@@ -68,6 +68,8 @@ export function checksum(w, field = null) {
     mix(w.navDestY[i]);
     mix(w.attackCd[i]);
     mix(w.abilityCd[i]);
+    if (w.mana) mix(w.mana[i]);
+    if (w.manaAcc) mix(w.manaAcc[i]);
     mix(w.distractCd[i]);
     mix(w.hp[i]);
     mix(w.type[i]);

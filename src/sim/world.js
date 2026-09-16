@@ -8,6 +8,7 @@
 
 import { makeRng } from './rng.js';
 import { getUnitDef } from './unitTypes.js';
+import { isManaCaster, MANA_MAX } from './mana.js';
 import { MAX_WAYPOINTS } from './path.js';
 import { createSpatialGrid } from './spatialGrid.js';
 import { createProjectileStore } from './projectiles.js';
@@ -71,6 +72,8 @@ export function createWorld(seed) {
     rng: makeRng(seed),
     ORDER,
     spatial: createSpatialGrid(MAX_ENTITIES),
+    /** Adventure reinforcement schedule (see waveSpawner.js); null when unused. */
+    waveSpawners: null,
     projectiles: createProjectileStore(),
     fireZones: createFireZoneStore(),
     frogs: createFrogStore(),
@@ -174,6 +177,10 @@ export function createWorld(seed) {
     // combat
     attackCd: new Int16Array(MAX_ENTITIES),
     abilityCd: new Int16Array(MAX_ENTITIES),
+    /** Caster mana bank (0..MANA_MAX). Non-casters stay 0. */
+    mana: new Int16Array(MAX_ENTITIES),
+    /** Regen remainder toward the next charge. */
+    manaAcc: new Int16Array(MAX_ENTITIES),
     /** Ticks remaining of frog-plague confusion (no acquire / no attack). */
     distractCd: new Int16Array(MAX_ENTITIES),
     /** Absorb HP remaining from Holy Armor (and future absorb buffs). */
@@ -269,6 +276,8 @@ export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed } = {}) 
   w.lastPy[i] = y;
   w.attackCd[i] = 0;
   w.abilityCd[i] = 0;
+  w.mana[i] = isManaCaster(type) ? MANA_MAX : 0;
+  w.manaAcc[i] = 0;
   w.distractCd[i] = 0;
   w.shieldHp[i] = 0;
   w.shieldTicks[i] = 0;

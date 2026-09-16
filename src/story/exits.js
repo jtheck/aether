@@ -44,7 +44,17 @@ export function exitRingSpec(obj, field) {
   };
 }
 
+function zoneWord(obj) {
+  const raw = String(obj?.label || '').trim();
+  if (!raw) return '';
+  const word = raw.replace(/\(EXIT\)/gi, '').trim().split(/\s+/)[0];
+  return word || '';
+}
+
+/** One-word zone tag. Authored label wins; EXIT / HERE are the fallbacks. */
 export function exitLabel(obj) {
+  const word = zoneWord(obj);
+  if (word) return word.toUpperCase();
   if (obj?.next || obj?.kind === 'escape' || obj?.kind === 'advance') return 'EXIT';
   return 'HERE';
 }

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decodeGarden } from '../sim/garden.js';
-import { zoneContains } from './objectives.js';
+import { objectiveWorldPos, zoneContains } from './objectives.js';
 import {
   SURVIVE_SECONDS_PER_WAVE,
   armCampaignTriggers,
@@ -90,6 +90,91 @@ describe('destroy target-death trigger', () => {
     armCampaignTriggers([obj], ctx);
     assert.deepEqual(stepCampaignTriggers([obj], ctx), []);
     assert.equal(obj.completed, false);
+  });
+});
+
+describe('objective triggers — hold / capture / infiltrate / race / escort / choice', () => {
+  const FIELD = { width: 100, height: 100, worldHalfF: 200 };
+  const at = (obj) => objectiveWorldPos(obj, FIELD);
+  function ctx(tick, over = {}) {
+    return {
+      tick,
+      tickHz: TICK_HZ,
+      field: FIELD,
+      partyPoints: () => [],
+      enemyPoints: () => [],
+      escortPoint: () => null,
+      partyAlive: () => true,
+      targetsInZone: () => [],
+      isTargetAlive: () => true,
+      ...over,
+    };
+  }
+
+  it('hold completes only after a continuous stay, and resets on leaving', () => {
+    const obj = { kind: 'hold', tx: 50, tz: 50, r: 5, params: { hold: 3 }, completed: false };
+    const inZone = { partyPoints: () => [at(obj)] };
+    armCampaignTriggers([obj], ctx(0));
+    stepCampaignTriggers([obj], ctx(0, inZone));
+    assert.equal(obj._holdEnd, 3 * TICK_HZ);
+    stepCampaignTriggers([obj], ctx(10)); // left the zone
+    assert.equal(obj._holdEnd, undefined, 'timer resets when nobody holds it');
+    stepCampaignTriggers([obj], ctx(20, inZone));
+    stepCampaignTriggers([obj], ctx(20 + 3 * TICK_HZ, inZone));
+    assert.equal(obj.completed, true);
+  });
+
+  it('capture needs the zone cleared of enemies', () => {
+    const obj = { kind: 'capture', tx: 50, tz: 50, r: 5, completed: false };
+    armCampaignTriggers([obj], ctx(0));
+    const contested = { partyPoints: () => [at(obj)], enemyPoints: () => [at(obj)] };
+    assert.deepEqual(stepCampaignTriggers([obj], ctx(0, contested)), []);
+    const cleared = { partyPoints: () => [at(obj)], enemyPoints: () => [] };
+    assert.equal(stepCampaignTriggers([obj], ctx(1, cleared)).length, 1);
+    assert.equal(obj.completed, true);
+  });
+
+  it('race fails the chapter when the clock runs out', () => {
+    const obj = { kind: 'race', tx: 50, tz: 50, r: 5, params: { seconds: 5 }, completed: false };
+    armCampaignTriggers([obj], ctx(0));
+    assert.equal(obj._raceEnd, 5 * TICK_HZ);
+    stepCampaignTriggers([obj], ctx(5 * TICK_HZ + 1));
+    assert.equal(obj._failed, true);
+    assert.ok(obj.failMessage);
+  });
+
+  it('escort completes on arrival and fails if the escort dies', () => {
+    const obj = { kind: 'escort', tx: 50, tz: 50, r: 5, params: { escort: 'Cart' }, completed: false };
+    armCampaignTriggers([obj], ctx(0));
+    // Seen alive but not yet at the zone.
+    stepCampaignTriggers([obj], ctx(0, { escortPoint: () => ({ x: 999, z: 999 }) }));
+    assert.equal(obj._escortSeen, true);
+    assert.equal(obj.completed, false);
+    // Escort dies (no point) → fail.
+    stepCampaignTriggers([obj], ctx(1, { escortPoint: () => null }));
+    assert.equal(obj._failed, true);
+  });
+
+  it('escort completes when the escort reaches the zone', () => {
+    const obj = { kind: 'escort', tx: 50, tz: 50, r: 5, params: { escort: 'Cart' }, completed: false };
+    armCampaignTriggers([obj], ctx(0));
+    const arrived = { escortPoint: () => at(obj) };
+    assert.equal(stepCampaignTriggers([obj], ctx(0, arrived)).length, 1);
+    assert.equal(obj.completed, true);
+  });
+
+  it('choice resolves sibling forks when one branch is taken', () => {
+    const ledge = { kind: 'choice', tx: 40, tz: 50, r: 5, params: { branch: 'ledge' }, completed: false };
+    const rope = { kind: 'choice', tx: 60, tz: 50, r: 5, params: { branch: 'bridge' }, completed: false };
+    const list = [ledge, rope];
+    armCampaignTriggers(list, ctx(0));
+    const pick = { partyPoints: () => [at(ledge)] };
+    const just = stepCampaignTriggers(list, ctx(0, pick));
+    assert.equal(ledge.completed, true);
+    assert.equal(rope.completed, true);
+    assert.equal(ledge._choice, 'ledge');
+    assert.equal(rope._choice, 'ledge');
+    assert.equal(just.length, 2);
   });
 });
 

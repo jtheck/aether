@@ -1,15 +1,13 @@
-// Epic campaign scaffold — 5 episodes, 19 chapters.
+// Epic campaign — 5 episodes, 19 chapters.
 //
-// This is the "where to put what" blueprint: each chapter is pure data —
-// board size/shape, a couple of cinematic beats, and a small mix of objectives.
-// The generic builder (campaignBuild.js) turns each entry into a v4 garden;
-// the generation script writes them to maps/<id>.garden.
+// Each chapter is data: table size/shape, chunk holes for giant off-board props,
+// water and forest barriers, halls, camps, a couple of cinematic beats, and
+// a chain of one-word trigger zones. campaignBuild.js turns an entry into a
+// v4 garden; build-campaign.mjs writes maps/<id>.garden.
 //
-// Coordinates in beats / objectives / camps are FRACTIONS of the board (0..1);
-// the builder resolves them to tiles, so a chapter can change size without
-// re-authoring positions. Objective kinds beyond reach/escape/advance are
-// authored intents today (they behave as reach-zones) — real triggers get
-// wired in per kind as we dial the campaign in.
+// Coordinates in beats / objectives / camps / dress are FRACTIONS of the board
+// (0..1). `hole` carves extra chunks so a keep / volcano / ice wall / sundering
+// can sit in the gap and still feel attached to the table.
 
 import { cam, hold, line, narrate } from './reel.js';
 import { UNIT } from '../sim/unitTypes.js';
@@ -34,12 +32,18 @@ function camp(fx, fz, building, units, clear) {
   return { fx, fz, building, units: units || [], clear };
 }
 
+/** Set-dressing building. owner 4 hostile, owner 2 allied. */
+function hall(fx, fz, type, owner = 4, yaw = 0) {
+  return { fx, fz, type, owner, yaw };
+}
+
 const W = UNIT.WARRIOR;
 const A = UNIT.ARCHER;
 const K = UNIT.WARLOCK;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Episode 1 — Escape the Siege (a burning castle / battle / siege)
+// Giant keep sits in the north-edge holes; moat and outer woods do the walls.
 // ─────────────────────────────────────────────────────────────────────────
 const EP1 = {
   n: 1,
@@ -50,13 +54,26 @@ const EP1 = {
       id: 'e1c1',
       name: 'Breach in the Wall',
       seed: 0x51e6e001,
-      chunks: 7,
+      chunks: 9,
       shape: 'square',
-      spawn: { fx: 0.5, fz: 0.85 },
-      camps: [camp(0.5, 0.2, 'camp', [[W, -3, 2], [W, 3, 2], [A, 0, -3]])],
+      // Castle wings off the north rim — giant keep sits in the bite.
+      hole: [[0, 0], [1, 0], [7, 0], [8, 0]],
+      spawn: { fx: 0.5, fz: 0.86 },
+      channel: [[0.04, 0.26, 0.96, 0.26, 3]],
+      woods: [[0.14, 0.78, 0.1, 0.86], [0.86, 0.78, 0.1, 0.86]],
+      hedge: [[0.08, 0.42, 0.08, 0.72, 3], [0.92, 0.42, 0.92, 0.72, 3]],
+      rubble: [[0.5, 0.4, 0.045]],
+      camps: [camp(0.5, 0.22, 'camp', [[W, -3, 2], [W, 3, 2], [A, 0, -3]])],
+      halls: [
+        hall(0.18, 0.48, 'tower'),
+        hall(0.82, 0.48, 'tower'),
+        hall(0.72, 0.64, 'barracks'),
+        hall(0.28, 0.64, 'church'),
+      ],
       objectives: [
-        obj('defend', 0.5, 0.62, 5, 'Hold the breach', 'Buy the others time at the gap.'),
-        obj('escape', 0.5, 0.12, 6, 'Flee the burning keep (EXIT)', 'The wall is lost. Run.', { terminal: true }),
+        obj('reach', 0.22, 0.7, 4, 'here', 'The yard. Catch them if you still can.'),
+        obj('defend', 0.5, 0.54, 5, 'hold', 'Buy the others time at the gap.'),
+        obj('escape', 0.5, 0.16, 6, 'run', 'The wall is lost. Run.', { terminal: true }),
       ],
       intro: [
         cam(0.5, 0.35, 190, -2.1, 1.6),
@@ -77,11 +94,21 @@ const EP1 = {
       seed: 0x51e6e002,
       chunks: 7,
       shape: 'notched',
-      spawn: { fx: 0.5, fz: 0.85 },
-      camps: [camp(0.32, 0.45, 'tower', [[A, -2, 2], [A, 2, 2], [W, 0, 3]])],
+      hole: [[0, 1]],
+      spawn: { fx: 0.58, fz: 0.86 },
+      water: [[0.48, 0.64, 0.05]],
+      woods: [[0.82, 0.48, 0.12, 0.88], [0.18, 0.72, 0.08, 0.8]],
+      hedge: [[0.7, 0.22, 0.88, 0.55, 3]],
+      rubble: [[0.4, 0.48, 0.03]],
+      camps: [camp(0.28, 0.46, 'tower', [[A, -2, 2], [A, 2, 2], [W, 0, 3]])],
+      halls: [
+        hall(0.22, 0.62, 'barracks'),
+        hall(0.48, 0.28, 'tower'),
+      ],
       objectives: [
-        obj('infiltrate', 0.5, 0.5, 5, 'Slip past the patrol', 'Stay out of the torchlight.'),
-        obj('escape', 0.62, 0.12, 5, 'Reach the sally port (EXIT)', 'The little door. Nobody watches it.', { terminal: true }),
+        obj('infiltrate', 0.4, 0.52, 5, 'sneak', 'Stay out of the torchlight.'),
+        obj('reach', 0.58, 0.36, 4, 'here', 'Past the light. Almost.'),
+        obj('escape', 0.7, 0.12, 5, 'run', 'The little door. Nobody watches it.', { terminal: true }),
       ],
       intro: [
         cam(0.5, 0.45, 200, -1.7, 1.8),
@@ -100,16 +127,28 @@ const EP1 = {
       id: 'e1c3',
       name: 'Courtyard Gauntlet',
       seed: 0x51e6e003,
-      chunks: 7,
+      chunks: 9,
       shape: 'round',
-      spawn: { fx: 0.5, fz: 0.85 },
+      spawn: { fx: 0.5, fz: 0.86 },
+      water: [[0.5, 0.62, 0.045]],
+      woods: [[0.12, 0.22, 0.07, 0.8], [0.88, 0.22, 0.07, 0.8]],
+      hedge: [[0.1, 0.55, 0.22, 0.82, 3], [0.9, 0.55, 0.78, 0.82, 3]],
+      rubble: [[0.5, 0.38, 0.04]],
       camps: [
-        camp(0.28, 0.4, 'camp', [[W, -2, 2], [A, 2, 1]]),
-        camp(0.72, 0.4, 'camp', [[W, 2, 2], [A, -2, 1]]),
+        camp(0.22, 0.4, 'camp', [[W, -2, 2], [A, 2, 1]]),
+        camp(0.78, 0.4, 'camp', [[W, 2, 2], [A, -2, 1]]),
+      ],
+      halls: [
+        hall(0.5, 0.4, 'barracks'),
+        hall(0.18, 0.58, 'tower'),
+        hall(0.82, 0.58, 'tower'),
       ],
       objectives: [
-        obj('reach', 0.5, 0.6, 5, 'Regroup at the well', 'Catch your breath in the open yard.'),
-        obj('destroy', 0.5, 0.18, 6, 'Sabotage the siege ram (EXIT)', 'Wreck it and the gate is ours.', { terminal: true }),
+        obj('reach', 0.5, 0.62, 5, 'here', 'Catch your breath in the open yard.'),
+        obj('destroy', 0.5, 0.16, 6, 'kill', 'Wreck it and the gate is ours.', {
+          terminal: true,
+          params: { building: 'workshop' },
+        }),
       ],
       intro: [
         cam(0.5, 0.4, 195, -2.0, 1.6),
@@ -127,14 +166,26 @@ const EP1 = {
       id: 'e1c4',
       name: 'Over the Moat',
       seed: 0x51e6e004,
-      chunksX: 9,
+      chunksX: 11,
       chunksZ: 5,
       shape: 'corridor',
-      spawn: { fx: 0.12, fz: 0.5 },
-      camps: [camp(0.55, 0.3, 'tower', [[A, -2, 1], [A, 2, 1], [W, 0, 3]])],
+      // Castle / water mass off the short ends — the board is the bridge.
+      hole: [[0, 0], [1, 0], [9, 0], [10, 0]],
+      spawn: { fx: 0.1, fz: 0.5 },
+      channel: [
+        [0.04, 0.12, 0.96, 0.12, 2],
+        [0.04, 0.88, 0.96, 0.88, 2],
+      ],
+      rubble: [[0.48, 0.5, 0.03]],
+      camps: [camp(0.52, 0.3, 'tower', [[A, -2, 1], [A, 2, 1], [W, 0, 3]])],
+      halls: [
+        hall(0.34, 0.68, 'tower'),
+        hall(0.68, 0.32, 'silo'),
+      ],
       objectives: [
-        obj('escort', 0.5, 0.5, 5, 'Protect the wounded wagon', 'It cannot defend itself — keep it whole.'),
-        obj('escape', 0.9, 0.5, 6, 'Cross the moat bridge (EXIT)', 'The far bank. Freedom, for now.', { terminal: true }),
+        obj('reach', 0.38, 0.5, 4, 'here', 'The boards hold. For now.'),
+        obj('escort', 0.78, 0.5, 5, 'guard', 'It cannot defend itself — keep it whole.', { params: { escort: 'Wagon' } }),
+        obj('escape', 0.92, 0.5, 6, 'run', 'The far bank. Freedom, for now.', { terminal: true }),
       ],
       intro: [
         cam(0.5, 0.5, 250, 0.0, 1.8),
@@ -154,6 +205,7 @@ const EP1 = {
 
 // ─────────────────────────────────────────────────────────────────────────
 // Episode 2 — Ashfall (a fight near / with a volcano)
+// Volcano and fortress sit in carved holes. On-board: ash, crater water, slag.
 // ─────────────────────────────────────────────────────────────────────────
 const EP2 = {
   n: 2,
@@ -167,11 +219,17 @@ const EP2 = {
       chunksX: 5,
       chunksZ: 11,
       shape: 'corridor',
-      spawn: { fx: 0.5, fz: 0.9 },
-      camps: [camp(0.5, 0.55, 'camp', [[W, -2, 2], [A, 2, 1]])],
+      // Volcano mass along the west bite.
+      hole: [[0, 2], [0, 6], [0, 9]],
+      spawn: { fx: 0.52, fz: 0.9 },
+      channel: [[0.18, 0.2, 0.18, 0.82, 2], [0.84, 0.12, 0.84, 0.7, 2]],
+      rubble: [[0.55, 0.42, 0.035]],
+      camps: [camp(0.52, 0.52, 'camp', [[W, -2, 2], [A, 2, 1]])],
+      halls: [hall(0.52, 0.28, 'mine')],
       objectives: [
-        obj('race', 0.5, 0.5, 6, 'Outrun the lava flow', 'Do not stop. The road is melting.', { params: { seconds: 90 } }),
-        obj('escape', 0.5, 0.08, 6, 'Reach the high ridge (EXIT)', 'High ground. The flow can\'t follow.', { terminal: true }),
+        obj('reach', 0.52, 0.72, 4, 'here', 'Do not stop. The road is melting.'),
+        obj('race', 0.52, 0.48, 6, 'run', 'Do not stop. The road is melting.', { params: { seconds: 90 } }),
+        obj('escape', 0.52, 0.08, 6, 'go', 'High ground. The flow can\'t follow.', { terminal: true }),
       ],
       intro: [
         cam(0.5, 0.5, 300, -1.6, 1.8),
@@ -192,14 +250,25 @@ const EP2 = {
       seed: 0x51e6e012,
       chunks: 9,
       shape: 'square',
-      spawn: { fx: 0.5, fz: 0.85 },
+      reveal: 'all',
+      hole: [[1, 0], [2, 0], [6, 0], [7, 0]],
+      spawn: { fx: 0.5, fz: 0.86 },
+      channel: [[0.08, 0.18, 0.4, 0.18, 2], [0.6, 0.18, 0.92, 0.18, 2]],
+      woods: [[0.12, 0.72, 0.08, 0.7], [0.88, 0.7, 0.08, 0.7]],
+      rubble: [[0.5, 0.42, 0.04]],
       camps: [
-        camp(0.5, 0.3, 'tower', [[A, -3, 1], [A, 3, 1], [W, -1, 3], [W, 1, 3]]),
-        camp(0.2, 0.55, 'camp', [[W, 0, 2], [K, 2, 0]]),
+        camp(0.5, 0.28, 'tower', [[A, -3, 1], [A, 3, 1], [W, -1, 3], [W, 1, 3]]),
+        camp(0.18, 0.52, 'camp', [[W, 0, 2], [K, 2, 0]]),
       ],
+      halls: [
+        hall(0.78, 0.48, 'barracks'),
+        hall(0.32, 0.36, 'tower'),
+        hall(0.68, 0.36, 'tower'),
+      ],
+      allies: [{ from: [0.28, 0.82], to: [0.5, 0.28], waves: 2, count: 3, delay: 5, interval: 14 }],
       objectives: [
-        obj('defend', 0.5, 0.62, 5, 'Screen the approach', 'Keep them off the ridge stair.'),
-        obj('capture', 0.5, 0.25, 6, 'Seize Emberhold (EXIT)', 'Take the keep and hold the height.', { terminal: true }),
+        obj('defend', 0.5, 0.62, 5, 'hold', 'Keep them off the ridge stair.'),
+        obj('capture', 0.5, 0.24, 6, 'take', 'Take the keep and hold the height.', { terminal: true }),
       ],
       intro: [
         cam(0.5, 0.35, 240, -2.0, 1.8),
@@ -217,16 +286,27 @@ const EP2 = {
       id: 'e2c3',
       name: 'The Caldera',
       seed: 0x51e6e013,
-      chunks: 9,
+      chunks: 11,
       shape: 'round',
-      spawn: { fx: 0.5, fz: 0.86 },
+      // Mouth of the volcano through the table — giant cone sits in the hole.
+      hole: [[5, 5]],
+      spawn: { fx: 0.5, fz: 0.88 },
+      water: [[0.42, 0.5, 0.055], [0.58, 0.5, 0.055], [0.5, 0.42, 0.04], [0.5, 0.58, 0.04]],
+      rubble: [[0.22, 0.28, 0.04], [0.78, 0.28, 0.04]],
       camps: [
-        camp(0.3, 0.35, 'camp', [[K, 0, 2], [W, 2, 0]]),
-        camp(0.7, 0.35, 'camp', [[K, 0, 2], [W, -2, 0]]),
+        camp(0.22, 0.36, 'camp', [[K, 0, 2], [W, 2, 0]]),
+        camp(0.78, 0.36, 'camp', [[K, 0, 2], [W, -2, 0]]),
+      ],
+      halls: [
+        hall(0.18, 0.62, 'tower'),
+        hall(0.82, 0.62, 'tower'),
       ],
       objectives: [
-        obj('survive', 0.5, 0.6, 6, 'Hold until it blows', 'Stay alive while the vent overloads.', { params: { waves: 3 } }),
-        obj('destroy', 0.5, 0.3, 6, 'Seal the fire vent (EXIT)', 'Collapse it and the mountain sleeps.', { terminal: true }),
+        obj('survive', 0.5, 0.72, 6, 'last', 'Stay alive while the vent overloads.', { params: { waves: 3 } }),
+        obj('destroy', 0.5, 0.26, 6, 'kill', 'Collapse it and the mountain sleeps.', {
+          terminal: true,
+          params: { building: 'factory' },
+        }),
       ],
       intro: [
         cam(0.5, 0.45, 250, -1.9, 1.6),
@@ -247,11 +327,22 @@ const EP2 = {
       seed: 0x51e6e014,
       chunks: 9,
       shape: 'wedge',
-      spawn: { fx: 0.2, fz: 0.85 },
-      camps: [camp(0.6, 0.45, 'tower', [[A, -2, 1], [A, 2, 1], [W, 0, 3]])],
+      spawn: { fx: 0.18, fz: 0.86 },
+      channel: [
+        [0.08, 0.28, 0.72, 0.22, 2],
+        [0.22, 0.62, 0.78, 0.48, 2],
+      ],
+      woods: [[0.12, 0.48, 0.07, 0.65]],
+      rubble: [[0.58, 0.38, 0.035]],
+      camps: [camp(0.58, 0.44, 'tower', [[A, -2, 1], [A, 2, 1], [W, 0, 3]])],
+      halls: [
+        hall(0.32, 0.32, 'mine'),
+        hall(0.7, 0.58, 'silo'),
+      ],
       objectives: [
-        obj('gather', 0.7, 0.35, 5, 'Carry out the living embers', 'The sacred coals must not go cold.', { params: { count: 3 } }),
-        obj('escape', 0.85, 0.12, 6, 'Escape down the ash slope (EXIT)', 'Off the mountain, embers and all.', { terminal: true }),
+        obj('reach', 0.32, 0.64, 4, 'here', 'The sacred coals must not go cold.'),
+        obj('gather', 0.68, 0.36, 5, 'take', 'The sacred coals must not go cold.', { params: { count: 3 } }),
+        obj('escape', 0.86, 0.12, 6, 'run', 'Off the mountain, embers and all.', { terminal: true }),
       ],
       intro: [
         cam(0.5, 0.5, 240, -1.7, 1.8),
@@ -270,6 +361,7 @@ const EP2 = {
 
 // ─────────────────────────────────────────────────────────────────────────
 // Episode 3 — The Ice Wall (a chase along a wall of ice)
+// Ice wall is a giant prop in the west holes. On-board: melt water, pine hedges.
 // ─────────────────────────────────────────────────────────────────────────
 const EP3 = {
   n: 3,
@@ -281,13 +373,18 @@ const EP3 = {
       name: 'First Frost',
       seed: 0x51e6e021,
       chunksX: 5,
-      chunksZ: 9,
+      chunksZ: 11,
       shape: 'corridor',
-      spawn: { fx: 0.5, fz: 0.9 },
-      camps: [camp(0.5, 0.5, 'camp', [[A, -2, 1], [W, 2, 1]])],
+      hole: [[0, 1], [0, 5], [0, 9]],
+      spawn: { fx: 0.58, fz: 0.9 },
+      water: [[0.28, 0.38, 0.055], [0.72, 0.62, 0.05]],
+      woods: [[0.78, 0.28, 0.07, 0.8], [0.78, 0.78, 0.07, 0.8]],
+      hedge: [[0.78, 0.18, 0.78, 0.88, 2]],
+      camps: [camp(0.52, 0.5, 'camp', [[A, -2, 1], [W, 2, 1]])],
+      halls: [hall(0.52, 0.28, 'tower')],
       objectives: [
-        obj('infiltrate', 0.5, 0.55, 5, 'Cross the watched ice', 'Hunters walk the wall. Do not be seen.'),
-        obj('escape', 0.5, 0.1, 6, 'Reach the ice shelter (EXIT)', 'A cleeward hollow. Warmth, and a moment.', { terminal: true }),
+        obj('infiltrate', 0.52, 0.55, 5, 'sneak', 'Hunters walk the wall. Do not be seen.'),
+        obj('escape', 0.52, 0.1, 6, 'run', 'A cleeward hollow. Warmth, and a moment.', { terminal: true }),
       ],
       intro: [
         cam(0.5, 0.5, 260, -1.6, 1.8),
@@ -309,14 +406,22 @@ const EP3 = {
       chunksX: 5,
       chunksZ: 13,
       shape: 'corridor',
-      spawn: { fx: 0.5, fz: 0.94 },
+      hole: [[0, 2], [0, 6], [0, 10]],
+      spawn: { fx: 0.58, fz: 0.94 },
+      water: [[0.28, 0.22, 0.04], [0.72, 0.48, 0.04], [0.28, 0.72, 0.04]],
+      hedge: [[0.8, 0.1, 0.8, 0.9, 3]],
+      woods: [[0.8, 0.35, 0.08, 0.85], [0.8, 0.7, 0.08, 0.85]],
       camps: [
         camp(0.5, 0.7, 'camp', [[W, -2, 1], [A, 2, 1]]),
         camp(0.5, 0.4, 'camp', [[W, -2, 1], [A, 2, 1]]),
       ],
+      halls: [hall(0.5, 0.22, 'tower')],
       objectives: [
-        obj('survive', 0.5, 0.6, 6, 'Outlast the hunters', 'They come in packs. Keep the line.', { params: { waves: 4 } }),
-        obj('escape', 0.5, 0.06, 6, 'Reach the gap in the wall (EXIT)', 'A break in the ice. Through it and gone.', { terminal: true }),
+        obj('reach', 0.52, 0.8, 4, 'here', 'They come in packs. Keep the line.'),
+        obj('survive', 0.52, 0.58, 6, 'last', 'They come in packs. Keep the line.', {
+          params: { waves: 4, route: [[0.52, 0.14], [0.52, 0.32], [0.52, 0.5]] },
+        }),
+        obj('escape', 0.52, 0.06, 6, 'run', 'A break in the ice. Through it and gone.', { terminal: true }),
       ],
       intro: [
         cam(0.5, 0.5, 340, -1.6, 1.8),
@@ -338,10 +443,19 @@ const EP3 = {
       chunks: 9,
       shape: 'notched',
       spawn: { fx: 0.5, fz: 0.86 },
-      camps: [camp(0.5, 0.35, 'tower', [[A, -2, 1], [A, 2, 1], [W, 0, 3]])],
+      channel: [[0.08, 0.42, 0.92, 0.42, 3]],
+      woods: [[0.16, 0.7, 0.08, 0.8], [0.84, 0.7, 0.08, 0.8]],
+      rubble: [[0.5, 0.55, 0.03]],
+      camps: [camp(0.5, 0.32, 'tower', [[A, -2, 1], [A, 2, 1], [W, 0, 3]])],
+      halls: [hall(0.22, 0.55, 'tower'), hall(0.78, 0.55, 'tower')],
       objectives: [
-        obj('choice', 0.5, 0.55, 5, 'Choose a crossing', 'The narrow ledge, or cut the rope bridge behind you.', { params: { branches: ['ledge', 'bridge'] } }),
-        obj('escape', 0.5, 0.15, 6, 'Reach the far rim (EXIT)', 'Across the crevasse, whatever it cost.', { terminal: true }),
+        obj('choice', 0.28, 0.55, 4, 'pick', 'The narrow ledge, or cut the rope bridge behind you.', {
+          params: { branches: ['ledge', 'bridge'], branch: 'ledge' },
+        }),
+        obj('choice', 0.72, 0.55, 4, 'pick', 'The narrow ledge, or cut the rope bridge behind you.', {
+          params: { branches: ['ledge', 'bridge'], branch: 'bridge' },
+        }),
+        obj('escape', 0.5, 0.14, 6, 'run', 'Across the crevasse, whatever it cost.', { terminal: true }),
       ],
       intro: [
         cam(0.5, 0.45, 240, -1.7, 1.8),
@@ -363,11 +477,16 @@ const EP3 = {
       chunksX: 11,
       chunksZ: 5,
       shape: 'corridor',
+      // Calved ice off the south edge.
+      hole: [[1, 4], [3, 4], [7, 4], [9, 4]],
       spawn: { fx: 0.1, fz: 0.5 },
-      camps: [camp(0.55, 0.4, 'camp', [[W, -2, 1], [A, 2, 1]])],
+      channel: [[0.08, 0.86, 0.92, 0.86, 2]],
+      woods: [[0.22, 0.22, 0.06, 0.7], [0.72, 0.22, 0.06, 0.7]],
+      camps: [camp(0.55, 0.38, 'camp', [[W, -2, 1], [A, 2, 1]])],
+      halls: [hall(0.38, 0.32, 'tower')],
       objectives: [
-        obj('race', 0.5, 0.5, 6, 'Beat the collapse', 'The shelf is calving behind you.', { params: { seconds: 75 } }),
-        obj('escape', 0.92, 0.5, 6, 'Reach solid ground (EXIT)', 'Off the ice. Onto stone at last.', { terminal: true }),
+        obj('race', 0.48, 0.5, 6, 'run', 'The shelf is calving behind you.', { params: { seconds: 75 } }),
+        obj('escape', 0.92, 0.5, 6, 'here', 'Off the ice. Onto stone at last.', { terminal: true }),
       ],
       intro: [
         cam(0.5, 0.5, 300, 0.0, 1.8),
@@ -386,6 +505,7 @@ const EP3 = {
 
 // ─────────────────────────────────────────────────────────────────────────
 // Episode 4 — Muster (great war preparations)
+// Open field, thick woods as the walls, a stream, real halls for the camp.
 // ─────────────────────────────────────────────────────────────────────────
 const EP4 = {
   n: 4,
@@ -398,11 +518,31 @@ const EP4 = {
       seed: 0x51e6e031,
       chunks: 11,
       shape: 'square',
-      spawn: { fx: 0.5, fz: 0.8 },
-      camps: [camp(0.5, 0.25, 'camp', [[W, -3, 2], [W, 3, 2], [A, 0, -3]])],
+      hole: [[0, 0], [10, 0]],
+      spawn: { fx: 0.5, fz: 0.82 },
+      channel: [[0.04, 0.18, 0.96, 0.18, 2]],
+      woods: [
+        [0.14, 0.28, 0.12, 0.88],
+        [0.86, 0.3, 0.12, 0.88],
+        [0.22, 0.78, 0.09, 0.82],
+        [0.78, 0.8, 0.09, 0.82],
+      ],
+      hedge: [[0.08, 0.45, 0.22, 0.7, 3], [0.92, 0.45, 0.78, 0.7, 3]],
+      camps: [camp(0.5, 0.22, 'camp', [[W, -3, 2], [W, 3, 2], [A, 0, -3]])],
+      halls: [
+        hall(0.42, 0.55, 'camp', 2),
+        hall(0.58, 0.55, 'barracks', 2),
+        hall(0.38, 0.68, 'farm', 2),
+        hall(0.62, 0.68, 'silo', 2),
+        hall(0.5, 0.42, 'tavern', 2),
+      ],
+      allies: [{ from: [0.28, 0.82], to: [0.5, 0.24], waves: 2, count: 3, delay: 8, interval: 14 }],
       objectives: [
-        obj('build', 0.5, 0.55, 6, 'Raise the palisade', 'Wall the camp before nightfall.'),
-        obj('defend', 0.5, 0.4, 7, 'Hold the muster ground (EXIT)', 'Break the raid and the camp stands.', { terminal: true, params: { waves: 3 } }),
+        obj('build', 0.5, 0.56, 6, 'here', 'Wall the camp before nightfall.'),
+        obj('defend', 0.5, 0.4, 7, 'hold', 'Break the raid and the camp stands.', {
+          terminal: true,
+          params: { waves: 3, route: [[0.5, 0.1], [0.5, 0.22], [0.5, 0.32]] },
+        }),
       ],
       intro: [
         cam(0.5, 0.45, 320, -2.0, 1.8),
@@ -424,10 +564,22 @@ const EP4 = {
       chunks: 11,
       shape: 'round',
       spawn: { fx: 0.5, fz: 0.82 },
-      camps: [camp(0.75, 0.4, 'tower', [[A, -2, 1], [A, 2, 1], [W, 0, 3]])],
+      channel: [[0.12, 0.62, 0.38, 0.22, 2]],
+      woods: [
+        [0.16, 0.28, 0.11, 0.86],
+        [0.82, 0.22, 0.1, 0.84],
+        [0.78, 0.72, 0.1, 0.8],
+      ],
+      rubble: [[0.28, 0.4, 0.05]],
+      camps: [camp(0.76, 0.4, 'tower', [[A, -2, 1], [A, 2, 1], [W, 0, 3]])],
+      halls: [
+        hall(0.5, 0.36, 'workshop', 2),
+        hall(0.28, 0.42, 'mine', 2),
+        hall(0.62, 0.5, 'barracks', 2),
+      ],
       objectives: [
-        obj('gather', 0.3, 0.4, 6, 'Stockpile stone and steel', 'An army marches on its supply.', { params: { count: 4 } }),
-        obj('build', 0.5, 0.35, 6, 'Raise the war forge (EXIT)', 'Light the forge and arm the muster.', { terminal: true }),
+        obj('gather', 0.28, 0.4, 6, 'take', 'An army marches on its supply.', { params: { count: 4 } }),
+        obj('build', 0.5, 0.35, 6, 'build', 'Light the forge and arm the muster.', { terminal: true }),
       ],
       intro: [
         cam(0.5, 0.45, 320, -1.9, 1.8),
@@ -447,11 +599,27 @@ const EP4 = {
       seed: 0x51e6e033,
       chunks: 11,
       shape: 'notched',
-      spawn: { fx: 0.5, fz: 0.85 },
-      camps: [camp(0.28, 0.4, 'camp', [[W, 0, 2], [K, 2, 0]])],
+      spawn: { fx: 0.52, fz: 0.86 },
+      water: [[0.48, 0.42, 0.055]],
+      woods: [
+        [0.16, 0.22, 0.1, 0.86],
+        [0.84, 0.55, 0.11, 0.86],
+        [0.22, 0.72, 0.09, 0.8],
+      ],
+      camps: [camp(0.26, 0.38, 'camp', [[W, 0, 2], [K, 2, 0]])],
+      halls: [
+        hall(0.52, 0.58, 'tavern'),
+        hall(0.7, 0.32, 'camp'),
+        hall(0.38, 0.28, 'church'),
+      ],
       objectives: [
-        obj('choice', 0.5, 0.6, 6, 'Treat with the clans', 'Bargain, or take the banner by force.', { params: { branches: ['parley', 'seize'] } }),
-        obj('capture', 0.7, 0.3, 6, 'Win the clan banner (EXIT)', 'With their banner, their spears are ours.', { terminal: true }),
+        obj('choice', 0.42, 0.6, 5, 'ask', 'Bargain, or take the banner by force.', {
+          params: { branches: ['parley', 'seize'], branch: 'parley' },
+        }),
+        obj('choice', 0.62, 0.48, 5, 'take', 'Bargain, or take the banner by force.', {
+          params: { branches: ['parley', 'seize'], branch: 'seize' },
+        }),
+        obj('capture', 0.72, 0.28, 6, 'take', 'With their banner, their spears are ours.', { terminal: true }),
       ],
       intro: [
         cam(0.5, 0.45, 320, -1.8, 1.8),
@@ -473,13 +641,28 @@ const EP4 = {
       chunks: 11,
       shape: 'square',
       spawn: { fx: 0.5, fz: 0.82 },
+      channel: [[0.18, 0.42, 0.82, 0.42, 2]],
+      woods: [
+        [0.12, 0.14, 0.1, 0.86],
+        [0.88, 0.14, 0.1, 0.86],
+        [0.14, 0.78, 0.09, 0.82],
+        [0.86, 0.78, 0.09, 0.82],
+      ],
       camps: [
-        camp(0.3, 0.3, 'tower', [[A, -2, 1], [A, 2, 1]]),
-        camp(0.7, 0.3, 'tower', [[A, -2, 1], [A, 2, 1]]),
+        camp(0.28, 0.28, 'tower', [[A, -2, 1], [A, 2, 1]]),
+        camp(0.72, 0.28, 'tower', [[A, -2, 1], [A, 2, 1]]),
+      ],
+      halls: [
+        hall(0.5, 0.5, 'barracks', 2),
+        hall(0.42, 0.62, 'church', 2),
+        hall(0.58, 0.62, 'tavern', 2),
       ],
       objectives: [
-        obj('control', 0.5, 0.5, 6, 'Hold the war gate', 'Keep the muster gate through the night.'),
-        obj('defend', 0.5, 0.35, 7, 'Survive the night raid (EXIT)', 'Last till dawn and the army marches whole.', { terminal: true, params: { waves: 5 } }),
+        obj('control', 0.5, 0.5, 6, 'hold', 'Keep the muster gate through the night.'),
+        obj('defend', 0.5, 0.34, 7, 'last', 'Last till dawn and the army marches whole.', {
+          terminal: true,
+          params: { waves: 5, route: [[0.12, 0.12], [0.32, 0.26]] },
+        }),
       ],
       intro: [
         cam(0.5, 0.45, 320, -2.0, 1.8),
@@ -499,6 +682,7 @@ const EP4 = {
 
 // ─────────────────────────────────────────────────────────────────────────
 // Episode 5 — Cataclysm (the final, world-ending battle)
+// Sundering / dark heart as giant props in punched holes. Burned woods, wound water.
 // ─────────────────────────────────────────────────────────────────────────
 const EP5 = {
   n: 5,
@@ -511,15 +695,37 @@ const EP5 = {
       seed: 0x51e6e041,
       chunks: 13,
       shape: 'square',
-      spawn: { fx: 0.5, fz: 0.82 },
-      camps: [
-        camp(0.3, 0.28, 'camp', [[W, -2, 2], [A, 2, 1]]),
-        camp(0.7, 0.28, 'camp', [[W, 2, 2], [A, -2, 1]]),
-        camp(0.5, 0.2, 'tower', [[A, -3, 1], [A, 3, 1]]),
+      reveal: 'all',
+      hole: [[4, 0], [5, 0], [7, 0], [8, 0]],
+      spawn: { fx: 0.5, fz: 0.84 },
+      woods: [
+        [0.1, 0.55, 0.09, 0.72],
+        [0.9, 0.55, 0.09, 0.72],
+        [0.16, 0.82, 0.08, 0.7],
+        [0.84, 0.82, 0.08, 0.7],
       ],
+      rubble: [[0.5, 0.38, 0.05]],
+      camps: [
+        camp(0.28, 0.26, 'camp', [[W, -2, 2], [A, 2, 1]]),
+        camp(0.72, 0.26, 'camp', [[W, 2, 2], [A, -2, 1]]),
+        camp(0.36, 0.16, 'tower', [[A, -2, 1], [A, 2, 1]]),
+        camp(0.64, 0.16, 'tower', [[A, -2, 1], [A, 2, 1]]),
+      ],
+      halls: [
+        hall(0.18, 0.42, 'tower'),
+        hall(0.82, 0.42, 'tower'),
+        hall(0.5, 0.48, 'barracks', 2),
+      ],
+      allies: [{ from: [0.3, 0.86], to: [0.5, 0.32], waves: 3, count: 4, delay: 6, interval: 12 }],
       objectives: [
-        obj('defend', 0.5, 0.55, 7, 'Break the black tide', 'The horde comes in waves without end.', { params: { waves: 6 } }),
-        obj('destroy', 0.5, 0.25, 7, 'Fell the siege beast (EXIT)', 'Kill the thing that leads them and the tide breaks.', { terminal: true }),
+        obj('reach', 0.5, 0.68, 5, 'here', 'The horde comes in waves without end.'),
+        obj('defend', 0.5, 0.52, 7, 'hold', 'The horde comes in waves without end.', {
+          params: { waves: 6, route: [[0.5, 0.08], [0.5, 0.28], [0.5, 0.42]] },
+        }),
+        obj('destroy', 0.5, 0.22, 7, 'kill', 'Kill the thing that leads them and the tide breaks.', {
+          terminal: true,
+          params: { building: 'factory' },
+        }),
       ],
       intro: [
         cam(0.5, 0.45, 380, -2.0, 1.8),
@@ -540,15 +746,29 @@ const EP5 = {
       seed: 0x51e6e042,
       chunks: 13,
       shape: 'notched',
-      spawn: { fx: 0.5, fz: 0.85 },
+      reveal: 'all',
+      // Tear in the world — relic walks around the hole.
+      hole: [[6, 6], [6, 5]],
+      spawn: { fx: 0.5, fz: 0.86 },
+      water: [[0.5, 0.48, 0.07], [0.42, 0.52, 0.05], [0.58, 0.52, 0.05]],
+      woods: [[0.12, 0.22, 0.08, 0.72], [0.88, 0.22, 0.08, 0.72]],
       camps: [
-        camp(0.25, 0.4, 'tower', [[A, -2, 1], [A, 2, 1], [W, 0, 3]]),
-        camp(0.75, 0.4, 'tower', [[A, -2, 1], [A, 2, 1], [W, 0, 3]]),
+        camp(0.22, 0.4, 'tower', [[A, -2, 1], [A, 2, 1], [W, 0, 3]]),
+        camp(0.78, 0.4, 'tower', [[A, -2, 1], [A, 2, 1], [W, 0, 3]]),
       ],
+      halls: [
+        hall(0.28, 0.52, 'moonwell', 2),
+        hall(0.72, 0.52, 'moonwell', 2),
+        hall(0.5, 0.28, 'church'),
+      ],
+      allies: [{ from: [0.5, 0.86], to: [0.5, 0.34], waves: 2, count: 4, delay: 6, interval: 14 }],
       objectives: [
-        obj('control', 0.28, 0.5, 5, 'Hold the west ward', 'One of three anchors of the seal.'),
-        obj('control', 0.72, 0.5, 5, 'Hold the east ward', 'One of three anchors of the seal.'),
-        obj('escort', 0.5, 0.3, 6, 'Carry the relic to the center (EXIT)', 'Only the relic can close the sundering.', { terminal: true }),
+        obj('control', 0.26, 0.52, 5, 'hold', 'One of three anchors of the seal.'),
+        obj('control', 0.74, 0.52, 5, 'hold', 'One of three anchors of the seal.'),
+        obj('escort', 0.5, 0.28, 6, 'guard', 'Only the relic can close the sundering.', {
+          terminal: true,
+          params: { escort: 'Relic' },
+        }),
       ],
       intro: [
         cam(0.5, 0.45, 380, -1.9, 1.8),
@@ -568,15 +788,32 @@ const EP5 = {
       seed: 0x51e6e043,
       chunks: 13,
       shape: 'round',
-      spawn: { fx: 0.5, fz: 0.86 },
+      reveal: 'all',
+      hole: [[5, 3], [7, 3]],
+      spawn: { fx: 0.5, fz: 0.88 },
+      water: [[0.5, 0.28, 0.06]],
+      woods: [
+        [0.14, 0.62, 0.09, 0.75],
+        [0.86, 0.62, 0.09, 0.75],
+      ],
+      rubble: [[0.5, 0.48, 0.05]],
       camps: [
-        camp(0.3, 0.35, 'camp', [[K, 0, 2], [W, 2, 0]]),
-        camp(0.7, 0.35, 'camp', [[K, 0, 2], [W, -2, 0]]),
-        camp(0.5, 0.22, 'tower', [[A, -3, 1], [A, 3, 1], [K, 0, 2]]),
+        camp(0.28, 0.34, 'camp', [[K, 0, 2], [W, 2, 0]]),
+        camp(0.72, 0.34, 'camp', [[K, 0, 2], [W, -2, 0]]),
+        camp(0.5, 0.2, 'tower', [[A, -3, 1], [A, 3, 1], [K, 0, 2]]),
+      ],
+      halls: [
+        hall(0.38, 0.58, 'church', 2),
+        hall(0.62, 0.58, 'moonwell', 2),
+        hall(0.18, 0.48, 'tower'),
+        hall(0.82, 0.48, 'tower'),
       ],
       objectives: [
-        obj('survive', 0.5, 0.6, 7, 'The last stand', 'Hold the ring while the light gathers.', { params: { waves: 8 } }),
-        obj('destroy', 0.5, 0.3, 7, 'Extinguish the dark heart', 'End it here. There is no next road.', { terminal: true }),
+        obj('survive', 0.5, 0.62, 7, 'here', 'Hold the ring while the light gathers.', { params: { waves: 8 } }),
+        obj('destroy', 0.5, 0.28, 7, 'end', 'End it here. There is no next road.', {
+          terminal: true,
+          params: { building: 'church' },
+        }),
       ],
       intro: [
         cam(0.5, 0.45, 380, -2.0, 1.8),
@@ -608,6 +845,10 @@ export const CAMPAIGN_CHAPTERS = (() => {
   const flat = [];
   for (const ep of EPISODES) {
     ep.chapters.forEach((def, idx) => {
+      // Stamp episode context onto the def so the builder can theme terrain and
+      // pick the right enemy roster (casters ramp in by episode).
+      def.theme = ep.theme;
+      def.episode = ep.n;
       flat.push({ def, episode: ep.n, episodeName: ep.name, theme: ep.theme, indexInEpisode: idx + 1 });
     });
   }

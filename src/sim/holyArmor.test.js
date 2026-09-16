@@ -72,7 +72,7 @@ function castBuffsFriendliesInRadius() {
 
   const amount = holyArmorShieldAmount(UNIT.PRIEST);
   assert.ok(w.abilityCd[priest] > 0);
-  assert.equal(w.abilityCd[priest], HOLY_ARMOR_COOLDOWN - 1);
+  assert.equal(w.mana[priest], 200);
   assert.equal(w.shieldHp[priest], amount, 'self included');
   assert.equal(w.shieldHp[allyNear], amount, 'nearby ally shielded');
   assert.equal(w.shieldHp[allyRow], amount, 'row-spaced huddle shielded');

@@ -19,6 +19,7 @@ import {
   spatialCellId,
 } from './spatialGrid.js';
 import { tickHolyArmorShields } from './holyArmor.js';
+import { tickMana } from './mana.js';
 import {
   applyDamageBuilding,
   attackBuildingStandPointOnField,
@@ -39,6 +40,7 @@ export function combatSystem(w, field) {
   rebuildEngagementClaims(w);
   acquireTargets(w, field);
   resolveAttacks(w, field);
+  tickMana(w);
 }
 
 export { kill };

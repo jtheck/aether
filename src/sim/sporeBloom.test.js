@@ -124,7 +124,7 @@ function castFellsTreesAndQueuesSeeds() {
   }]);
 
   assert.ok(w.abilityCd[myco] > 0);
-  assert.equal(w.abilityCd[myco], SPORE_BLOOM_COOLDOWN - 1);
+  assert.equal(w.mana[myco], 200);
 
   // Center trees should be gone.
   for (let dz = -1; dz <= 1; dz++) {

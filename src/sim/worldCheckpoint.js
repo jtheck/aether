@@ -17,6 +17,7 @@ import { ensureFrogCapacity } from './frogs.js';
 import { ensureFireZoneCapacity } from './fireZones.js';
 import { capacityFor } from './capacity.js';
 import { SPORE_PENDING_INITIAL } from './sporeBloom.js';
+import { isManaCaster, MANA_MAX } from './mana.js';
 
 export const CHECKPOINT_FORMAT = 1;
 
@@ -28,7 +29,7 @@ const ENTITY_I32 = [
   'gatherTile', 'carriedAmt',
 ];
 const ENTITY_I16 = [
-  'engagementSlot', 'attackCd', 'abilityCd', 'distractCd', 'shieldHp', 'shieldTicks',
+  'engagementSlot', 'attackCd', 'abilityCd', 'mana', 'manaAcc', 'distractCd', 'shieldHp', 'shieldTicks',
   'dotTicks', 'dotDamage', 'dotPeriod', 'dotAcc', 'locustTicks', 'locustStacks', 'locustAcc', 'locustHops',
   'frostTicks', 'lobTicks', 'lobDur', 'lobPeak',
   'gatherCd',
@@ -105,6 +106,7 @@ export function exportWorldCheckpoint(w, field, checksum) {
     resources: serializeResources(w),
     field: exportFieldMutable(field),
     pendingLightning: exportPendingLightning(w.pendingLightning),
+    waveSpawners: exportWaveSpawners(w.waveSpawners),
   };
 }
 
@@ -143,6 +145,12 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   if (!ent.arrays.locustAcc && w.locustAcc) w.locustAcc.fill(0);
   if (!ent.arrays.locustHops && w.locustHops) w.locustHops.fill(0);
   if (!ent.arrays.locustSource && w.locustSource) w.locustSource.fill(-1);
+  if (!ent.arrays.mana && w.mana) {
+    for (let i = 0; i < n; i++) {
+      w.mana[i] = w.alive[i] && isManaCaster(w.type[i]) ? MANA_MAX : 0;
+      if (w.manaAcc) w.manaAcc[i] = 0;
+    }
+  }
 
   importPoolStore(w.projectiles, checkpoint.projectiles, {
     u8: ['alive', 'type', 'owner', 'hitCount', 'despawnReason', 'power', 'launchWait'],
@@ -206,6 +214,7 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   importKoth(w, checkpoint.koth);
   importAgoras(w, checkpoint.agoras);
   importBuildings(w, checkpoint.buildings);
+  importWaveSpawners(w, checkpoint.waveSpawners);
   applySerializedTech(w, checkpoint.tech);
   applySerializedResources(w, checkpoint.resources);
   importFieldMutable(field, checkpoint.field);
@@ -329,6 +338,57 @@ function importTreeGrowth(store, data) {
   decodeTAInto(store.tile, data.tile);
   decodeTAInto(store.growAtTick, data.growAtTick);
   decodeTAInto(store.stock, data.stock);
+}
+
+function cloneRoster(r) {
+  if (!r) return null;
+  return {
+    base: Array.isArray(r.base) ? r.base.map((t) => t | 0) : [],
+    caster: Array.isArray(r.caster) ? r.caster.map((t) => t | 0) : [],
+    casterPct: r.casterPct | 0,
+    casterWave: r.casterWave | 0,
+  };
+}
+
+function exportWaveSpawners(list) {
+  if (!list?.length) return null;
+  return list.map((s) => ({
+    owner: s.owner | 0,
+    cx: s.cx | 0,
+    cz: s.cz | 0,
+    ringF: s.ringF | 0,
+    waves: s.waves | 0,
+    count: s.count | 0,
+    interval: s.interval | 0,
+    spawned: s.spawned | 0,
+    nextTick: s.nextTick | 0,
+    baseDir: s.baseDir | 0,
+    route: (s.route ?? []).map((wp) => ({ x: wp.x | 0, z: wp.z | 0 })),
+    roster: cloneRoster(s.roster),
+  }));
+}
+
+function importWaveSpawners(w, data) {
+  // Older checkpoints predate wave spawners — keep the init-built schedule.
+  if (data === undefined) return;
+  if (!data) {
+    w.waveSpawners = null;
+    return;
+  }
+  w.waveSpawners = data.map((s) => ({
+    owner: s.owner | 0,
+    cx: s.cx | 0,
+    cz: s.cz | 0,
+    ringF: s.ringF | 0,
+    waves: s.waves | 0,
+    count: s.count | 0,
+    interval: s.interval | 0,
+    spawned: s.spawned | 0,
+    nextTick: s.nextTick | 0,
+    baseDir: s.baseDir | 0,
+    route: Array.isArray(s.route) ? s.route.map((wp) => ({ x: wp.x | 0, z: wp.z | 0 })) : [],
+    roster: cloneRoster(s.roster),
+  }));
 }
 
 function exportKoth(k) {

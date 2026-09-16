@@ -1,0 +1,912 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AETHER</title>
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 16px/1.45 Georgia, "Times New Roman", serif;
+  color: #e8e2d4;
+  background: #16140f;
+}
+a { color: inherit; }
+nav {
+  position: sticky; top: 0; z-index: 2;
+  background: #16140f;
+  border-bottom: 1px solid #3a3428;
+  padding: 10px 18px 12px;
+}
+nav strong { display: block; letter-spacing: .12em; font: 700 12px/1.2 sans-serif; color: #c9a227; }
+nav ol { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 8px 0 0; padding: 0; list-style: none; }
+nav a { font: 600 13px/1.2 sans-serif; color: #d8c9a0; text-decoration: none; }
+nav a:hover { color: #fff; }
+main { max-width: 720px; margin: 0 auto; padding: 28px 20px 80px; }
+.title { text-align: center; margin: 36px 0 48px; }
+.title h1 { font: 700 42px/1.1 Georgia, serif; letter-spacing: .08em; margin: 0 0 8px; }
+.title p { margin: 0; color: #9a907c; font-style: italic; }
+.act { margin: 56px 0 0; }
+.act > h2 {
+  font: 700 13px/1.2 sans-serif;
+  letter-spacing: .16em;
+  color: #c9a227;
+  border-top: 1px solid #3a3428;
+  padding-top: 18px;
+}
+.chapter { margin: 36px 0 56px; }
+.chapter > h3 { font: 700 22px/1.2 Georgia, serif; margin: 0 0 18px; }
+.slug {
+  font: 700 14px/1.35 sans-serif;
+  letter-spacing: .04em;
+  color: #f2ead2;
+  margin: 22px 0 10px;
+}
+.slug.later { color: #b7ae96; }
+.action { margin: 10px 0; color: #e8e2d4; }
+.camera { margin: 10px 0; color: #8fa8b8; font-style: italic; }
+.beat { margin: 10px 0; color: #7a7366; font-style: italic; }
+.trans { text-align: right; color: #7a7366; font: 600 12px/1.2 sans-serif; letter-spacing: .08em; margin: 22px 0; }
+.line { margin: 18px auto; max-width: 22em; text-align: center; }
+.who { font: 700 13px/1.2 sans-serif; letter-spacing: .08em; color: #c9a227; }
+.who-lady { color: #c9b4de; }
+.who-doc { color: #8eb4d4; }
+.who-goblin { color: #d47a5a; }
+.who-stumpey { color: #d4b84a; }
+.paren { color: #8a8374; font: italic 13px/1.3 Georgia, serif; margin-top: 2px; }
+.said { margin: 4px 0 0; }
+.play {
+  margin: 20px 0;
+  padding: 12px 14px;
+  border: 1px solid #5a4a1e;
+  background: #241e10;
+}
+.play-label { font: 700 12px/1 sans-serif; letter-spacing: .14em; color: #c9a227; }
+.play ul { margin: 8px 0 0; padding: 0 0 0 1.1em; }
+.play li { margin: 4px 0; }
+.play b { color: #f2ead2; }
+.end { text-align: center; margin: 64px 0 24px; letter-spacing: .2em; color: #c9a227; font: 700 14px/1 sans-serif; }
+</style>
+</head>
+<body>
+<nav><strong>AETHER</strong><ol>
+<li><a href="#prologue">Prologue</a></li>
+<li><a href="#ep1">Episode 1 · The Siege</a></li>
+<li><a href="#ep2">Episode 2 · Ashfall</a></li>
+<li><a href="#ep3">Episode 3 · The Ice Wall</a></li>
+<li><a href="#ep4">Episode 4 · Muster</a></li>
+<li><a href="#ep5">Episode 5 · Cataclysm</a></li>
+</ol></nav>
+<main>
+<header class="title"><h1>AETHER</h1><p>a campaign in five episodes</p></header>
+<section class="act" id="prologue"><h2>PROLOGUE</h2>
+<article class="chapter" id="grove-1">
+<h3>The Grove</h3>
+<p class="trans">FADE IN:</p>
+<h4 class="slug">EXT. THE ANCIENT GROVE - PROLOGUE</h4>
+<p class="action">Before the siege. The party is still only four, and the woods are already dying.</p>
+<h4 class="slug">EXT. THE ANCIENT GROVE - THE GROVE</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="action">The ancient grove shudders. A darkness creeps through the roots, twisting all it touches.</p>
+<p class="camera">The camera finds them — closer now.</p>
+<p class="beat">A beat.</p>
+<div class="line">
+<div class="who who-stumpey">STUMPEY</div>
+<div class="paren">(scared)</div>
+<p class="said">Big problems... we oughtta get outta here.</p>
+</div>
+<div class="line">
+<div class="who who-lady">LADY</div>
+<div class="paren">(whispering)</div>
+<p class="said">What is happening to the forest? I can feel it dying.</p>
+</div>
+<div class="line">
+<div class="who who-doc">DOC</div>
+<div class="paren">(quietly, to himself)</div>
+<p class="said">Something has poisoned the heartwood. There is no curing this from here.</p>
+</div>
+<div class="line">
+<div class="who who-goblin">GOBLIN</div>
+<div class="paren">(shouting)</div>
+<p class="said">Less talking, more running! North, through the old pass!</p>
+</div>
+<div class="line">
+<div class="who who-stumpey">STUMPEY</div>
+<div class="paren">(commanding)</div>
+<p class="said">Right. Stay close everyone. Move!</p>
+</div>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li>REACH the old road north.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. THE ANCIENT GROVE - THE GROVE - LATER</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-stumpey">STUMPEY</div>
+<div class="paren">(whispering)</div>
+<p class="said">We made it...</p>
+</div>
+<div class="line">
+<div class="who who-lady">LADY</div>
+<div class="paren">(scared)</div>
+<p class="said">But look behind us...</p>
+</div>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-doc">DOC</div>
+<div class="paren">(quietly, to himself)</div>
+<p class="said">All those towers... everything we built. Gone.</p>
+</div>
+<p class="beat">A beat.</p>
+<div class="line">
+<div class="who who-goblin">GOBLIN</div>
+<p class="said">No use cryin' about it. What's ahead?</p>
+</div>
+<div class="line">
+<div class="who who-stumpey">STUMPEY</div>
+<p class="said">The old road. Nobody's used it in ages.</p>
+</div>
+<p class="action">The party turns north, leaving the corrupted grove behind.</p>
+<p class="beat">A beat.</p>
+</article>
+<article class="chapter" id="grove-2">
+<h3>The Ridge</h3>
+<h4 class="slug">EXT. THE ANCIENT GROVE - THE RIDGE</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="beat">A beat.</p>
+<p class="action">The old road opens onto another clearing. The blight did not follow — yet.</p>
+<p class="camera">ANGLE ON STUMPEY.</p>
+<div class="line">
+<div class="who who-stumpey">STUMPEY</div>
+<div class="paren">(commanding)</div>
+<p class="said">New dirt. Same feet. Keep moving.</p>
+</div>
+<p class="beat">A beat.</p>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li>TAKE the north ridge.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. THE ANCIENT GROVE - THE RIDGE - LATER</h4>
+<p class="camera">The camera finds them — closer now.</p>
+<div class="line">
+<div class="who who-doc">DOC</div>
+<p class="said">Ridge is clear. Something still pulls north.</p>
+</div>
+<p class="beat">A beat.</p>
+</article>
+<article class="chapter" id="grove-3">
+<h3>Clean Ground</h3>
+<h4 class="slug">EXT. THE ANCIENT GROVE - CLEAN GROUND</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="beat">A beat.</p>
+<p class="action">The ridge drops into a last hollow. The road ends in open dirt.</p>
+<p class="camera">ANGLE ON STUMPEY.</p>
+<div class="line">
+<div class="who who-goblin">GOBLIN</div>
+<div class="paren">(shouting)</div>
+<p class="said">That bright patch. That is the door.</p>
+</div>
+<div class="line">
+<div class="who who-stumpey">STUMPEY</div>
+<div class="paren">(commanding)</div>
+<p class="said">Then we walk it. No more looking back.</p>
+</div>
+<p class="beat">A beat.</p>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li>REACH the clean hollow.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. THE ANCIENT GROVE - CLEAN GROUND - LATER</h4>
+<p class="camera">The camera finds them — closer now.</p>
+<div class="line">
+<div class="who who-lady">LADY</div>
+<p class="said">The blight cannot reach us here.</p>
+</div>
+<p class="beat">A beat.</p>
+<p class="action">The party stands on clean ground. This road is done.</p>
+<p class="beat">A beat.</p>
+<p class="trans">FADE OUT.</p>
+</article>
+</section>
+<section class="act" id="ep1"><h2>EPISODE 1 · THE SIEGE</h2>
+<article class="chapter" id="e1c1">
+<h3>1.1 Breach in the Wall</h3>
+<p class="trans">FADE IN:</p>
+<h4 class="slug">EXT. THE BURNING KEEP - BREACH IN THE WALL</h4>
+<p class="action">EPISODE 1: The Siege. CHAPTER 1.1 — Breach in the Wall.</p>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="action">The keep is burning. The outer wall has fallen and the enemy pours through the breach.</p>
+<p class="camera">The camera finds them — closer now.</p>
+<div class="line">
+<div class="who who-goblin">GOBLIN</div>
+<div class="paren">(shouting)</div>
+<p class="said">They're through the wall! Everybody up — we do not die here!</p>
+</div>
+<div class="line">
+<div class="who who-lady">LADY</div>
+<div class="paren">(commanding)</div>
+<p class="said">The gatehouse is gone. North, over the rubble!</p>
+</div>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li><b>HERE</b> — The yard. Catch them if you still can.</li>
+<li><b>HOLD</b> — Buy the others time at the gap.</li>
+<li><b>RUN</b> — The wall is lost. Run.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. THE BURNING KEEP - BREACH IN THE WALL - LATER</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-stumpey">STUMPEY</div>
+<div class="paren">(commanding)</div>
+<p class="said">Out. Barely. Keep moving before they regroup.</p>
+</div>
+<p class="beat">A beat.</p>
+<p class="trans">FADE OUT.</p>
+</article>
+<article class="chapter" id="e1c2">
+<h3>1.2 The Sally Port</h3>
+<p class="trans">FADE IN:</p>
+<h4 class="slug">EXT. THE BURNING KEEP - THE SALLY PORT</h4>
+<p class="action">EPISODE 1: The Siege. CHAPTER 1.2 — The Sally Port.</p>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="action">A side passage clings to the inner wall — a forgotten sally port, and a way out.</p>
+<p class="camera">ANGLE ON DOC.</p>
+<div class="line">
+<div class="who who-doc">DOC</div>
+<div class="paren">(whispering)</div>
+<p class="said">Guards ahead. We go quiet, or we do not go at all.</p>
+</div>
+<div class="line">
+<div class="who who-goblin">GOBLIN</div>
+<p class="said">Quiet is not my strength.</p>
+</div>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li><b>SNEAK</b> — Stay out of the torchlight.</li>
+<li><b>HERE</b> — Past the light. Almost.</li>
+<li><b>RUN</b> — The little door. Nobody watches it.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. THE BURNING KEEP - THE SALLY PORT - LATER</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-lady">LADY</div>
+<div class="paren">(whispering)</div>
+<p class="said">The door holds. We're outside the walls.</p>
+</div>
+<p class="beat">A beat.</p>
+<p class="trans">FADE OUT.</p>
+</article>
+<article class="chapter" id="e1c3">
+<h3>1.3 Courtyard Gauntlet</h3>
+<p class="trans">FADE IN:</p>
+<h4 class="slug">EXT. THE BURNING KEEP - COURTYARD GAUNTLET</h4>
+<p class="action">EPISODE 1: The Siege. CHAPTER 1.3 — Courtyard Gauntlet.</p>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="action">The great courtyard is a killing floor. The enemy ram waits at the far gate.</p>
+<p class="camera">The camera finds them — closer now.</p>
+<div class="line">
+<div class="who who-stumpey">STUMPEY</div>
+<div class="paren">(commanding)</div>
+<p class="said">That ram breaks the last gate if we let it. We don't let it.</p>
+</div>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li><b>HERE</b> — Catch your breath in the open yard.</li>
+<li><b>KILL</b> — Wreck it and the gate is ours.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. THE BURNING KEEP - COURTYARD GAUNTLET - LATER</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-goblin">GOBLIN</div>
+<div class="paren">(shouting)</div>
+<p class="said">One dead ram. That felt good.</p>
+</div>
+<p class="beat">A beat.</p>
+<p class="trans">FADE OUT.</p>
+</article>
+<article class="chapter" id="e1c4">
+<h3>1.4 Over the Moat</h3>
+<p class="trans">FADE IN:</p>
+<h4 class="slug">EXT. THE BURNING KEEP - OVER THE MOAT</h4>
+<p class="action">EPISODE 1: The Siege. CHAPTER 1.4 — Over the Moat.</p>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="action">The only way clear is the long bridge across the moat — and the wagon of wounded must cross with you.</p>
+<p class="camera">ANGLE ON LADY.</p>
+<div class="line">
+<div class="who who-lady">LADY</div>
+<div class="paren">(commanding)</div>
+<p class="said">The wagon is slow and full of hurt. We do not leave it.</p>
+</div>
+<div class="line">
+<div class="who who-doc">DOC</div>
+<p class="said">Then we move together, or not at all.</p>
+</div>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li><b>HERE</b> — The boards hold. For now.</li>
+<li><b>GUARD</b> — It cannot defend itself — keep it whole.</li>
+<li><b>RUN</b> — The far bank. Freedom, for now.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. THE BURNING KEEP - OVER THE MOAT - LATER</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-stumpey">STUMPEY</div>
+<div class="paren">(whispering)</div>
+<p class="said">Across. The castle is behind us. All of it.</p>
+</div>
+<p class="beat">A beat.</p>
+<p class="trans">FADE OUT.</p>
+</article>
+</section>
+<section class="act" id="ep2"><h2>EPISODE 2 · ASHFALL</h2>
+<article class="chapter" id="e2c1">
+<h3>2.1 The Cinder Road</h3>
+<p class="trans">FADE IN:</p>
+<h4 class="slug">EXT. ASHFALL - THE CINDER ROAD</h4>
+<p class="action">EPISODE 2: Ashfall. CHAPTER 2.1 — The Cinder Road.</p>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="action">The mountain has woken. A river of fire chases you up the only road that still stands.</p>
+<p class="camera">The camera finds them — closer now.</p>
+<div class="line">
+<div class="who who-goblin">GOBLIN</div>
+<div class="paren">(scared)</div>
+<p class="said">Is the ground supposed to be that colour?!</p>
+</div>
+<div class="line">
+<div class="who who-stumpey">STUMPEY</div>
+<div class="paren">(shouting)</div>
+<p class="said">Run. Explanations later. RUN.</p>
+</div>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li><b>HERE</b> — Do not stop. The road is melting.</li>
+<li><b>RUN</b> — Do not stop. The road is melting.</li>
+<li><b>GO</b> — High ground. The flow can't follow.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. ASHFALL - THE CINDER ROAD - LATER</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-doc">DOC</div>
+<div class="paren">(quietly, to himself)</div>
+<p class="said">The ridge holds. The fire pools below us.</p>
+</div>
+<p class="beat">A beat.</p>
+<p class="trans">FADE OUT.</p>
+</article>
+<article class="chapter" id="e2c2">
+<h3>2.2 Emberhold</h3>
+<p class="trans">FADE IN:</p>
+<h4 class="slug">EXT. ASHFALL - EMBERHOLD</h4>
+<p class="action">EPISODE 2: Ashfall. CHAPTER 2.2 — Emberhold.</p>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="action">A fortress of black stone squats on the caldera rim — Emberhold, and the cultists who kept the fire.</p>
+<p class="camera">The camera finds them — closer now.</p>
+<div class="line">
+<div class="who who-lady">LADY</div>
+<div class="paren">(commanding)</div>
+<p class="said">They feed the mountain from that keep. We take it.</p>
+</div>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li><b>HOLD</b> — Keep them off the ridge stair.</li>
+<li><b>TAKE</b> — Take the keep and hold the height.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. ASHFALL - EMBERHOLD - LATER</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-stumpey">STUMPEY</div>
+<div class="paren">(quietly, to himself)</div>
+<p class="said">Emberhold is ours. Now — what were they hiding?</p>
+</div>
+<p class="beat">A beat.</p>
+<p class="trans">FADE OUT.</p>
+</article>
+<article class="chapter" id="e2c3">
+<h3>2.3 The Caldera</h3>
+<p class="trans">FADE IN:</p>
+<h4 class="slug">EXT. ASHFALL - THE CALDERA</h4>
+<p class="action">EPISODE 2: Ashfall. CHAPTER 2.3 — The Caldera.</p>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="action">Inside the caldera the air shimmers. A single vent breathes the fire that fuels it all.</p>
+<p class="camera">ANGLE ON DOC.</p>
+<div class="line">
+<div class="who who-doc">DOC</div>
+<div class="paren">(quietly, to himself)</div>
+<p class="said">Seal that vent and the eruption chokes. But it will fight us.</p>
+</div>
+<div class="line">
+<div class="who who-goblin">GOBLIN</div>
+<p class="said">Everything fights us. Let's go.</p>
+</div>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li><b>LAST</b> — Stay alive while the vent overloads.</li>
+<li><b>KILL</b> — Collapse it and the mountain sleeps.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. ASHFALL - THE CALDERA - LATER</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-lady">LADY</div>
+<div class="paren">(whispering)</div>
+<p class="said">It's closing. The roar is dying.</p>
+</div>
+<p class="beat">A beat.</p>
+<p class="trans">FADE OUT.</p>
+</article>
+<article class="chapter" id="e2c4">
+<h3>2.4 Rivers of Fire</h3>
+<p class="trans">FADE IN:</p>
+<h4 class="slug">EXT. ASHFALL - RIVERS OF FIRE</h4>
+<p class="action">EPISODE 2: Ashfall. CHAPTER 2.4 — Rivers of Fire.</p>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="action">Molten channels split the slope. Somewhere in the heat wait the last living embers of the old faith.</p>
+<p class="camera">ANGLE ON LADY.</p>
+<div class="line">
+<div class="who who-lady">LADY</div>
+<div class="paren">(commanding)</div>
+<p class="said">Those coals are older than the kingdom. We carry them out.</p>
+</div>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li><b>HERE</b> — The sacred coals must not go cold.</li>
+<li><b>TAKE</b> — The sacred coals must not go cold.</li>
+<li><b>RUN</b> — Off the mountain, embers and all.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. ASHFALL - RIVERS OF FIRE - LATER</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-stumpey">STUMPEY</div>
+<p class="said">Embers safe. The mountain behind us. On to the cold.</p>
+</div>
+<p class="beat">A beat.</p>
+<p class="trans">FADE OUT.</p>
+</article>
+</section>
+<section class="act" id="ep3"><h2>EPISODE 3 · THE ICE WALL</h2>
+<article class="chapter" id="e3c1">
+<h3>3.1 First Frost</h3>
+<p class="trans">FADE IN:</p>
+<h4 class="slug">EXT. THE ICE WALL - FIRST FROST</h4>
+<p class="action">EPISODE 3: The Ice Wall. CHAPTER 3.1 — First Frost.</p>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="action">A wall of blue ice runs to both horizons. Along its foot, something is already hunting you.</p>
+<p class="camera">The camera finds them — closer now.</p>
+<div class="line">
+<div class="who who-goblin">GOBLIN</div>
+<div class="paren">(whispering)</div>
+<p class="said">Footprints. Not ours. Fresh.</p>
+</div>
+<div class="line">
+<div class="who who-doc">DOC</div>
+<div class="paren">(whispering)</div>
+<p class="said">We are the prey now. Move soft.</p>
+</div>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li><b>SNEAK</b> — Hunters walk the wall. Do not be seen.</li>
+<li><b>RUN</b> — A cleeward hollow. Warmth, and a moment.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. THE ICE WALL - FIRST FROST - LATER</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-lady">LADY</div>
+<div class="paren">(whispering)</div>
+<p class="said">Shelter. Rest — but not long.</p>
+</div>
+<p class="beat">A beat.</p>
+<p class="trans">FADE OUT.</p>
+</article>
+<article class="chapter" id="e3c2">
+<h3>3.2 The Long Chase</h3>
+<p class="trans">FADE IN:</p>
+<h4 class="slug">EXT. THE ICE WALL - THE LONG CHASE</h4>
+<p class="action">EPISODE 3: The Ice Wall. CHAPTER 3.2 — The Long Chase.</p>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="action">The wall never ends and neither does the chase. Wave after wave breaks against your rear guard.</p>
+<p class="camera">ANGLE ON GOBLIN.</p>
+<div class="line">
+<div class="who who-goblin">GOBLIN</div>
+<div class="paren">(shouting)</div>
+<p class="said">They just keep coming!</p>
+</div>
+<div class="line">
+<div class="who who-stumpey">STUMPEY</div>
+<div class="paren">(commanding)</div>
+<p class="said">Then we just keep running. Hold the back, get to the gap!</p>
+</div>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li><b>HERE</b> — They come in packs. Keep the line.</li>
+<li><b>LAST</b> — They come in packs. Keep the line.</li>
+<li><b>RUN</b> — A break in the ice. Through it and gone.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. THE ICE WALL - THE LONG CHASE - LATER</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-doc">DOC</div>
+<div class="paren">(quietly, to himself)</div>
+<p class="said">The gap. We're through — leave them the cold.</p>
+</div>
+<p class="beat">A beat.</p>
+<p class="trans">FADE OUT.</p>
+</article>
+<article class="chapter" id="e3c3">
+<h3>3.3 Crevasse</h3>
+<p class="trans">FADE IN:</p>
+<h4 class="slug">EXT. THE ICE WALL - CREVASSE</h4>
+<p class="action">EPISODE 3: The Ice Wall. CHAPTER 3.3 — Crevasse.</p>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="action">A crevasse splits the ice. One ledge, one failing bridge, and hunters at your heels.</p>
+<p class="camera">ANGLE ON LADY.</p>
+<div class="line">
+<div class="who who-lady">LADY</div>
+<div class="paren">(quietly, to himself)</div>
+<p class="said">If we cut the bridge, they can't follow. But someone has to be last across.</p>
+</div>
+<div class="line">
+<div class="who who-stumpey">STUMPEY</div>
+<div class="paren">(commanding)</div>
+<p class="said">Then we choose, and we choose fast.</p>
+</div>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li><b>PICK</b> — The narrow ledge, or cut the rope bridge behind you.</li>
+<li><b>PICK</b> — The narrow ledge, or cut the rope bridge behind you.</li>
+<li><b>RUN</b> — Across the crevasse, whatever it cost.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. THE ICE WALL - CREVASSE - LATER</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-doc">DOC</div>
+<div class="paren">(whispering)</div>
+<p class="said">The far rim. What's done is done.</p>
+</div>
+<p class="beat">A beat.</p>
+<p class="trans">FADE OUT.</p>
+</article>
+<article class="chapter" id="e3c4">
+<h3>3.4 The Breaking Shelf</h3>
+<p class="trans">FADE IN:</p>
+<h4 class="slug">EXT. THE ICE WALL - THE BREAKING SHELF</h4>
+<p class="action">EPISODE 3: The Ice Wall. CHAPTER 3.4 — The Breaking Shelf.</p>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="action">The whole shelf groans and begins to break apart. The exit is the far edge — if it's still there when you arrive.</p>
+<p class="camera">The camera finds them — closer now.</p>
+<div class="line">
+<div class="who who-goblin">GOBLIN</div>
+<div class="paren">(shouting)</div>
+<p class="said">It's breaking! GO!</p>
+</div>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li><b>RUN</b> — The shelf is calving behind you.</li>
+<li><b>HERE</b> — Off the ice. Onto stone at last.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. THE ICE WALL - THE BREAKING SHELF - LATER</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-stumpey">STUMPEY</div>
+<p class="said">Stone. Blessed, solid stone. The wall is behind us.</p>
+</div>
+<p class="beat">A beat.</p>
+<p class="trans">FADE OUT.</p>
+</article>
+</section>
+<section class="act" id="ep4"><h2>EPISODE 4 · MUSTER</h2>
+<article class="chapter" id="e4c1">
+<h3>4.1 The War Camp</h3>
+<p class="trans">FADE IN:</p>
+<h4 class="slug">EXT. THE MUSTER PLAIN - THE WAR CAMP</h4>
+<p class="action">EPISODE 4: Muster. CHAPTER 4.1 — The War Camp.</p>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="action">At last, allies. A war camp rises on the plain — but the enemy would strangle it in the cradle.</p>
+<p class="camera">The camera finds them — closer now.</p>
+<div class="line">
+<div class="who who-stumpey">STUMPEY</div>
+<div class="paren">(commanding)</div>
+<p class="said">No more running. Here we build, and here we stand.</p>
+</div>
+<div class="line">
+<div class="who who-lady">LADY</div>
+<p class="said">Walls first. Then we bloody their nose.</p>
+</div>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li><b>HERE</b> — Wall the camp before nightfall.</li>
+<li><b>HOLD</b> — Break the raid and the camp stands.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. THE MUSTER PLAIN - THE WAR CAMP - LATER</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-goblin">GOBLIN</div>
+<p class="said">Camp's holding. Feels strange, winning ground instead of losing it.</p>
+</div>
+<p class="beat">A beat.</p>
+<p class="trans">FADE OUT.</p>
+</article>
+<article class="chapter" id="e4c2">
+<h3>4.2 Forge and Field</h3>
+<p class="trans">FADE IN:</p>
+<h4 class="slug">EXT. THE MUSTER PLAIN - FORGE AND FIELD</h4>
+<p class="action">EPISODE 4: Muster. CHAPTER 4.2 — Forge and Field.</p>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="action">Steel wins wars as surely as courage. The forge must be built, and fed.</p>
+<p class="camera">ANGLE ON DOC.</p>
+<div class="line">
+<div class="who who-doc">DOC</div>
+<div class="paren">(quietly, to himself)</div>
+<p class="said">Ore from the ridge, timber from the wood. Then we forge.</p>
+</div>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li><b>TAKE</b> — An army marches on its supply.</li>
+<li><b>BUILD</b> — Light the forge and arm the muster.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. THE MUSTER PLAIN - FORGE AND FIELD - LATER</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-lady">LADY</div>
+<p class="said">The forge is lit. Now we have teeth.</p>
+</div>
+<p class="beat">A beat.</p>
+<p class="trans">FADE OUT.</p>
+</article>
+<article class="chapter" id="e4c3">
+<h3>4.3 The Alliance</h3>
+<p class="trans">FADE IN:</p>
+<h4 class="slug">EXT. THE MUSTER PLAIN - THE ALLIANCE</h4>
+<p class="action">EPISODE 4: Muster. CHAPTER 4.3 — The Alliance.</p>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="action">The hill clans hold the balance. Their banner would double the muster — if they can be won.</p>
+<p class="camera">ANGLE ON STUMPEY.</p>
+<div class="line">
+<div class="who who-stumpey">STUMPEY</div>
+<div class="paren">(quietly, to himself)</div>
+<p class="said">We can ask for their banner. Or we can take it. I'd rather ask.</p>
+</div>
+<div class="line">
+<div class="who who-goblin">GOBLIN</div>
+<p class="said">Asking's cheaper. Usually.</p>
+</div>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li><b>ASK</b> — Bargain, or take the banner by force.</li>
+<li><b>TAKE</b> — Bargain, or take the banner by force.</li>
+<li><b>TAKE</b> — With their banner, their spears are ours.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. THE MUSTER PLAIN - THE ALLIANCE - LATER</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-lady">LADY</div>
+<p class="said">The banner flies with ours. The alliance holds.</p>
+</div>
+<p class="beat">A beat.</p>
+<p class="trans">FADE OUT.</p>
+</article>
+<article class="chapter" id="e4c4">
+<h3>4.4 Eve of Battle</h3>
+<p class="trans">FADE IN:</p>
+<h4 class="slug">EXT. THE MUSTER PLAIN - EVE OF BATTLE</h4>
+<p class="action">EPISODE 4: Muster. CHAPTER 4.4 — Eve of Battle.</p>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="action">The last night before the march. The enemy tries one desperate raid to break the muster before it moves.</p>
+<p class="camera">The camera finds them — closer now.</p>
+<div class="line">
+<div class="who who-doc">DOC</div>
+<div class="paren">(quietly, to himself)</div>
+<p class="said">They know what dawn brings. They'll spend everything tonight.</p>
+</div>
+<div class="line">
+<div class="who who-stumpey">STUMPEY</div>
+<div class="paren">(commanding)</div>
+<p class="said">Then we spend the night killing raids. Hold the gate!</p>
+</div>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li><b>HOLD</b> — Keep the muster gate through the night.</li>
+<li><b>LAST</b> — Last till dawn and the army marches whole.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. THE MUSTER PLAIN - EVE OF BATTLE - LATER</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-lady">LADY</div>
+<div class="paren">(whispering)</div>
+<p class="said">Dawn. We held. The army marches.</p>
+</div>
+<p class="beat">A beat.</p>
+<p class="trans">FADE OUT.</p>
+</article>
+</section>
+<section class="act" id="ep5"><h2>EPISODE 5 · CATACLYSM</h2>
+<article class="chapter" id="e5c1">
+<h3>5.1 The Black Tide</h3>
+<p class="trans">FADE IN:</p>
+<h4 class="slug">EXT. THE LAST FIELD - THE BLACK TIDE</h4>
+<p class="action">EPISODE 5: Cataclysm. CHAPTER 5.1 — The Black Tide.</p>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="action">The horizon is black with them. At its head walks a beast the size of a keep.</p>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-goblin">GOBLIN</div>
+<div class="paren">(scared)</div>
+<p class="said">That is not an army. That is the end of the world.</p>
+</div>
+<div class="line">
+<div class="who who-stumpey">STUMPEY</div>
+<div class="paren">(shouting)</div>
+<p class="said">Then we end it first. For the beast — everyone, on me!</p>
+</div>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li><b>HERE</b> — The horde comes in waves without end.</li>
+<li><b>HOLD</b> — The horde comes in waves without end.</li>
+<li><b>KILL</b> — Kill the thing that leads them and the tide breaks.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. THE LAST FIELD - THE BLACK TIDE - LATER</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-lady">LADY</div>
+<div class="paren">(quietly, to himself)</div>
+<p class="said">The beast falls. The tide falters — but only for a breath.</p>
+</div>
+<p class="beat">A beat.</p>
+<p class="trans">FADE OUT.</p>
+</article>
+<article class="chapter" id="e5c2">
+<h3>5.2 The Sundering</h3>
+<p class="trans">FADE IN:</p>
+<h4 class="slug">EXT. THE LAST FIELD - THE SUNDERING</h4>
+<p class="action">EPISODE 5: Cataclysm. CHAPTER 5.2 — The Sundering.</p>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="action">The sky is tearing open. Three wards must hold while the relic is carried to the wound in the world.</p>
+<p class="camera">ANGLE ON DOC.</p>
+<div class="line">
+<div class="who who-doc">DOC</div>
+<div class="paren">(commanding)</div>
+<p class="said">Hold the wards. Get the relic to the center. Everything depends on both.</p>
+</div>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li><b>HOLD</b> — One of three anchors of the seal.</li>
+<li><b>HOLD</b> — One of three anchors of the seal.</li>
+<li><b>GUARD</b> — Only the relic can close the sundering.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. THE LAST FIELD - THE SUNDERING - LATER</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-stumpey">STUMPEY</div>
+<div class="paren">(whispering)</div>
+<p class="said">The relic's in place. The tear... it's slowing.</p>
+</div>
+<p class="beat">A beat.</p>
+<p class="trans">FADE OUT.</p>
+</article>
+<article class="chapter" id="e5c3">
+<h3>5.3 The Last Light</h3>
+<p class="trans">FADE IN:</p>
+<h4 class="slug">EXT. THE LAST FIELD - THE LAST LIGHT</h4>
+<p class="action">EPISODE 5: Cataclysm. CHAPTER 5.3 — The Last Light.</p>
+<p class="camera">The camera takes the field. Wide.</p>
+<p class="action">At the center of everything beats a dark heart. Around it, the last of the light — and the last of you.</p>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-lady">LADY</div>
+<div class="paren">(whispering)</div>
+<p class="said">Whatever happens now, we finish it together.</p>
+</div>
+<div class="line">
+<div class="who who-stumpey">STUMPEY</div>
+<div class="paren">(commanding)</div>
+<p class="said">Together. For the heart. One last time.</p>
+</div>
+<p class="trans">CUT TO:</p>
+<div class="play">
+<div class="play-label">PLAY</div>
+<ul>
+<li><b>HERE</b> — Hold the ring while the light gathers.</li>
+<li><b>END</b> — End it here. There is no next road.</li>
+</ul>
+</div>
+<p class="trans">CUT TO:</p>
+<h4 class="slug later">EXT. THE LAST FIELD - THE LAST LIGHT - LATER</h4>
+<p class="camera">The camera takes the field. Wide.</p>
+<div class="line">
+<div class="who who-doc">DOC</div>
+<div class="paren">(whispering)</div>
+<p class="said">It's... over. The dark is gone.</p>
+</div>
+<p class="action">The heart shatters into a thousand points of light, and the world holds its breath — then breathes.</p>
+<p class="beat">A beat.</p>
+<p class="trans">FADE OUT.</p>
+</article>
+</section>
+<p class="end">THE END</p>
+</main>
+</body>
+</html>

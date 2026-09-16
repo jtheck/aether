@@ -30,6 +30,7 @@
     "build:explorer": "node build-explorer.mjs",
     "build:howler": "node build-howler.mjs",
     "build:campaign": "node build-campaign.mjs",
+    "build:script": "node build-campaign-script.mjs",
     "serve": "node serve.mjs",
     "prebake": "node prebake.mjs",
     "prebake:repack": "node prebake/repackMeshes.mjs",

@@ -16,6 +16,7 @@
 import * as fx from './fixed.js';
 import { applyCommands } from './commands.js';
 import { buildingProductionSystem } from './buildingProduction.js';
+import { waveSpawnerSystem } from './waveSpawner.js';
 import { combatSystem } from './combat.js';
 import { towerCombatSystem } from './towerCombat.js';
 import {
@@ -159,6 +160,8 @@ export function step(world, field, commands) {
 
   phase('commands', () => applyCommands(world, field, commands));
   phase('buildings', () => buildingProductionSystem(world, field));
+  // Scripted reinforcements land before combat so they fight the same tick.
+  phase('waves', () => waveSpawnerSystem(world, field));
   phase('transport', () => transportAutoLoadSystem(world));
   phase('repair', () => repairSystem(world));
   phase('engineerAssist', () => refreshEngineerAssists(world));

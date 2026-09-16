@@ -892,7 +892,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   // Scenario override — loading-screen / unit-tester share vision with the AI.
   // `fog: false` / ?fog=0 still disables the overlay entirely.
   let fogUserEnabled = bootCfg.fog !== false;
-  let fogShareVisionWith = shareVisionOwnersFromCfg(bootCfg);
+  /** Cinematic 'all' reveal — covers every campaign owner slot (party + hostiles). */
+  const REVEAL_ALL_OWNERS = [0, 1, 2, 3, 4, 5, 6, 7];
+  /** Owners shared by config (teammates / spectate). Cinematics layer on top. */
+  let baseShareVisionWith = shareVisionOwnersFromCfg(bootCfg);
+  /** Temporary cinematic reveal: null, 'all', or a list of owner ids. */
+  let cinematicReveal = null;
+  let fogShareVisionWith = baseShareVisionWith;
   function fogActive() {
     if (!fogUserEnabled) return false;
     if (session.role === 'spectator') return true;
@@ -904,11 +910,28 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     stampFog();
     refreshFoggedProps();
   }
-  function setShareVisionWith(owners) {
-    fogShareVisionWith = Array.isArray(owners) ? owners.map((id) => id | 0) : [];
+  function applyEffectiveShareVision() {
+    let eff = baseShareVisionWith;
+    if (cinematicReveal === 'all') {
+      eff = REVEAL_ALL_OWNERS;
+    } else if (Array.isArray(cinematicReveal) && cinematicReveal.length) {
+      eff = [...new Set([...baseShareVisionWith, ...cinematicReveal])];
+    }
+    fogShareVisionWith = eff;
     if (session.resetting || liveConfigQuietFog) return;
     stampFog();
     refreshFoggedProps();
+  }
+  function setShareVisionWith(owners) {
+    baseShareVisionWith = Array.isArray(owners) ? owners.map((id) => id | 0) : [];
+    applyEffectiveShareVision();
+  }
+  /** Cinematic vision share driven by the active story reel. spec: null | 'all' | number[]. */
+  function setCinematicReveal(spec) {
+    cinematicReveal = spec === 'all'
+      ? 'all'
+      : (Array.isArray(spec) ? spec.map((id) => id | 0) : null);
+    applyEffectiveShareVision();
   }
 
   const sceneryFogAt = (x, z) => fog.fogFactorAt(x, z);
@@ -1800,6 +1823,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     getField: () => session.field,
     getSpeakerPos: getStorySpeakerPos,
     worldToScreen: (x, y, z) => renderer.worldToScreen?.(x, y, z) ?? null,
+    onReveal: (spec) => setCinematicReveal(spec),
   });
   if (garden?.story) matchStory.playIntro(garden.story);
   const objectiveHud = createObjectiveHud(document.body);
@@ -1817,6 +1841,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   let carriedParty = null;
   let carriedBank = null;
   let chapterWon = false;
+  let chapterLost = false;
+  /** Latched once the party is seen alive, so we never "lose" before heroes spawn. */
+  let partySeen = false;
   let chapterAdvanceBusy = false;
   let pendingChapterUrl = null;
   let objectivesArmedAt = 0;
@@ -1941,8 +1968,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     adventureStory = g?.story || null;
     adventureObjectives = gardenObjectivesOf(g);
     chapterWon = false;
+    chapterLost = false;
+    partySeen = false;
     chapterAdvanceBusy = false;
     pendingChapterUrl = null;
+    const overEl = document.getElementById('match-over');
+    if (overEl) overEl.hidden = true;
     chapterVotes.clear();
     chapterVoteUrl = '';
     chapterProposeSent = false;
@@ -1987,6 +2018,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     chapterVoteUrl = next.chapterVoteUrl;
     chapterProposeSent = next.chapterProposeSent;
     chapterFlushTimer = next.chapterFlushTimer;
+    chapterLost = false;
+    partySeen = false;
     matchStory.stop();
     storyCast = [];
     objectiveHud.hide();
@@ -2063,11 +2096,36 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         }
         return false;
       },
+      field,
+      partyPoints() {
+        const out = [];
+        const n = world?.count | 0;
+        for (let i = 0; i < n; i++) {
+          if (!world.alive?.[i] || !allow.has(world.owner[i] | 0)) continue;
+          out.push({ x: fx.toFloat(world.px[i]), z: fx.toFloat(world.py[i]) });
+        }
+        return out;
+      },
+      enemyPoints() {
+        const out = [];
+        const n = world?.count | 0;
+        for (let i = 0; i < n; i++) {
+          if (!world.alive?.[i] || (world.owner[i] | 0) !== CAMPAIGN_ENEMY_OWNER) continue;
+          out.push({ x: fx.toFloat(world.px[i]), z: fx.toFloat(world.py[i]) });
+        }
+        return out;
+      },
+      escortPoint(name) {
+        const entry = storyCast.find((c) => normalizeSpeaker(c.name) === normalizeSpeaker(name));
+        const i = entry?.index | 0;
+        if (entry == null || !world.alive?.[i]) return null;
+        return { x: fx.toFloat(world.px[i]), z: fx.toFloat(world.py[i]) };
+      },
     };
   }
 
   function tickAdventureObjectives() {
-    if (!adventureObjectives.length || chapterWon || chapterAdvanceBusy) {
+    if (!adventureObjectives.length || chapterWon || chapterLost || chapterAdvanceBusy) {
       objectiveHud.set(adventureObjectives, { hidden: true });
       syncExitMarks(true);
       return;
@@ -2092,7 +2150,16 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (just.length && just[0].message) {
       setStatusText(just[0].message);
     }
-    if (!result.chapterWin) return;
+    if (!result.chapterWin) {
+      // Lose conditions: a chapter's critical objective fails, or — the default —
+      // the whole party is dead. Latch partySeen so we never lose pre-spawn.
+      if (triggerCtx.partyAlive()) partySeen = true;
+      const failReason = chapterFailReason(adventureObjectives);
+      if (failReason || (partySeen && !triggerCtx.partyAlive())) {
+        enterAdventureDefeat(failReason || 'The party has fallen');
+      }
+      return;
+    }
     chapterWon = true;
     captureAdventureParty();
     const next = result.next || '';
@@ -2102,9 +2169,41 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     if (next) pendingChapterUrl = next;
     else {
+      endAdventureMatch('Victory', 'Adventure complete');
       setStatusText('Adventure complete');
-      objectiveHud.set(adventureObjectives);
     }
+  }
+
+  /**
+   * Reason this chapter is lost independent of party death — a critical objective
+   * that failed (e.g. a protect/escort target died). Trigger logic sets `_failed`
+   * with an optional `failMessage`. Returns '' when no critical objective failed.
+   */
+  function chapterFailReason(objectives) {
+    const failed = (objectives || []).find((o) => o._failed);
+    return failed ? (failed.failMessage || failed.message || 'Mission failed') : '';
+  }
+
+  /** End the chapter with a banner and hand the lobby back so the player can retry. */
+  function endAdventureMatch(title, sub) {
+    objectiveHud.set(adventureObjectives, { hidden: true });
+    syncExitMarks(true);
+    matchStory.stop();
+    enterPostGameObserve(session);
+    renderer.setFxPaused?.(true);
+    inputApi?.setRole?.('spectator');
+    showAdventureResult(title, sub);
+    // Return the room to ready-up (phase 'playing' → 'waiting') or the lobby stays
+    // stuck on "Match running." and the player can't start again.
+    adventureLobby()?.returnToWaiting?.();
+    lobbyUi.refresh?.();
+  }
+
+  function enterAdventureDefeat(reason) {
+    if (chapterLost) return;
+    chapterLost = true;
+    endAdventureMatch('Defeat', reason);
+    setStatusText(`Defeat — ${reason}`);
   }
 
   if (garden?.story || gardenObjectivesOf(garden).length) beginAdventure(garden);
@@ -2743,6 +2842,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (url) proposeChapterAdvance(url);
       else {
         pendingChapterUrl = null;
+        endAdventureMatch('Victory', 'Adventure complete');
         setStatusText('Adventure complete');
       }
     }
@@ -3781,7 +3881,11 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
     // Guard against a newer match rebuild superseding this one during the wait.
     const sweepGen = gen;
     setTimeout(() => {
-      if (sweepGen === liveConfigGeneration) sweepCameraToArmy(ctx, cfg);
+      // Never override an active story cinematic (belt-and-suspenders on top of
+      // the adventure/story exclusion in wantsMatchIntroSweep).
+      if (sweepGen === liveConfigGeneration && !ctx.matchStory?.driving?.()) {
+        sweepCameraToArmy(ctx, cfg);
+      }
     }, MATCH_INTRO_SWEEP_DELAY_MS);
   }
   aetherSteam.notifyPlayReady();
@@ -4048,6 +4152,18 @@ function matchEndedByAgora(session) {
     if (list[i].captured) return true;
   }
   return false;
+}
+
+/** Set the shared match-over banner (title + subtitle) and reveal it. */
+function showAdventureResult(title, sub) {
+  const el = document.getElementById('match-over');
+  if (!el) return;
+  const titleEl = document.getElementById('match-over-title');
+  const subEl = document.getElementById('match-over-sub');
+  if (titleEl) titleEl.textContent = title;
+  else el.textContent = sub ? `${title} — ${sub}` : title;
+  if (subEl) subEl.textContent = sub || '';
+  el.hidden = false;
 }
 
 function showMatchOver(session) {

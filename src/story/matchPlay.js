@@ -102,6 +102,8 @@ export function createMatchStory(opts = {}) {
     transport.detach();
     hud.hide();
     speech.hide();
+    // Drop any cinematic vision share when the reel ends or is skipped.
+    opts.onReveal?.(null);
   }
 
   function onKey(e) {
@@ -139,6 +141,8 @@ export function createMatchStory(opts = {}) {
       },
     });
     playing = true;
+    // Share vision with the reel's factions so spawns / distant action read on camera.
+    opts.onReveal?.(reel.reveal ?? null);
     transport.attach(player);
     bindSkip();
     player.play();

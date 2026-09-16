@@ -73,7 +73,7 @@ function castStrikesRandomHostile() {
   }]);
 
   assert.ok(w.abilityCd[wizard] > 0);
-  assert.equal(w.abilityCd[wizard], LIGHTNING_COOLDOWN - 1);
+  assert.equal(w.mana[wizard], 200);
   assert.equal(w.hp[ally], hpAlly, 'allies are not struck');
 
   const hitA = w.hp[foeA] < hpA;

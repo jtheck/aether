@@ -4,6 +4,7 @@ import { buildField, fieldSnapshot, mapSizeForConfig, STRESS_CAMERA_HALF_F, TILE
 import { applyTableSilhouette } from '../sim/tableShape.js';
 import { populateScenery } from '../sim/scenery.js';
 import { applyGardenPlacements, decodeGarden, fieldFromGarden } from '../sim/garden.js';
+import { setupWaveSpawners } from '../sim/waveSpawner.js';
 import { buildWorldFromConfig, spawnBases, stressReservedPoints } from '../sim/worldSetup.js';
 import { step } from '../sim/step.js';
 import { excludeHumanAiPlayers, generateAiCommands } from '../sim/ai.js';
@@ -119,6 +120,7 @@ self.onmessage = (e) => {
         || (msg.config.stressPerSide | 0) > 0
         || (msg.config.animStressPerSide | 0) > 0;
       if (garden) applyGardenPlacements(world, field, garden);
+      if (garden?.objectives?.length) setupWaveSpawners(world, field, garden.objectives);
       if (!garden) {
         field.suppressCenterBlock = !!msg.config.noCenterBlock;
         applyTableSilhouette(field);

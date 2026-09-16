@@ -10,6 +10,7 @@ import { getUnitDef } from './unitTypes.js';
 import { isHostile } from './teams.js';
 import { rngU32 } from './rng.js';
 import { ABILITY } from './abilities.js';
+import { canCastAbility } from './mana.js';
 import { agoraForOwner } from './agora.js';
 
 import {
@@ -281,7 +282,7 @@ function collectCasts(world, aiOwner, temper) {
   for (let i = 0; i < world.count; i++) {
     if (castCount >= temper.castCap) break;
     if (!world.alive[i] || world.owner[i] !== aiOwner) continue;
-    if (world.abilityCd[i] > 0) continue;
+    if (!canCastAbility(world, i)) continue;
     const def = getUnitDef(world.type[i]);
     if (!def.primaryAbility) continue;
     if (def.category !== 'military') continue;

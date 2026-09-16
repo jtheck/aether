@@ -45,7 +45,7 @@ function castSpawnsStaggeredCluster() {
   }]);
   assert.equal(w.frogs.activeCount, FROG_COUNT, 'cast spawns frog cluster');
   assert.ok(w.abilityCd[shaman] > 0);
-  assert.equal(w.abilityCd[shaman], FROG_PLAGUE_COOLDOWN - 1);
+  assert.equal(w.mana[shaman], 200);
 
   let waiting = 0;
   let hopping = 0;

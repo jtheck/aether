@@ -1,9 +1,10 @@
-// Health chips: unit row is 7 (4 big / 3 small, big on the ends), buildings
-// add one more on each end (9). Big chips are translucent HP — green above
-// 66%, yellow above 33%, then red — drawn behind opaque team-color circles.
-// Agora rows are 9 circles (large / small…). Invade fills from the right;
-// after unlock, small chips stay the founder color and the tug fills left.
-// Optional armor/holy rings sit on the inner small tiles.
+// Health chips: unit row is 7 HP pips, buildings add one more on each end (9).
+// Team color sits on the left pip plus a line under the HP row (O_____).
+// Casters show up to 3 ready-mana dots under that line; vehicles reuse those
+// dots for filled passenger seats. HP is green above 66%, yellow above 33%,
+// then red. Agora rows stay 9 circles (large / small…). Invade fills from
+// the right; after unlock, small chips stay the founder color and the tug
+// fills left. Optional armor/holy rings sit on inner HP tiles.
 
 import {
   addBillboardSprite,
@@ -30,15 +31,17 @@ export const AGORA_LARGE_CHIP_COUNT = 5;
 export const AGORA_TINT_NEUTRAL = -2;
 export const AGORA_NEUTRAL_RGB = [0.26, 0.26, 0.28];
 const CHIP_COUNT_MAX = BUILDING_CHIP_COUNT;
-/** One extra slot so a team square can sit past a full row. */
-const CHIP_DOT_SLOTS = CHIP_COUNT_MAX + 1;
+/** Ready-mana bank / max vehicle seats drawn under the HP line. */
+export const UNDER_DOT_MAX = 6;
+export const MANA_BANK_DOTS = 3;
 const TEX = 64;
 const FRAME_ROUND = 0;
 const FRAME_SQUARE = 1;
 const FRAME_LEAD_ROUND = 2;
 const FRAME_RING_HOLY = 3;
 const FRAME_RING_ARMOR = 4;
-const ATLAS_COLUMNS = 5;
+const FRAME_LINE = 5;
+const ATLAS_COLUMNS = 6;
 /** Corner radius as a fraction of half-extent. 0 = sharp square, 1 = circle. */
 export const CHIP_BIG_CORNER_MUL = 0.48;
 export const CHIP_SMALL_CORNER_MUL = 0.48;
@@ -65,16 +68,24 @@ export const TARGET_AGORA_DOT_PX = 14;
 /** Half size past the look-at near radius. */
 export const TARGET_DOT_PX_FAR = TARGET_DOT_PX * 0.5;
 const DOT_DIAMETER_MAIN_MUL = 0.88;
-/** First HP pip — a tick larger than the other big chips. */
+/** First HP pip — a tick larger than the other chips. */
 export const DOT_DIAMETER_FIRST_MUL = 0.96;
-/** Small interstitial chips (team-color circles). Still below the big HP pips. */
+/** Leftover from the old interstitial team pips. */
 export const DOT_DIAMETER_ALTERNATE_MUL = 0.58;
 /** Circles stay 1:1 — leftover from the old wide squares. */
 export const DOT_ALTERNATE_WIDTH_MUL = 1;
-/** Permanent left team pip — a tick larger than the in-row team circles. */
+/** Permanent left team pip. */
 export const DOT_DIAMETER_LEAD_MUL = 0.80;
+/** Ready-mana / filled-seat dots under the HP line. */
+export const DOT_DIAMETER_UNDER_MUL = 1.12;
 /** Center gap — visual tiles are smaller than the billboard, so this can sit under 0.72. */
-const DOT_SPACING_MUL = 0.54;
+const DOT_SPACING_MUL = 0.60;
+const LINE_HEIGHT_MUL = 0.16;
+const LINE_DOWN_MUL = 0.40;
+const UNDER_DOWN_MUL = 0.98;
+const UNDER_SPACING_MUL = 0.86;
+const UNDER_SPACING_PACKED_MUL = 0.62;
+const RGB_MANA = [0.40, 0.86, 0.96];
 /** Agora circles — large on even slots, smaller on odd, with air between. */
 export const DOT_DIAMETER_AGORA_LARGE_MUL = 2.15;
 export const DOT_DIAMETER_AGORA_SMALL_MUL = 1.22;
@@ -107,8 +118,8 @@ export const HORIZON_HIDE = 1;
 /** Skip draws when the horizon scale is at or below this. */
 export const HORIZON_HIDE_EPS = 0.04;
 
-/** Max sprites per slot: 10 dots + 2 holy rings + 2 armor rings. */
-const SPRITES_PER_SLOT = CHIP_DOT_SLOTS + 4;
+/** Max sprites per slot: HP chips + lead + line + under dots + rings. */
+const SPRITES_PER_SLOT = CHIP_COUNT_MAX + 1 + 1 + UNDER_DOT_MAX + 4;
 /**
  * Toward-camera pull so chips win depth against terrain and unit meshes.
  * (Billboard API always depth-tests; bias is the HUD-style always-visible path.)
@@ -162,6 +173,34 @@ function writeSoftChip(pixels, ox, size, cornerMul, opts = {}) {
   }
 }
 
+function writeUnderline(pixels, ox, size) {
+  const cx = size * 0.5;
+  const cy = size * 0.5;
+  const halfW = size * 0.48;
+  const halfH = size * 0.055;
+  const feather = size * 0.02;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const px = x + 0.5 - cx;
+      const py = y + 0.5 - cy;
+      const ax = Math.abs(px) - halfW + halfH;
+      const ay = Math.abs(py) - halfH + halfH;
+      const oxp = Math.max(ax, 0);
+      const oyp = Math.max(ay, 0);
+      const d = Math.hypot(oxp, oyp) + Math.min(Math.max(ax, ay), 0) - halfH;
+      let a = 0;
+      if (d <= 0) a = 1;
+      else if (d < feather) a = 1 - d / feather;
+      const i = ((y * size * ATLAS_COLUMNS) + ox + x) * 4;
+      const rgb = a > 0 ? 255 : 0;
+      pixels[i] = rgb;
+      pixels[i + 1] = rgb;
+      pixels[i + 2] = rgb;
+      pixels[i + 3] = Math.round(a * 255);
+    }
+  }
+}
+
 function writeRoundedRing(pixels, ox, size, alpha) {
   const cx = size * 0.5;
   const cy = size * 0.5;
@@ -197,6 +236,7 @@ function createHealthChipAtlas(engine) {
   writeSoftChip(pixels, TEX * 2, TEX, CHIP_LEAD_CORNER_MUL);
   writeRoundedRing(pixels, TEX * 3, TEX, 0.92);
   writeRoundedRing(pixels, TEX * 4, TEX, 0.94);
+  writeUnderline(pixels, TEX * 5, TEX);
   const texture = createTexture2DFromPixels(engine, pixels, w, h, {
     minFilter: 'linear',
     magFilter: 'linear',
@@ -329,10 +369,10 @@ export function chipBarFilled(ratio, count, hp) {
   return chipBarState(ratio, count).filled;
 }
 
-/** Size vs the normal chip. Even = big, odd = small. 7: N S N S N S N. 9: + N S. */
+/** Size vs the normal chip. First pip is a tick larger; the rest match. */
 export function chipSizeMul(index, _count) {
   if (index === 0) return DOT_DIAMETER_FIRST_MUL;
-  return index % 2 === 1 ? DOT_DIAMETER_ALTERNATE_MUL : DOT_DIAMETER_MAIN_MUL;
+  return DOT_DIAMETER_MAIN_MUL;
 }
 
 /** Width vs height. Team circles stay round. */
@@ -340,19 +380,19 @@ export function chipWidthMul(_index) {
   return 1;
 }
 
-/** Odd slots are the small chips between the HP pips. */
-export function chipIsTeamDot(index) {
-  return (index & 1) === 1;
+/** In-row chips are HP only — team color lives on the left pip + underline. */
+export function chipIsTeamDot(_index) {
+  return false;
 }
 
-/** Big chips are HP color; small chips (and the left pip) are team color. */
-export function chipFillRgb(index, hpRgb, owner) {
-  return chipIsTeamDot(index) ? ownerTint(owner) : hpRgb;
+/** In-row chips use the HP band color. */
+export function chipFillRgb(_index, hpRgb, _owner) {
+  return hpRgb;
 }
 
-/** Atlas frame: odd slots are team circles; even are rounded HP. */
-export function chipDotFrame(index) {
-  return chipIsTeamDot(index) ? FRAME_LEAD_ROUND : FRAME_ROUND;
+/** Atlas frame: in-row chips are rounded HP. */
+export function chipDotFrame(_index) {
+  return FRAME_ROUND;
 }
 
 /** Opacity from HP ratio: 1 = green, 0 = red. */
@@ -361,10 +401,18 @@ export function chipFillAlpha(ratio) {
   return CHIP_FILL_ALPHA_GREEN + (CHIP_FILL_ALPHA_RED - CHIP_FILL_ALPHA_GREEN) * (1 - r);
 }
 
-/** Small chips match the left team pip; big HP chips use health alpha. */
-export function chipDotAlpha(index, filled, ratio) {
+/** HP chips fade with the health band; empty slots stay opaque if drawn. */
+export function chipDotAlpha(_index, filled, ratio) {
   if (!filled) return 1;
-  return chipIsTeamDot(index) ? CHIP_TEAM_FILL_ALPHA : chipFillAlpha(ratio);
+  return chipFillAlpha(ratio);
+}
+
+/** Ready mana charges, or filled vehicle seats — not both. */
+export function underDotCount(flags = {}) {
+  if (flags.agora || flags.building) return 0;
+  const seats = flags.seatsFilled | 0;
+  if (seats > 0) return Math.min(UNDER_DOT_MAX, seats);
+  return Math.min(MANA_BANK_DOTS, flags.manaReady | 0);
 }
 
 /** Extra sprite slot: permanent team square to the left of the HP row. */
@@ -500,11 +548,16 @@ function makeSpriteState() {
 
 function makeSlot() {
   const dots = [];
-  for (let i = 0; i < CHIP_DOT_SLOTS; i++) dots.push(makeSpriteState());
+  for (let i = 0; i < CHIP_COUNT_MAX; i++) dots.push(makeSpriteState());
+  const under = [];
+  for (let i = 0; i < UNDER_DOT_MAX; i++) under.push(makeSpriteState());
   return {
     active: false,
     dots,
-    /** Rings on the two small chips nearest the center of the inner 7. */
+    lead: makeSpriteState(),
+    line: makeSpriteState(),
+    under,
+    /** Rings on two inner HP chips. */
     holy: [makeSpriteState(), makeSpriteState()],
     armor: [makeSpriteState(), makeSpriteState()],
     showHoly: false,
@@ -563,7 +616,10 @@ export function createHealthBars(engine, scene, opts = {}) {
 
   function hide(slot) {
     if (!slot.active) return;
-    for (let i = 0; i < CHIP_DOT_SLOTS; i++) hideSprite(slot.dots[i]);
+    for (let i = 0; i < CHIP_COUNT_MAX; i++) hideSprite(slot.dots[i]);
+    hideSprite(slot.lead);
+    hideSprite(slot.line);
+    for (let i = 0; i < UNDER_DOT_MAX; i++) hideSprite(slot.under[i]);
     for (let i = 0; i < 2; i++) {
       hideSprite(slot.holy[i]);
       hideSprite(slot.armor[i]);
@@ -645,7 +701,7 @@ export function createHealthBars(engine, scene, opts = {}) {
      * @param {number} z
      * @param {number} _unitSize unused — chips are a fixed small size for all units
      * @param {number} ratio 0..1
-     * @param {{ armor?: boolean, holy?: boolean, building?: boolean, agora?: boolean, far?: boolean, owner?: number, founder?: number, capturer?: number, progress?: number, tug?: number, phase?: number, hp?: number }} [flags]
+     * @param {{ armor?: boolean, holy?: boolean, building?: boolean, agora?: boolean, far?: boolean, owner?: number, founder?: number, capturer?: number, progress?: number, tug?: number, phase?: number, hp?: number, manaReady?: number, seatsFilled?: number }} [flags]
      */
     write(x, y, z, _unitSize, ratio, flags = {}) {
       if (used >= capacity) return;
@@ -679,16 +735,25 @@ export function createHealthBars(engine, scene, opts = {}) {
       /**
        * @param {ReturnType<typeof makeSpriteState>} spr
        * @param {number} along
-       * @param {number} d
+       * @param {number} sx
+       * @param {number} sy
        * @param {number[]} rgb
        * @param {number} alpha
        * @param {number} frame
        * @param {number} towardCam
+       * @param {number} [down]
        */
-      function placeAlong(spr, along, d, rgb, alpha, frame, towardCam) {
+      function placeAlong(spr, along, sx, sy, rgb, alpha, frame, towardCam, down = 0) {
         let px = bx + rx * along;
         let py = by;
         let pz = bz + rz * along;
+        if (down) {
+          const cam = scene?.camera;
+          const [ux, uy, uz] = chipScreenUpDir(cam?.alpha, cam?.beta);
+          px -= ux * down;
+          py -= uy * down;
+          pz -= uz * down;
+        }
         if (towardCam > 0 && eye) {
           const dx = eye[0] - px;
           const dy = eye[1] - py;
@@ -704,8 +769,8 @@ export function createHealthBars(engine, scene, opts = {}) {
         spr.position[0] = px;
         spr.position[1] = py;
         spr.position[2] = pz;
-        spr.sizeWorld[0] = d;
-        spr.sizeWorld[1] = d;
+        spr.sizeWorld[0] = sx;
+        spr.sizeWorld[1] = sy;
         spr.color[0] = rgb[0];
         spr.color[1] = rgb[1];
         spr.color[2] = rgb[2];
@@ -757,21 +822,24 @@ export function createHealthBars(engine, scene, opts = {}) {
       }
 
       const teamNudge = normalDot * TEAM_DEPTH_NUDGE_MUL;
+      const teamRgb = ownerTint(flags.owner);
       if (agora) {
-        for (let i = 0; i < CHIP_DOT_SLOTS; i++) {
+        hideSprite(slot.lead);
+        hideSprite(slot.line);
+        for (let i = 0; i < UNDER_DOT_MAX; i++) hideSprite(slot.under[i]);
+        for (let i = 0; i < CHIP_COUNT_MAX; i++) {
           const spr = slot.dots[i];
-          if (chipIsLeadingTeam(i) || i >= count) {
+          if (i >= count) {
             hideSprite(spr);
             continue;
           }
           const d = normalDot * agoraChipSizeMul(i) * agoraChipPulseMul(i, flags, chipNow);
           const along = (i * spacing) - (totalWidth * 0.5);
           const rgb = agoraChipRgb(i, flags);
-          placeAlong(spr, along, d, rgb, CHIP_TEAM_FILL_ALPHA, FRAME_LEAD_ROUND, 0);
+          placeAlong(spr, along, d, d, rgb, CHIP_TEAM_FILL_ALPHA, FRAME_LEAD_ROUND, 0);
         }
       } else {
         for (let i = 0; i < count; i++) {
-          if (chipIsTeamDot(i)) continue;
           const spr = slot.dots[i];
           if (!chipDotVisible(i, filled)) {
             hideSprite(spr);
@@ -783,43 +851,60 @@ export function createHealthBars(engine, scene, opts = {}) {
             spr,
             along,
             d * chipWidthMul(i),
+            d,
             chipFillRgb(i, hpRgb, flags.owner),
             chipDotAlpha(i, true, r),
             chipDotFrame(i),
             0,
           );
         }
-        for (let i = 0; i < count; i++) {
-          if (!chipIsTeamDot(i)) continue;
-          const spr = slot.dots[i];
-          if (!chipDotVisible(i, filled)) {
-            hideSprite(spr);
-            continue;
-          }
-          const d = normalDot * chipSizeMul(i, count);
-          const along = (i * spacing) - (totalWidth * 0.5);
-          placeAlong(
-            spr,
-            along,
-            d,
-            ownerTint(flags.owner),
-            CHIP_TEAM_FILL_ALPHA,
-            FRAME_LEAD_ROUND,
-            teamNudge,
-          );
-        }
         for (let i = count; i < CHIP_COUNT_MAX; i++) hideSprite(slot.dots[i]);
-        const lead = slot.dots[CHIP_LEAD_TEAM_INDEX];
-        const along = -spacing - (totalWidth * 0.5);
         placeAlong(
-          lead,
-          along,
+          slot.lead,
+          -spacing - (totalWidth * 0.5),
           normalDot * DOT_DIAMETER_LEAD_MUL,
-          ownerTint(flags.owner),
+          normalDot * DOT_DIAMETER_LEAD_MUL,
+          teamRgb,
           CHIP_TEAM_FILL_ALPHA,
           FRAME_LEAD_ROUND,
           teamNudge,
         );
+        const lineW = Math.max(spacing, totalWidth + spacing * 0.55);
+        placeAlong(
+          slot.line,
+          0,
+          lineW,
+          normalDot * LINE_HEIGHT_MUL,
+          teamRgb,
+          0.85,
+          FRAME_LINE,
+          0,
+          normalDot * LINE_DOWN_MUL,
+        );
+        const underN = underDotCount(flags);
+        const underSpace = normalDot * (underN > 3 ? UNDER_SPACING_PACKED_MUL : UNDER_SPACING_MUL);
+        const underWidth = Math.max(0, underN - 1) * underSpace;
+        const underRgb = (flags.seatsFilled | 0) > 0 ? teamRgb : RGB_MANA;
+        const underD = normalDot * DOT_DIAMETER_UNDER_MUL;
+        for (let i = 0; i < UNDER_DOT_MAX; i++) {
+          const spr = slot.under[i];
+          if (i >= underN) {
+            hideSprite(spr);
+            continue;
+          }
+          const along = (i * underSpace) - (underWidth * 0.5);
+          placeAlong(
+            spr,
+            along,
+            underD,
+            underD,
+            underRgb,
+            CHIP_TEAM_FILL_ALPHA,
+            FRAME_LEAD_ROUND,
+            teamNudge,
+            normalDot * UNDER_DOWN_MUL,
+          );
+        }
       }
 
       slot.showArmor = armor;
@@ -836,7 +921,10 @@ export function createHealthBars(engine, scene, opts = {}) {
       clearBillboardSprites(system);
       for (let s = 0; s < capacity; s++) {
         const slot = slots[s];
-        for (let i = 0; i < CHIP_DOT_SLOTS; i++) slot.dots[i].handle = null;
+        for (let i = 0; i < CHIP_COUNT_MAX; i++) slot.dots[i].handle = null;
+        slot.lead.handle = null;
+        slot.line.handle = null;
+        for (let i = 0; i < UNDER_DOT_MAX; i++) slot.under[i].handle = null;
         for (let i = 0; i < 2; i++) {
           slot.holy[i].handle = null;
           slot.armor[i].handle = null;

@@ -12,8 +12,9 @@ function styleOf(raw) {
  * @param {string} id reel id (e.g. 'intro')
  * @param {'start'|'win'} when
  * @param {Array<object>} steps beat steps from cam()/line()/narrate()/hold()
+ * @param {true|'all'|number[]} [reveal] factions to reveal while this reel plays
  */
-export function reelFromSteps(id, when, steps) {
+export function reelFromSteps(id, when, steps, reveal) {
   const clips = [];
   let t = 0;
   let n = 0;
@@ -52,7 +53,9 @@ export function reelFromSteps(id, when, steps) {
       t += dur;
     }
   }
-  return { id, when, clips, duration: t };
+  const reel = { id, when, clips, duration: t };
+  if (reveal !== undefined && reveal !== false) reel.reveal = reveal;
+  return reel;
 }
 
 // Compact authoring helpers. Camera coords are fractions of the board (0..1);

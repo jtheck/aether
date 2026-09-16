@@ -28,6 +28,7 @@ import { clearPath } from './path.js';
 import { clearEngagement } from './engagement.js';
 import { ORDER } from './world.js';
 import { isCarried } from './transport.js';
+import { canCastAbility, spendMana, CAST_GCD } from './mana.js';
 
 export const ABILITY = {
   WARLOCK_FIREBALL: 'warlock_fireball',
@@ -113,7 +114,7 @@ export function applyCasts(w, field, ids, abilityId, tx, ty) {
     const i = ids[k];
     if (i < 0 || i >= w.count || !w.alive[i]) continue;
     if (isCarried(w, i)) continue;
-    if (w.abilityCd[i] > 0) continue;
+    if (!canCastAbility(w, i)) continue;
     const aimX = sharedAim ? tx : tx?.[k];
     const aimY = sharedAim ? ty : ty?.[k];
     if (aimX == null || aimY == null) continue;
@@ -182,8 +183,9 @@ function tryCastGroup(w, field, abilityId, casters, aimX, aimY) {
   }
 }
 
-function lockCaster(w, i, cooldown) {
-  w.abilityCd[i] = cooldown;
+function lockCaster(w, i, _cooldown) {
+  spendMana(w, i);
+  w.abilityCd[i] = CAST_GCD;
   w.vx[i] = 0;
   w.vy[i] = 0;
   clearPath(w, i);
@@ -203,7 +205,7 @@ function filterType(w, casters, typeId) {
   for (let k = 0; k < casters.length; k++) {
     const i = casters[k];
     if (i < 0 || i >= w.count || !w.alive[i]) continue;
-    if (w.abilityCd[i] > 0) continue;
+    if (!canCastAbility(w, i)) continue;
     if (w.type[i] !== typeId) continue;
     out.push(i);
   }

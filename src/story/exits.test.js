@@ -17,8 +17,12 @@ describe('chapter exits', () => {
     assert.equal(field.terrainTypes[15 * 32 + 8], TERRAIN.DIRT);
   });
 
-  it('labels a departing zone as EXIT', () => {
+  it('labels a departing zone as EXIT, or the authored one-word name', () => {
     assert.equal(exitLabel({ kind: 'escape', next: '/maps/chapter3.garden' }), 'EXIT');
-    assert.equal(exitLabel({ kind: 'reach', label: 'Scout the far ridge' }), 'HERE');
+    assert.equal(exitLabel({ kind: 'reach', label: 'Scout the far ridge' }), 'SCOUT');
+    assert.equal(exitLabel({ kind: 'reach', label: 'well' }), 'WELL');
+    assert.equal(exitLabel({ kind: 'escape', label: 'port', next: '/maps/e1c3.garden' }), 'PORT');
+    assert.equal(exitLabel({ kind: 'reach' }), 'HERE');
+    assert.equal(exitLabel({ kind: 'defend', label: 'here' }), 'HERE');
   });
 });

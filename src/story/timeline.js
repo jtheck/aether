@@ -82,6 +82,20 @@ export function normalizeClip(raw) {
   return { id, kind, t, dur };
 }
 
+/**
+ * Cinematic vision share: `'all'` (every faction) or a list of owner ids whose
+ * sight is unioned into the local overlay while this reel plays. `undefined`
+ * when nothing extra is revealed.
+ */
+export function normalizeReveal(v) {
+  if (v === true || v === 'all') return 'all';
+  if (Array.isArray(v)) {
+    const ids = [...new Set(v.map((id) => id | 0).filter((id) => Number.isFinite(id) && id >= 0))];
+    return ids.length ? ids : undefined;
+  }
+  return undefined;
+}
+
 export function normalizeReel(raw) {
   const clips = [];
   const list = Array.isArray(raw?.clips) ? raw.clips : [];
@@ -95,12 +109,15 @@ export function normalizeReel(raw) {
   const authored = Number(raw?.duration);
   const duration = Math.max(derived, Number.isFinite(authored) ? authored : 0);
   const when = raw?.when === 'win' ? 'win' : 'start';
-  return {
+  const reveal = normalizeReveal(raw?.reveal);
+  const reel = {
     id: String(raw?.id || 'intro'),
     when,
     clips,
     duration,
   };
+  if (reveal !== undefined) reel.reveal = reveal;
+  return reel;
 }
 
 export function normalizeStory(raw) {
@@ -120,6 +137,7 @@ export function encodeStory(story) {
       id: reel.id,
       when: reel.when,
       duration: reel.duration || undefined,
+      reveal: reel.reveal,
       clips: reel.clips.map((clip) => {
         if (clip.kind === CLIP_CAMERA) {
           const packed = {

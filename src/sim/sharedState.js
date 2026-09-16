@@ -4,7 +4,7 @@
 import { MAX_ENTITIES } from './world.js';
 import { MAX_PROJECTILES } from './projectiles.js';
 
-export const SHARED_LAYOUT_VERSION = 11;
+export const SHARED_LAYOUT_VERSION = 12;
 const HEADER_I32 = 6; // version, unitCount, tick, projectileActive, publishSeq, projectileHighWater
 
 export function simSharedByteSize() {
@@ -19,6 +19,7 @@ export function simSharedByteSize() {
     MAX_ENTITIES * 2 + // frostTicks
     MAX_ENTITIES * 2 + // dotTicks
     MAX_ENTITIES * 2 + // locustStacks
+    MAX_ENTITIES * 2 + // mana (0..300)
     MAX_ENTITIES + // alive
     MAX_ENTITIES + // owner
     MAX_ENTITIES + // type (written once at init)
@@ -55,6 +56,8 @@ export function mapSharedState(sab) {
   const dotTicks = new Int16Array(sab, o, MAX_ENTITIES);
   o += MAX_ENTITIES * 2;
   const locustStacks = new Int16Array(sab, o, MAX_ENTITIES);
+  o += MAX_ENTITIES * 2;
+  const mana = new Int16Array(sab, o, MAX_ENTITIES);
   o += MAX_ENTITIES * 2;
   const alive = new Uint8Array(sab, o, MAX_ENTITIES);
   o += MAX_ENTITIES;
@@ -110,6 +113,7 @@ export function mapSharedState(sab) {
     frostTicks,
     dotTicks,
     locustStacks,
+    mana,
     alive,
     owner,
     type,
@@ -153,6 +157,7 @@ export function publishWorld(w, s) {
   if (s.frostTicks && w.frostTicks) s.frostTicks.set(w.frostTicks.subarray(0, n));
   if (s.dotTicks && w.dotTicks) s.dotTicks.set(w.dotTicks.subarray(0, n));
   if (s.locustStacks && w.locustStacks) s.locustStacks.set(w.locustStacks.subarray(0, n));
+  if (s.mana && w.mana) s.mana.set(w.mana.subarray(0, n));
   s.alive.set(w.alive.subarray(0, n));
   s.owner.set(w.owner.subarray(0, n));
   s.order.set(w.order.subarray(0, n));
@@ -214,6 +219,7 @@ export function simViewFacade(s) {
     frostTicks: s.frostTicks,
     dotTicks: s.dotTicks,
     locustStacks: s.locustStacks,
+    mana: s.mana,
     alive: s.alive,
     owner: s.owner,
     type: s.type,

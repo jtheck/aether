@@ -7,7 +7,7 @@ export const OVERLAY_MAX_BARS = 3072;
 export const OVERLAY_MAX_BUILDING_BARS = 128;
 /**
  * Billboard slot pool. Must stay overlay-sized — never entity / KOTH / stress
- * count. Each slot is up to 13 alpha-sorted sprites.
+ * count. Each slot is HP chips + lead + underline + under dots + rings.
  */
 export const HEALTH_BAR_CAPACITY = OVERLAY_MAX_BARS + OVERLAY_MAX_BUILDING_BARS;
 /** Packed holy-shield spheres (not entity-indexed). */

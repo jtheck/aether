@@ -7,8 +7,7 @@ import { TILE_SIZE_F, worldHalfFFromField } from '../sim/field.js';
 export const OBJ_REACH = 'reach';
 export const OBJ_ESCAPE = 'escape';
 export const OBJ_ADVANCE = 'advance';
-// Campaign vocabulary — authored now, wired to bespoke triggers as we dial in.
-// Until then these behave as reach-zone checkpoints (see stepObjectives).
+// Campaign vocabulary — completion lives in triggers.js (see CAMPAIGN_TRIGGER_KINDS).
 export const OBJ_DESTROY = 'destroy';
 export const OBJ_CAPTURE = 'capture';
 export const OBJ_HOLD = 'hold';
@@ -33,10 +32,15 @@ export const OBJ_KINDS = Object.freeze([
 export const TERMINAL_KINDS = Object.freeze([OBJ_ESCAPE, OBJ_ADVANCE]);
 
 /**
- * Kinds driven by campaign triggers (target death / hold-out timer) rather than
- * a party-in-zone check. stepObjectives leaves these for the trigger stepper.
+ * Kinds driven by campaign triggers (triggers.js) rather than a simple
+ * party-in-zone check. stepObjectives leaves these for the trigger stepper;
+ * only reach / escape / advance stay as plain zone objectives here.
  */
-export const CAMPAIGN_TRIGGER_KINDS = Object.freeze([OBJ_DESTROY, OBJ_SURVIVE, OBJ_DEFEND]);
+export const CAMPAIGN_TRIGGER_KINDS = Object.freeze([
+  OBJ_DESTROY, OBJ_SURVIVE, OBJ_DEFEND,
+  OBJ_HOLD, OBJ_CONTROL, OBJ_CAPTURE, OBJ_INFILTRATE,
+  OBJ_ESCORT, OBJ_GATHER, OBJ_BUILD, OBJ_CHOICE, OBJ_RACE,
+]);
 
 function kindOf(raw) {
   const k = String(raw || '').trim().toLowerCase();

@@ -35,6 +35,10 @@ import {
   chipIsTeamDot,
   chipSizeMul,
   chipWidthMul,
+  underDotCount,
+  UNDER_DOT_MAX,
+  MANA_BANK_DOTS,
+  DOT_DIAMETER_UNDER_MUL,
   DOT_ALTERNATE_WIDTH_MUL,
   AGORA_CHIP_COUNT,
   AGORA_LARGE_CHIP_COUNT,
@@ -208,14 +212,14 @@ describe('health chip bars', () => {
     assert.ok(chipBarFilled(1, UNIT_CHIP_COUNT, 50) > 1);
   });
 
-  it('uses health alpha on big chips and keeps team squares opaque', () => {
+  it('uses health alpha on HP chips and keeps the left team pip separate', () => {
     assert.equal(CHIP_FILL_ALPHA_GREEN, 0.5);
     assert.equal(CHIP_FILL_ALPHA_RED, 1);
     assert.equal(chipFillAlpha(1), CHIP_FILL_ALPHA_GREEN);
     assert.equal(chipFillAlpha(0), CHIP_FILL_ALPHA_RED);
     assert.equal(chipDotAlpha(0, true, 1), CHIP_FILL_ALPHA_GREEN);
     assert.equal(chipDotAlpha(0, true, 0), CHIP_FILL_ALPHA_RED);
-    assert.equal(chipDotAlpha(1, true, 0), CHIP_TEAM_FILL_ALPHA);
+    assert.equal(chipDotAlpha(1, true, 0), CHIP_FILL_ALPHA_RED);
     assert.equal(CHIP_TEAM_FILL_ALPHA, 1);
     assert.equal(chipDotAlpha(0, false, 0), 1);
     assert.equal(chipIsLeadingTeam(9), true);
@@ -225,13 +229,13 @@ describe('health chip bars', () => {
     assert.equal(chipDotVisible(0, 0), false);
   });
 
-  it('rounds HP chips; team pips are circles', () => {
+  it('rounds HP chips; the left team pip is a circle', () => {
     assert.equal(CHIP_SMALL_CORNER_MUL, CHIP_BIG_CORNER_MUL);
     assert.equal(CHIP_LEAD_CORNER_MUL, 1);
     assert.ok(CHIP_BIG_CORNER_MUL > 0.36);
     assert.ok(CHIP_BIG_CORNER_MUL < 0.7);
     assert.equal(chipDotFrame(0), 0);
-    assert.equal(chipDotFrame(1), 2);
+    assert.equal(chipDotFrame(1), 0);
     assert.equal(chipDotFrame(2), 0);
     assert.ok(CHIP_BASELINE_MUL > 0.05 && CHIP_BASELINE_MUL < 0.12);
     assert.equal(CHIP_BASELINE_ALPHA, 0.5);
@@ -241,40 +245,37 @@ describe('health chip bars', () => {
     assert.equal(CHIP_EDGE_ALPHA, 1);
   });
 
-  it('tints the small interstitial chips with team color', () => {
+  it('keeps team color off the HP chips', () => {
     setLocalOwnerTint(-1, null);
     const hp = chipBarState(1, UNIT_CHIP_COUNT).rgb;
     assert.equal(chipIsTeamDot(0), false);
-    assert.equal(chipIsTeamDot(1), true);
+    assert.equal(chipIsTeamDot(1), false);
     assert.deepEqual(chipFillRgb(0, hp, 1), hp);
-    assert.deepEqual(chipFillRgb(1, hp, 1), ownerTint(1));
-    assert.deepEqual(chipFillRgb(1, hp, 1), OWNER_TINTS[1]);
+    assert.deepEqual(chipFillRgb(1, hp, 1), hp);
+    assert.notDeepEqual(hp, OWNER_TINTS[1]);
   });
 
-  it('puts big chips on the ends (4 big / 3 small on units)', () => {
+  it('uses even HP chips and a bigger under-dot for mana / seats', () => {
     assert.ok(chipSizeMul(0, UNIT_CHIP_COUNT) > chipSizeMul(2, UNIT_CHIP_COUNT));
     assert.equal(chipSizeMul(0, UNIT_CHIP_COUNT), DOT_DIAMETER_FIRST_MUL);
     assert.equal(chipSizeMul(6, UNIT_CHIP_COUNT), chipSizeMul(2, UNIT_CHIP_COUNT));
-    const bigMul = chipSizeMul(2, UNIT_CHIP_COUNT);
-    let big = 0;
-    let small = 0;
-    for (let i = 0; i < UNIT_CHIP_COUNT; i++) {
-      if (chipSizeMul(i, UNIT_CHIP_COUNT) < bigMul) small++;
-      else big++;
-    }
-    assert.equal(big, 4);
-    assert.equal(small, 3);
+    assert.equal(chipSizeMul(1, UNIT_CHIP_COUNT), chipSizeMul(2, UNIT_CHIP_COUNT));
     assert.equal(chipSizeMul(0, BUILDING_CHIP_COUNT), chipSizeMul(0, UNIT_CHIP_COUNT));
     assert.equal(chipSizeMul(8, BUILDING_CHIP_COUNT), chipSizeMul(2, UNIT_CHIP_COUNT));
-    assert.ok(chipSizeMul(1, BUILDING_CHIP_COUNT) < 1);
     assert.equal(DOT_DIAMETER_ALTERNATE_MUL, 0.58);
     assert.equal(DOT_ALTERNATE_WIDTH_MUL, 1);
     assert.equal(chipWidthMul(1), 1);
     assert.equal(chipWidthMul(0), 1);
-    assert.ok(DOT_DIAMETER_LEAD_MUL > DOT_DIAMETER_ALTERNATE_MUL);
     assert.ok(DOT_DIAMETER_LEAD_MUL < chipSizeMul(2, UNIT_CHIP_COUNT));
-    assert.ok(DOT_DIAMETER_ALTERNATE_MUL < chipSizeMul(2, UNIT_CHIP_COUNT));
+    assert.ok(DOT_DIAMETER_UNDER_MUL > chipSizeMul(2, UNIT_CHIP_COUNT));
     assert.ok(DOT_SPACING_AGORA_MUL > 1);
+    assert.equal(underDotCount({ manaReady: 3 }), MANA_BANK_DOTS);
+    assert.equal(underDotCount({ manaReady: 1 }), 1);
+    assert.equal(underDotCount({ seatsFilled: 4 }), 4);
+    assert.equal(underDotCount({ seatsFilled: 8 }), UNDER_DOT_MAX);
+    assert.equal(underDotCount({ building: true, manaReady: 3 }), 0);
+    assert.equal(underDotCount({ agora: true, seatsFilled: 2 }), 0);
+    assert.equal(underDotCount({ seatsFilled: 2, manaReady: 3 }), 2);
   });
 
   it('uses 9 alternating circles; invade from the right, tug from the left', () => {

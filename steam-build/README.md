@@ -69,6 +69,18 @@ npm run upload:steam
 
 Then set the build live on the partner Builds page.
 
+## Workshop seed item
+
+Partner checklist needs one public item. From `steam-build`:
+
+```powershell
+$env:STEAMWORKS_SDK="C:\Users\blind\steamworks_sdk"
+$env:STEAM_BUILD_USER="your_account"
+npm run upload:workshop
+```
+
+That uploads `workshop-seed/content/map.garden` (the unit tester) as a public item. Accept https://steamcommunity.com/sharedfiles/workshoplegalagreement on that account first. The published file id is written to `workshop-seed/publishedfileid.txt`.
+
 ## Bridge API
 
 Injected `bridge.js` exposes `window.aetherDesktop` (`runtime: 'nwjs'`). The page does not get Node APIs (`node-remote` is unset); Steam calls go over a local HTTP bridge.
@@ -78,10 +90,16 @@ if (window.aetherDesktop?.steam?.isAvailable()) {
   aetherDesktop.steam.unlockAchievement('ACH_FIRST_LAUNCH');
   aetherDesktop.steam.setPresence('status', 'In match');
   aetherDesktop.steam.openOverlay('achievements');
+  aetherDesktop.steam.openOverlay('workshop');
+  await aetherDesktop.steam.listWorkshopMaps();
+  await aetherDesktop.steam.loadWorkshopGarden('123456789');
+  await aetherDesktop.steam.publishWorkshopGarden({ garden, title: 'Grove' });
 }
 ```
 
 Game code uses `window.aetherSteam` (`src/app/steam.js`). No-ops in the browser.
+
+Workshop maps are subscribed items that contain `.garden` files (`map.garden`, or `maps/*.garden` for a campaign pack). The worker reads the Steam install folder and returns JSON over this bridge — the page cannot see the disk. `?garden=workshop:<id>` / `workshop:<id>/maps/02.garden` loads in the game and Forge. Forge can publish the current map. Adventure lobbies list subscribed items; the host embeds the garden JSON on START / CHAPTER so web guests can play without Steam. Campaign `next` can be a relative file in the same pack (`maps/02.garden`). Enable Workshop for app **5043860** on the partner site before items can be published.
 
 DLC ownership is on `getInfo().dlc` (`{ appId, owned }`). First Responder is App ID **5217980**. The game maps that to pack `first_responder` via `aetherSteam.ownedPacks()`. Local art iteration (loopback only): `http://127.0.0.1:5173/?dlc=first_responder`. Ignored on aether.garden.
 
@@ -102,6 +120,10 @@ aetherSteam.test('ACH_FIRST_MATCH')
 aetherSteam.test('ACH_KOTH_DEFEAT')
 aetherSteam.test('ACH_LINUX_LAUNCH')
 aetherSteam.test('ACH_FORGE_OPEN')
+aetherSteam.listWorkshopMaps()
+aetherSteam.loadWorkshopGarden('123456789')
+aetherSteam.openOverlay('workshop')
+aetherSteam.publishWorkshopGarden({ garden, title: 'Grove' })
 ```
 
 Reset on your account via Steam console (`steam://open/console`):

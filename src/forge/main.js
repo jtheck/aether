@@ -43,6 +43,7 @@ import {
 } from '../sim/tableShape.js';
 import { TERRAIN } from '../sim/field.js';
 import { decodeGarden, encodeGarden, fieldFromGarden, GARDEN_SESSION_KEY } from '../sim/garden.js';
+import { formatWorkshopRef, loadGardenRef } from '../app/workshop.js';
 import { RESOURCE_KINDS, STARTING_RESOURCES } from '../sim/resources.js';
 import { applyAuthoredScenery, populateScenery, paintSceneryBrush, SCENERY } from '../sim/scenery.js';
 import { UNIT_DEFS } from '../sim/unitTypes.js';
@@ -1260,12 +1261,85 @@ async function loadGardenFromSearch() {
   const raw = new URLSearchParams(location.search).get('garden');
   if (!raw) return;
   try {
-    const res = await fetch(raw);
-    if (!res.ok) throw new Error(`garden ${res.status}`);
-    applyGardenJson(await res.json());
+    applyGardenJson(await loadGardenRef(raw, {
+      loadWorkshopGarden: (id, file) => aetherSteam.loadWorkshopGarden(id, file),
+    }));
   } catch (err) {
     console.error(err);
     alert('Could not load that garden URL.');
+  }
+}
+
+function workshopOptionLabel(item, garden) {
+  const title = item.title || garden.name || item.id;
+  if ((item.gardens?.length || 0) > 1) return `${title} — ${garden.name || garden.file}`;
+  return title;
+}
+
+async function refreshWorkshopMaps() {
+  const select = document.getElementById('workshop-maps');
+  if (!select) return;
+  const items = await aetherSteam.listWorkshopMaps();
+  const current = select.value;
+  select.replaceChildren();
+  const blank = document.createElement('option');
+  blank.value = '';
+  blank.textContent = items.length ? 'Subscribed maps…' : 'No subscribed maps';
+  select.appendChild(blank);
+  for (const item of items) {
+    for (const garden of item.gardens || []) {
+      const opt = document.createElement('option');
+      opt.value = formatWorkshopRef(item.id, garden.file);
+      opt.textContent = workshopOptionLabel(item, garden);
+      select.appendChild(opt);
+    }
+  }
+  if (current && [...select.options].some((o) => o.value === current)) select.value = current;
+}
+
+async function publishWorkshopMap() {
+  if (!aetherSteam.isAvailable()) {
+    alert('Publishing needs the Steam build.');
+    return;
+  }
+  const btn = document.getElementById('btn-workshop-publish');
+  if (btn) btn.disabled = true;
+  try {
+    const garden = gardenPayload();
+    const result = await aetherSteam.publishWorkshopGarden({
+      garden,
+      title: state.mapName || garden.n || 'Untitled garden',
+    });
+    if (!result?.ok) {
+      if (result?.needsAgreement) aetherSteam.openOverlay('workshop-legal');
+      alert(result?.error || 'Could not publish to the Workshop.');
+      return;
+    }
+    if (result.needsAgreement) aetherSteam.openOverlay('workshop-legal');
+    else aetherSteam.openOverlay(`workshop:${result.id}`);
+    await refreshWorkshopMaps();
+  } catch (err) {
+    console.error(err);
+    alert('Could not publish to the Workshop.');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function loadWorkshopSelection() {
+  const select = document.getElementById('workshop-maps');
+  const raw = select?.value;
+  if (!raw) {
+    await refreshWorkshopMaps();
+    return;
+  }
+  try {
+    applyGardenJson(await loadGardenRef(raw, {
+      loadWorkshopGarden: (id, file) => aetherSteam.loadWorkshopGarden(id, file),
+    }));
+  } catch (err) {
+    console.error(err);
+    alert('Could not load that Workshop map.');
   }
 }
 
@@ -1432,8 +1506,17 @@ function mountUi() {
         <button id="btn-import">Import</button>
         <button id="btn-play">Play</button>
       </div>
+      <label>Steam Workshop</label>
+      <select id="workshop-maps">
+        <option value="">Subscribed maps…</option>
+      </select>
+      <div class="row">
+        <button id="btn-workshop-load" type="button">Load subscribed</button>
+        <button id="btn-workshop-browse" type="button">Browse Workshop</button>
+        <button id="btn-workshop-publish" type="button">Publish to Workshop</button>
+      </div>
       <input id="import-file" type="file" accept=".garden,.json" style="display:none">
-      <p class="hint">v4 .garden files live in repo-root maps/ (chapter1, tester). Legacy adventure is maps/adventure/. Play opens a solo match from this map.</p>
+      <p class="hint" id="workshop-hint">v4 .garden files live in repo-root maps/ (chapter1, tester). Steam can load subscribed Workshop items and publish this map. Campaigns use a relative Next garden (maps/02.garden). Play opens a solo match from this map.</p>
     </div>
     <div id="panel-table" class="panel">
       <p id="select-hint" class="hint">Click to select. Shift-click to add. Double-click to toggle on/off.</p>
@@ -1715,6 +1798,15 @@ function mountUi() {
     if (file) importFile(file);
     e.target.value = '';
   });
+  document.getElementById('btn-workshop-load')?.addEventListener('click', () => {
+    void loadWorkshopSelection();
+  });
+  document.getElementById('btn-workshop-browse')?.addEventListener('click', () => {
+    aetherSteam.openOverlay?.('workshop');
+  });
+  document.getElementById('btn-workshop-publish')?.addEventListener('click', () => {
+    void publishWorkshopMap();
+  });
 }
 
 function loadForgeCelestial() {
@@ -1918,15 +2010,21 @@ async function main() {
   await rebuildTerrain();
   syncFormFromField();
   await loadGardenFromSearch();
+  await refreshWorkshopMaps();
   await startEngine(engine);
   notifyForgeOpened();
 }
 
 function notifyForgeOpened() {
-  if (aetherSteam.notifyForgeOpened()) return;
+  if (aetherSteam.notifyForgeOpened()) {
+    void refreshWorkshopMaps();
+    return;
+  }
   let tries = 0;
   const id = setInterval(() => {
-    if (aetherSteam.notifyForgeOpened() || ++tries >= 15) clearInterval(id);
+    const ready = aetherSteam.notifyForgeOpened();
+    if (ready) void refreshWorkshopMaps();
+    if (ready || ++tries >= 15) clearInterval(id);
   }, 1000);
 }
 

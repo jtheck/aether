@@ -1,0 +1,69 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  formatWorkshopRef,
+  isWorkshopRef,
+  loadGardenRef,
+  normalizeGardenRel,
+  parseWorkshopId,
+  parseWorkshopRef,
+  resolveNextGardenRef,
+} from './workshop.js';
+
+describe('workshop refs', () => {
+  it('parses workshop:id and an optional garden path', () => {
+    assert.deepEqual(parseWorkshopRef('workshop:99'), { id: '99', file: '' });
+    assert.deepEqual(parseWorkshopRef('workshop:99/maps/02.garden'), {
+      id: '99',
+      file: 'maps/02.garden',
+    });
+    assert.equal(parseWorkshopRef('/maps/chapter1.garden'), null);
+    assert.equal(parseWorkshopRef('workshop:../9'), null);
+    assert.equal(parseWorkshopRef('workshop:99/../x.garden'), null);
+    assert.equal(isWorkshopRef('workshop:1'), true);
+    assert.equal(formatWorkshopRef('99', 'maps/02.garden'), 'workshop:99/maps/02.garden');
+    assert.equal(parseWorkshopId('5043860'), '5043860');
+    assert.equal(normalizeGardenRel('map.garden'), 'map.garden');
+  });
+
+  it('resolves a relative next against the current Workshop pack', () => {
+    assert.equal(
+      resolveNextGardenRef('02.garden', 'workshop:99/maps/01.garden'),
+      'workshop:99/maps/02.garden',
+    );
+    assert.equal(
+      resolveNextGardenRef('maps/02.garden', 'workshop:99'),
+      'workshop:99/maps/02.garden',
+    );
+    assert.equal(resolveNextGardenRef('/maps/chapter2.garden', 'workshop:99/map.garden'), '/maps/chapter2.garden');
+    assert.equal(resolveNextGardenRef('workshop:8/map.garden', 'workshop:99'), 'workshop:8/map.garden');
+    assert.equal(resolveNextGardenRef('02.garden', '/maps/chapter1.garden'), '02.garden');
+    assert.equal(resolveNextGardenRef('', 'workshop:99'), '');
+  });
+});
+
+describe('loadGardenRef', () => {
+  it('loads session JSON, workshop items, then URLs', async () => {
+    const session = await loadGardenRef('session', {
+      sessionText: () => '{"v":4,"n":"From session","w":8,"h":8}',
+    });
+    assert.equal(session.n, 'From session');
+
+    const workshop = await loadGardenRef('workshop:12/maps/02.garden', {
+      loadWorkshopGarden: async (id, file) => ({ v: 4, n: `${id}:${file}`, w: 8, h: 8 }),
+    });
+    assert.equal(workshop.n, '12:maps/02.garden');
+
+    const url = await loadGardenRef('/maps/chapter1.garden', {
+      fetchGarden: async (href) => ({ v: 4, n: href, w: 8, h: 8 }),
+    });
+    assert.equal(url.n, '/maps/chapter1.garden');
+  });
+
+  it('throws when a workshop load has no garden', async () => {
+    await assert.rejects(
+      () => loadGardenRef('workshop:1', { loadWorkshopGarden: async () => null }),
+      /workshop garden missing/,
+    );
+  });
+});

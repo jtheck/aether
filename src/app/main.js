@@ -28,7 +28,8 @@ import {
   stressShareVisionOwners,
 } from '../sim/ai.js';
 import { CMD } from '../sim/commands.js';
-import { decodeGarden, GARDEN_SESSION_KEY } from '../sim/garden.js';
+import { decodeGarden } from '../sim/garden.js';
+import { loadGardenRef, resolveNextGardenRef } from './workshop.js';
 import { TESTER_GARDEN_URL } from '../sim/testerGarden.js';
 import {
   applySerializedBuildingOccupancy,
@@ -46,6 +47,7 @@ import {
   ownedFinishedBuildingTypes,
   getBuildingCost,
   getBuildingRequires,
+  isBuildingAlive,
 } from '../sim/buildings.js';
 import { menuGateState } from '../sim/menuGate.js';
 import { TILE_SIZE_F, worldToTile, setActiveMapSize, SKIRMISH_MAP_W, SKIRMISH_MAP_H } from '../sim/field.js';
@@ -107,7 +109,7 @@ import {
 } from './input/buildingSelect.js';
 import { chasePoseXZ } from './poseInterp.js';
 import { init as initAudio, playMatchStart, playThunder, thunderPlaysForStrikes } from './audio.js';
-import { SimSession, formatHudMatchClock, matchSecondsFromTick } from './simSession.js';
+import { SimSession, TICK_HZ, formatHudMatchClock, matchSecondsFromTick } from './simSession.js';
 import { createKothShard, kothModeFromSearch } from './kothShard.js';
 import { setupKothLobby } from './kothLobby.js';
 import { createGameLobby } from './gameLobby.js';
@@ -131,10 +133,16 @@ import {
   createObjectiveHud,
   normalizeObjectives,
   stepObjectives,
+  zoneContains,
 } from '../story/objectives.js';
+import {
+  armCampaignTriggers,
+  describeCampaignObjective,
+  stepCampaignTriggers,
+} from '../story/triggers.js';
 import { createExitMarks } from '../story/exits.js';
 import { liveConfigKeepsAdventure, resetAdventureRuntime } from '../story/adventureRuntime.js';
-import { CHAPTER_FLUSH_MS, chapterVotesReady, pickCanonicalChapter } from '../story/chapterSync.js';
+import { CHAPTER_FLUSH_MS, chapterVotesReady, gardenFromChapterVotes, pickCanonicalChapter } from '../story/chapterSync.js';
 import { getTeamAssignments, setTeamAssignments } from '../sim/teams.js';
 import { aetherSteam } from './steam.js';
 import {
@@ -166,9 +174,8 @@ function fogOverrideFromSearch(search = location.search) {
 }
 
 function loadGardenJson(url) {
-  return fetch(url).then((res) => {
-    if (!res.ok) throw new Error(`garden ${res.status}`);
-    return res.json();
+  return loadGardenRef(url, {
+    loadWorkshopGarden: (id, file) => aetherSteam.loadWorkshopGarden(id, file),
   });
 }
 
@@ -199,14 +206,9 @@ async function loadGardenFromSearch(search) {
   }
   if (!raw) return null;
   try {
-    if (raw === 'session' || raw === 'local') {
-      const text = sessionStorage.getItem(GARDEN_SESSION_KEY);
-      if (!text) throw new Error('no session garden');
-      return JSON.parse(text);
-    }
-    const res = await fetch(raw);
-    if (!res.ok) throw new Error(`garden ${res.status}`);
-    return await res.json();
+    return await loadGardenRef(raw, {
+      loadWorkshopGarden: (id, file) => aetherSteam.loadWorkshopGarden(id, file),
+    });
   } catch (err) {
     console.error('Could not load garden', raw, err);
     return null;
@@ -1871,6 +1873,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (!chapterVotesReady(chapterVotes, humans) || chapterAdvanceBusy || chapterFlushTimer) return;
     const picked = pickCanonicalChapter(chapterVotes);
     if (!picked?.url) return;
+    const garden = gardenFromChapterVotes(chapterVotes);
     const lobby = adventureLobby();
     lobby?.detachSession?.();
     session.pauseLockstep = true;
@@ -1881,39 +1884,57 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       chapterVotes.clear();
       chapterVoteUrl = '';
       if (picked.epoch != null) lobby?.setLockstepEpoch?.(picked.epoch | 0);
-      void ctxAdvanceChapter?.(picked.url, picked);
+      void ctxAdvanceChapter?.(picked.url, { ...picked, garden });
     }, CHAPTER_FLUSH_MS);
   }
 
-  function proposeChapterAdvance(url) {
+  function proposeChapterAdvance(url, embeddedGarden = null) {
     if (!adventureSessionLive()) return;
-    if (!url) {
+    const current = ctxRef.current?.adventureLive?.gardenUrl || '';
+    const resolved = resolveNextGardenRef(url, current);
+    if (!resolved) {
+      pendingChapterUrl = null;
       setStatusText('Adventure complete');
       return;
     }
-    if (chapterProposeSent && chapterVoteUrl === url) {
+    if (chapterProposeSent && chapterVoteUrl === resolved) {
       tryFlushChapter();
       return;
     }
     chapterProposeSent = true;
     pendingChapterUrl = null;
-    const humans = session.humanPlayers?.length ? session.humanPlayers : [localPlayerId];
-    const lobby = adventureLobby();
-    if (humans.length < 2 || !lobby) {
-      void ctxAdvanceChapter?.(url);
-      return;
-    }
-    const payload = {
-      url,
-      playerId: localPlayerId | 0,
-      party: carriedParty || [],
-      bank: carriedBank,
-      epoch: (lobby.getLockstepEpoch?.() | 0) + 1,
-    };
-    noteChapterVote(payload);
-    lobby.sendChapter?.(payload);
-    setStatusText('Waiting for party…');
-    tryFlushChapter();
+    chapterVoteUrl = resolved;
+    void (async () => {
+      let garden = embeddedGarden && typeof embeddedGarden === 'object' ? embeddedGarden : null;
+      if (!garden) {
+        try { garden = await loadGardenJson(resolved); } catch { garden = null; }
+      }
+      const humans = session.humanPlayers?.length ? session.humanPlayers : [localPlayerId];
+      const lobby = adventureLobby();
+      if (humans.length < 2 || !lobby) {
+        if (!garden) {
+          chapterProposeSent = false;
+          setStatusText('Next chapter failed to load');
+          chapterWon = false;
+          session.pauseLockstep = false;
+          return;
+        }
+        void ctxAdvanceChapter?.(resolved, { garden });
+        return;
+      }
+      const payload = {
+        url: resolved,
+        garden,
+        playerId: localPlayerId | 0,
+        party: carriedParty || [],
+        bank: carriedBank,
+        epoch: (lobby.getLockstepEpoch?.() | 0) + 1,
+      };
+      noteChapterVote(payload);
+      lobby.sendChapter?.(payload);
+      setStatusText('Waiting for party…');
+      tryFlushChapter();
+    })();
   }
 
   function beginAdventure(g) {
@@ -1995,6 +2016,56 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     return out;
   }
 
+  /** Adventure enemy owner — hostile camps / destroy targets sit outside the ally table. */
+  const CAMPAIGN_ENEMY_OWNER = 4;
+
+  /** Deterministic context for campaign triggers (target death, hold-out timers). */
+  function campaignTriggerCtx() {
+    const world = session.state;
+    const field = session.field;
+    const humans = session.humanPlayers?.length ? session.humanPlayers : [localPlayerId];
+    const allow = new Set(humans);
+    const buildingKey = (b) => `${b.type}@${Math.round(b.x)}_${Math.round(b.z)}`;
+    return {
+      tick: session.confirmedTick | 0,
+      tickHz: TICK_HZ,
+      targetsInZone(obj) {
+        const out = [];
+        const n = world?.count | 0;
+        for (let i = 0; i < n; i++) {
+          if (!world.alive?.[i] || (world.owner[i] | 0) !== CAMPAIGN_ENEMY_OWNER) continue;
+          const x = fx.toFloat(world.px[i]);
+          const z = fx.toFloat(world.py[i]);
+          if (zoneContains(obj, x, z, field)) out.push({ kind: 'unit', i });
+        }
+        const list = session.buildings || [];
+        for (let j = 0; j < list.length; j++) {
+          const b = list[j];
+          if (!b || (b.owner | 0) !== CAMPAIGN_ENEMY_OWNER) continue;
+          if (zoneContains(obj, b.x, b.z, field)) out.push({ kind: 'building', j, key: buildingKey(b) });
+        }
+        return out;
+      },
+      isTargetAlive(t) {
+        if (t.kind === 'unit') return !!world.alive?.[t.i];
+        const list = session.buildings || [];
+        let b = list[t.j];
+        // Guard against the buildings array being rebuilt: fall back to the key.
+        if (t.key && (!b || buildingKey(b) !== t.key)) {
+          b = list.find((bb) => bb && (bb.owner | 0) === CAMPAIGN_ENEMY_OWNER && buildingKey(bb) === t.key) || null;
+        }
+        return !!(b && isBuildingAlive(b));
+      },
+      partyAlive() {
+        const n = world?.count | 0;
+        for (let i = 0; i < n; i++) {
+          if (world.alive?.[i] && allow.has(world.owner[i] | 0)) return true;
+        }
+        return false;
+      },
+    };
+  }
+
   function tickAdventureObjectives() {
     if (!adventureObjectives.length || chapterWon || chapterAdvanceBusy) {
       objectiveHud.set(adventureObjectives, { hidden: true });
@@ -2011,11 +2082,15 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       syncExitMarks(true);
       return;
     }
+    const triggerCtx = campaignTriggerCtx();
+    armCampaignTriggers(adventureObjectives, triggerCtx);
+    const justTriggers = stepCampaignTriggers(adventureObjectives, triggerCtx);
     const result = stepObjectives(adventureObjectives, collectObjectiveUnits(), session.field);
-    objectiveHud.set(adventureObjectives);
+    objectiveHud.set(adventureObjectives, { describe: (o) => describeCampaignObjective(o, triggerCtx) });
     syncExitMarks(false);
-    if (result.just.length && result.just[0].message) {
-      setStatusText(result.just[0].message);
+    const just = justTriggers.length ? [...justTriggers, ...result.just] : result.just;
+    if (just.length && just[0].message) {
+      setStatusText(just[0].message);
     }
     if (!result.chapterWin) return;
     chapterWon = true;
@@ -3460,7 +3535,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           captureAdventureParty();
         }
         if (chapterWon && !matchStory.driving()) {
-          proposeChapterAdvance(msg.url);
+          proposeChapterAdvance(msg.url, msg.garden);
           return;
         }
       } else if (firstFromPeer) {
@@ -3701,7 +3776,68 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
 
   ctx.setInteractive?.(true);
   if (!cfg.skipSplash) dismissBootSplash();
+  if (wantsMatchIntroSweep(cfg)) {
+    // Hold the neutral overview for a beat while the splash lifts, then sweep in.
+    // Guard against a newer match rebuild superseding this one during the wait.
+    const sweepGen = gen;
+    setTimeout(() => {
+      if (sweepGen === liveConfigGeneration) sweepCameraToArmy(ctx, cfg);
+    }, MATCH_INTRO_SWEEP_DELAY_MS);
+  }
   aetherSteam.notifyPlayReady();
+}
+
+/** Neutral overview holds for a beat, then the view glides in behind the army. */
+const MATCH_INTRO_SWEEP_DELAY_MS = 650;
+const MATCH_INTRO_SWEEP_MS = 1400;
+const MATCH_INTRO_SWEEP_RATE = 3.4;
+/** Slide the look-at this fraction from the home agora toward map center. */
+const MATCH_INTRO_LOOK_BIAS = 0.16;
+/** Gentle push-in from the reset radius as the view swings around. */
+const MATCH_INTRO_ZOOM = 0.92;
+
+/** A fresh competitive table (koth / 1v1 / teams) — not skirmish backdrop, replay, or a story map. */
+function wantsMatchIntroSweep(cfg) {
+  if (!cfg || !cfg.reset || cfg.skipSplash || cfg.watchingReplay) return false;
+  if (!wantsMatchStartCue(cfg)) return false;
+  // Adventure / authored gardens drive their own camera timeline via matchStory.
+  if (cfg.mode === 'adventure') return false;
+  if (cfg.garden?.story || cfg.garden?.obj) return false;
+  return true;
+}
+
+/**
+ * Match intro: swing from the neutral overview to behind the local player's agora,
+ * looking forward across the middle of the map. No-op if the local seat has no home
+ * agora (spectator / story map) — the neutral pose just stays put.
+ */
+function sweepCameraToArmy(ctx, cfg) {
+  const controller = ctx?.renderer?.cameraController;
+  if (!controller?.easePose) return;
+  const localId = cfg?.localPlayerId ?? ctx?.localPlayerId;
+  if (!(localId >= 0)) return;
+  const agoras = ctx?.session?.agoras ?? [];
+  let home = null;
+  for (const a of agoras) {
+    if (!a || (a.owner | 0) !== localId) continue;
+    if (!Number.isFinite(a.x) || !Number.isFinite(a.z)) continue;
+    home = a;
+    break;
+  }
+  if (!home) return;
+  // Map center is the world origin. Sit on the far side of the agora from center
+  // (alpha aimed outward) so the camera looks back inward across the midfield.
+  const dist = Math.hypot(home.x, home.z);
+  if (dist < 1e-3) return;
+  const alpha = Math.atan2(home.z, home.x);
+  const tx = home.x * (1 - MATCH_INTRO_LOOK_BIAS);
+  const tz = home.z * (1 - MATCH_INTRO_LOOK_BIAS);
+  const pose = controller.getPose?.();
+  const radius = Number.isFinite(pose?.radius) ? pose.radius * MATCH_INTRO_ZOOM : undefined;
+  controller.easePose(
+    { x: tx, z: tz, alpha, radius },
+    { ms: MATCH_INTRO_SWEEP_MS, rate: MATCH_INTRO_SWEEP_RATE },
+  );
 }
 
 /** Stinger on the first lockstep commit of a real match — not lobby / replay / sandbox. */
@@ -4128,7 +4264,9 @@ async function loadAdventureGardenUrl(ctx, url, kothShard, extras = {}) {
     if (bank == null) bank = handoff?.bank ?? null;
   }
   setStatusText('Loading next chapter…');
-  const gardenJson = await loadGardenJson(url);
+  const gardenJson = extras.garden && typeof extras.garden === 'object'
+    ? extras.garden
+    : await loadGardenJson(url);
   const id = ctx.localPlayerId ?? 0;
   const live = ctx.adventureLive || {
     mode: 'adventure',
@@ -4200,12 +4338,14 @@ async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
   let garden = null;
   if (snapshot.mode === 'adventure') {
     const url = cfg.gardenUrl || gardenUrlForChapter(cfg.chapter);
-    if (!url) {
+    if (!url && !snapshot.garden) {
       setStatusText('That chapter is not ready yet');
       throw new Error('chapter garden missing');
     }
     try {
-      const rawGarden = await loadGardenJson(url);
+      const rawGarden = snapshot.garden && typeof snapshot.garden === 'object'
+        ? snapshot.garden
+        : await loadGardenJson(url);
       garden = prepareAdventureGarden(rawGarden, {
         humanPlayers: cfg.humanPlayers,
         seed: adventureDealSeed(cfg.seed, rawGarden.s),

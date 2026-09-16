@@ -95,6 +95,24 @@ describe('buildReplayFile', () => {
     file.frames[0].commands[0].entities.push(9);
     assert.deepEqual(source[0].commands[0].entities, [4]);
   });
+
+  it('keeps a workshop garden blob on the replay file', () => {
+    const garden = { v: 4, n: 'Grove', w: 8, h: 8 };
+    const file = buildReplayFile({
+      confirmedTick: 10,
+      replayConfig: { mode: 'adventure', gardenUrl: 'workshop:99/map.garden' },
+      replayGarden: garden,
+      exportReplayLedger() { return []; },
+    });
+    assert.deepEqual(file.garden, garden);
+    const official = buildReplayFile({
+      confirmedTick: 10,
+      replayConfig: { mode: 'adventure', gardenUrl: '/maps/chapter1.garden' },
+      replayGarden: garden,
+      exportReplayLedger() { return []; },
+    });
+    assert.equal(official.garden, undefined);
+  });
 });
 
 describe('replay size copy', () => {

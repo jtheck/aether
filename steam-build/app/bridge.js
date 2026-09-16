@@ -55,6 +55,25 @@
         postJson('/steam/overlay', { dialog: dialog });
         return true;
       },
+      listWorkshopMaps: function () {
+        return fetch(BRIDGE + '/steam/workshop/subscribed', { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (data) { return (data && data.items) || []; })
+          .catch(function () { return []; });
+      },
+      loadWorkshopGarden: function (id, file) {
+        return postJson('/steam/workshop/garden', { id: String(id || ''), file: file || '' })
+          .then(function (data) {
+            return data && data.ok ? data.garden : null;
+          });
+      },
+      publishWorkshopGarden: function (body) {
+        return postJson('/steam/workshop/publish', body || {});
+      },
+      downloadWorkshopItem: function (id, highPriority) {
+        postJson('/steam/workshop/download', { id: String(id || ''), highPriority: !!highPriority });
+        return true;
+      },
     };
   }
 

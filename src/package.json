@@ -29,6 +29,7 @@
     "build:lite": "node build-lite.mjs",
     "build:explorer": "node build-explorer.mjs",
     "build:howler": "node build-howler.mjs",
+    "build:campaign": "node build-campaign.mjs",
     "serve": "node serve.mjs",
     "prebake": "node prebake.mjs",
     "prebake:repack": "node prebake/repackMeshes.mjs",

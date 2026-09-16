@@ -112,6 +112,26 @@ function createBridgeApi() {
       steamClient.openOverlay(String(dialog || '')).catch(function () {});
       return true;
     },
+
+    listWorkshopMaps: function () {
+      if (!shouldEnableSteam()) return Promise.resolve([]);
+      return steamClient.listWorkshopMaps().then(function (data) {
+        return (data && data.items) || [];
+      }).catch(function () { return []; });
+    },
+
+    loadWorkshopGarden: function (id, file) {
+      if (!shouldEnableSteam()) return Promise.resolve(null);
+      return steamClient.loadWorkshopGarden(id, file).then(function (data) {
+        return data && data.ok ? data.garden : null;
+      }).catch(function () { return null; });
+    },
+
+    downloadWorkshopItem: function (id, highPriority) {
+      if (!shouldEnableSteam()) return false;
+      steamClient.downloadWorkshopItem(id, highPriority).catch(function () {});
+      return true;
+    },
   };
 }
 

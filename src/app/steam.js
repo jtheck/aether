@@ -103,6 +103,45 @@ export function createAetherSteam(opts = {}) {
       return s && s.setPresence ? s.setPresence(key, value) : false;
     },
 
+    /** Subscribed Workshop maps (Steam shell). Empty in the browser. */
+    listWorkshopMaps() {
+      const s = steam();
+      if (!s || !s.listWorkshopMaps) return Promise.resolve([]);
+      return Promise.resolve(s.listWorkshopMaps()).then((items) => (
+        Array.isArray(items) ? items : []
+      )).catch(() => []);
+    },
+
+    /** Installed .garden JSON for a subscribed item. Null in the browser. */
+    loadWorkshopGarden(id, file) {
+      const s = steam();
+      if (!s || !s.loadWorkshopGarden) return Promise.resolve(null);
+      return Promise.resolve(s.loadWorkshopGarden(id, file)).then((garden) => (
+        garden && typeof garden === 'object' ? garden : null
+      )).catch(() => null);
+    },
+
+    downloadWorkshopItem(id, highPriority) {
+      const s = steam();
+      return s && s.downloadWorkshopItem ? s.downloadWorkshopItem(id, highPriority) : false;
+    },
+
+    /** Create a Workshop item from garden JSON. Null / failed in the browser. */
+    publishWorkshopGarden(body) {
+      const s = steam();
+      if (!s || !s.publishWorkshopGarden) {
+        return Promise.resolve({ ok: false, error: 'workshop unavailable' });
+      }
+      return Promise.resolve(s.publishWorkshopGarden(body || {})).then((result) => (
+        result && typeof result === 'object' ? result : { ok: false, error: 'publish failed' }
+      )).catch((err) => ({ ok: false, error: err?.message || 'publish failed' }));
+    },
+
+    openOverlay(dialog) {
+      const s = steam();
+      return s && s.openOverlay ? s.openOverlay(dialog) : false;
+    },
+
     /** First time the garden is playable (splash down / interactive). */
     notifyPlayReady() {
       if (api._firstLaunchHandled) return false;

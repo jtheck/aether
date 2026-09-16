@@ -3,6 +3,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const workshopMaps = require('./workshopMaps');
 
 const PORT = parseInt(process.env.AETHER_STEAM_PORT || '9786', 10);
 const HOST = '127.0.0.1';
@@ -158,8 +159,25 @@ function sendJson(res, code, data) {
   res.end(body);
 }
 
+function requestPath(req) {
+  var raw = String(req.url || '');
+  var q = raw.indexOf('?');
+  return q < 0 ? raw : raw.slice(0, q);
+}
+
+function openWorkshopOverlay(dialog) {
+  var url = workshopMaps.workshopOverlayUrl(dialog, readAppId());
+  if (!url || !sdk || !sdk.overlay || typeof sdk.overlay.activateGameOverlayToWebPage !== 'function') {
+    return false;
+  }
+  sdk.overlay.activateGameOverlayToWebPage(url);
+  return true;
+}
+
 async function handle(req, res) {
-  if (req.method === 'GET' && req.url === '/health') {
+  var urlPath = requestPath(req);
+
+  if (req.method === 'GET' && urlPath === '/health') {
     if (!available && !initError) initSteam();
     return sendJson(res, 200, {
       ok: true,
@@ -168,7 +186,7 @@ async function handle(req, res) {
     });
   }
 
-  if (req.method === 'GET' && req.url === '/info') {
+  if (req.method === 'GET' && urlPath === '/info') {
     if (!available && !initSteam()) {
       return sendJson(res, 200, { available: false, error: initError ? initError.message : null });
     }
@@ -185,7 +203,7 @@ async function handle(req, res) {
     }
   }
 
-  if (req.method === 'POST' && req.url === '/unlock') {
+  if (req.method === 'POST' && urlPath === '/unlock') {
     if (!available && !initSteam()) return sendJson(res, 200, { ok: false });
     try {
       var body = await readBody(req);
@@ -196,7 +214,7 @@ async function handle(req, res) {
     }
   }
 
-  if (req.method === 'POST' && req.url === '/is-unlocked') {
+  if (req.method === 'POST' && urlPath === '/is-unlocked') {
     if (!available && !initSteam()) return sendJson(res, 200, { unlocked: false });
     try {
       var body2 = await readBody(req);
@@ -207,7 +225,7 @@ async function handle(req, res) {
     }
   }
 
-  if (req.method === 'POST' && req.url === '/presence') {
+  if (req.method === 'POST' && urlPath === '/presence') {
     if (!available && !initSteam()) return sendJson(res, 200, { ok: false });
     try {
       var body3 = await readBody(req);
@@ -218,7 +236,7 @@ async function handle(req, res) {
     }
   }
 
-  if (req.method === 'POST' && req.url === '/overlay') {
+  if (req.method === 'POST' && urlPath === '/overlay') {
     if (!available && !initSteam()) return sendJson(res, 200, { ok: false });
     var map = {
       friends: 'Friends', community: 'Community', players: 'Players',
@@ -226,7 +244,9 @@ async function handle(req, res) {
     };
     try {
       var body4 = await readBody(req);
-      var panel = map[String(body4.dialog || '').toLowerCase()];
+      var dialog = String(body4.dialog || '');
+      if (openWorkshopOverlay(dialog)) return sendJson(res, 200, { ok: true });
+      var panel = map[dialog.toLowerCase()];
       if (!panel) return sendJson(res, 200, { ok: false });
       sdk.overlay.activateGameOverlay(panel);
       return sendJson(res, 200, { ok: true });
@@ -235,7 +255,64 @@ async function handle(req, res) {
     }
   }
 
-  if (req.method === 'POST' && req.url === '/quit') {
+  if (req.method === 'GET' && urlPath === '/workshop/subscribed') {
+    if (!available && !initSteam()) return sendJson(res, 200, { ok: false, items: [] });
+    try {
+      return sendJson(res, 200, {
+        ok: true,
+        items: workshopMaps.listSubscribedMaps(sdk.workshop),
+      });
+    } catch (err) {
+      return sendJson(res, 200, { ok: false, items: [], error: err.message });
+    }
+  }
+
+  if (req.method === 'POST' && urlPath === '/workshop/garden') {
+    if (!available && !initSteam()) return sendJson(res, 200, { ok: false, error: 'Steam unavailable' });
+    try {
+      var bodyGarden = await readBody(req);
+      return sendJson(res, 200, workshopMaps.loadSubscribedGarden(
+        sdk.workshop,
+        bodyGarden.id,
+        bodyGarden.file,
+      ));
+    } catch (err) {
+      return sendJson(res, 200, { ok: false, error: err.message });
+    }
+  }
+
+  if (req.method === 'POST' && urlPath === '/workshop/publish') {
+    if (!available && !initSteam()) return sendJson(res, 200, { ok: false, error: 'Steam unavailable' });
+    try {
+      var bodyPub = await readBody(req);
+      var published = await workshopMaps.publishWorkshopItem(sdk.workshop, bodyPub.garden, {
+        appId: readAppId(),
+        title: bodyPub.title,
+        description: bodyPub.description,
+        visibility: bodyPub.visibility,
+      });
+      return sendJson(res, 200, published);
+    } catch (err) {
+      return sendJson(res, 200, { ok: false, error: err.message });
+    }
+  }
+
+  if (req.method === 'POST' && urlPath === '/workshop/download') {
+    if (!available && !initSteam()) return sendJson(res, 200, { ok: false });
+    try {
+      var bodyDl = await readBody(req);
+      var published = workshopMaps.toPublishedFileId(bodyDl.id);
+      if (!published || !sdk.workshop || typeof sdk.workshop.downloadItem !== 'function') {
+        return sendJson(res, 200, { ok: false });
+      }
+      var started = !!sdk.workshop.downloadItem(published, !!bodyDl.highPriority);
+      return sendJson(res, 200, { ok: started });
+    } catch (err) {
+      return sendJson(res, 200, { ok: false, error: err.message });
+    }
+  }
+
+  if (req.method === 'POST' && urlPath === '/quit') {
     sendJson(res, 200, { ok: true });
     setTimeout(function () { process.exit(0); }, 10);
     return;

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { chapterVotesReady, pickCanonicalChapter } from './chapterSync.js';
+import { chapterVotesReady, gardenFromChapterVotes, pickCanonicalChapter } from './chapterSync.js';
 
 describe('chapter sync', () => {
   it('waits until every seated player has voted', () => {
@@ -20,5 +20,15 @@ describe('chapter sync', () => {
     assert.deepEqual(picked.party, [{ name: 'host' }]);
     assert.equal(picked.epoch, 1);
     assert.equal(picked.url, '/maps/chapter2.garden');
+  });
+
+  it('uses an embedded garden from any vote when the lowest seat has none', () => {
+    const garden = { v: 4, n: 'Road', w: 8, h: 8 };
+    const votes = new Map([
+      [0, { playerId: 0, url: 'workshop:99/maps/02.garden', party: [] }],
+      [1, { playerId: 1, url: 'workshop:99/maps/02.garden', garden, party: [] }],
+    ]);
+    assert.equal(pickCanonicalChapter(votes).garden, undefined);
+    assert.equal(gardenFromChapterVotes(votes), garden);
   });
 });

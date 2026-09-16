@@ -176,6 +176,39 @@ module.exports = {
       return httpJson('POST', '/overlay', { dialog: dialog }).then(function (r) { return !!r.ok; });
     }).catch(function () { return false; });
   },
+  listWorkshopMaps: function () {
+    return ensureWorkerProcess().then(function (ok) {
+      if (!ok) return { ok: false, items: [] };
+      return httpJson('GET', '/workshop/subscribed');
+    }).catch(function (err) {
+      return { ok: false, items: [], error: err.message };
+    });
+  },
+  loadWorkshopGarden: function (id, file) {
+    return ensureWorkerProcess().then(function (ok) {
+      if (!ok) return { ok: false, error: 'Steam worker not running' };
+      return httpJson('POST', '/workshop/garden', { id: id, file: file || '' });
+    }).catch(function (err) {
+      return { ok: false, error: err.message };
+    });
+  },
+  publishWorkshopGarden: function (body) {
+    return ensureWorkerProcess().then(function (ok) {
+      if (!ok) return { ok: false, error: 'Steam worker not running' };
+      return httpJson('POST', '/workshop/publish', body || {});
+    }).catch(function (err) {
+      return { ok: false, error: err.message };
+    });
+  },
+  downloadWorkshopItem: function (id, highPriority) {
+    return ensureWorkerProcess().then(function (ok) {
+      if (!ok) return false;
+      return httpJson('POST', '/workshop/download', {
+        id: id,
+        highPriority: !!highPriority,
+      }).then(function (r) { return !!(r && r.ok); });
+    }).catch(function () { return false; });
+  },
   shutdown: function () {
     var pid = worker && worker.pid;
     worker = null;

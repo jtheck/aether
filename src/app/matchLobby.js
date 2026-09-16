@@ -25,6 +25,7 @@ import { CHAT_MIN_INTERVAL_MS, createChatLog, makeChatMessage } from '../lobby/c
 import { getPlayerColor, getPlayerName, getUnitSkins } from './settings.js';
 import { localOwnedPacks, selectedSkins } from './dlcCatalog.js';
 import { aetherSteam } from './steam.js';
+import { parseWorkshopRef } from './workshop.js';
 import { CMD } from '../sim/commands.js';
 import { LOCKSTEP_STALL_UI_MS } from './simSession.js';
 
@@ -58,6 +59,7 @@ export function createMatchLobby({
   onLeaveMatch,
   onChapter,
   onChat,
+  loadGarden,
 } = {}) {
   let mode = null;
   let roomId = null;
@@ -85,6 +87,9 @@ export function createMatchLobby({
   let hadMatch = false;
   const chatLog = createChatLog();
   let lastChatSendAt = 0;
+  /** Raw garden JSON embedded on START so web guests can play Workshop maps. */
+  let startGarden = null;
+  let startBusy = false;
 
   function emit() {
     onChange?.();
@@ -126,6 +131,8 @@ export function createMatchLobby({
       maxPlayers: getMode(mode)?.maxPlayers ?? seats.length,
       countdownEndsAt,
       userId,
+      garden: startGarden,
+      loadingMap: startBusy,
     };
   }
 
@@ -410,6 +417,7 @@ export function createMatchLobby({
       seats = next;
     }
     if (msg.settings) settings = { ...settings, ...msg.settings };
+    if (msg.garden && typeof msg.garden === 'object') startGarden = msg.garden;
     if (msg.hostId) hostId = msg.hostId;
     if (msg.hostName) hostName = msg.hostName;
     if (msg.hostColor) hostColor = msg.hostColor;
@@ -470,6 +478,8 @@ export function createMatchLobby({
     peerUser.clear();
     settings = defaultSettings('onevsone');
     hadMatch = false;
+    startGarden = null;
+    startBusy = false;
     chatLog.clear();
     emit();
   }
@@ -573,19 +583,58 @@ export function createMatchLobby({
     if (!hosting || phase === 'idle' || phase === 'starting' || phase === 'playing') return;
     if (key === 'seed') settings.seed = (Number(value) || 0) >>> 0;
     else if (key === 'fieldSize') settings.fieldSize = String(value);
-    else if (key === 'chapter') settings.chapter = String(value);
+    else if (key === 'chapter') {
+      settings.chapter = String(value);
+      startGarden = null;
+    }
     else return;
     sendData({ type: MSG.SETTING, key, value: settings[key] });
     startAnnounce();
     emit();
   }
 
-  function requestStart() {
-    if (!hosting || phase !== 'waiting') return false;
-    if (!canStart(mode, seats)) return false;
+  async function defaultLoadGarden(nextSettings) {
+    if (typeof loadGarden === 'function') return loadGarden(nextSettings);
+    const parsed = parseWorkshopRef(nextSettings?.chapter);
+    if (!parsed) return null;
+    return aetherSteam.loadWorkshopGarden(parsed.id, parsed.file);
+  }
+
+  function beginCountdown() {
+    startBusy = false;
     armCountdown(Date.now() + COUNTDOWN_MS);
-    sendData({ type: MSG.START, countdownEndsAt });
+    sendData({ type: MSG.START, countdownEndsAt, garden: startGarden });
     startAnnounce();
+    emit();
+  }
+
+  function requestStart() {
+    if (!hosting || phase !== 'waiting' || startBusy) return false;
+    if (!canStart(mode, seats)) return false;
+    if (mode === 'adventure' && parseWorkshopRef(settings.chapter)) {
+      const room = roomId;
+      startBusy = true;
+      emit();
+      void (async () => {
+        try {
+          const garden = await defaultLoadGarden(settings);
+          if (!hosting || phase !== 'waiting' || roomId !== room) return;
+          if (!garden || typeof garden !== 'object') {
+            startBusy = false;
+            emit();
+            return;
+          }
+          startGarden = garden;
+          beginCountdown();
+        } catch {
+          startBusy = false;
+          emit();
+        }
+      })();
+      return true;
+    }
+    startGarden = null;
+    beginCountdown();
     return true;
   }
 
@@ -700,6 +749,7 @@ export function createMatchLobby({
       return;
     }
     if (msg.type === MSG.START && msg.countdownEndsAt) {
+      if (msg.garden && typeof msg.garden === 'object') startGarden = msg.garden;
       armCountdown(msg.countdownEndsAt);
       return;
     }
@@ -785,8 +835,8 @@ export function createMatchLobby({
     getState: snapshot,
     isActive: () => phase !== 'idle',
     isHosting: () => hosting,
-    startBlockReason: () => (mode ? startBlockReason(mode, seats) : ''),
-    canStart: () => mode ? canStart(mode, seats) : false,
+    startBlockReason: () => startBusy ? 'Loading map…' : (mode ? startBlockReason(mode, seats) : ''),
+    canStart: () => !startBusy && (mode ? canStart(mode, seats) : false),
     countdownMs: () => (phase === 'countdown' ? Math.max(0, countdownEndsAt - Date.now()) : 0),
   };
 }

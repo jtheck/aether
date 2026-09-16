@@ -1,17 +1,28 @@
 // Pre-match lobby mode constraints. Same room shell; only seats / defaults change.
 
+import { CHAPTER_CATALOG } from '../story/campaign.js';
+
 export const FIELD_SIZES = ['tiny', 'small', 'medium', 'large', 'huge'];
 
-export const ADVENTURE_CHAPTERS = [
+/** Legacy grove prototype chapters — kept ahead of the campaign for compatibility. */
+export const LEGACY_CHAPTERS = [
   { id: 'ch1', name: 'Chapter 1', garden: '/maps/chapter1.garden' },
   { id: 'ch2', name: 'Chapter 2', garden: '/maps/chapter2.garden' },
   { id: 'ch3', name: 'Chapter 3', garden: '/maps/chapter3.garden' },
 ];
 
-/** @param {string} [chapterId] */
+/** Selectable adventure chapters: legacy grove first, then the 5-episode campaign. */
+export const ADVENTURE_CHAPTERS = [
+  ...LEGACY_CHAPTERS,
+  ...CHAPTER_CATALOG.map(({ id, name, garden }) => ({ id, name, garden })),
+];
+
+/** Official chapter id, or a workshop:<id>[/file] ref. */
 export function gardenUrlForChapter(chapterId) {
-  const ch = ADVENTURE_CHAPTERS.find((c) => c.id === chapterId);
-  return ch?.garden || '';
+  const raw = String(chapterId || '');
+  const ch = ADVENTURE_CHAPTERS.find((c) => c.id === raw);
+  if (ch?.garden) return ch.garden;
+  return raw.toLowerCase().startsWith('workshop:') ? raw : '';
 }
 
 export function chapterIdForGardenUrl(url) {
@@ -28,6 +39,9 @@ export function chapterLabelFor(ref = {}) {
     || name.match(/chapter\s*(\d+)/i)?.[1]
     || url.match(/chapter(\d+)/i)?.[1];
   if (num) return `Ch ${num}`;
+  if (id.toLowerCase().startsWith('workshop:') || url.toLowerCase().startsWith('workshop:')) {
+    return name.trim() || 'Workshop';
+  }
   return name.trim();
 }
 

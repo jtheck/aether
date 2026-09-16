@@ -41,7 +41,7 @@ function fakeSteam(opts = {}) {
 }
 
 describe('createAetherSteam', () => {
-  it('no-ops when the desktop bridge is missing', () => {
+  it('no-ops when the desktop bridge is missing', async () => {
     const steam = createAetherSteam({ root: {} });
     assert.equal(steam.isAvailable(), false);
     assert.equal(steam.notifyPlayReady(), false);
@@ -51,6 +51,36 @@ describe('createAetherSteam', () => {
     assert.equal(steam.unlockAchievement(ACH_FIRST_LAUNCH), false);
     assert.deepEqual(steam.ownedPacks(), []);
     assert.equal(steam.ownsPack(DLC_FIRST_RESPONDER), false);
+    assert.deepEqual(await steam.listWorkshopMaps(), []);
+    assert.equal(await steam.loadWorkshopGarden('1'), null);
+    assert.deepEqual(await steam.publishWorkshopGarden({ garden: { v: 4, w: 8, h: 8 } }), {
+      ok: false,
+      error: 'workshop unavailable',
+    });
+    assert.equal(steam.downloadWorkshopItem('1'), false);
+    assert.equal(steam.openOverlay('workshop'), false);
+  });
+
+  it('lists and loads workshop gardens from the desktop bridge', async () => {
+    const garden = { v: 4, n: 'Grove', w: 8, h: 8 };
+    const stub = fakeSteam();
+    stub.api.listWorkshopMaps = async () => [{ id: '99', title: 'Grove', gardens: [{ file: 'map.garden', name: 'Grove' }] }];
+    stub.api.loadWorkshopGarden = async (id, file) => (id === '99' && !file ? garden : null);
+    stub.api.downloadWorkshopItem = (id) => id === '99';
+    const steam = createAetherSteam({ steam: () => stub.api });
+    const items = await steam.listWorkshopMaps();
+    assert.equal(items[0].id, '99');
+    assert.deepEqual(await steam.loadWorkshopGarden('99'), garden);
+    assert.equal(steam.downloadWorkshopItem('99'), true);
+  });
+
+  it('publishes a garden through the desktop bridge', async () => {
+    const stub = fakeSteam();
+    stub.api.publishWorkshopGarden = async (body) => ({ ok: true, id: '55', title: body.title });
+    const steam = createAetherSteam({ steam: () => stub.api });
+    const result = await steam.publishWorkshopGarden({ garden: { v: 4, w: 8, h: 8 }, title: 'Grove' });
+    assert.equal(result.ok, true);
+    assert.equal(result.id, '55');
   });
 
   it('maps owned Steam DLC app ids onto catalog packs', () => {

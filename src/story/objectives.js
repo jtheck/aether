@@ -3,14 +3,49 @@
 import { formatGameNumber } from '../sim/formatGameNumber.js';
 import { TILE_SIZE_F, worldHalfFFromField } from '../sim/field.js';
 
+// Core zone kinds with live triggers today.
 export const OBJ_REACH = 'reach';
 export const OBJ_ESCAPE = 'escape';
 export const OBJ_ADVANCE = 'advance';
-export const OBJ_KINDS = Object.freeze([OBJ_REACH, OBJ_ESCAPE, OBJ_ADVANCE]);
+// Campaign vocabulary — authored now, wired to bespoke triggers as we dial in.
+// Until then these behave as reach-zone checkpoints (see stepObjectives).
+export const OBJ_DESTROY = 'destroy';
+export const OBJ_CAPTURE = 'capture';
+export const OBJ_HOLD = 'hold';
+export const OBJ_INFILTRATE = 'infiltrate';
+export const OBJ_CONTROL = 'control';
+export const OBJ_ESCORT = 'escort';
+export const OBJ_DEFEND = 'defend';
+export const OBJ_SURVIVE = 'survive';
+export const OBJ_GATHER = 'gather';
+export const OBJ_BUILD = 'build';
+export const OBJ_CHOICE = 'choice';
+export const OBJ_RACE = 'race';
+
+export const OBJ_KINDS = Object.freeze([
+  OBJ_REACH, OBJ_ESCAPE, OBJ_ADVANCE,
+  OBJ_DESTROY, OBJ_CAPTURE, OBJ_HOLD, OBJ_INFILTRATE, OBJ_CONTROL,
+  OBJ_ESCORT, OBJ_DEFEND, OBJ_SURVIVE, OBJ_GATHER, OBJ_BUILD,
+  OBJ_CHOICE, OBJ_RACE,
+]);
+
+/** Kinds that inherently end the chapter (carry `next`). Others need `terminal: true`. */
+export const TERMINAL_KINDS = Object.freeze([OBJ_ESCAPE, OBJ_ADVANCE]);
+
+/**
+ * Kinds driven by campaign triggers (target death / hold-out timer) rather than
+ * a party-in-zone check. stepObjectives leaves these for the trigger stepper.
+ */
+export const CAMPAIGN_TRIGGER_KINDS = Object.freeze([OBJ_DESTROY, OBJ_SURVIVE, OBJ_DEFEND]);
 
 function kindOf(raw) {
   const k = String(raw || '').trim().toLowerCase();
   return OBJ_KINDS.includes(k) ? k : OBJ_REACH;
+}
+
+/** A chapter-ending objective — inherently terminal or explicitly flagged. */
+export function isTerminalObjective(obj) {
+  return obj?.terminal === true || TERMINAL_KINDS.includes(obj?.kind);
 }
 
 function fieldHalf(field) {
@@ -36,6 +71,7 @@ export function zoneContains(obj, x, z, field) {
 
 export function normalizeObjective(raw, index = 0) {
   if (Array.isArray(raw)) {
+    const opts = raw[8] && typeof raw[8] === 'object' ? raw[8] : null;
     return normalizeObjective({
       tx: raw[0],
       tz: raw[1],
@@ -45,10 +81,18 @@ export function normalizeObjective(raw, index = 0) {
       next: raw[5],
       label: raw[6],
       id: raw[7],
+      terminal: opts?.t,
+      params: opts?.p,
     }, index);
   }
   const kind = kindOf(raw?.kind ?? raw?.type);
   const id = String(raw?.id || '').trim() || `obj-${index}`;
+  const params = raw?.params && typeof raw.params === 'object'
+    ? { ...raw.params }
+    : null;
+  const terminal = raw?.terminal === true
+    || raw?.terminal === 1
+    || TERMINAL_KINDS.includes(kind);
   return {
     id,
     kind,
@@ -58,6 +102,8 @@ export function normalizeObjective(raw, index = 0) {
     label: String(raw?.label || '').trim(),
     message: String(raw?.message || '').trim(),
     next: String(raw?.next || '').trim(),
+    terminal,
+    params,
     completed: false,
   };
 }
@@ -71,12 +117,21 @@ export function encodeObjectives(list) {
   const out = [];
   for (const obj of normalizeObjectives(list)) {
     const row = [obj.tx, obj.tz, obj.r, obj.kind];
-    if (obj.message || obj.next || obj.label || (obj.id && !obj.id.startsWith('obj-'))) {
-      row.push(obj.message);
-    }
-    if (obj.next || obj.label || (obj.id && !obj.id.startsWith('obj-'))) row.push(obj.next);
-    if (obj.label || (obj.id && !obj.id.startsWith('obj-'))) row.push(obj.label);
-    if (obj.id && !obj.id.startsWith('obj-')) row.push(obj.id);
+    // Trailing options object (index 8) — only when there's something the
+    // positional fields can't hold. Escape/advance stay implicitly terminal,
+    // so classic gardens re-encode byte-for-byte.
+    const explicitTerminal = obj.terminal === true && !TERMINAL_KINDS.includes(obj.kind);
+    const hasParams = obj.params && Object.keys(obj.params).length > 0;
+    const opts = {};
+    if (explicitTerminal) opts.t = 1;
+    if (hasParams) opts.p = obj.params;
+    const wantOpts = Object.keys(opts).length > 0;
+    const wantId = obj.id && !obj.id.startsWith('obj-');
+    if (obj.message || obj.next || obj.label || wantId || wantOpts) row.push(obj.message);
+    if (obj.next || obj.label || wantId || wantOpts) row.push(obj.next);
+    if (obj.label || wantId || wantOpts) row.push(obj.label);
+    if (wantId || wantOpts) row.push(obj.id);
+    if (wantOpts) row.push(opts);
     out.push(row);
   }
   return out.length ? out : undefined;
@@ -95,16 +150,14 @@ function unitInZone(obj, units, field) {
 export function chapterObjectivesWin(objectives) {
   const list = objectives || [];
   if (!list.length) return false;
-  const terminals = list.filter((o) => o.kind === OBJ_ESCAPE || o.kind === OBJ_ADVANCE);
+  const terminals = list.filter(isTerminalObjective);
   if (terminals.length) return terminals.some((o) => o.completed);
   return list.every((o) => o.completed);
 }
 
 export function winningNext(objectives) {
   const list = objectives || [];
-  const hit = list.find((o) => (
-    (o.kind === OBJ_ESCAPE || o.kind === OBJ_ADVANCE) && o.completed && o.next
-  ));
+  const hit = list.find((o) => isTerminalObjective(o) && o.completed && o.next);
   if (hit) return hit.next;
   if (chapterObjectivesWin(list)) {
     return list.find((o) => o.next)?.next || '';
@@ -121,6 +174,8 @@ export function stepObjectives(objectives, units, field) {
   const list = objectives || [];
   for (const obj of list) {
     if (obj.completed) continue;
+    // Target-death / hold-out objectives are completed by the trigger stepper.
+    if (CAMPAIGN_TRIGGER_KINDS.includes(obj.kind)) continue;
     let hit = false;
     if (obj.kind === OBJ_ESCAPE) {
       const party = partyUnits(units);
@@ -164,7 +219,7 @@ export function createObjectiveHud(host = typeof document !== 'undefined' ? docu
     }
   }
   return {
-    set(list, { hidden = false } = {}) {
+    set(list, { hidden = false, describe } = {}) {
       if (!bar) return;
       const open = (list || []).filter((o) => !o.completed);
       if (hidden || !open.length) {
@@ -180,7 +235,8 @@ export function createObjectiveHud(host = typeof document !== 'undefined' ? docu
       for (const obj of open) {
         const row = document.createElement('div');
         row.style.cssText = 'font-size:14px;color:#eee;line-height:1.35;margin-top:4px';
-        row.textContent = obj.label || obj.message || `${obj.kind} ${formatGameNumber(obj.tx)},${formatGameNumber(obj.tz)}`;
+        const fallback = obj.label || obj.message || `${obj.kind} ${formatGameNumber(obj.tx)},${formatGameNumber(obj.tz)}`;
+        row.textContent = (describe ? describe(obj) : null) || fallback;
         bar.appendChild(row);
       }
       bar.style.display = 'block';

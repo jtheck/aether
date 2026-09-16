@@ -12,7 +12,9 @@
     "zip:linux": "npm run dist:linux && node zip-dist.mjs linux",
     "upload:steam": "node upload-steam.mjs",
     "upload:win": "node upload-steam.mjs --win-only",
-    "upload:linux": "node upload-steam.mjs --linux-only"
+    "upload:linux": "node upload-steam.mjs --linux-only",
+    "upload:workshop": "node upload-workshop-seed.mjs",
+    "test": "node --test app/workshopMaps.test.js"
   },
   "devDependencies": {
     "nw": "^0.96.0",

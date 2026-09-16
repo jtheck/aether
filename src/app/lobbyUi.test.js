@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatCountdown, formatCreateLobbyLabel, formatMatchStatus, formatSeatName, formatStartLabel, formatTypeLobbyRow, setupLobbyUi } from './lobbyUi.js';
+import { chapterSelectOptions, formatCountdown, formatCreateLobbyLabel, formatMatchStatus, formatSeatName, formatStartLabel, formatTypeLobbyRow, setupLobbyUi } from './lobbyUi.js';
 
 describe('lobby ui copy', () => {
   it('formats a type-list row', () => {
@@ -74,6 +74,15 @@ describe('lobby ui copy', () => {
     assert.equal(formatCreateLobbyLabel('onevsone'), 'Create 1 vs 1 lobby');
     assert.equal(formatCreateLobbyLabel('teams'), 'Create Teams lobby');
     assert.equal(formatCreateLobbyLabel('adventure'), 'Create Adventure lobby');
+  });
+
+  it('lists official chapters plus subscribed Workshop maps', () => {
+    const opts = chapterSelectOptions([
+      { id: '99', title: 'Grove', gardens: [{ file: 'map.garden', name: 'Grove' }] },
+    ], 'workshop:12/maps/02.garden');
+    assert.equal(opts[0].id, 'ch1');
+    assert.equal(opts.some((o) => o.id === 'workshop:99/map.garden'), true);
+    assert.equal(opts.find((o) => o.id === 'workshop:12/maps/02.garden')?.name, 'Workshop map');
   });
 });
 

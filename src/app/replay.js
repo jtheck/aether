@@ -1,6 +1,8 @@
 // Post-match command-log replay. KOTH world checkpoints stay for late-join
 // catch-up; this tape is the unpruned input log so we can save the match.
 
+import { isWorkshopRef } from './workshop.js';
+
 export const REPLAY_KIND = 'aether-replay';
 export const REPLAY_VERSION = 1;
 
@@ -110,7 +112,7 @@ export function buildReplayFile(session, extra = {}) {
     ?? [])
     .map(cloneReplayFrame)
     .filter(Boolean);
-  return {
+  const file = {
     v: REPLAY_VERSION,
     kind: REPLAY_KIND,
     savedAt: extra.savedAt ?? new Date().toISOString(),
@@ -120,6 +122,9 @@ export function buildReplayFile(session, extra = {}) {
     config,
     frames,
   };
+  const garden = extra.garden ?? session?.replayGarden ?? null;
+  if (garden && isWorkshopRef(config?.gardenUrl)) file.garden = garden;
+  return file;
 }
 
 /** @param {unknown} value */

@@ -142,6 +142,10 @@ export function createReplayController(deps) {
 
   async function loadGardenFor(file) {
     if (state.garden) return state.garden;
+    if (file?.garden && typeof file.garden === 'object') {
+      state.garden = file.garden;
+      return file.garden;
+    }
     const url = file?.config?.gardenUrl;
     if (!url) return null;
     const garden = await deps.loadGarden(url);

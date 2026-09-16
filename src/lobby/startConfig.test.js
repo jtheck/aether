@@ -58,6 +58,17 @@ describe('lobby start config', () => {
     assert.equal(cfg.chapter, 'ch1');
     assert.equal(cfg.gardenUrl, '/maps/chapter1.garden');
   });
+
+  it('passes workshop chapter refs through as gardenUrl', () => {
+    const cfg = liveConfigFromLobby({
+      mode: 'adventure',
+      roomId: 'adv',
+      settings: { fieldSize: 'small', seed: 2, chapter: 'workshop:99/maps/02.garden' },
+      seats: [seats[0]],
+    }, 'host-id');
+    assert.equal(cfg.chapter, 'workshop:99/maps/02.garden');
+    assert.equal(cfg.gardenUrl, 'workshop:99/maps/02.garden');
+  });
 });
 
 describe('chapterLabelFor', () => {
@@ -65,5 +76,7 @@ describe('chapterLabelFor', () => {
     assert.equal(chapterLabelFor({ chapter: 'ch2' }), 'Ch 2');
     assert.equal(chapterLabelFor({ gardenUrl: '/maps/chapter3.garden' }), 'Ch 3');
     assert.equal(chapterLabelFor({ name: 'Chapter 1' }), 'Ch 1');
+    assert.equal(chapterLabelFor({ chapter: 'workshop:99', name: 'Grove' }), 'Grove');
+    assert.equal(chapterLabelFor({ gardenUrl: 'workshop:99' }), 'Workshop');
   });
 });

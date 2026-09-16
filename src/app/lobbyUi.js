@@ -3,6 +3,8 @@
 import { sameUserId, shortUserId } from '../lobby/ids.js';
 import { ADVENTURE_CHAPTERS, FIELD_SIZES, MODE_IDS, getMode } from '../lobby/modes.js';
 import { shortRoomId } from '../lobby/protocol.js';
+import { aetherSteam } from './steam.js';
+import { formatWorkshopRef, isWorkshopRef } from './workshop.js';
 
 /**
  * @param {object} lobby
@@ -160,7 +162,9 @@ function paintSeats(container, seats, { teams, localId, compact }) {
 
 function fillSelect(select, values, current, labelOf = (v) => v) {
   if (!select) return;
-  if (select.options.length !== values.length) {
+  const ids = values.map((v) => (typeof v === 'string' ? v : v.id)).join('\0');
+  if (select.dataset.optSig !== ids) {
+    select.dataset.optSig = ids;
     select.replaceChildren(
       ...values.map((v) => {
         const opt = document.createElement('option');
@@ -171,6 +175,30 @@ function fillSelect(select, values, current, labelOf = (v) => v) {
     );
   }
   if (current != null && select.value !== String(current)) select.value = String(current);
+}
+
+function workshopChapterLabel(item, garden) {
+  const title = item.title || garden.name || item.id;
+  if ((item.gardens?.length || 0) > 1) return `${title} — ${garden.name || garden.file}`;
+  return title;
+}
+
+export function chapterSelectOptions(workshopItems, current) {
+  const official = ADVENTURE_CHAPTERS.filter((c) => c.garden).map((c) => ({ id: c.id, name: c.name }));
+  const extra = [];
+  for (const item of workshopItems || []) {
+    for (const garden of item.gardens || []) {
+      extra.push({
+        id: formatWorkshopRef(item.id, garden.file),
+        name: workshopChapterLabel(item, garden),
+      });
+    }
+  }
+  const cur = String(current || '');
+  if (cur && isWorkshopRef(cur) && !extra.some((row) => row.id === cur) && !official.some((row) => row.id === cur)) {
+    extra.unshift({ id: cur, name: 'Workshop map' });
+  }
+  return official.concat(extra);
 }
 
 /**
@@ -233,6 +261,23 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
 
   let lastSig = '';
   let overlayParked = false;
+  let workshopItems = [];
+  let lastWorkshopPull = 0;
+
+  function pullWorkshopChapters() {
+    const now = Date.now();
+    if (now - lastWorkshopPull < 3000) return;
+    lastWorkshopPull = now;
+    void aetherSteam.listWorkshopMaps().then((items) => {
+      const next = Array.isArray(items) ? items : [];
+      const sig = next.flatMap((item) => (item.gardens || []).map((g) => `${item.id}:${g.file}`)).join();
+      const prev = workshopItems.flatMap((item) => (item.gardens || []).map((g) => `${item.id}:${g.file}`)).join();
+      if (sig === prev) return;
+      workshopItems = next;
+      lastSig = '';
+      refresh();
+    });
+  }
 
   function refresh() {
     const live = kothLive();
@@ -247,6 +292,8 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
       Boolean(matchLobby.lockstepStalled?.()),
       Math.ceil((matchLobby.countdownMs?.() ?? 0) / 200),
       state?.settings?.fieldSize, state?.settings?.seed, state?.settings?.chapter,
+      state?.loadingMap,
+      workshopItems.flatMap((item) => (item.gardens || []).map((g) => `${item.id}:${g.file}`)).join(),
       JSON.stringify(state?.seats ?? []),
       overlayParked, matchOverOn,
     ].join('/');
@@ -336,8 +383,9 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
     setText(panelNote, note);
 
     const hostControls = state.hosting && state.phase === 'waiting';
+    if (mode?.hasChapter) pullWorkshopChapters();
     fillSelect(fieldSelect, FIELD_SIZES, state.settings.fieldSize);
-    fillSelect(chapterSelect, ADVENTURE_CHAPTERS.filter((c) => c.garden), state.settings.chapter);
+    fillSelect(chapterSelect, chapterSelectOptions(workshopItems, state.settings.chapter), state.settings.chapter);
     if (seedInput && document.activeElement !== seedInput && String(seedInput.value) !== String(state.settings.seed)) {
       seedInput.value = String(state.settings.seed);
     }

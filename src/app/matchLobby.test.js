@@ -225,6 +225,49 @@ describe('match lobby', () => {
     room.leaveRoom();
   });
 
+  it('embeds a workshop garden on START so guests can play', async () => {
+    const garden = { v: 4, n: 'Grove', w: 8, h: 8 };
+    const p2p = fakeP2p('host');
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      loadGarden: async (settings) => (settings.chapter === 'workshop:99' ? garden : null),
+    });
+    room.createRoom('adventure');
+    room.setSetting('chapter', 'workshop:99');
+    assert.equal(room.requestStart(), true);
+    assert.equal(room.getState().loadingMap, true);
+    await new Promise((r) => setTimeout(r, 0));
+    const start = p2p.sent.find((row) => row.msg.type === MSG.START);
+    assert.deepEqual(start.msg.garden, garden);
+    assert.deepEqual(room.getState().garden, garden);
+    assert.equal(room.getState().phase, 'countdown');
+    room.leaveRoom();
+  });
+
+  it('guests keep an embedded START garden for match load', () => {
+    const garden = { v: 4, n: 'Grove', w: 8, h: 8 };
+    let dataFn = null;
+    const guest = createMatchLobby({
+      getP2p: () => fakeP2p('guest-id'),
+      getUserId: () => 'guest-id',
+      gameLobby: createGameLobby({ getP2p: () => fakeP2p('guest-id') }),
+      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+    });
+    guest.joinRoom('adventure', 'lobby-1', 'host-id');
+    dataFn({
+      v: 1,
+      type: MSG.START,
+      countdownEndsAt: Date.now() + 3000,
+      roomId: 'lobby-1',
+      mode: 'adventure',
+      garden,
+    });
+    assert.deepEqual(guest.getState().garden, garden);
+    guest.leaveRoom();
+  });
+
   it('drops lockstep frames from a previous chapter epoch', () => {
     const p2p = fakeP2p('host');
     let dataFn = null;

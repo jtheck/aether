@@ -12,6 +12,7 @@ Aether-win64.zip
 Aether-linux64.zip
 
 # SteamCMD upload
+workshop-seed/item.vdf
 steampipe/config.json
 steampipe/app_build_*.vdf
 steampipe/depot_build_*.vdf

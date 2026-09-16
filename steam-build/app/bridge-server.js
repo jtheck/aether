@@ -87,6 +87,33 @@ async function handle(req, res) {
     return sendJson(res, 200, { ok: !!ok3 });
   }
 
+  if (req.method === 'GET' && req.url === '/steam/workshop/subscribed') {
+    try {
+      var listed = await steamClient.listWorkshopMaps();
+      return sendJson(res, 200, listed || { ok: false, items: [] });
+    } catch (err) {
+      return sendJson(res, 200, { ok: false, items: [], error: err.message });
+    }
+  }
+
+  if (req.method === 'POST' && req.url === '/steam/workshop/garden') {
+    var bodyGarden = await readBody(req);
+    var garden = await steamClient.loadWorkshopGarden(bodyGarden.id, bodyGarden.file);
+    return sendJson(res, 200, garden || { ok: false });
+  }
+
+  if (req.method === 'POST' && req.url === '/steam/workshop/publish') {
+    var bodyPub = await readBody(req);
+    var published = await steamClient.publishWorkshopGarden(bodyPub || {});
+    return sendJson(res, 200, published || { ok: false });
+  }
+
+  if (req.method === 'POST' && req.url === '/steam/workshop/download') {
+    var bodyDl = await readBody(req);
+    var started = await steamClient.downloadWorkshopItem(bodyDl.id, bodyDl.highPriority);
+    return sendJson(res, 200, { ok: !!started });
+  }
+
   if (req.method === 'POST' && req.url === '/devtools/toggle') {
     if (onDevToolsToggle) onDevToolsToggle();
     return sendJson(res, 200, { ok: true });

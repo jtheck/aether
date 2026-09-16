@@ -8,6 +8,8 @@ import {
   parseWorkshopId,
   parseWorkshopRef,
   resolveNextGardenRef,
+  STEAM_APP_ID,
+  workshopPageUrl,
 } from './workshop.js';
 
 describe('workshop refs', () => {
@@ -24,6 +26,22 @@ describe('workshop refs', () => {
     assert.equal(formatWorkshopRef('99', 'maps/02.garden'), 'workshop:99/maps/02.garden');
     assert.equal(parseWorkshopId('5043860'), '5043860');
     assert.equal(normalizeGardenRel('map.garden'), 'map.garden');
+  });
+
+  it('builds public Steam Community URLs for workshop overlays', () => {
+    assert.equal(
+      workshopPageUrl('workshop', STEAM_APP_ID),
+      'https://steamcommunity.com/app/5043860/workshop/',
+    );
+    assert.equal(
+      workshopPageUrl('workshop:42', STEAM_APP_ID),
+      'https://steamcommunity.com/sharedfiles/filedetails/?id=42',
+    );
+    assert.equal(
+      workshopPageUrl('workshop-legal', STEAM_APP_ID),
+      'https://steamcommunity.com/sharedfiles/workshoplegalagreement',
+    );
+    assert.equal(workshopPageUrl('achievements', STEAM_APP_ID), '');
   });
 
   it('resolves a relative next against the current Workshop pack', () => {

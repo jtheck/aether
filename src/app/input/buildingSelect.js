@@ -76,10 +76,13 @@ export function radialHubFramedBuilding(h, framed) {
 /**
  * LMB on a foreign unit/building: inspect (collar + HP) when idle;
  * keep attack / a-move when the player already has orderable troops.
+ * Story camera locks orders (`canIssueOrders` false) so the click inspects
+ * even with a selection — select/look, do not issue.
  * @param {boolean} hasOwnOrderableSelection
+ * @param {boolean} [canIssueOrders]
  */
-export function inspectForeignOnClick(hasOwnOrderableSelection) {
-  return !hasOwnOrderableSelection;
+export function inspectForeignOnClick(hasOwnOrderableSelection, canIssueOrders = true) {
+  return !hasOwnOrderableSelection || !canIssueOrders;
 }
 
 /**

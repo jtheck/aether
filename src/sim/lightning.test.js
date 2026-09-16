@@ -9,7 +9,6 @@ import { SCENERY } from './scenery.js';
 import { TREE_WOOD_PER_STAGE } from './trees.js';
 import { checksum } from './checksum.js';
 import {
-  LIGHTNING_COOLDOWN,
   LIGHTNING_HIT,
   LIGHTNING_IMPACT_SCATTER,
   LIGHTNING_STRIKE_RADIUS,

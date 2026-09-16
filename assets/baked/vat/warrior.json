@@ -1,0 +1,99 @@
+{
+  "sourceUrl": "/assets/models/warrior.glb",
+  "bakeClipName": "Idle",
+  "idleName": "Idle",
+  "walkName": "Run",
+  "carryName": null,
+  "chopName": null,
+  "attackName": "Attack_Swing",
+  "idleClip": {
+    "fromRow": 0,
+    "frameCount": 151,
+    "fps": 60
+  },
+  "walkClip": {
+    "fromRow": 151,
+    "frameCount": 76,
+    "fps": 60
+  },
+  "chopClip": null,
+  "attackClip": {
+    "fromRow": 227,
+    "frameCount": 76,
+    "fps": 60
+  },
+  "carryClip": null,
+  "carryIdleClip": null,
+  "carryWalkClip": null,
+  "prims": [
+    {
+      "boneCount": 19,
+      "frameCount": 303,
+      "clips": {
+        "Idle": {
+          "fromRow": 0,
+          "frameCount": 151,
+          "fps": 60
+        },
+        "Run": {
+          "fromRow": 151,
+          "frameCount": 76,
+          "fps": 60
+        },
+        "Attack_Swing": {
+          "fromRow": 227,
+          "frameCount": 76,
+          "fps": 60
+        }
+      },
+      "byteOffset": 0,
+      "floatCount": 92112
+    },
+    {
+      "boneCount": 19,
+      "frameCount": 303,
+      "clips": {
+        "Idle": {
+          "fromRow": 0,
+          "frameCount": 151,
+          "fps": 60
+        },
+        "Run": {
+          "fromRow": 151,
+          "frameCount": 76,
+          "fps": 60
+        },
+        "Attack_Swing": {
+          "fromRow": 227,
+          "frameCount": 76,
+          "fps": 60
+        }
+      },
+      "byteOffset": 368448,
+      "floatCount": 92112
+    },
+    {
+      "boneCount": 19,
+      "frameCount": 303,
+      "clips": {
+        "Idle": {
+          "fromRow": 0,
+          "frameCount": 151,
+          "fps": 60
+        },
+        "Run": {
+          "fromRow": 151,
+          "frameCount": 76,
+          "fps": 60
+        },
+        "Attack_Swing": {
+          "fromRow": 227,
+          "frameCount": 76,
+          "fps": 60
+        }
+      },
+      "byteOffset": 736896,
+      "floatCount": 92112
+    }
+  ]
+}

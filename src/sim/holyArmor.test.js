@@ -8,7 +8,6 @@ import { createField } from './field.js';
 import { checksum } from './checksum.js';
 import { applyDamage } from './damage.js';
 import {
-  HOLY_ARMOR_COOLDOWN,
   HOLY_ARMOR_DURATION,
   HOLY_ARMOR_RADIUS,
   applyAreaHolyArmor,

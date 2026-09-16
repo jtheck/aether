@@ -19,6 +19,12 @@ import {
   roofChipLift,
   unitChipLift,
   worldSizeForScreenPx,
+  chipLineHeight,
+  chipLineLayout,
+  LINE_MIN_PX,
+  LINE_ATLAS_HALF_MUL,
+  LINE_RIGHT_TRIM,
+  snapScreenYToPixelCenter,
   UNIT_CHIP_COUNT,
   BUILDING_CHIP_COUNT,
   chipBarState,
@@ -39,6 +45,9 @@ import {
   UNDER_DOT_MAX,
   MANA_BANK_DOTS,
   DOT_DIAMETER_UNDER_MUL,
+  RGB_MANA,
+  RGB_SEAT,
+  underDotRgb,
   DOT_ALTERNATE_WIDTH_MUL,
   AGORA_CHIP_COUNT,
   AGORA_LARGE_CHIP_COUNT,
@@ -149,6 +158,39 @@ describe('health chip screen-constant size', () => {
     assert.ok(Math.abs(chipScreenPixels(far, 200, vh, fov) - TARGET_DOT_PX_FAR) < 1e-6);
   });
 
+  it('keeps the underline one pixel and fills the atlas cell', () => {
+    const fov = 0.8;
+    const vh = 1080;
+    assert.equal(LINE_MIN_PX, 1);
+    assert.ok(LINE_ATLAS_HALF_MUL > 0.4);
+    const tiny = 0.01;
+    const far = chipLineHeight(tiny, 400, vh, fov);
+    assert.ok(Math.abs(chipScreenPixels(far, 400, vh, fov) - LINE_MIN_PX) < 1e-6);
+    const close = chipLineHeight(2, 80, vh, fov);
+    assert.ok(Math.abs(chipScreenPixels(close, 80, vh, fov) - LINE_MIN_PX) < 1e-6);
+  });
+
+  it('trims a third of the underline from the right', () => {
+    assert.equal(LINE_RIGHT_TRIM, 1 / 3);
+    const totalWidth = 6;
+    const spacing = 1;
+    const full = totalWidth + spacing * 0.55;
+    const { width, along } = chipLineLayout(totalWidth, spacing);
+    assert.ok(Math.abs(width - full * (2 / 3)) < 1e-6);
+    const left = along - width * 0.5;
+    const right = along + width * 0.5;
+    assert.ok(Math.abs(left + full * 0.5) < 1e-6);
+    assert.ok(right < full * 0.5 - 1e-6);
+  });
+
+  it('snaps the underline onto a device-pixel center', () => {
+    assert.equal(snapScreenYToPixelCenter(50, 1), 50.5);
+    assert.equal(snapScreenYToPixelCenter(50.4, 1), 50.5);
+    assert.equal(snapScreenYToPixelCenter(50.9, 1), 50.5);
+    assert.equal(snapScreenYToPixelCenter(50.25, 2), 50.25);
+    assert.equal(snapScreenYToPixelCenter(50.4, 2), 50.25);
+  });
+
   it('grows world size with distance and shrinks with viewport height', () => {
     const a = worldSizeForScreenPx(TARGET_DOT_PX, 100, 720, 0.8);
     const b = worldSizeForScreenPx(TARGET_DOT_PX, 200, 720, 0.8);
@@ -255,7 +297,7 @@ describe('health chip bars', () => {
     assert.notDeepEqual(hp, OWNER_TINTS[1]);
   });
 
-  it('uses even HP chips and a bigger under-dot for mana / seats', () => {
+  it('uses even HP chips and a smaller dark-blue mana bauble', () => {
     assert.ok(chipSizeMul(0, UNIT_CHIP_COUNT) > chipSizeMul(2, UNIT_CHIP_COUNT));
     assert.equal(chipSizeMul(0, UNIT_CHIP_COUNT), DOT_DIAMETER_FIRST_MUL);
     assert.equal(chipSizeMul(6, UNIT_CHIP_COUNT), chipSizeMul(2, UNIT_CHIP_COUNT));
@@ -266,8 +308,11 @@ describe('health chip bars', () => {
     assert.equal(DOT_ALTERNATE_WIDTH_MUL, 1);
     assert.equal(chipWidthMul(1), 1);
     assert.equal(chipWidthMul(0), 1);
-    assert.ok(DOT_DIAMETER_LEAD_MUL < chipSizeMul(2, UNIT_CHIP_COUNT));
-    assert.ok(DOT_DIAMETER_UNDER_MUL > chipSizeMul(2, UNIT_CHIP_COUNT));
+    assert.ok(DOT_DIAMETER_LEAD_MUL > chipSizeMul(2, UNIT_CHIP_COUNT));
+    assert.ok(DOT_DIAMETER_UNDER_MUL < chipSizeMul(2, UNIT_CHIP_COUNT));
+    assert.ok(RGB_MANA[2] > RGB_MANA[0] && RGB_MANA[2] > RGB_MANA[1]);
+    assert.ok(RGB_MANA[1] < RGB_MANA[2] * 0.55);
+    assert.ok(RGB_MANA[2] - Math.min(RGB_MANA[0], RGB_MANA[1]) > 0.45);
     assert.ok(DOT_SPACING_AGORA_MUL > 1);
     assert.equal(underDotCount({ manaReady: 3 }), MANA_BANK_DOTS);
     assert.equal(underDotCount({ manaReady: 1 }), 1);
@@ -276,6 +321,10 @@ describe('health chip bars', () => {
     assert.equal(underDotCount({ building: true, manaReady: 3 }), 0);
     assert.equal(underDotCount({ agora: true, seatsFilled: 2 }), 0);
     assert.equal(underDotCount({ seatsFilled: 2, manaReady: 3 }), 2);
+    assert.deepEqual(underDotRgb({ manaReady: 3 }), RGB_MANA);
+    assert.deepEqual(underDotRgb({ seatsFilled: 2 }), RGB_SEAT);
+    assert.ok(Math.abs(RGB_SEAT[0] - RGB_SEAT[1]) < 0.06);
+    assert.ok(RGB_SEAT[2] > RGB_SEAT[0]);
   });
 
   it('uses 9 alternating circles; invade from the right, tug from the left', () => {

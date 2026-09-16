@@ -18,6 +18,15 @@
     #forge-ui button { margin: 2px 2px 2px 0; }
     .row { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
     .row button.active { outline: 1px solid #ccc; }
+    /* v1 kakko links — corner brackets, aqua / darkmagenta */
+    #forge-ui a.kakko {
+      text-decoration: none; color: #fff; white-space: nowrap; font-size: .8em;
+    }
+    #forge-ui a.kakko:hover { color: aqua; }
+    #forge-ui a.kakko:active { color: darkmagenta; }
+    #forge-ui a.kakko:visited { color: #fff; }
+    #forge-ui a.kakko:before { content: "\300C\000A0"; }
+    #forge-ui a.kakko:after { content: "\000A0\300D"; }
     .panel { margin-top: 8px; }
     .hint { color: #888; font-size: 11px; }
     #story-sheet {

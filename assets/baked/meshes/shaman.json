@@ -4,6 +4,29 @@
   "sockets": [],
   "materials": [
     {
+      "name": "TeamColor",
+      "baseColorFactor": [
+        0.8000074625015259,
+        0.04788985848426819,
+        0.101985402405262,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
       "name": "Material",
       "baseColorFactor": [
         0.007487825118005276,
@@ -27,11 +50,11 @@
       "emissiveImage": null
     },
     {
-      "name": "Material.002",
+      "name": "Material.001",
       "baseColorFactor": [
-        0.2573549151420593,
-        0.11393597722053528,
-        0.08641349524259567,
+        0.5783872008323669,
+        0.19368627667427063,
+        0.027153946459293365,
         1
       ],
       "metallicFactor": 0,
@@ -50,11 +73,11 @@
       "emissiveImage": null
     },
     {
-      "name": "Material.003",
+      "name": "Material.004",
       "baseColorFactor": [
-        0.21381643414497375,
-        0.5958901643753052,
-        0.800070583820343,
+        0.004591120406985283,
+        0,
+        0.0014808839187026024,
         1
       ],
       "metallicFactor": 0,
@@ -73,11 +96,34 @@
       "emissiveImage": null
     },
     {
-      "name": "TeamColor",
+      "name": "Material.005",
       "baseColorFactor": [
-        0.8000074625015259,
-        0.04788985848426819,
-        0.101985402405262,
+        0.042449064552783966,
+        0.015671517699956894,
+        0.004653186071664095,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "hair",
+      "baseColorFactor": [
+        0.015908634290099144,
+        0.015908634290099144,
+        0.015908634290099144,
         1
       ],
       "metallicFactor": 0,
@@ -99,142 +145,212 @@
   "images": [],
   "parts": [
     {
-      "materialName": "Material",
+      "materialName": "TeamColor",
       "materialIndex": 0,
       "reverseWinding": true,
       "boundMin": [
-        -1.3753596544265747,
-        0.016535727307200432,
-        -0.6607242822647095
+        -1.5209941864013672,
+        0.3495936989784241,
+        -0.32494306564331055
       ],
       "boundMax": [
-        0.761156439781189,
-        3.653010368347168,
-        1.238101840019226
+        -0.18992947041988373,
+        1.7324999570846558,
+        0.9035429954528809
       ],
       "positions": {
         "offset": 0,
-        "length": 594,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 2376,
-        "length": 594,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 4752,
-        "length": 306,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 5976,
-        "length": 396,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material.002",
-      "materialIndex": 1,
-      "reverseWinding": true,
-      "boundMin": [
-        -1.2587913274765015,
-        -0.05441039055585861,
-        -0.6607242822647095
-      ],
-      "boundMax": [
-        0.8412926197052002,
-        3.143272638320923,
-        0.6296881437301636
-      ],
-      "positions": {
-        "offset": 7560,
-        "length": 3555,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 21780,
-        "length": 3555,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 36000,
-        "length": 1794,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 43176,
-        "length": 2370,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material.003",
-      "materialIndex": 2,
-      "reverseWinding": true,
-      "boundMin": [
-        -0.8526045083999634,
-        2.130098342895508,
-        -0.6607242822647095
-      ],
-      "boundMax": [
-        0.761156439781189,
-        3.653010368347168,
-        0.1802338808774948
-      ],
-      "positions": {
-        "offset": 52656,
-        "length": 468,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 54528,
-        "length": 468,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 56400,
-        "length": 234,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 57336,
-        "length": 312,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "TeamColor",
-      "materialIndex": 3,
-      "reverseWinding": true,
-      "boundMin": [
-        -1.2944469451904297,
-        0.26501473784446716,
-        -0.3343002200126648
-      ],
-      "boundMax": [
-        -0.005334655754268169,
-        1.560472846031189,
-        1.0232555866241455
-      ],
-      "positions": {
-        "offset": 58584,
         "length": 168,
         "type": "f32"
       },
       "normals": {
-        "offset": 59256,
+        "offset": 672,
         "length": 168,
         "type": "f32"
       },
       "indices": {
-        "offset": 59928,
+        "offset": 1344,
         "length": 84,
         "type": "u32"
       },
       "uvs": {
-        "offset": 60264,
+        "offset": 1680,
         "length": 112,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "boundMin": [
+        -1.6298420429229736,
+        0.17741259932518005,
+        -0.5904243588447571
+      ],
+      "boundMax": [
+        -0.06372956931591034,
+        1.908705711364746,
+        1.1809135675430298
+      ],
+      "positions": {
+        "offset": 2128,
+        "length": 462,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 3976,
+        "length": 462,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 5824,
+        "length": 240,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 6784,
+        "length": 308,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.001",
+      "materialIndex": 2,
+      "reverseWinding": true,
+      "boundMin": [
+        -1.4568496942520142,
+        0.8080423474311829,
+        -0.14381718635559082
+      ],
+      "boundMax": [
+        0.6911725997924805,
+        2.422959804534912,
+        0.7305705547332764
+      ],
+      "positions": {
+        "offset": 8016,
+        "length": 1164,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 12672,
+        "length": 1164,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 17328,
+        "length": 588,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 19680,
+        "length": 776,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.004",
+      "materialIndex": 3,
+      "reverseWinding": true,
+      "boundMin": [
+        -0.46058809757232666,
+        -0.01764826849102974,
+        -0.10896895825862885
+      ],
+      "boundMax": [
+        0.47543442249298096,
+        0.21865883469581604,
+        0.6375147104263306
+      ],
+      "positions": {
+        "offset": 22784,
+        "length": 246,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 23768,
+        "length": 246,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 24752,
+        "length": 126,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 25256,
+        "length": 164,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.005",
+      "materialIndex": 4,
+      "reverseWinding": true,
+      "boundMin": [
+        -0.44511207938194275,
+        0.17386198043823242,
+        -0.49497300386428833
+      ],
+      "boundMax": [
+        0.9140101075172424,
+        1.1312638521194458,
+        0.3763699531555176
+      ],
+      "positions": {
+        "offset": 25912,
+        "length": 588,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 28264,
+        "length": 588,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 30616,
+        "length": 294,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 31792,
+        "length": 392,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "hair",
+      "materialIndex": 5,
+      "reverseWinding": true,
+      "boundMin": [
+        -0.24670691788196564,
+        1.4502474069595337,
+        -0.3342892825603485
+      ],
+      "boundMax": [
+        0.25741079449653625,
+        2.4762558937072754,
+        0.35193580389022827
+      ],
+      "positions": {
+        "offset": 33360,
+        "length": 528,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 35472,
+        "length": 528,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 37584,
+        "length": 264,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 38640,
+        "length": 352,
         "type": "f32"
       }
     }

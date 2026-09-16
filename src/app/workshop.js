@@ -4,6 +4,21 @@
 import { GARDEN_SESSION_KEY } from '../sim/garden.js';
 
 export const WORKSHOP_SCHEME = 'workshop:';
+export const STEAM_APP_ID = 5043860;
+
+/** Public Steam Community URL for overlay dialogs (`workshop`, `workshop:id`, `workshop-legal`). */
+export function workshopPageUrl(dialog = 'workshop', appId = STEAM_APP_ID) {
+  const raw = String(dialog || '').trim();
+  const id = Number(appId) | 0;
+  if (raw.toLowerCase() === 'workshop') {
+    return id > 0 ? `https://steamcommunity.com/app/${id}/workshop/` : '';
+  }
+  if (raw.toLowerCase() === 'workshop-legal') {
+    return 'https://steamcommunity.com/sharedfiles/workshoplegalagreement';
+  }
+  const m = /^workshop:(\d{1,20})$/i.exec(raw);
+  return m ? `https://steamcommunity.com/sharedfiles/filedetails/?id=${m[1]}` : '';
+}
 
 export function parseWorkshopId(raw) {
   const s = String(raw ?? '').trim();

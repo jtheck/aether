@@ -75,6 +75,7 @@ const ABILITY_HOLD_MS = 400;
  * @param {(x: number, z: number, y?: number, cmdType?: number, tile?: number, extra?: { arrow?: number }) => void} [opts.onOrder]
  * @param {(x: number, z: number, y?: number) => void} [opts.onAbilityHold]
  * @param {() => boolean} [opts.canInteract]
+ * @param {() => boolean} [opts.canIssueCommands] — select/inspect when false; no orders
  * @param {() => { owner: number, x: number, z: number }[]} [opts.getAgoras]
  * @param {() => { owner: number, type: string, x: number, z: number, yaw?: number }[]} [opts.getBuildings]
  * @param {(sel: { kind: 'agora' | 'building', index: number } | null, ptr?: { clientX: number, clientY: number }, all?: { kind: 'agora' | 'building', index: number }[]) => void} [opts.onBuildingSelected]
@@ -113,6 +114,7 @@ export function createGameInput(opts) {
     onOrder,
     onAbilityHold,
     canInteract,
+    canIssueCommands,
     getAgoras,
     getBuildings,
     onBuildingSelected,
@@ -256,6 +258,11 @@ export function createGameInput(opts) {
 
   function canUseInput() {
     return inputEnabled && localPlayerId >= 0 && (canInteract?.() ?? true);
+  }
+
+  /** Selection stays up during story camera; orders / casts / place / train do not. */
+  function canIssueOrders() {
+    return canUseInput() && (canIssueCommands?.() ?? true);
   }
 
   function isPlacing() {
@@ -934,7 +941,7 @@ export function createGameInput(opts) {
 
   /**
    * Selection-strip chip — units and buildings use the same click-to-select-all.
-   * @param {{ kind?: string, typeId?: number, typeKey?: string } | number | null} slot
+   * @param {{ kind?: string, typeId?: number, typeKey?: string, entityId?: number } | number | null} slot
    * @param {boolean} add
    */
   function selectHudSlot(slot, add) {
@@ -943,8 +950,24 @@ export function createGameInput(opts) {
       selectAllBuildingsOfType(slot.typeKey, add);
       return;
     }
+    if (typeof slot === 'object' && slot.entityId != null) {
+      selectHudEntity(slot.entityId | 0, add);
+      return;
+    }
     const typeId = typeof slot === 'number' ? slot : slot.typeId;
     if (typeId != null) selectAllOfType(typeId, add);
+  }
+
+  function selectHudEntity(id, add) {
+    const world = getWorld();
+    if (id < 0 || id >= world.count || !world.alive[id]) return;
+    const owner = world.owner[id] | 0;
+    if (!add) clearUnitSelectionBits();
+    else dropUnitsNotOwnedBy(owner);
+    if (world.owner[id] === owner) selectEntity(id);
+    clearBuildingSelection();
+    syncSelectionSquad();
+    onSelectionChanged?.();
   }
 
   /**
@@ -1027,6 +1050,7 @@ export function createGameInput(opts) {
    * @param {number} cmdType CMD.MOVE | CMD.ATTACK_MOVE
    */
   function rallyOrderAt(x, z, cmdType) {
+    if (!canIssueOrders()) return false;
     const list = rallyCapableBuildings();
     const order = cmdType === CMD.ATTACK_MOVE ? ORDER.ATTACK_MOVE : ORDER.MOVE;
     let any = false;
@@ -1206,7 +1230,7 @@ export function createGameInput(opts) {
    * @param {{ kind: 'agora' | 'building', index: number } | null} [preBld]
    */
   async function orderAt(clientX, clientY, cmdType, preHit, epoch, preBld) {
-    if (!canUseInput() || isPlacing()) return;
+    if (!canIssueOrders() || isPlacing()) return;
     const ids = selectedIds();
     if (ids.length === 0) return;
     if (epoch !== undefined && !clickCurrent(epoch)) return;
@@ -1341,7 +1365,7 @@ export function createGameInput(opts) {
 
   /** Tap+hold — unload loaded transports, else cast primary ability. */
   function castAbilityAt(clientX, clientY) {
-    if (!canUseInput() || isPlacing()) return;
+    if (!canIssueOrders() || isPlacing()) return;
     const ids = selectedIds();
     if (ids.length === 0) return;
     const g = renderer.screenToGround(clientX, clientY);
@@ -1390,7 +1414,7 @@ export function createGameInput(opts) {
     abilityHoldFired = false;
     abilityHoldClientX = clientX;
     abilityHoldClientY = clientY;
-    if (isPlacing() || !hasOrderableSelection()) return;
+    if (isPlacing() || !hasOrderableSelection() || !canIssueOrders()) return;
 
     // Arm the timer immediately. Waiting on GPU pick first made hold-cast miss under
     // stress (pick latency ate the whole gesture before the 400ms timer even started).
@@ -1577,7 +1601,7 @@ export function createGameInput(opts) {
         isTransport(world.type[hit]) &&
         passengerCount(world, hit) < transportCapacityOf(world.type[hit]) &&
         selected.some((id) => id !== hit && canRideTransport(world.type[id]));
-      if (canEmbark) {
+      if (canEmbark && canIssueOrders()) {
         lastTap = null;
         if (!clickCurrent(epoch)) return;
         await orderAt(e.clientX, e.clientY, CMD.ATTACK_MOVE, hit, epoch);
@@ -1604,7 +1628,7 @@ export function createGameInput(opts) {
 
     // Idle click on a visible foreign unit → inspect (collar + HP). With own
     // troops selected this stays an attack-move so combat LMB is unchanged.
-    if (hit >= 0 && inspectForeignOnClick(hasOrderableSelection())) {
+    if (hit >= 0 && inspectForeignOnClick(hasOrderableSelection(), canIssueOrders())) {
       const owner = world.owner[hit];
       const typeId = world.type[hit];
       const selectAll =
@@ -1643,7 +1667,7 @@ export function createGameInput(opts) {
     }
     if (bld) {
       const ownBld = buildingOwnerOf(bld) === localPlayerId;
-      if (ownBld || inspectForeignOnClick(hasOrderableSelection())) {
+      if (ownBld || inspectForeignOnClick(hasOrderableSelection(), canIssueOrders())) {
         const typeKey = buildingTypeKeyOf(bld);
         const selectAll =
           !!typeKey &&
@@ -1672,7 +1696,7 @@ export function createGameInput(opts) {
     // Hub frames the selected building — a miss must not rally / deselect.
     if (click.hubPassThrough) return;
 
-    if (hasOrderableSelection()) {
+    if (hasOrderableSelection() && canIssueOrders()) {
       if (!clickCurrent(epoch)) return;
       // Double-tap enemy/ground → cast (first tap already a-moved; do not delay it).
       const castEligible =
@@ -1697,7 +1721,7 @@ export function createGameInput(opts) {
       return;
     }
 
-    if (hasRallySelection()) {
+    if (hasRallySelection() && canIssueOrders()) {
       if (!clickCurrent(epoch)) return;
       const g = renderer.screenToGround?.(e.clientX, e.clientY);
       if (g) rallyOrderAt(g.x, g.z, CMD.ATTACK_MOVE);
@@ -1763,7 +1787,7 @@ export function createGameInput(opts) {
         if (isPlacingRally?.()) {
           if (radialKind === 'pick') {
             lastTap = null;
-            onRadialPick?.(picked);
+            if (canIssueOrders()) onRadialPick?.(picked);
             radialHandled = true;
           } else if (radialKind === 'hub' || radialKind === 'chrome') {
             lastTap = null;
@@ -1775,13 +1799,13 @@ export function createGameInput(opts) {
               Math.hypot(e.clientX - d.x, e.clientY - d.y) <= DRAG_THRESHOLD_PX
             ) {
               const g = renderer.screenToGround?.(e.clientX, e.clientY);
-              if (g) onRallyConfirm?.(g.x, g.z);
+              if (g && canIssueOrders()) onRallyConfirm?.(g.x, g.z);
             }
           }
         } else {
           const yaw = currentYaw();
           if (placeRotating && placeAnchor) {
-            onPlacementConfirm?.(placeAnchor.x, placeAnchor.z, yaw);
+            if (canIssueOrders()) onPlacementConfirm?.(placeAnchor.x, placeAnchor.z, yaw);
           } else {
             const tap =
               d &&
@@ -1796,7 +1820,7 @@ export function createGameInput(opts) {
             );
             if (tapKind === 'pick') {
               lastTap = null;
-              onRadialPick?.(picked);
+              if (canIssueOrders()) onRadialPick?.(picked);
             } else if (tapKind === 'exit') {
               lastTap = null;
               cancelPlacement();
@@ -1806,7 +1830,7 @@ export function createGameInput(opts) {
               const g =
                 placeAnchor ??
                 renderer.screenToGround?.(e.clientX, e.clientY);
-              if (g) onPlacementConfirm?.(g.x, g.z, yaw);
+              if (g && canIssueOrders()) onPlacementConfirm?.(g.x, g.z, yaw);
             }
           }
         }
@@ -1823,7 +1847,7 @@ export function createGameInput(opts) {
           });
           if (kind === 'pick') {
             lastTap = null;
-            onRadialPick?.(picked);
+            if (canIssueOrders()) onRadialPick?.(picked);
             radialHandled = true;
           } else if (kind === 'hub') {
             // Empty hole sits on the selected building — re-select / select-all.
@@ -1868,7 +1892,7 @@ export function createGameInput(opts) {
    * No unit pick; ignores enemies. Camera latches pan + click on the same travel.
    */
   function forceMoveAt(clientX, clientY) {
-    if (!canUseInput() || isPlacing()) return false;
+    if (!canIssueOrders() || isPlacing()) return false;
     if (hasRallySelection()) {
       lastTap = null;
       const g = renderer.screenToGround?.(clientX, clientY);

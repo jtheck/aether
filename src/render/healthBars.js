@@ -14,6 +14,7 @@ import {
   createFacingBillboardSystem,
   createGridSpriteAtlas,
   createTexture2DFromPixels,
+  getViewProjectionMatrix,
   removeBillboardSprite,
   updateBillboardSprite,
 } from '../vendor/lite/liteVendor.js';
@@ -74,18 +75,28 @@ export const DOT_DIAMETER_FIRST_MUL = 0.96;
 export const DOT_DIAMETER_ALTERNATE_MUL = 0.58;
 /** Circles stay 1:1 — leftover from the old wide squares. */
 export const DOT_ALTERNATE_WIDTH_MUL = 1;
-/** Permanent left team pip. */
-export const DOT_DIAMETER_LEAD_MUL = 0.80;
-/** Ready-mana / filled-seat dots under the HP line. */
-export const DOT_DIAMETER_UNDER_MUL = 1.12;
+/** Permanent left team pip — larger than the HP chips. */
+export const DOT_DIAMETER_LEAD_MUL = 1.22 - 1 / TARGET_DOT_PX;
+/** Ready-mana / filled-seat dots under the HP line — a hair under the HP chips. */
+export const DOT_DIAMETER_UNDER_MUL = 0.86;
 /** Center gap — visual tiles are smaller than the billboard, so this can sit under 0.72. */
-const DOT_SPACING_MUL = 0.60;
-const LINE_HEIGHT_MUL = 0.16;
-const LINE_DOWN_MUL = 0.40;
-const UNDER_DOWN_MUL = 0.98;
-const UNDER_SPACING_MUL = 0.86;
-const UNDER_SPACING_PACKED_MUL = 0.62;
-const RGB_MANA = [0.40, 0.86, 0.96];
+const DOT_SPACING_MUL = 0.82;
+/** Fallback only when the camera eye is unknown. */
+const LINE_HEIGHT_MUL = 0.30;
+/** Underline stays one CSS pixel; the atlas stroke fills the cell so this is real. */
+export const LINE_MIN_PX = 1;
+/** Atlas half-extent of the underline — near 0.5 so billboard height ≈ stroke. */
+export const LINE_ATLAS_HALF_MUL = 0.48;
+export const LINE_DOWN_MUL = 0.68;
+/** Cut this fraction off the right end of the underline. */
+export const LINE_RIGHT_TRIM = 1 / 3;
+const UNDER_DOWN_MUL = 1.42;
+const UNDER_SPACING_MUL = 1.22;
+const UNDER_SPACING_PACKED_MUL = 0.98;
+/** Saturated cobalt — dark enough to sit under HP, not greyed-out. */
+export const RGB_MANA = [0.16, 0.40, 0.92];
+/** Filled vehicle seats — same cool grey as HUD `--pop-ink` (`#b8c0cc`). */
+export const RGB_SEAT = [184 / 255, 192 / 255, 204 / 255];
 /** Agora circles — large on even slots, smaller on odd, with air between. */
 export const DOT_DIAMETER_AGORA_LARGE_MUL = 2.15;
 export const DOT_DIAMETER_AGORA_SMALL_MUL = 1.22;
@@ -176,8 +187,8 @@ function writeSoftChip(pixels, ox, size, cornerMul, opts = {}) {
 function writeUnderline(pixels, ox, size) {
   const cx = size * 0.5;
   const cy = size * 0.5;
-  const halfW = size * 0.48;
-  const halfH = size * 0.055;
+  const halfW = size * LINE_ATLAS_HALF_MUL;
+  const halfH = size * LINE_ATLAS_HALF_MUL;
   const feather = size * 0.02;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -299,6 +310,52 @@ export function worldSizeForScreenPx(screenPx, distance, viewportHeight, fov) {
 }
 
 /**
+ * Underline height in world units. Always one CSS pixel once the camera
+ * distance is known — chip scale used to shrink this under a pixel.
+ */
+export function chipLineHeight(normalDot, distance, viewportHeight, fov) {
+  if (distance > 1e-3) {
+    return worldSizeForScreenPx(LINE_MIN_PX, distance, viewportHeight, fov);
+  }
+  return Math.max(0, normalDot) * LINE_HEIGHT_MUL;
+}
+
+/** Underline width and row offset — left edge stays, right end is trimmed. */
+export function chipLineLayout(totalWidth, spacing) {
+  const full = Math.max(spacing, totalWidth + spacing * 0.55);
+  const width = full * (1 - LINE_RIGHT_TRIM);
+  return { width, along: -full * LINE_RIGHT_TRIM * 0.5 };
+}
+
+/** Snap a CSS-pixel Y to a device-pixel center so a 1px bar cannot strobe. */
+export function snapScreenYToPixelCenter(screenY, devicePixelRatio = 1) {
+  const dpr = devicePixelRatio > 1e-3 ? devicePixelRatio : 1;
+  return (Math.floor(screenY * dpr) + 0.5) / dpr;
+}
+
+/**
+ * Nudge a world point along screen-up so its projected Y sits on a pixel
+ * center. `vp` is column-major view-projection.
+ * @returns {[number, number, number]}
+ */
+export function snapWorldToPixelRow(px, py, pz, vp, viewH, deviceH, ux, uy, uz, dist, fov) {
+  if (!vp || !(viewH > 1) || !(dist > 1e-3)) return [px, py, pz];
+  let clipY = vp[1] * px + vp[5] * py + vp[9] * pz + vp[13];
+  let clipW = vp[3] * px + vp[7] * py + vp[11] * pz + vp[15];
+  if (!(Math.abs(clipW) > 1e-8)) return [px, py, pz];
+  if (clipW < 0) {
+    clipY = -clipY;
+    clipW = -clipW;
+  }
+  const screenY = (1 - clipY / clipW) * 0.5 * viewH;
+  const dpr = deviceH > 1 ? deviceH / viewH : 1;
+  const errPx = snapScreenYToPixelCenter(screenY, dpr) - screenY;
+  if (Math.abs(errPx) < 1e-6) return [px, py, pz];
+  const world = worldSizeForScreenPx(errPx, dist, viewH, fov);
+  return [px - ux * world, py - uy * world, pz - uz * world];
+}
+
+/**
  * 1 until half zoom, then smoothstep to 0 at max zoom-out.
  * @param {number} normalizedZoom 0 = closest, 1 = farthest
  */
@@ -405,6 +462,12 @@ export function chipFillAlpha(ratio) {
 export function chipDotAlpha(_index, filled, ratio) {
   if (!filled) return 1;
   return chipFillAlpha(ratio);
+}
+
+/** Ready-mana cobalt, or the HUD grey for filled seats. */
+export function underDotRgb(flags = {}) {
+  if ((flags.seatsFilled | 0) > 0) return RGB_SEAT;
+  return RGB_MANA;
 }
 
 /** Ready mana charges, or filled vehicle seats — not both. */
@@ -589,7 +652,7 @@ function hideSprite(spr) {
 /**
  * @param {object} engine
  * @param {object} scene
- * @param {{ capacity?: number, getViewportHeight?: () => number }} [opts]
+ * @param {{ capacity?: number, getViewportHeight?: () => number, getViewportWidth?: () => number }} [opts]
  */
 export function createHealthBars(engine, scene, opts = {}) {
   const capacity = Math.max(1, opts.capacity ?? HEALTH_BAR_CAPACITY);
@@ -609,6 +672,10 @@ export function createHealthBars(engine, scene, opts = {}) {
   /** Highest slot that was live last frame — `end()` only hides this tail. */
   let prevUsed = 0;
   let viewH = 720;
+  let viewW = 1280;
+  let deviceH = 720;
+  /** @type {Float32Array | number[] | null} */
+  let viewProjection = null;
   let fov = 0.8;
   let horizonScale = 1;
   let sizeScale = 1;
@@ -679,12 +746,25 @@ export function createHealthBars(engine, scene, opts = {}) {
     return Number.isFinite(h) && h > 1 ? h : 720;
   }
 
+  function viewportWidth() {
+    const fromOpts = opts.getViewportWidth?.();
+    if (Number.isFinite(fromOpts) && fromOpts > 1) return fromOpts;
+    const c = engine?.canvas;
+    const w = c?.clientWidth || c?.width;
+    return Number.isFinite(w) && w > 1 ? w : 1280;
+  }
+
   return {
     begin() {
       used = 0;
       chipNow = typeof performance !== 'undefined' ? performance.now() : 0;
       viewH = viewportHeight();
+      viewW = viewportWidth();
+      deviceH = engine?.canvas?.height > 1 ? engine.canvas.height : viewH;
       const cam = scene?.camera;
+      viewProjection = cam && viewW > 1 && viewH > 1
+        ? getViewProjectionMatrix(cam, viewW / viewH)
+        : null;
       const camFov = cam?.fov;
       fov = Number.isFinite(camFov) && camFov > 1e-3 ? camFov : 0.8;
       const minR = cam?.lowerRadiusLimit ?? 50;
@@ -742,8 +822,9 @@ export function createHealthBars(engine, scene, opts = {}) {
        * @param {number} frame
        * @param {number} towardCam
        * @param {number} [down]
+       * @param {boolean} [snapPixelY]
        */
-      function placeAlong(spr, along, sx, sy, rgb, alpha, frame, towardCam, down = 0) {
+      function placeAlong(spr, along, sx, sy, rgb, alpha, frame, towardCam, down = 0, snapPixelY = false) {
         let px = bx + rx * along;
         let py = by;
         let pz = bz + rz * along;
@@ -765,6 +846,22 @@ export function createHealthBars(engine, scene, opts = {}) {
             py += dy * k;
             pz += dz * k;
           }
+        }
+        if (snapPixelY) {
+          const cam = scene?.camera;
+          const [ux, uy, uz] = chipScreenUpDir(cam?.alpha, cam?.beta);
+          const snapDist = eye
+            ? Math.hypot(eye[0] - px, eye[1] - py, eye[2] - pz)
+            : dist;
+          [px, py, pz] = snapWorldToPixelRow(
+            px, py, pz,
+            viewProjection,
+            viewH,
+            deviceH,
+            ux, uy, uz,
+            snapDist,
+            fov,
+          );
         }
         spr.position[0] = px;
         spr.position[1] = py;
@@ -859,6 +956,7 @@ export function createHealthBars(engine, scene, opts = {}) {
           );
         }
         for (let i = count; i < CHIP_COUNT_MAX; i++) hideSprite(slot.dots[i]);
+        const lineDown = normalDot * LINE_DOWN_MUL;
         placeAlong(
           slot.lead,
           -spacing - (totalWidth * 0.5),
@@ -868,23 +966,25 @@ export function createHealthBars(engine, scene, opts = {}) {
           CHIP_TEAM_FILL_ALPHA,
           FRAME_LEAD_ROUND,
           teamNudge,
+          lineDown,
         );
-        const lineW = Math.max(spacing, totalWidth + spacing * 0.55);
+        const { width: lineW, along: lineAlong } = chipLineLayout(totalWidth, spacing);
         placeAlong(
           slot.line,
-          0,
+          lineAlong,
           lineW,
-          normalDot * LINE_HEIGHT_MUL,
+          chipLineHeight(normalDot, dist, viewH, fov),
           teamRgb,
-          0.85,
+          CHIP_TEAM_FILL_ALPHA,
           FRAME_LINE,
-          0,
-          normalDot * LINE_DOWN_MUL,
+          teamNudge,
+          lineDown,
+          true,
         );
         const underN = underDotCount(flags);
         const underSpace = normalDot * (underN > 3 ? UNDER_SPACING_PACKED_MUL : UNDER_SPACING_MUL);
         const underWidth = Math.max(0, underN - 1) * underSpace;
-        const underRgb = (flags.seatsFilled | 0) > 0 ? teamRgb : RGB_MANA;
+        const underRgb = underDotRgb(flags);
         const underD = normalDot * DOT_DIAMETER_UNDER_MUL;
         for (let i = 0; i < UNDER_DOT_MAX; i++) {
           const spr = slot.under[i];

@@ -4,29 +4,57 @@ import { CHAPTER_CATALOG } from '../story/campaign.js';
 
 export const FIELD_SIZES = ['tiny', 'small', 'medium', 'large', 'huge'];
 
-/** Legacy grove prototype chapters — kept ahead of the campaign for compatibility. */
+/** Playable adventure chapters in the lobby. Full 5-episode campaign stays off the UI for now. */
 export const LEGACY_CHAPTERS = [
   { id: 'ch1', name: 'Chapter 1', garden: '/maps/chapter1.garden' },
   { id: 'ch2', name: 'Chapter 2', garden: '/maps/chapter2.garden' },
   { id: 'ch3', name: 'Chapter 3', garden: '/maps/chapter3.garden' },
 ];
 
-/** Selectable adventure chapters: legacy grove first, then the 5-episode campaign. */
-export const ADVENTURE_CHAPTERS = [
-  ...LEGACY_CHAPTERS,
-  ...CHAPTER_CATALOG.map(({ id, name, garden }) => ({ id, name, garden })),
-];
+const CAMPAIGN_CHAPTER_OPTIONS = CHAPTER_CATALOG.map(({ id, name, garden }) => ({ id, name, garden }));
+
+/** Every official garden the sim can start — picker is a subset. */
+const KNOWN_CHAPTERS = [...LEGACY_CHAPTERS, ...CAMPAIGN_CHAPTER_OPTIONS];
+
+/** Selectable adventure chapters: the old grove three. */
+export const ADVENTURE_CHAPTERS = [...LEGACY_CHAPTERS];
+
+function pageHostname() {
+  return typeof location !== 'undefined' ? location.hostname : '';
+}
+
+function pageSearch() {
+  return typeof location !== 'undefined' ? location.search : '';
+}
+
+/** Same loopback gate as `?dlc=` — ignored on aether.garden. */
+export function isLocalStoryHost(hostname = pageHostname()) {
+  const host = String(hostname ?? '').replace(/^\[|\]$/g, '').toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+
+/** Local `?story=1` unlocks the 5-episode catalog in the adventure picker. */
+export function showFullStoryPicker(search = pageSearch(), hostname = pageHostname()) {
+  if (!isLocalStoryHost(hostname)) return false;
+  const q = new URLSearchParams(search).get('story');
+  return q === '1' || q === 'all' || q === 'true';
+}
+
+export function selectableAdventureChapters(search = pageSearch(), hostname = pageHostname()) {
+  if (showFullStoryPicker(search, hostname)) return [...LEGACY_CHAPTERS, ...CAMPAIGN_CHAPTER_OPTIONS];
+  return ADVENTURE_CHAPTERS;
+}
 
 /** Official chapter id, or a workshop:<id>[/file] ref. */
 export function gardenUrlForChapter(chapterId) {
   const raw = String(chapterId || '');
-  const ch = ADVENTURE_CHAPTERS.find((c) => c.id === raw);
+  const ch = KNOWN_CHAPTERS.find((c) => c.id === raw);
   if (ch?.garden) return ch.garden;
   return raw.toLowerCase().startsWith('workshop:') ? raw : '';
 }
 
 export function chapterIdForGardenUrl(url) {
-  return ADVENTURE_CHAPTERS.find((c) => c.garden === url)?.id || '';
+  return KNOWN_CHAPTERS.find((c) => c.garden === url)?.id || '';
 }
 
 /** Corner mark for story mode — "Ch 1" from id, garden url, or name. */
@@ -34,7 +62,7 @@ export function chapterLabelFor(ref = {}) {
   const id = String(ref.chapter || '');
   const url = String(ref.gardenUrl || ref.url || '');
   const name = String(ref.name || ref.n || '');
-  const ch = ADVENTURE_CHAPTERS.find((c) => c.id === id || (url && c.garden === url));
+  const ch = KNOWN_CHAPTERS.find((c) => c.id === id || (url && c.garden === url));
   const num = ch?.id.match(/\d+/)?.[0]
     || name.match(/chapter\s*(\d+)/i)?.[1]
     || url.match(/chapter(\d+)/i)?.[1];

@@ -276,8 +276,8 @@ export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed } = {}) 
   w.lastPy[i] = y;
   w.attackCd[i] = 0;
   w.abilityCd[i] = 0;
-  w.mana[i] = isManaCaster(type) ? MANA_MAX : 0;
-  w.manaAcc[i] = 0;
+  if (w.mana) w.mana[i] = isManaCaster(type) ? MANA_MAX : 0;
+  if (w.manaAcc) w.manaAcc[i] = 0;
   w.distractCd[i] = 0;
   w.shieldHp[i] = 0;
   w.shieldTicks[i] = 0;

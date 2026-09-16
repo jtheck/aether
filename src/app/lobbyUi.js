@@ -1,7 +1,7 @@
 // Side-menu type drawers + center match room + reduced sidebar copy.
 
 import { sameUserId, shortUserId } from '../lobby/ids.js';
-import { ADVENTURE_CHAPTERS, FIELD_SIZES, MODE_IDS, getMode } from '../lobby/modes.js';
+import { FIELD_SIZES, MODE_IDS, getMode, selectableAdventureChapters } from '../lobby/modes.js';
 import { shortRoomId } from '../lobby/protocol.js';
 import { aetherSteam } from './steam.js';
 import { formatWorkshopRef, isWorkshopRef } from './workshop.js';
@@ -183,8 +183,10 @@ function workshopChapterLabel(item, garden) {
   return title;
 }
 
-export function chapterSelectOptions(workshopItems, current) {
-  const official = ADVENTURE_CHAPTERS.filter((c) => c.garden).map((c) => ({ id: c.id, name: c.name }));
+export function chapterSelectOptions(workshopItems, current, search, hostname) {
+  const official = selectableAdventureChapters(search, hostname)
+    .filter((c) => c.garden)
+    .map((c) => ({ id: c.id, name: c.name }));
   const extra = [];
   for (const item of workshopItems || []) {
     for (const garden of item.gardens || []) {

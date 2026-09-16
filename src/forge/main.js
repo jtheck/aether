@@ -43,7 +43,7 @@ import {
 } from '../sim/tableShape.js';
 import { TERRAIN } from '../sim/field.js';
 import { decodeGarden, encodeGarden, fieldFromGarden, GARDEN_SESSION_KEY } from '../sim/garden.js';
-import { formatWorkshopRef, loadGardenRef } from '../app/workshop.js';
+import { formatWorkshopRef, loadGardenRef, workshopPageUrl } from '../app/workshop.js';
 import { RESOURCE_KINDS, STARTING_RESOURCES } from '../sim/resources.js';
 import { applyAuthoredScenery, populateScenery, paintSceneryBrush, SCENERY } from '../sim/scenery.js';
 import { UNIT_DEFS } from '../sim/unitTypes.js';
@@ -1326,6 +1326,22 @@ async function publishWorkshopMap() {
   }
 }
 
+function syncWorkshopChrome() {
+  const steam = aetherSteam.isAvailable();
+  const select = document.getElementById('workshop-maps');
+  const load = document.getElementById('btn-workshop-load');
+  const publish = document.getElementById('btn-workshop-publish');
+  const hint = document.getElementById('workshop-hint');
+  if (select) select.hidden = !steam;
+  if (load) load.hidden = !steam;
+  if (publish) publish.hidden = !steam;
+  if (hint) {
+    hint.textContent = steam
+      ? 'Steam can load subscribed Workshop items and publish this map. Campaigns use a relative Next garden (maps/02.garden). Play opens a solo match from this map.'
+      : 'Subscribe and publish from the Steam build. On the web, export/import .garden files, or browse maps on Steam Workshop. Play opens a solo match from this map.';
+  }
+}
+
 async function loadWorkshopSelection() {
   const select = document.getElementById('workshop-maps');
   const raw = select?.value;
@@ -1512,11 +1528,11 @@ function mountUi() {
       </select>
       <div class="row">
         <button id="btn-workshop-load" type="button">Load subscribed</button>
-        <button id="btn-workshop-browse" type="button">Browse Workshop</button>
+        <a id="btn-workshop-browse" class="kakko" href="${workshopPageUrl()}" target="_blank" rel="noopener noreferrer">Browse Workshop</a>
         <button id="btn-workshop-publish" type="button">Publish to Workshop</button>
       </div>
       <input id="import-file" type="file" accept=".garden,.json" style="display:none">
-      <p class="hint" id="workshop-hint">v4 .garden files live in repo-root maps/ (chapter1, tester). Steam can load subscribed Workshop items and publish this map. Campaigns use a relative Next garden (maps/02.garden). Play opens a solo match from this map.</p>
+      <p class="hint" id="workshop-hint">Subscribe and publish from the Steam build. On the web, export/import .garden files, or browse maps on Steam Workshop. Play opens a solo match from this map.</p>
     </div>
     <div id="panel-table" class="panel">
       <p id="select-hint" class="hint">Click to select. Shift-click to add. Double-click to toggle on/off.</p>
@@ -1801,12 +1817,13 @@ function mountUi() {
   document.getElementById('btn-workshop-load')?.addEventListener('click', () => {
     void loadWorkshopSelection();
   });
-  document.getElementById('btn-workshop-browse')?.addEventListener('click', () => {
-    aetherSteam.openOverlay?.('workshop');
+  document.getElementById('btn-workshop-browse')?.addEventListener('click', (e) => {
+    if (aetherSteam.openOverlay('workshop')) e.preventDefault();
   });
   document.getElementById('btn-workshop-publish')?.addEventListener('click', () => {
     void publishWorkshopMap();
   });
+  syncWorkshopChrome();
 }
 
 function loadForgeCelestial() {
@@ -2017,13 +2034,17 @@ async function main() {
 
 function notifyForgeOpened() {
   if (aetherSteam.notifyForgeOpened()) {
+    syncWorkshopChrome();
     void refreshWorkshopMaps();
     return;
   }
   let tries = 0;
   const id = setInterval(() => {
     const ready = aetherSteam.notifyForgeOpened();
-    if (ready) void refreshWorkshopMaps();
+    if (ready) {
+      syncWorkshopChrome();
+      void refreshWorkshopMaps();
+    }
     if (ready || ++tries >= 15) clearInterval(id);
   }, 1000);
 }

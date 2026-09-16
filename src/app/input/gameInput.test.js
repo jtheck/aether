@@ -79,6 +79,7 @@ describe('building multi / box select helpers', () => {
   it('foreign LMB inspects when idle and stays an order click with troops selected', () => {
     assert.equal(inspectForeignOnClick(false), true);
     assert.equal(inspectForeignOnClick(true), false);
+    assert.equal(inspectForeignOnClick(true, false), true);
   });
 
   it('2-finger tap consumes placement, building selection, and an open radial', () => {

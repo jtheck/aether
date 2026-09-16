@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { chapterLabelFor } from './modes.js';
+import { chapterLabelFor, gardenUrlForChapter, selectableAdventureChapters, showFullStoryPicker } from './modes.js';
 import { liveConfigFromLobby, teamByOwnerForMode } from './startConfig.js';
 
 const seats = [
@@ -78,5 +78,21 @@ describe('chapterLabelFor', () => {
     assert.equal(chapterLabelFor({ name: 'Chapter 1' }), 'Ch 1');
     assert.equal(chapterLabelFor({ chapter: 'workshop:99', name: 'Grove' }), 'Grove');
     assert.equal(chapterLabelFor({ gardenUrl: 'workshop:99' }), 'Workshop');
+  });
+});
+
+describe('local story picker', () => {
+  it('keeps the 5-episode catalog off the public picker', () => {
+    assert.equal(showFullStoryPicker('', 'localhost'), false);
+    assert.equal(showFullStoryPicker('?story=1', 'aether.garden'), false);
+    assert.deepEqual(selectableAdventureChapters('', 'localhost').map((c) => c.id), ['ch1', 'ch2', 'ch3']);
+  });
+
+  it('unlocks campaign chapters on localhost ?story=1', () => {
+    assert.equal(showFullStoryPicker('?story=1', 'localhost'), true);
+    const ids = selectableAdventureChapters('?story=1', '127.0.0.1').map((c) => c.id);
+    assert.deepEqual(ids.slice(0, 3), ['ch1', 'ch2', 'ch3']);
+    assert.ok(ids.includes('e1c1'));
+    assert.equal(gardenUrlForChapter('e1c1'), '/maps/e1c1.garden');
   });
 });

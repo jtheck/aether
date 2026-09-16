@@ -81,8 +81,15 @@ describe('lobby ui copy', () => {
       { id: '99', title: 'Grove', gardens: [{ file: 'map.garden', name: 'Grove' }] },
     ], 'workshop:12/maps/02.garden');
     assert.equal(opts[0].id, 'ch1');
+    assert.equal(opts.some((o) => o.id === 'e1c1'), false);
     assert.equal(opts.some((o) => o.id === 'workshop:99/map.garden'), true);
     assert.equal(opts.find((o) => o.id === 'workshop:12/maps/02.garden')?.name, 'Workshop map');
+  });
+
+  it('lists campaign chapters on localhost ?story=1', () => {
+    const opts = chapterSelectOptions([], 'ch1', '?story=1', 'localhost');
+    assert.equal(opts[0].id, 'ch1');
+    assert.equal(opts.some((o) => o.id === 'e1c1'), true);
   });
 });
 

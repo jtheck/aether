@@ -5,6 +5,7 @@
   "walkName": "walk_cycle",
   "carryName": "carry",
   "chopName": "chop",
+  "attackName": null,
   "idleClip": {
     "fromRow": 0,
     "frameCount": 101,
@@ -20,6 +21,7 @@
     "frameCount": 61,
     "fps": 60
   },
+  "attackClip": null,
   "carryClip": {
     "fromRow": 225,
     "frameCount": 101,

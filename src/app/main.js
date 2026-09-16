@@ -65,7 +65,8 @@ import { TECH, TECH_BY_ID } from '../sim/tech.js';
 import { createRenderer } from '../render/renderer.js';
 import { createFogOfWar } from '../render/fogOfWar.js';
 import { shareVisionOwnersFromCfg } from '../render/visionShare.js';
-import { selectionGroupsFromBuildings } from '../render/selectionHud.js';
+import { selectionGroupsFromBuildings, selectionGroupsFromUnits } from '../render/selectionHud.js';
+import { manaReadyCount } from '../sim/mana.js';
 import { createLiteExplorerToggle } from '../render/liteExplorer.js';
 import { setupMenu } from './menu.js';
 import {
@@ -861,6 +862,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     hbHurtOwner: new Int32Array(CAP),
     hbSelectedHp: new Int32Array(CAP),
     hbHurtHp: new Int32Array(CAP),
+    hbSelectedMana: new Int8Array(CAP),
+    hbHurtMana: new Int8Array(CAP),
+    hbSelectedSeats: new Int8Array(CAP),
+    hbHurtSeats: new Int8Array(CAP),
     /** Passenger deck packing for carried units. */
     passengerSlot: new Int32Array(CAP),
     passengerTotalOf: new Int32Array(CAP),
@@ -1550,6 +1555,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   }
 
   function openRadialForAgora(index) {
+    if (matchStory?.driving?.()) return;
     lastAgoraIndex = index;
     const a = session.agoras?.[index];
     if (!a) return;
@@ -1573,6 +1579,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   let lastAgoraHotkeyTap = null;
 
   function jumpCameraToOwnedAgora(index) {
+    if (matchStory?.driving?.()) return;
     const a = session.agoras?.[index];
     if (!a || !Number.isFinite(a.x) || !Number.isFinite(a.z)) return;
     renderer.cameraController?.lookAtXZ?.(a.x, a.z);
@@ -1673,6 +1680,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   }
 
   function openActionRadialForBuilding(index, indices) {
+    if (matchStory?.driving?.()) return;
     const b = session.buildings?.[index];
     if (!b || (!buildingHasMenu(b.type) && b.built !== 0)) {
       closeRadial();
@@ -2209,6 +2217,15 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   if (garden?.story || gardenObjectivesOf(garden).length) beginAdventure(garden);
   let ctxAdvanceChapter = null;
 
+  function playerCanIssueCommands() {
+    return session.role === 'player' && localPlayerId >= 0 && !session.pauseLockstep && !matchStory.driving();
+  }
+
+  function submitIssuedCommand(cmd) {
+    if (cmd?.type !== CMD.SELECT && !playerCanIssueCommands()) return;
+    session.submitCommand(cmd);
+  }
+
   let inputApi = setupInput({
     canvas,
     renderer,
@@ -2224,9 +2241,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       out.z = bufs.renderZ[i];
       return out;
     },
-    enqueueCommand: (cmd) => session.submitCommand(cmd),
+    enqueueCommand: (cmd) => submitIssuedCommand(cmd),
     onSelectionChanged: updateColors,
     onControlGroupJump: () => {
+      if (matchStory.driving()) return;
       const c = selectionFollowPoint();
       if (!c) return;
       renderer.cameraController?.lookAtXZ?.(c.x, c.z);
@@ -2243,7 +2261,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     },
     onAbilityHold: null,
     canInteract: () =>
-      session.role === 'player' && localPlayerId >= 0 && !session.pauseLockstep && !matchStory.driving(),
+      session.role === 'player' && localPlayerId >= 0 && !session.pauseLockstep,
+    canIssueCommands: () => playerCanIssueCommands(),
     getAgoras: () => session.agoras ?? [],
     getBuildings: () => session.buildings ?? [],
     getField: () => session.field ?? null,
@@ -2285,6 +2304,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       setRallyGhostAt(b, x, z);
     },
     onRallyConfirm: (x, z) => {
+      if (!playerCanIssueCommands()) return;
       if (!placingRally || actionBuildingIndex < 0 || localPlayerId < 0) return;
       const b = session.buildings?.[actionBuildingIndex];
       if (!b || !isRallyBeyondBuilding(b.type, b.x, b.z, x, z)) {
@@ -2324,6 +2344,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       syncPlacementGhost(x, z, yawRad);
     },
     onPlacementConfirm: (x, z, yaw = placingYaw) => {
+      if (!playerCanIssueCommands()) return;
       if (!placingType) return;
       const type = placingType;
       const yawRad = snapBuildingYaw(yaw ?? placingYaw);
@@ -2360,7 +2381,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     isRadialOpen: () => !placingType && isAnyRadialOpen(),
     pickRadialOption: (cx, cy) => renderer.pickBuildingRadial?.(cx, cy) ?? null,
     onRadialPick: (picked) => {
-      if (!picked) return;
+      if (!picked || !playerCanIssueCommands()) return;
       if (typeof picked === 'string') {
         applyPlacingType(picked);
         placingYaw = 0;
@@ -2817,8 +2838,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   const CORPSE_COMPACT_FRACTION = 0.08;
   const CORPSE_COMPACT_MS = 1000;
   let lastCorpseCompact = 0;
-  /** Reused per-frame: selected unit count keyed by sim type id. */
-  const selCountByType = new Map();
+  /** Reused per-frame: selected living unit ids (health-bar / HUD order). */
+  const selUnitIds = [];
 
   renderer.onFrame((deltaMs) => {
     const frameT0 = frameProf ? performance.now() : 0;
@@ -2902,7 +2923,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     } = bufs;
 
     fogHidden.fill(0);
-    selCountByType.clear();
+    selUnitIds.length = 0;
     for (let i = 0; i < n; i++) {
       if (!world.alive[i]) continue;
       let owner = world.owner[i];
@@ -2986,6 +3007,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     const hbHurtOwner = bufs.hbHurtOwner;
     const hbSelHp = bufs.hbSelectedHp;
     const hbHurtHp = bufs.hbHurtHp;
+    const hbSelMana = bufs.hbSelectedMana;
+    const hbHurtMana = bufs.hbHurtMana;
+    const hbSelSeats = bufs.hbSelectedSeats;
+    const hbHurtSeats = bufs.hbHurtSeats;
 
     // Overlay LOD: collar spin by eye distance; bars selected-first, then nearest hurt.
     const overlay = overlayCameraRef(renderer);
@@ -3233,7 +3258,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       else if (world.owner[i] === 1) drawStats.p1++;
       const isSel = !!selected[i] && !!world.alive[i];
       if (isSel) {
-        selCountByType.set(world.type[i], (selCountByType.get(world.type[i]) ?? 0) + 1);
+        selUnitIds.push(i);
         // Burst + idle spin within spin distance; static collar beyond (always drawn).
         const spinOk = !!overlaySpinAllow[i];
         if (spinOk) {
@@ -3310,6 +3335,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         const buf = isSel ? hbSel : hbHurt;
         const owners = isSel ? hbSelOwner : hbHurtOwner;
         const hps = isSel ? hbSelHp : hbHurtHp;
+        const manas = isSel ? hbSelMana : hbHurtMana;
+        const seats = isSel ? hbSelSeats : hbHurtSeats;
         const o = slot * 4;
         buf[o] = x;
         buf[o + 1] = z;
@@ -3317,6 +3344,16 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         buf[o + 3] = hp / maxHp;
         owners[slot] = world.owner[i];
         hps[slot] = hp | 0;
+        if (isTransport(world.type[i])) {
+          manas[slot] = 0;
+          seats[slot] = passengerTotalOf[i] | 0;
+        } else if (def.primaryAbility) {
+          manas[slot] = manaReadyCount(world.mana?.[i] | 0);
+          seats[slot] = 0;
+        } else {
+          manas[slot] = 0;
+          seats[slot] = 0;
+        }
       }
     }
     profSplit('pose');
@@ -3328,6 +3365,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         far: overlayBarIsFar(hbSel[o] - refX, hbSel[o + 1] - refZ),
         owner: hbSelOwner[s],
         hp: hbSelHp[s],
+        manaReady: hbSelMana[s],
+        seatsFilled: hbSelSeats[s],
       });
     }
     for (let s = 0; s < hbHurtCount; s++) {
@@ -3338,6 +3377,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         far: overlayBarIsFar(hbHurt[o] - refX, hbHurt[o + 1] - refZ),
         owner: hbHurtOwner[s],
         hp: hbHurtHp[s],
+        manaReady: hbHurtMana[s],
+        seatsFilled: hbHurtSeats[s],
       });
     }
     const markedB = new Set();
@@ -3433,11 +3474,15 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           ),
         );
       } else {
-        const groups = [];
-        for (const [typeId, count] of selCountByType) {
-          groups.push({ kind: 'unit', typeId, name: getUnitDef(typeId).name, count });
-        }
-        renderer.setSelectionGroups(groups);
+        renderer.setSelectionGroups(
+          selectionGroupsFromUnits(selUnitIds, world, (i) => {
+            for (let c = 0; c < storyCast.length; c++) {
+              const entry = storyCast[c];
+              if ((entry.index | 0) === i && entry.name) return String(entry.name);
+            }
+            return '';
+          }),
+        );
       }
     }
     inputApi.syncControlGroupMarks?.();

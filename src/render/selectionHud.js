@@ -25,6 +25,7 @@ import {
   BUILDING_MODEL_URLS,
   getBuildingDisplayName,
 } from '../sim/buildings.js';
+import { getUnitDef } from '../sim/unitTypes.js';
 
 /** Distinct types the strip can show at once (typical selections use few). */
 const MAX_SLOTS = 14;
@@ -85,7 +86,9 @@ export function selectionHudSlot(group) {
     return { kind: 'building', typeKey: String(group.typeKey) };
   }
   if (group.typeId != null) {
-    return { kind: 'unit', typeId: group.typeId | 0 };
+    const slot = { kind: 'unit', typeId: group.typeId | 0 };
+    if (group.entityId != null) slot.entityId = group.entityId | 0;
+    return slot;
   }
   return null;
 }
@@ -133,6 +136,41 @@ export function selectionGroupsFromBuildings(selected, buildings, agoras) {
     }
   }
   return [...byKey.values()];
+}
+
+/**
+ * Named adventure units each get their own chip; unnamed units still group by type.
+ * @param {Iterable<number> | null | undefined} ids
+ * @param {{ alive?: ArrayLike<number>, type?: ArrayLike<number> } | null | undefined} world
+ * @param {(index: number, typeId: number) => string | null | undefined} [nameOf]
+ * @returns {{ kind: 'unit', typeId: number, name: string, count: number, entityId?: number }[]}
+ */
+export function selectionGroupsFromUnits(ids, world, nameOf) {
+  /** @type {{ kind: 'unit', typeId: number, name: string, count: number, entityId?: number }[]} */
+  const named = [];
+  /** @type {Map<number, { kind: 'unit', typeId: number, name: string, count: number }>} */
+  const byType = new Map();
+  /** @type {{ kind: 'unit', typeId: number, name: string, count: number }[]} */
+  const typeOrder = [];
+  if (!ids || !world) return named;
+  for (const raw of ids) {
+    const i = raw | 0;
+    if (!world.alive?.[i]) continue;
+    const typeId = world.type[i] | 0;
+    const given = String(nameOf?.(i, typeId) || '').trim();
+    if (given) {
+      named.push({ kind: 'unit', typeId, name: given, count: 1, entityId: i });
+      continue;
+    }
+    let g = byType.get(typeId);
+    if (!g) {
+      g = { kind: 'unit', typeId, name: getUnitDef(typeId).name, count: 0 };
+      byType.set(typeId, g);
+      typeOrder.push(g);
+    }
+    g.count += 1;
+  }
+  return named.concat(typeOrder);
 }
 
 /** Overlay icon: skip depth so terrain / units / buildings cannot cover the strip. */

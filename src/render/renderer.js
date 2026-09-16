@@ -1563,6 +1563,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   const healthBars = createHealthBars(engine, scene, {
     capacity: HEALTH_BAR_CAPACITY,
     getViewportHeight: () => canvasCoords(0, 0).height,
+    getViewportWidth: () => canvasCoords(0, 0).width,
   });
   const trailGenerations = new Uint32Array(MAX_PROJECTILES);
   const trailLastEmitMs = new Float64Array(MAX_PROJECTILES);

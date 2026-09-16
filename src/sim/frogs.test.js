@@ -13,7 +13,6 @@ import {
   FROG_LAUNCH_STAGGER,
   FROG_LINGER_MIN,
   FROG_PHASE,
-  FROG_PLAGUE_COOLDOWN,
   findNearestWater,
   frogSystem,
   maybeConfuseAlly,

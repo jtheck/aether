@@ -5,6 +5,10 @@
 // pair unlocks a–c. Stone and mineral share mines. Caps are soft: income past
 // the unlocked cap is cut to 25% (see overflowCredit) instead of being hard
 // rejected, so refunds and spends stay on the uncapped addResource path.
+//
+// An attached silo is also a haul drop-off and a satellite gather circle of
+// the source's work radius (see gather.js). Slot pairing stays unique; every
+// in-range silo still counts as attached for drop-off / reach.
 
 import * as fx from './fixed.js';
 import { addResource, getResource, RESOURCE_KINDS } from './resources.js';
@@ -33,6 +37,10 @@ export const SILO_SOURCE_TYPE = Object.freeze({
   mineral: 'mine',
   food: 'farm',
 });
+
+/** Camp / mine / farm — a silo beside one of these is "attached". */
+export const SILO_SOURCE_TYPES = Object.freeze(['camp', 'mine', 'farm']);
+const SILO_SOURCE_TYPE_SET = new Set(SILO_SOURCE_TYPES);
 
 /**
  * Center-to-center reach. Adjacent farm (3) + silo (2) is 10; this allows a
@@ -81,6 +89,74 @@ function rangeSq(space) {
 /** @param {object} a @param {object} b @param {'fixed' | 'world'} [space] */
 export function withinSiloAttach(a, b, space = 'fixed') {
   return distSq(a, b, space) <= rangeSq(space);
+}
+
+/** @param {string | null | undefined} type */
+export function isSiloSourceType(type) {
+  return SILO_SOURCE_TYPE_SET.has(type);
+}
+
+/**
+ * Live silos sitting next to `source` (same owner). Slot pairing is separate —
+ * every in-range silo is a satellite drop-off and an extra gather circle.
+ * @param {object[] | null | undefined} buildings
+ * @param {object | null | undefined} source
+ * @param {'fixed' | 'world'} [space]
+ * @returns {object[]}
+ */
+export function silosAttachedTo(buildings, source, space = 'fixed') {
+  if (!buildings?.length || !source || !isSiloSourceType(source.type)) return [];
+  if (!isLiveStorageBuilding(source)) return [];
+  const o = source.owner | 0;
+  /** @type {object[]} */
+  const out = [];
+  for (let i = 0; i < buildings.length; i++) {
+    const b = buildings[i];
+    if ((b.owner | 0) !== o || b.type !== 'silo' || !isLiveStorageBuilding(b)) continue;
+    if (withinSiloAttach(b, source, space)) out.push(b);
+  }
+  return out;
+}
+
+/**
+ * Live camp / mine / farm this silo sits next to (same owner).
+ * @param {object[] | null | undefined} buildings
+ * @param {object | null | undefined} silo
+ * @param {'fixed' | 'world'} [space]
+ * @returns {object[]}
+ */
+export function sourcesAttachedToSilo(buildings, silo, space = 'fixed') {
+  if (!buildings?.length || !silo || silo.type !== 'silo' || !isLiveStorageBuilding(silo)) {
+    return [];
+  }
+  const o = silo.owner | 0;
+  /** @type {object[]} */
+  const out = [];
+  for (let i = 0; i < buildings.length; i++) {
+    const b = buildings[i];
+    if ((b.owner | 0) !== o || !isSiloSourceType(b.type) || !isLiveStorageBuilding(b)) continue;
+    if (withinSiloAttach(silo, b, space)) out.push(b);
+  }
+  return out;
+}
+
+/**
+ * True when a live silo sits next to a live camp / mine / farm of its owner.
+ * @param {object[] | null | undefined} buildings
+ * @param {object | null | undefined} silo
+ * @param {'fixed' | 'world'} [space]
+ */
+export function siloIsAttached(buildings, silo, space = 'fixed') {
+  if (!silo || silo.type !== 'silo' || !isLiveStorageBuilding(silo) || !buildings?.length) {
+    return false;
+  }
+  const o = silo.owner | 0;
+  for (let i = 0; i < buildings.length; i++) {
+    const b = buildings[i];
+    if ((b.owner | 0) !== o || !isSiloSourceType(b.type) || !isLiveStorageBuilding(b)) continue;
+    if (withinSiloAttach(silo, b, space)) return true;
+  }
+  return false;
 }
 
 /**

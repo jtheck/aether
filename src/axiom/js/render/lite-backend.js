@@ -35,7 +35,8 @@ import {
   setThinInstanceCount,
   setThinInstances,
 } from '@babylonjs/lite';
-import { WAVE_SOURCES } from '../sim/behaviors.js';
+import { WAVE_BALL_CAP, WAVE_EMITTER_BALLS, wavePresetId } from '../sim/behaviors.js';
+import { getNanotubeLattice } from '../sim/nanotube.js';
 
 function identityPark(count) {
   const m = new Float32Array(count * 16);
@@ -131,6 +132,10 @@ export function createLiteBackend() {
 
   /** @type {any} */
   let hardCircleTex = null;
+  /** @type {any[]} */
+  const waveEmitters = [];
+  /** @type {any} */
+  let waveLattice = null;
 
   const keys = new Set();
   let pointerDragging = false;
@@ -141,6 +146,9 @@ export function createLiteBackend() {
   let cdZ = 0;
   let stickX = 0;
   let stickZ = 0;
+  let padMX = 0;
+  let padMY = 0;
+  let padMZ = 0;
   let lastNow = 0;
   let lastDt = 1 / 60;
   let rafId = 0;
@@ -223,8 +231,9 @@ export function createLiteBackend() {
     if (keys.has('KeyF') || keys.has('ArrowRight')) mx += 1;
     if (keys.has('KeyR')) my += 1;
     if (keys.has('KeyC')) my -= 1;
-    mx += stickX;
-    mz += stickZ;
+    mx += stickX + padMX;
+    my += padMY;
+    mz += stickZ + padMZ;
 
     if (mx || my || mz) {
       const len = Math.hypot(mx, my, mz) || 1;
@@ -386,6 +395,23 @@ export function createLiteBackend() {
     tetras = { mesh, waveA, waveB, matrices, phase: 0 };
   }
 
+  function syncWaveEmitters() {
+    const tube = wavePresetId() === 'tube';
+    if (waveLattice) waveLattice.visible = tube;
+    for (let i = 0; i < waveEmitters.length; i++) {
+      const ball = waveEmitters[i];
+      const src = WAVE_EMITTER_BALLS[i];
+      if (!src) {
+        ball.visible = false;
+        continue;
+      }
+      ball.visible = true;
+      if (ball.scaling?.set) ball.scaling.set(1, 1, 1);
+      else if (ball.scale?.setScalar) ball.scale.setScalar(1);
+      ball.position.set(src.x, src.y, src.z);
+    }
+  }
+
   return {
     async init(canvasEl) {
       canvas = canvasEl;
@@ -442,14 +468,25 @@ export function createLiteBackend() {
       matChaos.diffuseTexture = chaosTex;
       setStandardEmissiveTexture(matChaos, chaosTex);
 
-      for (let i = 0; i < WAVE_SOURCES.length; i++) {
-        const src = WAVE_SOURCES[i];
+      for (let i = 0; i < WAVE_BALL_CAP; i++) {
         const ball = createPolyhedron(engine, { type: 3, size: 1 });
-        ball.name = i === 0 ? 'icosphere' : 'icosphere2';
-        ball.position.set(src.x, src.y, src.z);
+        ball.name = i === 0 ? 'icosphere' : `icosphere${i}`;
         ball.material = matChaos;
         addToScene(scene, ball);
+        waveEmitters.push(ball);
       }
+      {
+        const lat = getNanotubeLattice();
+        waveLattice = createLineSystem(engine, {
+          name: 'waveLattice',
+          lines: lat.lines,
+          color: { r: 0.49, g: 0.75, b: 0.69, a: 1 },
+        });
+        waveLattice.pickable = false;
+        waveLattice.visible = false;
+        addToScene(scene, waveLattice);
+      }
+      syncWaveEmitters();
 
       createTetraField();
       // Opacity is opt-in in Lite 1.23 — register the ext before the first build
@@ -460,6 +497,8 @@ export function createLiteBackend() {
       }
       await registerScene(scene);
     },
+
+    syncWaveEmitters,
 
     tickScenery() {
       if (!tetras) return;
@@ -614,6 +653,19 @@ export function createLiteBackend() {
 
     getCamera() {
       return camera;
+    },
+
+    applyGamepadFly(fly = {}) {
+      padMX = fly.mx || 0;
+      padMY = fly.my || 0;
+      padMZ = fly.mz || 0;
+      if (!camera) return;
+      if (fly.lookYaw || fly.lookPitch) {
+        // Pointer: yaw += dx (LH / look +Z). lookRight > 0 looks right.
+        camera._yaw += fly.lookYaw || 0;
+        camera._pitch += fly.lookPitch || 0;
+        applyLook();
+      }
     },
 
     getCameraPose() {
@@ -819,6 +871,8 @@ export function createLiteBackend() {
       species.clear();
       if (chunkLineGrid) removeFromScene(scene, chunkLineGrid);
       chunkLineGrid = null;
+      if (waveLattice) removeFromScene(scene, waveLattice);
+      waveLattice = null;
       tetras = null;
       if (scene) disposeScene(scene);
       if (engine) disposeEngine(engine);

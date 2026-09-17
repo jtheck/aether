@@ -2,7 +2,8 @@
  * Babylon.js 9 thin-instance render backend for axiom.
  * Expects global BABYLON from UMD script tags.
  */
-import { WAVE_SOURCES } from '../sim/behaviors.js';
+import { WAVE_BALL_CAP, WAVE_EMITTER_BALLS, wavePresetId } from '../sim/behaviors.js';
+import { getNanotubeLattice } from '../sim/nanotube.js';
 
 /**
  * @returns {import('./backend.js').AxiomRenderer & { getEngine: () => any }}
@@ -34,9 +35,29 @@ export function createBabylonBackend() {
 
   /** Shared hard-circle mask for alphatest billboards (created lazily). */
   let hardCircleTex = null;
+  /** @type {any[]} */
+  const waveEmitters = [];
+  /** @type {any} */
+  let waveLattice = null;
 
   function assertReady() {
     if (!engine || !scene) throw new Error('BabylonBackend: call init() first');
+  }
+
+  function syncWaveEmitters() {
+    const tube = wavePresetId() === 'tube';
+    if (waveLattice) waveLattice.setEnabled(tube);
+    for (let i = 0; i < waveEmitters.length; i++) {
+      const ball = waveEmitters[i];
+      const src = WAVE_EMITTER_BALLS[i];
+      if (!src) {
+        ball.setEnabled(false);
+        continue;
+      }
+      ball.setEnabled(true);
+      ball.scaling.set(1, 1, 1);
+      ball.position.set(src.x, src.y, src.z);
+    }
   }
 
   function getHardCircleTexture(B) {
@@ -177,21 +198,38 @@ export function createBabylonBackend() {
       matChaos.emissiveTexture = new B.Texture('./assets/sphere-q.jpg', scene);
       matChaos.ambientTexture = matChaos.emissiveTexture;
       matChaos.wireframe = true;
-      for (let i = 0; i < WAVE_SOURCES.length; i++) {
-        const src = WAVE_SOURCES[i];
+      for (let i = 0; i < WAVE_BALL_CAP; i++) {
         const ball = B.MeshBuilder.CreateIcoSphere(
           i === 0 ? 'icosphere' : `icosphere${i}`,
           { radius: 1, subdivisions: 3 },
           scene,
         );
-        ball.position.set(src.x, src.y, src.z);
         ball.material = matChaos;
+        waveEmitters.push(ball);
       }
+      {
+        const lat = getNanotubeLattice();
+        const lines = lat.lines.map(([a, b]) => [
+          new B.Vector3(a.x, a.y, a.z),
+          new B.Vector3(b.x, b.y, b.z),
+        ]);
+        waveLattice = B.MeshBuilder.CreateLineSystem(
+          'waveLattice',
+          { lines, updatable: false },
+          scene,
+        );
+        waveLattice.color = new B.Color3(0.49, 0.75, 0.69);
+        waveLattice.isPickable = false;
+        waveLattice.setEnabled(false);
+      }
+      syncWaveEmitters();
 
       createTetraField(B);
     },
 
     /** Bob the classic tetra grid — call once per frame. */
+    syncWaveEmitters,
+
     tickScenery() {
       if (!tetras) return;
       // Match original gY += 0.00314 per frame (not dt-scaled)
@@ -386,6 +424,26 @@ export function createBabylonBackend() {
       return camera;
     },
 
+    applyGamepadFly(fly = {}) {
+      if (!camera) return;
+      const B = globalThis.BABYLON;
+      if (fly.lookYaw || fly.lookPitch) {
+        camera.cameraRotation.y += fly.lookYaw || 0;
+        camera.cameraRotation.x -= fly.lookPitch || 0;
+      }
+      const mx = fly.mx || 0;
+      const my = fly.my || 0;
+      const mz = fly.mz || 0;
+      if (!mx && !my && !mz) return;
+      const speed = (camera.speed || 5.5) * (1 / 60) * 16;
+      const forward = camera.getDirection(B.Axis.Z);
+      const right = camera.getDirection(B.Axis.X);
+      // FreeCamera local +Z is behind the view — forward uses −Z
+      camera.cameraDirection.addInPlace(forward.scale(-mz * speed));
+      camera.cameraDirection.addInPlace(right.scale(mx * speed));
+      if (my) camera.cameraDirection.y += my * speed;
+    },
+
     /**
      * Camera pose for chunk streaming + CPU billboards (thin-instance safe).
      * @returns {{ x: number, y: number, z: number, billboard: { rx: number, ry: number, rz: number, ux: number, uy: number, uz: number } }}
@@ -541,6 +599,8 @@ export function createBabylonBackend() {
       chunkLineFocus?.dispose();
       chunkLineGrid = null;
       chunkLineFocus = null;
+      waveLattice?.dispose();
+      waveLattice = null;
       tetras?.mesh.dispose();
       tetras = null;
       scene?.dispose();

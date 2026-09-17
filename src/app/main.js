@@ -7,6 +7,7 @@ import {
   GATHER_ACT,
   campWorkRadiusWorld,
 } from '../sim/gather.js';
+import { silosAttachedTo, sourcesAttachedToSilo } from '../sim/storage.js';
 import * as fx from '../sim/fixed.js';
 import {
   PLAYER_ARMY,
@@ -51,7 +52,7 @@ import {
 } from '../sim/buildings.js';
 import { menuGateState } from '../sim/menuGate.js';
 import { TILE_SIZE_F, worldToTile, setActiveMapSize, SKIRMISH_MAP_W, SKIRMISH_MAP_H } from '../sim/field.js';
-import { agoraOverlayActive, AGORA_CAPTURE_TICKS, AGORA_TUG_TICKS } from '../sim/agora.js';
+import { agoraOverlayActive } from '../sim/agora.js';
 import { ownerResourcesFrom } from '../sim/resources.js';
 import { formatGameNumber } from '../sim/formatGameNumber.js';
 import { createResourceBank } from './resourceBank.js';
@@ -89,9 +90,6 @@ import {
 } from '../render/overlayLod.js';
 import { posePassengerOnTransport, seatsForUnitType } from '../render/transportSeats.js';
 import {
-  AGORA_CHIP_COUNT,
-  AGORA_LARGE_CHIP_COUNT,
-  agoraChipFilled,
   DEFAULT_AGORA_ROOF,
   DEFAULT_BUILDING_ROOF,
   roofChipLift,
@@ -1040,9 +1038,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (list) {
       for (let i = 0; i < list.length; i++) {
         const a = list[i];
-        const invade = agoraChipFilled(a.progress, AGORA_CHIP_COUNT, AGORA_CAPTURE_TICKS);
-        const tug = agoraChipFilled(a.tug, AGORA_LARGE_CHIP_COUNT, AGORA_TUG_TICKS);
-        sig += `${a.owner}:${a.founder ?? a.owner}:${a.capturer}:${a.phase}:${invade}:${tug}|`;
+        sig += `${a.owner}:${a.founder ?? a.owner}:${a.capturer}:${a.phase}:${a.progress}:${a.tug}|`;
       }
     }
     if (sig === agoraOwnerPaintSig) return;
@@ -1287,7 +1283,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   /**
    * Ground rings showing gather reach for every drop-off of the selected type
-   * (same owner). Engineers extend each ring independently, matching the sim.
+   * (same owner), plus a matching extra circle on each attached silo.
+   * Selecting an attached silo shows its source type's rings.
    */
   function syncWorkRadiusRing() {
     const buildings = session.buildings;
@@ -1297,8 +1294,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (sel.kind !== 'building') continue;
       const b = buildings?.[sel.index];
       if (!b || (b.owner | 0) !== localPlayerId) continue;
-      if (b.built === 0 || !DROP_OFF_TYPES.has(b.type)) continue;
-      keys.add(`${b.owner}:${b.type}`);
+      if (b.built === 0) continue;
+      if (DROP_OFF_TYPES.has(b.type)) {
+        keys.add(`${b.owner}:${b.type}`);
+        continue;
+      }
+      if (b.type === 'silo') {
+        const sources = sourcesAttachedToSilo(buildings, b, 'world');
+        for (let s = 0; s < sources.length; s++) {
+          keys.add(`${b.owner}:${sources[s].type}`);
+        }
+      }
     }
     if (keys.size === 0) {
       renderer.setWorkRadiusRing?.(null);
@@ -1309,7 +1315,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     for (let i = 0; i < (buildings?.length ?? 0); i++) {
       const b = buildings[i];
       if (!b || b.built === 0 || !keys.has(`${b.owner}:${b.type}`)) continue;
-      rings.push({ x: b.x, z: b.z, radius: campWorkRadiusWorld(st, b, buildings), owner: b.owner });
+      const radius = campWorkRadiusWorld(st, b, buildings);
+      rings.push({ x: b.x, z: b.z, radius, owner: b.owner });
+      const silos = silosAttachedTo(buildings, b, 'world');
+      for (let s = 0; s < silos.length; s++) {
+        rings.push({ x: silos[s].x, z: silos[s].z, radius, owner: b.owner });
+      }
     }
     renderer.setWorkRadiusRing?.(rings);
   }
@@ -3398,6 +3409,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         progress: a.progress,
         tug: a.tug,
         phase: a.phase,
+        contested: a.contested,
       });
     };
     for (let i = 0; i < selectedBuildings.length; i++) {
@@ -3410,7 +3422,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       let hpLeft;
       if (sel.kind === 'rally') continue;
       if (sel.kind === 'agora') {
-        writeAgoraChips(session.agoras?.[sel.index], sel.index);
+        const a = session.agoras?.[sel.index];
+        if (agoraOverlayActive(a)) writeAgoraChips(a, sel.index);
         continue;
       }
       const b = session.buildings?.[sel.index];

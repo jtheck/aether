@@ -1,5 +1,5 @@
 // v1-style RTS camera: velocity + momentum for pan/zoom/yaw.
-// Touch/gamepad later call nudgePan / nudgeZoom / nudgeRotate.
+// Touch / gamepad call nudgePan / nudgeLookPan / nudgeZoom / nudgeRotate.
 
 import { WORLD_HALF_F, TILE_SIZE_F } from '../sim/field.js';
 
@@ -426,6 +426,27 @@ export function createCameraController(camera, canvas, opts = {}) {
     velocity.panZ += dz;
   }
 
+  /** Camera-relative analog pan (WASD / left stick). right = screen-right, forward = into the map. */
+  function nudgeLookPan(right, forward) {
+    applyLookPan(right, forward);
+  }
+
+  function applyLookPan(panX, panZ) {
+    if (followActive) return;
+    if (!panX && !panZ) return;
+    markNudged();
+    const { rightX, rightZ, forwardX, forwardZ } = groundAxes();
+    const zoomFactor = Math.max(0.3, Math.min(2.0, camera.radius / 80));
+    const panSens = KEY_PAN_BASE * zoomFactor;
+    const wx = (rightX * panX + forwardX * panZ) * panSens;
+    const wz = (rightZ * panX + forwardZ * panZ) * panSens;
+    velocity.panX += wx * 0.25;
+    velocity.panZ += wz * 0.25;
+    const maxVel = panSens * 8.0;
+    velocity.panX = Math.max(-maxVel, Math.min(maxVel, velocity.panX));
+    velocity.panZ = Math.max(-maxVel, Math.min(maxVel, velocity.panZ));
+  }
+
   function radiusLimits() {
     const minR = camera.lowerRadiusLimit ?? LOWER_RADIUS;
     const maxR = camera.upperRadiusLimit ?? UPPER_RADIUS;
@@ -797,19 +818,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     if (keyStates.arrowleft) panX -= 1.0;
     if (keyStates.arrowright) panX += 1.0;
 
-    if (panX !== 0 || panZ !== 0) {
-      markNudged();
-      const { rightX, rightZ, forwardX, forwardZ } = groundAxes();
-      const zoomFactor = Math.max(0.3, Math.min(2.0, camera.radius / 80));
-      const panSens = KEY_PAN_BASE * zoomFactor;
-      const wx = (rightX * panX + forwardX * panZ) * panSens;
-      const wz = (rightZ * panX + forwardZ * panZ) * panSens;
-      velocity.panX += wx * 0.25;
-      velocity.panZ += wz * 0.25;
-      const maxVel = panSens * 8.0;
-      velocity.panX = Math.max(-maxVel, Math.min(maxVel, velocity.panX));
-      velocity.panZ = Math.max(-maxVel, Math.min(maxVel, velocity.panZ));
-    }
+    applyLookPan(panX, panZ);
   }
 
   function velocitiesIdle() {
@@ -996,6 +1005,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     stopFollow,
     isFollowing,
     nudgePan,
+    nudgeLookPan,
     nudgeZoom,
     nudgeRotate,
     rotateBy,

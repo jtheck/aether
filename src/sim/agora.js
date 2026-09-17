@@ -7,10 +7,10 @@ import * as fx from './fixed.js';
 export const AGORA_OCCUPATION_RADIUS = fx.fromFloat(20);
 const OCC_R2 = fx.mul(AGORA_OCCUPATION_RADIUS, AGORA_OCCUPATION_RADIUS);
 
-/** ~15s at 20 Hz while continuously invading (lock phase). */
-export const AGORA_CAPTURE_TICKS = 300;
+/** ~9s at 20 Hz while continuously invading (lock phase). */
+export const AGORA_CAPTURE_TICKS = 180;
 /** Tug / occupy is shorter so the last phase feels decisive. */
-export const AGORA_TUG_TICKS = 180;
+export const AGORA_TUG_TICKS = 90;
 
 /** Locked home — enemy color invades from the right. */
 export const AGORA_PHASE_LOCK = 0;
@@ -43,9 +43,11 @@ export function createAgoras(list) {
   return list.map((a) => createAgora(a.owner, a.x, a.z));
 }
 
+/** Capture chips only while someone is on the pad or the meter is still live. */
 export function agoraOverlayActive(a) {
-  if (!a) return false;
-  return (a.phase | 0) === AGORA_PHASE_TUG
+  if (!a || (a.captured | 0)) return false;
+  return (a.contested | 0) !== 0
+    || (a.capturer | 0) >= 0
     || (a.progress | 0) > 0
     || (a.tug | 0) > 0;
 }
@@ -151,7 +153,6 @@ function stepInvade(a, counts) {
     a.phase = AGORA_PHASE_TUG;
     a.progress = 0;
     a.tug = 0;
-    a.capturer = -1;
     a.contested = 0;
   }
 }

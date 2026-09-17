@@ -80,6 +80,21 @@ describe('agora capture', () => {
     assert.equal(agoraOverlayActive(w.agoras[0]), true);
   });
 
+  it('hides capture chips until the pad is contested or filling', () => {
+    const idle = createAgoras([{ owner: 0, x: 0, z: 0 }])[0];
+    assert.equal(agoraOverlayActive(idle), false);
+    idle.contested = 1;
+    assert.equal(agoraOverlayActive(idle), true);
+    idle.contested = 0;
+    idle.progress = 4;
+    idle.capturer = 1;
+    assert.equal(agoraOverlayActive(idle), true);
+    idle.progress = 0;
+    idle.capturer = -1;
+    idle.phase = AGORA_PHASE_TUG;
+    assert.equal(agoraOverlayActive(idle), false);
+  });
+
   it('occupying the tug ends the match when the mode says so', () => {
     const w = createWorld(3);
     w.agoraOccupyEndsMatch = 1;

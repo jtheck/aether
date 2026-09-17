@@ -368,6 +368,8 @@ export function setupMenu({
     showPage(onSettings ? 'main' : 'settings');
     if (!onSettings) syncFromState();
   });
+  const steamStoreLink = drawer.querySelector('#steam_store_a');
+  if (steamStoreLink && aetherSteam.isAvailable()) steamStoreLink.hidden = true;
   const forgeLink = drawer.querySelector('#forge_editor_a');
   forgeLink?.addEventListener('click', () => {
     aetherSteam.notifyForgeOpened();

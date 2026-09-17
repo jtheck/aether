@@ -50,6 +50,7 @@ import {
   underDotRgb,
   DOT_ALTERNATE_WIDTH_MUL,
   AGORA_CHIP_COUNT,
+  AGORA_DASH_COUNT,
   AGORA_LARGE_CHIP_COUNT,
   AGORA_TINT_NEUTRAL,
   agoraChipFilled,
@@ -59,11 +60,23 @@ import {
   agoraChipRgb,
   agoraChipSizeMul,
   agoraChipTintOwner,
+  agoraDashFill,
+  agoraDashFillAlong,
+  agoraMeterParts,
+  agoraRowLayout,
+  agoraFlipStyle,
+  agoraClaimedDotIndex,
   agoraCaptureMix,
+  agoraLeadBlinkBlack,
+  agoraProgressRatio,
   agoraPropTint,
   AGORA_CAPTURER_LIFT,
-  AGORA_CAPTURER_PULSE_MUL,
+  AGORA_BLINK_PERIOD_MS,
+  AGORA_CONTESTED_RGB,
+  AGORA_INK_RGB,
+  AGORA_FLIP_DROP_END,
   DOT_DIAMETER_AGORA_LARGE_MUL,
+  DOT_DIAMETER_AGORA_DASH_H_MUL,
   DOT_DIAMETER_AGORA_SMALL_MUL,
   DOT_SPACING_AGORA_MUL,
   CHIP_BIG_CORNER_MUL,
@@ -327,47 +340,84 @@ describe('health chip bars', () => {
     assert.ok(RGB_SEAT[2] > RGB_SEAT[0]);
   });
 
-  it('uses 9 alternating circles; invade from the right, tug from the left', () => {
-    assert.equal(AGORA_CHIP_COUNT, 9);
-    assert.equal(AGORA_LARGE_CHIP_COUNT, 5);
-    assert.ok(DOT_DIAMETER_AGORA_LARGE_MUL > DOT_DIAMETER_AGORA_SMALL_MUL);
+  it('uses 3 dots with realtime dashes; invade from the right, tug from the left', () => {
+    assert.equal(AGORA_CHIP_COUNT, 3);
+    assert.equal(AGORA_DASH_COUNT, 2);
+    assert.equal(AGORA_LARGE_CHIP_COUNT, 3);
+    assert.ok(DOT_DIAMETER_AGORA_LARGE_MUL > DOT_DIAMETER_AGORA_DASH_H_MUL);
     assert.ok(DOT_DIAMETER_AGORA_LARGE_MUL > DOT_DIAMETER_FIRST_MUL);
+    assert.equal(DOT_DIAMETER_AGORA_SMALL_MUL, DOT_DIAMETER_AGORA_DASH_H_MUL);
     assert.equal(agoraChipSizeMul(0), DOT_DIAMETER_AGORA_LARGE_MUL);
-    assert.equal(agoraChipSizeMul(1), DOT_DIAMETER_AGORA_SMALL_MUL);
-    assert.equal(agoraChipIsSmall(1), true);
+    assert.equal(agoraChipSizeMul(1), DOT_DIAMETER_AGORA_LARGE_MUL);
+    assert.equal(agoraChipIsSmall(1), false);
     assert.equal(agoraChipFilled(0), 0);
-    assert.equal(agoraChipFilled(1, 9, 300), 1);
-    assert.equal(agoraChipFilled(300, 9, 300), 9);
-    const invade = { progress: 1, capturer: 1, owner: 0, count: 9 };
-    assert.equal(agoraChipTintOwner(8, invade), 1);
-    assert.equal(agoraChipTintOwner(0, invade), 0);
-    const tug = { phase: 1, tug: 1, capturer: 1, owner: 0, founder: 0 };
-    assert.equal(agoraChipTintOwner(1, tug), 0);
-    assert.equal(agoraChipTintOwner(0, tug), 1);
-    assert.equal(agoraChipTintOwner(2, tug), AGORA_TINT_NEUTRAL);
-    assert.equal(agoraChipTintOwner(3, tug), 0);
-    const invadeLead = { progress: 1, capturer: 1, owner: 0, count: 9 };
-    assert.equal(agoraChipLeadIndex(invadeLead), 8);
+    assert.equal(agoraChipFilled(1, 3, 180), 0);
+    assert.equal(agoraChipFilled(60, 3, 180), 1);
+    assert.equal(agoraChipFilled(180, 3, 180), 3);
+    const mid = agoraMeterParts(45, 2, 180);
+    assert.equal(mid.filled, 0);
+    assert.ok(mid.frac > 0.4 && mid.frac < 0.6);
+    const firstHalf = { progress: 45, capturer: 1, owner: 0 };
+    assert.ok(agoraProgressRatio(firstHalf) > 0.2 && agoraProgressRatio(firstHalf) < 0.3);
+    assert.ok(Math.abs(agoraDashFill(1, firstHalf) - agoraProgressRatio(firstHalf) * 2) < 1e-6);
+    assert.equal(agoraDashFill(0, firstHalf), 0);
+    assert.equal(agoraChipTintOwner(2, firstHalf), 0);
+    assert.equal(agoraChipLeadIndex(firstHalf), 2);
+    const half = { progress: 90, capturer: 1, owner: 0 };
+    assert.equal(agoraDashFill(1, half), 1);
+    assert.equal(agoraDashFill(0, half), 0);
+    assert.equal(agoraChipTintOwner(2, half), 1);
+    assert.equal(agoraChipTintOwner(0, half), 0);
+    assert.equal(agoraChipLeadIndex(half), 1);
+    const secondHalf = { progress: 135, capturer: 1, owner: 0 };
+    assert.equal(agoraDashFill(1, secondHalf), 1);
+    assert.ok(agoraDashFill(0, secondHalf) > 0.4 && agoraDashFill(0, secondHalf) < 0.6);
+    const tugHalf = { phase: 1, tug: 45, capturer: 1, owner: 0, founder: 0 };
+    assert.equal(agoraDashFill(0, tugHalf), 1);
+    assert.equal(agoraDashFill(1, tugHalf), 0);
+    assert.equal(agoraChipTintOwner(0, tugHalf), 1);
+    assert.equal(agoraChipTintOwner(1, tugHalf), AGORA_TINT_NEUTRAL);
+    assert.equal(agoraChipTintOwner(2, tugHalf), AGORA_TINT_NEUTRAL);
+    assert.ok(agoraDashFill(1, { phase: 1, tug: 68, capturer: 1 }) > 0.4);
+    const invadeLead = { progress: 1, capturer: 1, owner: 0 };
+    assert.equal(agoraChipLeadIndex(invadeLead), 2);
     const tugLead = { phase: 1, tug: 1, capturer: 1, owner: 0, founder: 0 };
     assert.equal(agoraChipLeadIndex(tugLead), 0);
-    assert.equal(agoraChipPulseMul(2, tugLead, 0), 1);
-    assert.ok(agoraChipPulseMul(0, tugLead, 0) > 1);
-    assert.ok(agoraChipPulseMul(0, tugLead, 99) > agoraChipPulseMul(0, tugLead, 0));
-    const invadeRow = { progress: 100, capturer: 1, owner: 0, count: 9 };
-    assert.equal(agoraChipLeadIndex(invadeRow), 6);
-    assert.ok(agoraChipPulseMul(6, invadeRow, 0) > agoraChipPulseMul(7, invadeRow, 0));
-    assert.ok(agoraChipPulseMul(7, invadeRow, 0) > 1);
-    assert.equal(agoraChipPulseMul(0, invadeRow, 0), 1);
-    const lifted = agoraChipRgb(8, { progress: 1, capturer: 1, owner: 0, count: 9 });
+    assert.equal(agoraChipPulseMul(0, tugLead, 0), 1);
+    assert.equal(agoraLeadBlinkBlack(0), true);
+    assert.equal(agoraLeadBlinkBlack(AGORA_BLINK_PERIOD_MS * 0.75), false);
+    assert.deepEqual(agoraChipRgb(2, invadeLead, 0), AGORA_INK_RGB);
+    assert.deepEqual(agoraChipRgb(2, invadeLead, AGORA_BLINK_PERIOD_MS * 0.75), ownerTint(0));
+    const stalled = { progress: 0, capturer: -1, owner: 0, contested: 1 };
+    assert.equal(agoraChipLeadIndex(stalled), 2);
+    assert.deepEqual(agoraChipRgb(2, stalled, 0), AGORA_CONTESTED_RGB);
+    const claimed = agoraChipRgb(2, half, AGORA_BLINK_PERIOD_MS);
     const base = ownerTint(1);
-    assert.ok(lifted[1] > base[1]);
-    assert.ok(agoraCaptureMix({ capturer: 1, progress: 150 }) > 0.4);
-    assert.equal(agoraCaptureMix({ owner: 0, progress: 150 }), 0);
+    assert.ok(claimed[1] > base[1]);
+    assert.ok(agoraCaptureMix({ capturer: 1, progress: 90 }) > 0.4);
+    assert.equal(agoraCaptureMix({ owner: 0, progress: 90 }), 0);
     const idle = agoraPropTint({ owner: 0 });
-    const mixed = agoraPropTint({ owner: 0, capturer: 1, progress: 300 });
+    const mixed = agoraPropTint({ owner: 0, capturer: 1, progress: 180 });
     assert.deepEqual(idle, ownerTint(0));
     assert.ok(Math.abs(mixed[0] - ownerTint(1)[0]) < Math.abs(idle[0] - ownerTint(1)[0]));
     assert.ok(AGORA_CAPTURER_LIFT > 0);
-    assert.ok(AGORA_CAPTURER_PULSE_MUL > 0);
+    const row = agoraRowLayout(1);
+    assert.equal(row.dotAlong.length, 3);
+    assert.equal(row.dashAlong.length, 2);
+    assert.ok(row.dotAlong[0] < row.dashAlong[0]);
+    assert.ok(row.dashAlong[0] < row.dotAlong[1]);
+    assert.ok(row.dotAlong[1] < row.dashAlong[1]);
+    assert.ok(row.dashAlong[1] < row.dotAlong[2]);
+    assert.ok(agoraDashFillAlong(0, 2, 0.5, true) > 0);
+    assert.ok(agoraDashFillAlong(0, 2, 0.5, false) < 0);
+    assert.equal(agoraClaimedDotIndex(0, { phase: 0 }), 2);
+    assert.equal(agoraClaimedDotIndex(0, { phase: 1 }), 0);
+    const ink = agoraFlipStyle(AGORA_FLIP_DROP_END * 0.5);
+    assert.deepEqual(ink.rgb, AGORA_INK_RGB);
+    assert.ok(ink.size < 1);
+    assert.ok(ink.drop > 0);
+    const arrive = agoraFlipStyle(0.9);
+    assert.equal(arrive.rgb, null);
+    assert.ok(arrive.size > 0.5);
   });
 });

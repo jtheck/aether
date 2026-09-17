@@ -2,9 +2,10 @@
 // Team color sits on the left pip plus a line under the HP row (O_____).
 // Casters show up to 3 ready-mana dots under that line; vehicles reuse those
 // dots for filled passenger seats. HP is green above 66%, yellow above 33%,
-// then red. Agora rows stay 9 circles (large / small…). Invade fills from
-// the right; after unlock, small chips stay the founder color and the tug
-// fills left. Optional armor/holy rings sit on inner HP tiles.
+// then red. Agora rows are o-o-o (dots on both ends, rectangles between).
+// Invade fills from the right, tug from the left; dashes fill in realtime.
+// Each rectangle is half the meter and fills smoothly. The contested
+// dot blinks black, then drips away before the new color lands.
 
 import {
   addBillboardSprite,
@@ -25,9 +26,12 @@ import { AGORA_CAPTURE_TICKS, AGORA_PHASE_TUG, AGORA_TUG_TICKS } from '../sim/ag
 
 export const UNIT_CHIP_COUNT = 7;
 export const BUILDING_CHIP_COUNT = 9;
-/** Capture meter: L S L S L S L S L circles. */
-export const AGORA_CHIP_COUNT = 9;
-export const AGORA_LARGE_CHIP_COUNT = 5;
+/** Capture meter: three milestone dots. */
+export const AGORA_CHIP_COUNT = 3;
+/** Same as the dot count — tug and invade both use all three. */
+export const AGORA_LARGE_CHIP_COUNT = AGORA_CHIP_COUNT;
+/** Two rectangle connectors between the three dots (o-o-o). */
+export const AGORA_DASH_COUNT = AGORA_CHIP_COUNT - 1;
 /** Sentinel — tug large chips that are not yet claimed. */
 export const AGORA_TINT_NEUTRAL = -2;
 export const AGORA_NEUTRAL_RGB = [0.26, 0.26, 0.28];
@@ -42,7 +46,8 @@ const FRAME_LEAD_ROUND = 2;
 const FRAME_RING_HOLY = 3;
 const FRAME_RING_ARMOR = 4;
 const FRAME_LINE = 5;
-const ATLAS_COLUMNS = 6;
+const FRAME_RECT = 6;
+const ATLAS_COLUMNS = 7;
 /** Corner radius as a fraction of half-extent. 0 = sharp square, 1 = circle. */
 export const CHIP_BIG_CORNER_MUL = 0.48;
 export const CHIP_SMALL_CORNER_MUL = 0.48;
@@ -97,14 +102,27 @@ const UNDER_SPACING_PACKED_MUL = 0.98;
 export const RGB_MANA = [0.16, 0.40, 0.92];
 /** Filled vehicle seats — same cool grey as HUD `--pop-ink` (`#b8c0cc`). */
 export const RGB_SEAT = [184 / 255, 192 / 255, 204 / 255];
-/** Agora circles — large on even slots, smaller on odd, with air between. */
+/** Agora milestone dots. */
 export const DOT_DIAMETER_AGORA_LARGE_MUL = 2.15;
-export const DOT_DIAMETER_AGORA_SMALL_MUL = 1.22;
-export const DOT_SPACING_AGORA_MUL = 1.72;
-/** Extra scale on the chip currently filling. */
-export const AGORA_LEAD_PULSE_MUL = 0.58;
-/** Smaller pulse on already-filled capturer chips. */
-export const AGORA_CAPTURER_PULSE_MUL = 0.2;
+/** Rectangle connectors between the dots. */
+export const DOT_DIAMETER_AGORA_DASH_W_MUL = 1.7;
+export const DOT_DIAMETER_AGORA_DASH_H_MUL = 0.52;
+/** Leftover name — dash height vs the old small-circle size. */
+export const DOT_DIAMETER_AGORA_SMALL_MUL = DOT_DIAMETER_AGORA_DASH_H_MUL;
+/** Center-to-center pitch of neighboring dots (dot + gaps + dash). */
+export const DOT_SPACING_AGORA_MUL = 4.29;
+export const AGORA_DASH_INNER_GAP_MUL = 0.22;
+export const AGORA_DASH_TRACK_ALPHA = 0.34;
+/** Leftover — contested pips blink black instead of scaling. */
+export const AGORA_LEAD_PULSE_MUL = 0;
+export const AGORA_CONTESTED_RGB = [0, 0, 0];
+export const AGORA_INK_RGB = [0, 0, 0];
+/** Full black-on / rest-color-off cycle. */
+export const AGORA_BLINK_PERIOD_MS = 280;
+/** Black drip → new color. */
+export const AGORA_FLIP_MS = 560;
+export const AGORA_FLIP_INK_END = 0;
+export const AGORA_FLIP_DROP_END = 0.48;
 /** Mix capturer chip RGB toward white so occupy reads hotter than the owner row. */
 export const AGORA_CAPTURER_LIFT = 0.28;
 const HOLY_RING_VS_NORMAL = 1.04;
@@ -248,6 +266,7 @@ function createHealthChipAtlas(engine) {
   writeRoundedRing(pixels, TEX * 3, TEX, 0.92);
   writeRoundedRing(pixels, TEX * 4, TEX, 0.94);
   writeUnderline(pixels, TEX * 5, TEX);
+  writeSoftChip(pixels, TEX * 6, TEX, 0);
   const texture = createTexture2DFromPixels(engine, pixels, w, h, {
     minFilter: 'linear',
     magFilter: 'linear',
@@ -490,58 +509,128 @@ export function chipDotVisible(index, filledCount) {
   return index < filledCount;
 }
 
-export function agoraChipSizeMul(index) {
-  return (index & 1) === 1 ? DOT_DIAMETER_AGORA_SMALL_MUL : DOT_DIAMETER_AGORA_LARGE_MUL;
+export function agoraChipSizeMul(_index) {
+  return DOT_DIAMETER_AGORA_LARGE_MUL;
 }
 
-/** How many pips a 0..maxTicks meter has earned. */
-export function agoraChipFilled(progress, count = AGORA_CHIP_COUNT, maxTicks = AGORA_CAPTURE_TICKS) {
+/**
+ * Completed segments + 0..1 fill of the live dash.
+ * Dots flip only when a segment finishes; dashes move every tick.
+ */
+export function agoraMeterParts(progress, count = AGORA_CHIP_COUNT, maxTicks = AGORA_CAPTURE_TICKS) {
   const n = Math.max(1, count | 0);
   const max = Math.max(1, maxTicks | 0);
   const p = Math.max(0, progress | 0);
-  if (p <= 0) return 0;
-  return Math.min(n, Math.max(1, Math.ceil((p / max) * n - 1e-6)));
+  if (p <= 0) return { filled: 0, frac: 0 };
+  if (p >= max) return { filled: n, frac: 0 };
+  const t = (p * n) / max;
+  const filled = Math.min(n - 1, Math.floor(t + 1e-6));
+  return { filled, frac: Math.min(1, Math.max(0, t - filled)) };
 }
 
-export function agoraChipIsSmall(index) {
-  return (index & 1) === 1;
+/** How many milestone dots a 0..maxTicks meter has claimed. */
+export function agoraChipFilled(progress, count = AGORA_CHIP_COUNT, maxTicks = AGORA_CAPTURE_TICKS) {
+  return agoraMeterParts(progress, count, maxTicks).filled;
 }
 
-/** Chip that just filled — invade from the right, tug large chips from the left. */
-export function agoraChipLeadIndex(state = {}) {
-  if ((state.capturer | 0) < 0) return -1;
+/** 0..1 capture meter — dashes and milestones both use this. */
+export function agoraProgressRatio(state = {}) {
   if ((state.phase | 0) === AGORA_PHASE_TUG) {
-    const filled = agoraChipFilled(state.tug, AGORA_LARGE_CHIP_COUNT, AGORA_TUG_TICKS);
-    if (filled <= 0) return -1;
-    return (filled - 1) * 2;
+    return Math.min(1, Math.max(0, (state.tug | 0) / AGORA_TUG_TICKS));
   }
+  return Math.min(1, Math.max(0, (state.progress | 0) / AGORA_CAPTURE_TICKS));
+}
+
+function agoraMeterState(state = {}) {
+  const segs = AGORA_DASH_COUNT;
+  if ((state.phase | 0) === AGORA_PHASE_TUG) {
+    return agoraMeterParts(state.tug, segs, AGORA_TUG_TICKS);
+  }
+  return agoraMeterParts(state.progress, segs, AGORA_CAPTURE_TICKS);
+}
+
+export function agoraChipIsSmall(_index) {
+  return false;
+}
+
+/** 0..1 realtime fill — each dash is half the whole meter. */
+export function agoraDashFill(index, state = {}) {
+  const dashes = AGORA_DASH_COUNT;
+  if (index < 0 || index >= dashes) return 0;
+  const order = (state.phase | 0) === AGORA_PHASE_TUG ? index : (dashes - 1 - index);
+  const start = order / dashes;
+  return Math.min(1, Math.max(0, (agoraProgressRatio(state) - start) * dashes));
+}
+
+/** Dot claimed by completed-segment `order` (0-first). */
+export function agoraClaimedDotIndex(order, state = {}) {
   const count = state.count ?? AGORA_CHIP_COUNT;
-  const filled = agoraChipFilled(state.progress, count, AGORA_CAPTURE_TICKS);
-  if (filled <= 0) return -1;
-  return count - filled;
+  if ((state.phase | 0) === AGORA_PHASE_TUG) return order;
+  return count - 1 - order;
 }
 
-export function agoraChipPulseMul(index, state = {}, nowMs = 0) {
-  const capturer = state.capturer;
-  if (capturer == null || (capturer | 0) < 0) return 1;
-  if (agoraChipTintOwner(index, state) !== (capturer | 0)) return 1;
-  const wave = 0.5 + 0.5 * Math.sin((nowMs | 0) * 0.016);
-  const lead = index === agoraChipLeadIndex(state);
-  return 1 + (lead ? AGORA_LEAD_PULSE_MUL : AGORA_CAPTURER_PULSE_MUL) * wave;
+/**
+ * Flip beat: stay black, drip away, then the arrive color scales in.
+ * `rgb` is null once the new swatch should show.
+ */
+export function agoraFlipStyle(t) {
+  const u = Math.max(0, Math.min(1, t));
+  if (u < AGORA_FLIP_DROP_END) {
+    const span = Math.max(1e-6, AGORA_FLIP_DROP_END - AGORA_FLIP_INK_END);
+    const k = Math.min(1, Math.max(0, (u - AGORA_FLIP_INK_END) / span));
+    return { rgb: AGORA_INK_RGB, size: 1 - 0.88 * k, drop: k };
+  }
+  const k = (u - AGORA_FLIP_DROP_END) / (1 - AGORA_FLIP_DROP_END);
+  const ease = k * k * (3 - 2 * k);
+  return { rgb: null, size: 0.12 + 0.88 * ease, drop: (1 - ease) * 0.16 };
 }
 
-export function agoraChipRgb(index, state = {}) {
-  const tint = agoraChipTintOwner(index, state);
-  if (tint === AGORA_TINT_NEUTRAL) return AGORA_NEUTRAL_RGB;
-  const rgb = ownerTint(tint);
-  const capturer = state.capturer;
-  if (capturer == null || (capturer | 0) < 0 || tint !== (capturer | 0)) return rgb;
+/** Dot currently being taken — invade from the right, tug from the left. */
+export function agoraChipLeadIndex(state = {}) {
+  const { filled, frac } = agoraMeterState(state);
+  const live = (state.capturer | 0) >= 0 || (state.contested | 0) !== 0 || filled > 0 || frac > 0;
+  if (!live || filled >= AGORA_DASH_COUNT) return -1;
+  if ((state.phase | 0) === AGORA_PHASE_TUG) return filled;
+  return AGORA_CHIP_COUNT - 1 - filled;
+}
+
+export function agoraLeadBlinkBlack(nowMs = 0) {
+  return (((Math.max(0, nowMs) / AGORA_BLINK_PERIOD_MS) % 1) < 0.5);
+}
+
+export function agoraChipPulseMul(_index, _state = {}, _nowMs = 0) {
+  return 1;
+}
+
+function liftCapturerRgb(rgb) {
   const t = AGORA_CAPTURER_LIFT;
   return [
     rgb[0] + (1 - rgb[0]) * t,
     rgb[1] + (1 - rgb[1]) * t,
     rgb[2] + (1 - rgb[2]) * t,
   ];
+}
+
+function agoraChipRestRgb(index, state = {}) {
+  const tint = agoraChipTintOwner(index, state);
+  if (tint === AGORA_TINT_NEUTRAL) return AGORA_NEUTRAL_RGB;
+  const rgb = ownerTint(tint);
+  const capturer = state.capturer;
+  if (capturer == null || (capturer | 0) < 0 || tint !== (capturer | 0)) return rgb;
+  return liftCapturerRgb(rgb);
+}
+
+export function agoraChipRgb(index, state = {}, nowMs = 0) {
+  if (index === agoraChipLeadIndex(state) && agoraLeadBlinkBlack(nowMs)) {
+    return AGORA_INK_RGB;
+  }
+  return agoraChipRestRgb(index, state);
+}
+
+export function agoraDashFillRgb(state = {}, trackRgb = AGORA_NEUTRAL_RGB) {
+  const capturer = state.capturer;
+  if (capturer == null || (capturer | 0) < 0) return trackRgb;
+  return liftCapturerRgb(ownerTint(capturer | 0));
 }
 
 /** 0..1 occupy mix for flag / agora TeamColor (idle stays the owner swatch). */
@@ -571,25 +660,90 @@ export function agoraPropTint(state = {}) {
 
 /**
  * Lock: capturer invades from the right.
- * Tug: small chips stay founder; large chips fill from the left (or stay neutral).
+ * Tug: dots fill from the left (or stay neutral until claimed).
  * @param {number} index
  * @param {{ phase?: number, progress?: number, tug?: number, owner?: number, founder?: number, capturer?: number, count?: number }} state
  */
 export function agoraChipTintOwner(index, state = {}) {
   const count = state.count ?? AGORA_CHIP_COUNT;
   const owner = state.owner | 0;
-  const founder = state.founder != null ? state.founder | 0 : owner;
   const capturer = state.capturer | 0;
+  const { filled } = agoraMeterState(state);
   if ((state.phase | 0) === AGORA_PHASE_TUG) {
-    if (agoraChipIsSmall(index)) return founder;
-    const filled = agoraChipFilled(state.tug, AGORA_LARGE_CHIP_COUNT, AGORA_TUG_TICKS);
-    const largeIndex = index >> 1;
-    if (capturer >= 0 && largeIndex < filled) return capturer;
+    if (capturer >= 0 && index < filled) return capturer;
     return AGORA_TINT_NEUTRAL;
   }
-  const filled = agoraChipFilled(state.progress, count, AGORA_CAPTURE_TICKS);
   if (capturer >= 0 && index >= count - filled) return capturer;
   return owner;
+}
+
+/** Centered o-o-o: dots on both ends, rectangles in the gaps. */
+export function agoraRowLayout(normalDot) {
+  const n = Math.max(1e-3, normalDot);
+  const dotD = n * DOT_DIAMETER_AGORA_LARGE_MUL;
+  const dashW = n * DOT_DIAMETER_AGORA_DASH_W_MUL;
+  const dashH = n * DOT_DIAMETER_AGORA_DASH_H_MUL;
+  const gap = n * AGORA_DASH_INNER_GAP_MUL;
+  const pitch = dotD + gap + dashW + gap;
+  const groupW = (AGORA_CHIP_COUNT - 1) * pitch + dotD;
+  const left = -groupW * 0.5;
+  const dashAlong = [];
+  const dotAlong = [];
+  for (let i = 0; i < AGORA_CHIP_COUNT; i++) {
+    dotAlong.push(left + dotD * 0.5 + i * pitch);
+  }
+  for (let i = 0; i < AGORA_DASH_COUNT; i++) {
+    dashAlong.push(left + dotD + gap + dashW * 0.5 + i * pitch);
+  }
+  return { dashAlong, dotAlong, dashW, dashH, dotD };
+}
+
+/** Shift a width-scaled dash so it grows from the invade (right) or tug (left) end. */
+export function agoraDashFillAlong(trackAlong, trackW, fill, fromRight) {
+  const f = Math.max(0, Math.min(1, fill));
+  const fillW = trackW * f;
+  const shift = (trackW - fillW) * 0.5;
+  return fromRight ? trackAlong + shift : trackAlong - shift;
+}
+
+function agoraFlipKey(x, z) {
+  return `${(x * 100 + 0.5) | 0},${(z * 100 + 0.5) | 0}`;
+}
+
+/** Warlock-style ink beads: hang, swell, then fall (alpha + hard disc). */
+export function emitAgoraInkDrips(emit, px, py, pz, size, gy) {
+  if (!emit) return 0;
+  const n = 5 + ((Math.random() * 3) | 0);
+  const killY = (Number.isFinite(gy) ? gy : py - 8) - 0.5;
+  for (let i = 0; i < n; i++) {
+    const hang = 0.1 + Math.random() * 0.18;
+    const peak = size * (0.45 + Math.random() * 0.35);
+    emit({
+      blend: 'alpha',
+      hard: true,
+      fadeOut: false,
+      killY,
+      position: [
+        px + (Math.random() - 0.5) * size * 0.45,
+        py - size * 0.12,
+        pz + (Math.random() - 0.5) * size * 0.45,
+      ],
+      velocity: [
+        (Math.random() - 0.5) * 0.4,
+        -0.35 - Math.random() * 0.7,
+        (Math.random() - 0.5) * 0.4,
+      ],
+      gravity: [0, -16 - Math.random() * 8, 0],
+      color: [0, 0, 0, 1],
+      hangTime: hang,
+      lifetime: hang + 0.9 + Math.random() * 0.4,
+      startSize: size * (0.28 + Math.random() * 0.18),
+      peakSize: peak,
+      endSize: peak * 0.75,
+      drag: 0.1,
+    });
+  }
+  return n;
 }
 
 function ringDotIndices(count) {
@@ -652,10 +806,12 @@ function hideSprite(spr) {
 /**
  * @param {object} engine
  * @param {object} scene
- * @param {{ capacity?: number, getViewportHeight?: () => number, getViewportWidth?: () => number }} [opts]
+ * @param {{ capacity?: number, getViewportHeight?: () => number, getViewportWidth?: () => number, emit?: (init: object) => unknown, groundYAt?: (x: number, z: number) => number }} [opts]
  */
 export function createHealthBars(engine, scene, opts = {}) {
   const capacity = Math.max(1, opts.capacity ?? HEALTH_BAR_CAPACITY);
+  const emitFx = opts.emit;
+  const groundYAt = opts.groundYAt;
   const atlas = createHealthChipAtlas(engine);
   const system = createFacingBillboardSystem(atlas, {
     capacity: capacity * SPRITES_PER_SLOT,
@@ -680,6 +836,10 @@ export function createHealthBars(engine, scene, opts = {}) {
   let horizonScale = 1;
   let sizeScale = 1;
   let chipNow = 0;
+  /** @type {Map<string, { filled: number, phase: number, flips: { index: number, t0: number, emitted: boolean }[] }>} */
+  const agoraFlips = new Map();
+  /** @type {Set<string>} */
+  const agoraSeen = new Set();
 
   function hide(slot) {
     if (!slot.active) return;
@@ -757,6 +917,7 @@ export function createHealthBars(engine, scene, opts = {}) {
   return {
     begin() {
       used = 0;
+      agoraSeen.clear();
       chipNow = typeof performance !== 'undefined' ? performance.now() : 0;
       viewH = viewportHeight();
       viewW = viewportWidth();
@@ -781,7 +942,7 @@ export function createHealthBars(engine, scene, opts = {}) {
      * @param {number} z
      * @param {number} _unitSize unused — chips are a fixed small size for all units
      * @param {number} ratio 0..1
-     * @param {{ armor?: boolean, holy?: boolean, building?: boolean, agora?: boolean, far?: boolean, owner?: number, founder?: number, capturer?: number, progress?: number, tug?: number, phase?: number, hp?: number, manaReady?: number, seatsFilled?: number }} [flags]
+     * @param {{ armor?: boolean, holy?: boolean, building?: boolean, agora?: boolean, far?: boolean, owner?: number, founder?: number, capturer?: number, progress?: number, tug?: number, phase?: number, contested?: number, hp?: number, manaReady?: number, seatsFilled?: number }} [flags]
      */
     write(x, y, z, _unitSize, ratio, flags = {}) {
       if (used >= capacity) return;
@@ -924,16 +1085,84 @@ export function createHealthBars(engine, scene, opts = {}) {
         hideSprite(slot.lead);
         hideSprite(slot.line);
         for (let i = 0; i < UNDER_DOT_MAX; i++) hideSprite(slot.under[i]);
-        for (let i = 0; i < CHIP_COUNT_MAX; i++) {
+        const row = agoraRowLayout(normalDot);
+        const fromRight = (flags.phase | 0) !== AGORA_PHASE_TUG;
+        const trackRgb = (flags.phase | 0) === AGORA_PHASE_TUG
+          ? AGORA_NEUTRAL_RGB
+          : ownerTint(flags.owner | 0);
+        const meter = agoraMeterState(flags);
+        const flipKey = agoraFlipKey(x, z);
+        agoraSeen.add(flipKey);
+        let rec = agoraFlips.get(flipKey);
+        const phase = flags.phase | 0;
+        if (!rec) {
+          rec = { filled: meter.filled, phase, flips: [] };
+          agoraFlips.set(flipKey, rec);
+        } else if (rec.phase !== phase) {
+          rec.phase = phase;
+          rec.filled = meter.filled;
+        } else if (meter.filled !== rec.filled) {
+          const prev = rec.filled;
+          const next = meter.filled;
+          const lo = Math.min(prev, next);
+          const hi = Math.max(prev, next);
+          for (let order = lo; order < hi; order++) {
+            rec.flips.push({
+              index: agoraClaimedDotIndex(order, flags),
+              t0: chipNow,
+              emitted: false,
+            });
+          }
+          rec.filled = next;
+        }
+        rec.flips = rec.flips.filter((f) => chipNow - f.t0 < AGORA_FLIP_MS);
+        for (let i = 0; i < AGORA_CHIP_COUNT; i++) {
+          const flip = rec.flips.find((f) => f.index === i);
+          const flipT = flip ? (chipNow - flip.t0) / AGORA_FLIP_MS : -1;
+          const style = flipT >= 0 ? agoraFlipStyle(flipT) : null;
+          const rgb = style?.rgb ?? agoraChipRgb(i, flags, chipNow);
+          const d = row.dotD * (style ? style.size : 1);
+          const drop = style ? row.dotD * style.drop : 0;
           const spr = slot.dots[i];
-          if (i >= count) {
-            hideSprite(spr);
+          placeAlong(spr, row.dotAlong[i], d, d, rgb, CHIP_TEAM_FILL_ALPHA, FRAME_LEAD_ROUND, 0, drop);
+          if (flip && !flip.emitted) {
+            flip.emitted = true;
+            const gy = groundYAt?.(x, z) ?? y - 12;
+            emitAgoraInkDrips(emitFx, spr.position[0], spr.position[1], spr.position[2], row.dotD, gy);
+          }
+        }
+        for (let i = 0; i < AGORA_DASH_COUNT; i++) {
+          placeAlong(
+            slot.dots[AGORA_CHIP_COUNT + i],
+            row.dashAlong[i],
+            row.dashW,
+            row.dashH,
+            trackRgb,
+            AGORA_DASH_TRACK_ALPHA,
+            FRAME_RECT,
+            0,
+          );
+          const fill = agoraDashFill(i, flags);
+          const fillSpr = slot.dots[AGORA_CHIP_COUNT + AGORA_DASH_COUNT + i];
+          if (fill <= 0) {
+            hideSprite(fillSpr);
             continue;
           }
-          const d = normalDot * agoraChipSizeMul(i) * agoraChipPulseMul(i, flags, chipNow);
-          const along = (i * spacing) - (totalWidth * 0.5);
-          const rgb = agoraChipRgb(i, flags);
-          placeAlong(spr, along, d, d, rgb, CHIP_TEAM_FILL_ALPHA, FRAME_LEAD_ROUND, 0);
+          const fillRgb = agoraDashFillRgb(flags, trackRgb);
+          const fillW = row.dashW * fill;
+          placeAlong(
+            fillSpr,
+            agoraDashFillAlong(row.dashAlong[i], row.dashW, fill, fromRight),
+            fillW,
+            row.dashH,
+            fillRgb,
+            CHIP_TEAM_FILL_ALPHA,
+            FRAME_RECT,
+            0,
+          );
+        }
+        for (let i = AGORA_CHIP_COUNT + AGORA_DASH_COUNT * 2; i < CHIP_COUNT_MAX; i++) {
+          hideSprite(slot.dots[i]);
         }
       } else {
         for (let i = 0; i < count; i++) {
@@ -1015,6 +1244,9 @@ export function createHealthBars(engine, scene, opts = {}) {
     end() {
       for (let s = used; s < prevUsed; s++) hide(slots[s]);
       prevUsed = used;
+      for (const key of agoraFlips.keys()) {
+        if (!agoraSeen.has(key)) agoraFlips.delete(key);
+      }
     },
 
     clear() {

@@ -3,8 +3,10 @@
  * Render backend: Three (default). ?backend=lite or ?backend=babylon
  */
 import { createWorld } from './sim/world.js';
+import { stepWavePreset, WAVE_SOURCES, WAVE_EMITTER_BALLS } from './sim/behaviors.js';
 import { FPSMeter } from './fps-meter.js';
 import { attachMobileMove } from './mobile-move.js';
+import { attachAxiomGamepad } from './gamepad.js';
 
 const params = new URLSearchParams(location.search);
 const BACKEND_PARAM = (params.get('backend') || '').toLowerCase();
@@ -52,6 +54,14 @@ async function main() {
     cam && typeof cam.getDirectionToRef === 'function'
       ? attachMobileMove(cam)
       : { tick() {}, dispose() {} };
+  function applyWaveShape(dir = 1) {
+    const id = stepWavePreset(dir);
+    renderer.syncWaveEmitters?.();
+    const extra =
+      id === 'tube' ? ` carbons=${WAVE_EMITTER_BALLS.length} waves=${WAVE_SOURCES.length}` : ` (${WAVE_SOURCES.length})`;
+    console.log(`[axiom] wave emitters → ${id}${extra}`);
+  }
+  const pad = attachAxiomGamepad(renderer, { onShape: applyWaveShape });
 
   // Boot with a visible volume, seek 42.9 FPS. ?throttle=0 = full budget, no seek.
   const throttleOn = params.get('throttle') !== '0';
@@ -170,6 +180,10 @@ async function main() {
     if (evt.key === 'g' || evt.key === 'G') {
       const on = renderer.toggleChunkWireframes();
       console.log(`[axiom] chunk wireframes ${on ? 'on' : 'off'}`);
+      return;
+    }
+    if ((evt.key === 'y' || evt.key === 'Y') && !evt.repeat) {
+      applyWaveShape(1);
     }
   });
 
@@ -216,7 +230,7 @@ async function main() {
   console.log(
     `[axiom] backend=${BACKEND} chunk volume size=${CHUNK_SIZE} radius=${CHUNK_RADIUS} ` +
       `budget=${INITIAL}/${CAPACITY} boot=${nAim}/r${rAim} throttle=${throttleOn ? 'up' : 'off'} — ` +
-      `ESDF fly (R/C up/down), mobi stick (look-dir), G cube wires, F9 inspector`,
+      `ESDF fly (R/C up/down), pad sticks + LT/RT, LB/RB shape, mobi stick (look-dir), G cube wires, Y emitter ring, F9 inspector`,
   );
 }
 

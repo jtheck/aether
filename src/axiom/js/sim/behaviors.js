@@ -1,5 +1,7 @@
 /** Particle behavior steps — pure SoA math, no engine imports. */
 
+import { nanotubeCorners, nanotubeWaveSources } from './nanotube.js';
+
 /**
  * Wind field with wrap inside a cubic chunk volume.
  * @param {object} store
@@ -97,15 +99,127 @@ export const COMPRESSION_SPEED = 6;
 export const COMPRESSION_AMPLITUDE = 1.1;
 export const COMPRESSION_K = (Math.PI * 2) / COMPRESSION_WAVELENGTH;
 
-/**
- * Scenery ico-spheres that emit compression waves (keep in sync with render backends).
- * Push another `{x,y,z}` to superpose — linear in S, bake at spawn.
- * Point stores pack basis as `i * WAVE_SOURCES.length + s`.
- */
-export const WAVE_SOURCES = [
+export const WAVE_PRESET_PAIR = [
   { x: 0, y: 0, z: 0 },
   { x: 0, y: 14, z: 0 },
 ];
+
+/** Six emitters in the XZ plane, mid-height between the pair. */
+export function wavePresetRing() {
+  const r = 10;
+  const y = 7;
+  const out = [];
+  for (let i = 0; i < 6; i++) {
+    const a = (i * Math.PI * 2) / 6;
+    out.push({ x: Math.cos(a) * r, y, z: Math.sin(a) * r });
+  }
+  return out;
+}
+
+/** All carbon corners (icos). Wave sum uses `WAVE_PRESET_TUBE` only. */
+export const WAVE_PRESET_TUBE_CORNERS = nanotubeCorners();
+/** Two rings of six — enough to read as a cylinder without starving the field. */
+export const WAVE_PRESET_TUBE = nanotubeWaveSources(12);
+
+function slotsFrom(start, n) {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(start + i);
+  return out;
+}
+
+/** Pair, ring, then the 12-site tube wave. Spawn bakes every slot; toggle only remaps. */
+export const WAVE_CATALOG = WAVE_PRESET_PAIR.concat(wavePresetRing(), WAVE_PRESET_TUBE);
+
+/** Point stores pack basis as `i * WAVE_SOURCE_CAP + s`. */
+export const WAVE_SOURCE_CAP = WAVE_CATALOG.length;
+
+const WAVE_SLOTS_PAIR = slotsFrom(0, WAVE_PRESET_PAIR.length);
+const WAVE_SLOTS_RING = slotsFrom(WAVE_SLOTS_PAIR.length, 6);
+const WAVE_SLOTS_TUBE = slotsFrom(WAVE_SLOTS_PAIR.length + WAVE_SLOTS_RING.length, WAVE_PRESET_TUBE.length);
+
+/** Ico-spheres: pair/ring follow sources; tube shows every carbon. */
+export const WAVE_BALL_CAP = Math.max(WAVE_SOURCE_CAP, WAVE_PRESET_TUBE_CORNERS.length);
+
+/**
+ * Live ico-sphere positions. Same as `WAVE_SOURCES` except on the tube
+ * (all corners vs the 12-site wave sum).
+ */
+export const WAVE_EMITTER_BALLS = WAVE_PRESET_PAIR.map((s) => ({ ...s }));
+
+/**
+ * Keep a fat source count from summing to a huge kick.
+ * Ring (6) is the reference strength.
+ */
+export function waveSourceAmplitude(sourceCount, base = COMPRESSION_AMPLITUDE) {
+  const n = sourceCount | 0;
+  if (n <= 6) return base;
+  return base * (6 / n);
+}
+
+/** Catalog indices the wave sum uses. Mutate in place — do not rebind. */
+const waveActiveSlots = WAVE_SLOTS_PAIR.slice();
+
+/** @type {'pair'|'ring'|'tube'} */
+let presetId = 'pair';
+
+/**
+ * Live scenery (ico-spheres). Same positions as `waveActiveSlots`.
+ * Mutate via `toggleWavePreset` — do not rebind.
+ */
+export const WAVE_SOURCES = WAVE_PRESET_PAIR.map((s) => ({ ...s }));
+
+export function wavePresetId() {
+  return presetId;
+}
+
+function setLiveSources(list) {
+  WAVE_SOURCES.length = 0;
+  for (const s of list) WAVE_SOURCES.push({ x: s.x, y: s.y, z: s.z });
+}
+
+function setEmitterBalls(list) {
+  WAVE_EMITTER_BALLS.length = 0;
+  for (const s of list) WAVE_EMITTER_BALLS.push({ x: s.x, y: s.y, z: s.z });
+}
+
+function setSlots(slots) {
+  waveActiveSlots.length = 0;
+  for (const s of slots) waveActiveSlots.push(s);
+}
+
+const PRESET_ORDER = /** @type {const} */ (['pair', 'ring', 'tube']);
+
+function applyWavePreset(id) {
+  if (id === 'ring') {
+    presetId = 'ring';
+    setSlots(WAVE_SLOTS_RING);
+    setLiveSources(wavePresetRing());
+    setEmitterBalls(wavePresetRing());
+  } else if (id === 'tube') {
+    presetId = 'tube';
+    setSlots(WAVE_SLOTS_TUBE);
+    setLiveSources(WAVE_PRESET_TUBE);
+    setEmitterBalls(WAVE_PRESET_TUBE_CORNERS);
+  } else {
+    presetId = 'pair';
+    setSlots(WAVE_SLOTS_PAIR);
+    setLiveSources(WAVE_PRESET_PAIR);
+    setEmitterBalls(WAVE_PRESET_PAIR);
+  }
+  return presetId;
+}
+
+/** Swap which baked slots the write loop sums. No rebake. @returns {'pair'|'ring'|'tube'} */
+export function toggleWavePreset() {
+  return stepWavePreset(1);
+}
+
+/** Left / right cycle. @param {number} dir −1 or +1 */
+export function stepWavePreset(dir) {
+  const d = dir < 0 ? -1 : 1;
+  const i = Math.max(0, PRESET_ORDER.indexOf(presetId));
+  return applyWavePreset(PRESET_ORDER[(i + d + PRESET_ORDER.length) % PRESET_ORDER.length]);
+}
 
 /**
  * @param {object} store
@@ -144,10 +258,9 @@ function bakeWaveFrom(store, i, j, ox, oy, oz) {
  * @param {number} i
  */
 export function bakeCompressionWaveRest(store, i) {
-  const S = WAVE_SOURCES.length;
-  const base = i * S;
-  for (let s = 0; s < S; s++) {
-    const src = WAVE_SOURCES[s];
+  const base = i * WAVE_SOURCE_CAP;
+  for (let s = 0; s < WAVE_SOURCE_CAP; s++) {
+    const src = WAVE_CATALOG[s];
     bakeWaveFrom(store, i, base + s, src.x, src.y, src.z);
   }
 }
@@ -231,8 +344,10 @@ export function behaviorOrbitCluster(store, time, center, radiansPerSec, tilt = 
 export function writeCompressionWavePositions(store, dest, destOffset, time, opts = {}) {
   const n = store.count | 0;
   if (n <= 0) return destOffset;
-  const S = WAVE_SOURCES.length;
-  const A = opts.amplitude ?? COMPRESSION_AMPLITUDE;
+  const slots = waveActiveSlots;
+  const S = slots.length;
+  const stride = WAVE_SOURCE_CAP;
+  const A = opts.amplitude ?? waveSourceAmplitude(S);
   const speed = opts.speed ?? COMPRESSION_SPEED;
   const omega = (speed * Math.PI * 2) / COMPRESSION_WAVELENGTH;
   const wt = omega * time;
@@ -241,25 +356,13 @@ export function writeCompressionWavePositions(store, dest, destOffset, time, opt
   const { hx, hy, hz, wnx, wny, wnz, waveC, waveS } = store;
   let o = destOffset | 0;
 
-  if (S === 1) {
-    for (let i = 0; i < n; i++) {
-      const u = A * (waveS[i] * ct - waveC[i] * st);
-      const p = o * 3;
-      dest[p] = hx[i] + wnx[i] * u;
-      dest[p + 1] = hy[i] + wny[i] * u;
-      dest[p + 2] = hz[i] + wnz[i] * u;
-      o++;
-    }
-    return o;
-  }
-
   for (let i = 0; i < n; i++) {
     let x = hx[i];
     let y = hy[i];
     let z = hz[i];
-    const base = i * S;
+    const base = i * stride;
     for (let s = 0; s < S; s++) {
-      const j = base + s;
+      const j = base + slots[s];
       const u = A * (waveS[j] * ct - waveC[j] * st);
       x += wnx[j] * u;
       y += wny[j] * u;

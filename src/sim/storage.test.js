@@ -16,7 +16,10 @@ import {
   overflowHintLabel,
   ownerResourceCap,
   ownerSlotCount,
+  siloIsAttached,
+  silosAttachedTo,
   slotVisual,
+  sourcesAttachedToSilo,
   takeStorageOverflow,
   unpairedSiloSource,
 } from './storage.js';
@@ -96,6 +99,20 @@ describe('silo pairing', () => {
       createBuilding({ owner: 1, type: 'silo', x: 8, z: 0 }),
     ];
     assert.equal(countSiloPairs(buildings, 0, 'camp'), 0);
+  });
+
+  it('lists every in-range silo as attached, even a second on one source', () => {
+    const buildings = [farm(0, 0), silo(8, 0), silo(0, 8)];
+    const attached = silosAttachedTo(buildings, buildings[0]);
+    assert.equal(attached.length, 2);
+    assert.ok(siloIsAttached(buildings, buildings[1]));
+    assert.equal(sourcesAttachedToSilo(buildings, buildings[1])[0], buildings[0]);
+  });
+
+  it('does not treat a distant silo as attached', () => {
+    const buildings = [camp(0, 0), silo(SILO_ATTACH_RANGE_F + 8, 0)];
+    assert.equal(silosAttachedTo(buildings, buildings[0]).length, 0);
+    assert.equal(siloIsAttached(buildings, buildings[1]), false);
   });
 });
 

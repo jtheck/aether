@@ -26,6 +26,7 @@ import {
 } from './chunks.js';
 import {
   writeCompressionWavePositions,
+  bakeCompressionWaveRest,
   behaviorOrbitCluster,
   behaviorSpinSelf,
 } from './behaviors.js';
@@ -612,6 +613,17 @@ export function createWorld(opts = {}) {
 
       // Points: wave writes straight into staging xyz (no per-chunk pack / second copy).
       packStaging(camera?.billboard ?? null, time);
+    },
+
+    rebakeWaves() {
+      for (const ch of active.values()) {
+        for (const f of flocks) {
+          if (!f.isPoint) continue;
+          const store = ch.stores.get(f.id);
+          if (!store?.count) continue;
+          for (let i = 0; i < store.count; i++) bakeCompressionWaveRest(store, i);
+        }
+      }
     },
 
     getRenderSpecies(id) {

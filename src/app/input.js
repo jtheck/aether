@@ -1,9 +1,10 @@
 // app/input.js — wires camera + game selection behind a single pointer hub.
-// Mouse + touch now; gamepad adapters plug into the same surfaces later.
+// Mouse + touch + standard-mapping gamepad (camera sticks, menu tab).
 
 import { createGameInput } from './input/gameInput.js';
 import { setupPointerHub } from './input/pointerHub.js';
 import { createTouchAdapter } from './input/touchAdapter.js';
+import { createGamepadAdapter } from './input/gamepad.js';
 
 /**
  * @param {object} opts
@@ -29,6 +30,7 @@ export function setupInput(opts) {
 
   const game = createGameInput(opts);
   const touch = createTouchAdapter({ canvas: opts.canvas, camera, game });
+  const pad = createGamepadAdapter({ camera, active: opts.inputActive });
 
   const hub = setupPointerHub({
     canvas: opts.canvas,
@@ -52,6 +54,9 @@ export function setupInput(opts) {
     cancelPlacement: () => game.cancelPlacement?.(),
     getSelectedBuilding: () => game.getSelectedBuilding?.(),
     setSelectedBuilding: (sel) => game.setSelectedBuilding?.(sel),
-    dispose: () => hub.dispose(),
+    dispose: () => {
+      pad.dispose();
+      hub.dispose();
+    },
   };
 }

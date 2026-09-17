@@ -188,6 +188,16 @@ describe('camera keys', () => {
     assert.ok(cam.target.x !== startX || cam.target.z !== startZ);
   });
 
+  it('nudgeLookPan strafes like WASD', () => {
+    const cam = fakeCamera();
+    const ctrl = createCameraController(cam, {}, { worldHalfF: 200 });
+    const startX = cam.target.x;
+    const startZ = cam.target.z;
+    ctrl.nudgeLookPan(1, 0);
+    ctrl.tick(16);
+    assert.ok(cam.target.x !== startX || cam.target.z !== startZ);
+  });
+
   it('wakes pan after the camera has coasted idle', () => {
     const cam = fakeCamera();
     const ctrl = createCameraController(cam, {}, { worldHalfF: 200 });

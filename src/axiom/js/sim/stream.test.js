@@ -133,7 +133,7 @@ import { createWorld } from './world.js';
     const dx = pts.positions[i * 3] - cx;
     const dy = pts.positions[i * 3 + 1] - cy;
     const dz = pts.positions[i * 3 + 2] - cz;
-    if (dx * dx + dy * dy + dz * dz > (r + 1.1) * (r + 1.1)) outside++;
+    if (dx * dx + dy * dy + dz * dz > (r + 2.3) * (r + 2.3)) outside++;
   }
   assert.equal(outside, 0, `sphere cull leaked ${outside} / ${pts.count}`);
 }

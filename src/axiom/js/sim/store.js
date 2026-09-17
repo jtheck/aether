@@ -1,6 +1,6 @@
 /** Engine-agnostic SoA particle store. No Babylon imports. */
 
-import { bakeCompressionWaveRest, WAVE_SOURCES } from './behaviors.js';
+import { bakeCompressionWaveRest, WAVE_SOURCE_CAP } from './behaviors.js';
 
 export const KIND_POINT = 'point';
 export const KIND_TRIANGLE = 'triangle';
@@ -48,7 +48,7 @@ export function createStore(capacity) {
  */
 export function createPointStore(capacity) {
   const cap = Math.max(1, capacity | 0);
-  const S = Math.max(1, WAVE_SOURCES.length);
+  const S = WAVE_SOURCE_CAP;
   const wave = cap * S;
   return {
     kind: 'point',

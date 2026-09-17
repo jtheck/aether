@@ -3,7 +3,8 @@
  * Same de-facto port as babylon-backend — sim stays engine-agnostic.
  */
 import * as THREE from '../../vendor/three.module.min.js';
-import { WAVE_SOURCES } from '../sim/behaviors.js';
+import { WAVE_BALL_CAP, WAVE_EMITTER_BALLS, wavePresetId } from '../sim/behaviors.js';
+import { getNanotubeLattice } from '../sim/nanotube.js';
 
 /**
  * @returns {import('./backend.js').AxiomRenderer & {
@@ -41,6 +42,13 @@ export function createThreeBackend() {
   /** @type {THREE.CanvasTexture | null} */
   let hardCircleTex = null;
 
+  /** @type {THREE.Mesh[]} */
+  const waveEmitters = [];
+  /** @type {THREE.MeshBasicMaterial | null} */
+  let waveEmitterMat = null;
+  /** @type {THREE.LineSegments | null} */
+  let waveLattice = null;
+
   // Fly controls (ESDF + R/C, pointer-drag look) — Babylon FreeCamera equivalent
   const keys = new Set();
   let yaw = 0;
@@ -58,10 +66,29 @@ export function createThreeBackend() {
   const right = new THREE.Vector3();
   let stickX = 0;
   let stickZ = 0;
+  let padMX = 0;
+  let padMY = 0;
+  let padMZ = 0;
   let rafId = 0;
 
   function assertReady() {
     if (!renderer || !scene || !camera) throw new Error('ThreeBackend: call init() first');
+  }
+
+  function syncWaveEmitters() {
+    const tube = wavePresetId() === 'tube';
+    if (waveLattice) waveLattice.visible = tube;
+    for (let i = 0; i < waveEmitters.length; i++) {
+      const ball = waveEmitters[i];
+      const src = WAVE_EMITTER_BALLS[i];
+      if (!src) {
+        ball.visible = false;
+        continue;
+      }
+      ball.visible = true;
+      ball.scale.setScalar(1);
+      ball.position.set(src.x, src.y, src.z);
+    }
   }
 
   function getHardCircleTexture() {
@@ -112,8 +139,9 @@ export function createThreeBackend() {
     if (keys.has('KeyF') || keys.has('ArrowRight')) mx += 1;
     if (keys.has('KeyR')) my += 1;
     if (keys.has('KeyC')) my -= 1;
-    mx += stickX;
-    mz += stickZ;
+    mx += stickX + padMX;
+    my += padMY;
+    mz += stickZ + padMZ;
 
     if (mx || my || mz) {
       const len = Math.hypot(mx, my, mz) || 1;
@@ -314,17 +342,28 @@ export function createThreeBackend() {
       scene.add(roof);
 
       const chaosTex = texLoader.load('./assets/sphere-q.jpg');
-      const matChaos = new THREE.MeshBasicMaterial({
+      waveEmitterMat = new THREE.MeshBasicMaterial({
         color: 0x666666,
         map: chaosTex,
         wireframe: true,
       });
-      for (let i = 0; i < WAVE_SOURCES.length; i++) {
-        const src = WAVE_SOURCES[i];
-        const ball = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 2), matChaos);
-        ball.position.set(src.x, src.y, src.z);
+      const geoIco = new THREE.IcosahedronGeometry(1, 2);
+      for (let i = 0; i < WAVE_BALL_CAP; i++) {
+        const ball = new THREE.Mesh(geoIco, waveEmitterMat);
+        waveEmitters.push(ball);
         scene.add(ball);
       }
+      const lat = getNanotubeLattice();
+      const latGeo = new THREE.BufferGeometry();
+      latGeo.setAttribute('position', new THREE.Float32BufferAttribute(lat.positions, 3));
+      waveLattice = new THREE.LineSegments(
+        latGeo,
+        new THREE.LineBasicMaterial({ color: 0x7dbeb0 }),
+      );
+      waveLattice.frustumCulled = false;
+      waveLattice.visible = false;
+      scene.add(waveLattice);
+      syncWaveEmitters();
 
       createTetraField();
 
@@ -362,6 +401,8 @@ export function createThreeBackend() {
       attachMobileStick();
       canvas.focus();
     },
+
+    syncWaveEmitters,
 
     tickScenery() {
       if (!tetras) return;
@@ -550,6 +591,18 @@ export function createThreeBackend() {
       return camera;
     },
 
+    applyGamepadFly(fly = {}) {
+      padMX = fly.mx || 0;
+      padMY = fly.my || 0;
+      padMZ = fly.mz || 0;
+      if (fly.lookYaw || fly.lookPitch) {
+        // Pointer: yaw -= dx (RH / look −Z). lookRight > 0 looks right.
+        yaw -= fly.lookYaw || 0;
+        pitch += fly.lookPitch || 0;
+        applyCameraOrientation();
+      }
+    },
+
     getCameraPose() {
       if (!camera) {
         return {
@@ -685,6 +738,19 @@ export function createThreeBackend() {
         chunkLineGrid.geometry.dispose();
         chunkLineGrid.material.dispose();
         chunkLineGrid = null;
+      }
+      for (const ball of waveEmitters) {
+        scene?.remove(ball);
+        ball.geometry?.dispose?.();
+      }
+      waveEmitters.length = 0;
+      waveEmitterMat?.dispose?.();
+      waveEmitterMat = null;
+      if (waveLattice) {
+        scene?.remove(waveLattice);
+        waveLattice.geometry.dispose();
+        waveLattice.material.dispose();
+        waveLattice = null;
       }
       if (tetras) {
         scene?.remove(tetras.mesh);

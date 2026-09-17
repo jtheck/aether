@@ -78,8 +78,8 @@ export function chunkBounds(cx, cy, cz, chunkSize) {
 
 /** Always-on bubble around the camera (look-up / step back). */
 export const STREAM_CORE_RADIUS = 1;
-/** Widen FOV so quantized look turns hit already-filled chunks. */
-export const STREAM_FOV_PAD = 1.35;
+/** Widen FOV so off-screen standby + quantized look stay filled. */
+export const STREAM_FOV_PAD = 1.55;
 /** Look hash step (radians) — pad covers the gap between bins. */
 export const STREAM_LOOK_QUANT = (8 * Math.PI) / 180;
 
@@ -171,7 +171,7 @@ export function chunkSphereHitsFrustum(cx, cy, cz, chunkSize, camera, opts = {})
   const pad = opts.fovPad ?? STREAM_FOV_PAD;
   const halfV = Math.tan(((a.fov * pad) * Math.PI) / 360);
   const halfH = halfV * a.aspect;
-  const near = opts.near ?? -s * 0.35;
+  const near = opts.near ?? -s;
   const far = opts.far ?? 1e6;
   if (
     a.x >= minX &&
@@ -221,7 +221,7 @@ export function chunkWanted(cx, cy, cz, focus, camera, chunkSize, chunkRadius, o
   if (cheb <= coreR) return true;
   if (cheb > chunkRadius) return false;
   return chunkSphereHitsFrustum(cx, cy, cz, chunkSize, camera, {
-    far: (chunkRadius + 0.5) * chunkSize + chunkSize,
+    far: (chunkRadius + 0.5) * chunkSize + chunkSize * 1.5,
     ...opts,
   });
 }

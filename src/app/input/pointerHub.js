@@ -3,8 +3,8 @@ import { isCameraFollowTypingTarget } from './cameraFollow.js';
 // Sole pointer/wheel surface for mouse and touch.
 // Document-level move/up like v1 — no pointer capture.
 // Touch is fully owned by the touch adapter (its own multi-finger bookkeeping);
-// it drives camera + game through the same surfaces mouse uses. Gamepad: call
-// nudge* / command helpers directly, same idea.
+// it drives camera + game through the same surfaces mouse uses. Gamepad owns
+// sticks + menu tab in gamepad.js (nudgeLookPan / nudge* / focus helpers).
 //
 // Boot/match splash gates camera+game via `active`. Held pointers are still
 // tracked while locked; on unlock we adopt current positions as a fresh

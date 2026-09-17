@@ -1,13 +1,19 @@
 import assert from 'node:assert/strict';
 import {
-  COMPRESSION_AMPLITUDE,
   COMPRESSION_K,
   COMPRESSION_SPEED,
   COMPRESSION_WAVELENGTH,
   WAVE_SOURCES,
+  WAVE_SOURCE_CAP,
+  WAVE_EMITTER_BALLS,
+  WAVE_PRESET_TUBE,
   bakeCompressionWaveRest,
+  toggleWavePreset,
+  stepWavePreset,
+  waveSourceAmplitude,
   writeCompressionWavePositions,
 } from './behaviors.js';
+import { getNanotubeLattice } from './nanotube.js';
 import { createPointStore, createPointStaging, KIND_POINT } from './store.js';
 import { createWorld } from './world.js';
 
@@ -16,6 +22,7 @@ assert.equal(WAVE_SOURCES.length, 2, 'origin + upper sphere');
 function expectedAt(hx, hy, hz, time) {
   const omega = (COMPRESSION_SPEED * Math.PI * 2) / COMPRESSION_WAVELENGTH;
   const wt = omega * time;
+  const A = waveSourceAmplitude(WAVE_SOURCES.length);
   let x = hx;
   let y = hy;
   let z = hz;
@@ -26,7 +33,7 @@ function expectedAt(hx, hy, hz, time) {
     const r2 = dx * dx + dy * dy + dz * dz;
     if (r2 < 1e-8) continue;
     const r = Math.sqrt(r2);
-    const u = COMPRESSION_AMPLITUDE * Math.sin(COMPRESSION_K * r - wt);
+    const u = A * Math.sin(COMPRESSION_K * r - wt);
     const inv = 1 / r;
     x += dx * inv * u;
     y += dy * inv * u;
@@ -116,6 +123,46 @@ function expectedAt(hx, hy, hz, time) {
     pts.positions[1] !== before[1] ||
     pts.positions[2] !== before[2];
   assert.ok(moved, 'wave should displace staging xyz');
+}
+
+{
+  assert.equal(WAVE_SOURCE_CAP, 2 + 6 + WAVE_PRESET_TUBE.length);
+  assert.equal(WAVE_PRESET_TUBE.length, 12);
+  const store = createPointStore(1);
+  store.count = 1;
+  store.hx[0] = 10;
+  store.hy[0] = 7;
+  store.hz[0] = 0;
+  bakeCompressionWaveRest(store, 0);
+  const dest = new Float32Array(3);
+  const t = 0.4;
+
+  assert.equal(toggleWavePreset(), 'ring');
+  assert.equal(WAVE_SOURCES.length, 6);
+  writeCompressionWavePositions(store, dest, 0, t);
+  const ring = expectedAt(10, 7, 0, t);
+  assert.ok(Math.abs(dest[0] - ring.x) < 1e-5);
+  assert.ok(Math.abs(dest[1] - ring.y) < 1e-5);
+  assert.ok(Math.abs(dest[2] - ring.z) < 1e-5);
+
+  assert.equal(toggleWavePreset(), 'tube');
+  assert.equal(WAVE_SOURCES.length, 12);
+  assert.equal(WAVE_EMITTER_BALLS.length, getNanotubeLattice().vertices.length);
+  writeCompressionWavePositions(store, dest, 0, t);
+  const tube = expectedAt(10, 7, 0, t);
+  assert.ok(Math.abs(dest[0] - tube.x) < 1e-5);
+  assert.ok(Math.abs(dest[1] - tube.y) < 1e-5);
+  assert.ok(Math.abs(dest[2] - tube.z) < 1e-5);
+
+  assert.equal(toggleWavePreset(), 'pair');
+  assert.equal(WAVE_SOURCES.length, 2);
+  assert.equal(stepWavePreset(-1), 'tube');
+  assert.equal(stepWavePreset(1), 'pair');
+  writeCompressionWavePositions(store, dest, 0, t);
+  const pair = expectedAt(10, 7, 0, t);
+  assert.ok(Math.abs(dest[0] - pair.x) < 1e-5);
+  assert.ok(Math.abs(dest[1] - pair.y) < 1e-5);
+  assert.ok(Math.abs(dest[2] - pair.z) < 1e-5);
 }
 
 console.log('wavePack.test.js ok');

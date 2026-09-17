@@ -192,7 +192,9 @@ function listSubscribedMaps(workshop, opts) {
   } catch (_err) {
     return [];
   }
-  if (!Array.isArray(rawIds)) return [];
+  if (!Array.isArray(rawIds)) {
+    rawIds = rawIds && typeof rawIds.length === 'number' ? Array.from(rawIds) : [];
+  }
   var items = [];
   for (var i = 0; i < rawIds.length; i++) {
     var id = itemIdString(rawIds[i]);
@@ -283,6 +285,46 @@ function workshopTagsForGarden(garden) {
   return tags;
 }
 
+/** Partner checklist tags — extra labels often make SubmitItemUpdate return false. */
+const WORKSHOP_SAFE_TAGS = ['Map', 'Special'];
+
+function submitAccepted(submitted) {
+  if (submitted === true) return true;
+  if (submitted === false || submitted == null) return false;
+  if (typeof submitted === 'object') {
+    if (submitted.success === false || submitted.ok === false) return false;
+    if (submitted.result != null && Number(submitted.result) !== 1) return false;
+    if (submitted.success === true || submitted.ok === true) return true;
+  }
+  return false;
+}
+
+function submitErrorMessage(submitted) {
+  if (submitted && typeof submitted === 'object') {
+    if (submitted.error || submitted.message) return String(submitted.error || submitted.message);
+    if (submitted.result != null) return 'submit failed (Steam result ' + submitted.result + ')';
+  }
+  return 'submit failed';
+}
+
+function publishAttempts(tags, hasPreview) {
+  var seen = Object.create(null);
+  var out = [];
+  function add(nextTags, preview) {
+    var usePreview = !!(preview && hasPreview);
+    var key = nextTags.join(',') + '|' + (usePreview ? '1' : '0');
+    if (seen[key]) return;
+    seen[key] = 1;
+    out.push({ tags: nextTags, preview: usePreview });
+  }
+  add(tags, true);
+  add(WORKSHOP_SAFE_TAGS, true);
+  add(tags, false);
+  add(WORKSHOP_SAFE_TAGS, false);
+  add([], false);
+  return out;
+}
+
 function createdItemId(result) {
   if (result == null || result === false) return { id: '', needsAgreement: false };
   if (typeof result === 'bigint' || typeof result === 'number' || typeof result === 'string') {
@@ -304,6 +346,24 @@ function createdItemId(result) {
 function looksLikeLegalAgreement(err) {
   var msg = err && err.message ? err.message : String(err || '');
   return /legal agreement/i.test(msg);
+}
+
+function writePreviewJpeg(dir, raw, io) {
+  var text = String(raw || '');
+  var comma = text.indexOf(',');
+  if (text.slice(0, 5) === 'data:' && comma > 0) text = text.slice(comma + 1);
+  if (!text || text.length > 1400000) return '';
+  var buf;
+  try { buf = Buffer.from(text, 'base64'); } catch (_err) { return ''; }
+  if (!buf.length || buf.length > 1024 * 1024) return '';
+  if (buf[0] !== 0xff || buf[1] !== 0xd8) return '';
+  var file = path.join(dir, 'preview.jpg');
+  try {
+    io.writeFileSync(file, buf);
+    return file;
+  } catch (_errWrite) {
+    return '';
+  }
 }
 
 /**
@@ -344,34 +404,50 @@ async function publishWorkshopItem(workshop, garden, opts) {
   var dir = opts.contentDir || io.mkdtempSync(path.join(os.tmpdir(), 'aeg-ugc-'));
   var wrote = false;
   try {
-    io.writeFileSync(path.join(dir, 'map.garden'), JSON.stringify(meta.garden));
+    var contentDir = path.join(dir, 'content');
+    try { io.mkdirSync(contentDir, { recursive: true }); } catch (_errMk) { /* exists */ }
+    io.writeFileSync(path.join(contentDir, 'map.garden'), JSON.stringify(meta.garden));
     wrote = true;
-    var handle = workshop.startItemUpdate(appId, toPublishedFileId(parsed.id));
-    if (handle == null) return { ok: false, error: 'start update failed', id: parsed.id };
-    if (typeof workshop.setItemTitle === 'function') workshop.setItemTitle(handle, title);
-    if (description && typeof workshop.setItemDescription === 'function') {
-      workshop.setItemDescription(handle, description);
+    var previewFile = opts.previewPath || writePreviewJpeg(dir, opts.previewJpeg, io);
+    var changeNote = String(opts.changeNote || 'Published from Forge');
+    var attempts = publishAttempts(tags, !!previewFile);
+    var lastError = 'submit failed';
+    for (var a = 0; a < attempts.length; a++) {
+      var attempt = attempts[a];
+      var handle = workshop.startItemUpdate(appId, toPublishedFileId(parsed.id));
+      if (handle == null) return { ok: false, error: 'start update failed', id: parsed.id };
+      if (typeof workshop.setItemTitle === 'function') workshop.setItemTitle(handle, title);
+      if (description && typeof workshop.setItemDescription === 'function') {
+        workshop.setItemDescription(handle, description);
+      }
+      if (typeof workshop.setItemVisibility === 'function') workshop.setItemVisibility(handle, visibility);
+      if (attempt.tags.length && typeof workshop.setItemTags === 'function') {
+        workshop.setItemTags(handle, attempt.tags);
+      }
+      if (typeof workshop.setItemContent !== 'function' || !workshop.setItemContent(handle, contentDir)) {
+        return { ok: false, error: 'set content failed', id: parsed.id };
+      }
+      if (attempt.preview && previewFile && typeof workshop.setItemPreview === 'function') {
+        try {
+          if (workshop.setItemPreview(handle, previewFile) === false) attempt.preview = false;
+        } catch (_errPrev) {
+          attempt.preview = false;
+        }
+      }
+      var submitted = await workshop.submitItemUpdate(handle, changeNote);
+      if (submitAccepted(submitted)) {
+        return {
+          ok: true,
+          id: parsed.id,
+          file: 'map.garden',
+          title: title,
+          tags: attempt.tags,
+          needsAgreement: parsed.needsAgreement,
+        };
+      }
+      lastError = submitErrorMessage(submitted);
     }
-    if (typeof workshop.setItemVisibility === 'function') workshop.setItemVisibility(handle, visibility);
-    if (typeof workshop.setItemTags === 'function') workshop.setItemTags(handle, tags);
-    if (typeof workshop.setItemContent !== 'function' || !workshop.setItemContent(handle, dir)) {
-      return { ok: false, error: 'set content failed', id: parsed.id };
-    }
-    if (opts.previewPath && typeof workshop.setItemPreview === 'function') {
-      try { workshop.setItemPreview(handle, opts.previewPath); } catch (_errPrev) { /* Steam Cloud often denies */ }
-    }
-    var submitted = await workshop.submitItemUpdate(handle, String(opts.changeNote || 'Published from Forge'));
-    if (submitted === false) {
-      return { ok: false, error: 'submit failed', id: parsed.id, needsAgreement: parsed.needsAgreement };
-    }
-    return {
-      ok: true,
-      id: parsed.id,
-      file: 'map.garden',
-      title: title,
-      tags: tags,
-      needsAgreement: parsed.needsAgreement,
-    };
+    return { ok: false, error: lastError, id: parsed.id, needsAgreement: parsed.needsAgreement };
   } catch (err) {
     return {
       ok: false,
@@ -407,5 +483,6 @@ module.exports = {
   workshopOverlayUrl,
   workshopTagsForGarden,
   createdItemId,
+  writePreviewJpeg,
   publishWorkshopItem,
 };

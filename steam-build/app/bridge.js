@@ -4,6 +4,20 @@
 
   var BRIDGE = 'http://127.0.0.1:9787';
   var steamCache = { available: false };
+  var STEAM_APP_ID = 5043860;
+
+  function workshopPageUrl(dialog, appId) {
+    var raw = String(dialog || '').trim();
+    var id = (appId | 0) || STEAM_APP_ID;
+    if (raw.toLowerCase() === 'workshop') {
+      return id > 0 ? 'https://steamcommunity.com/app/' + id + '/workshop/' : '';
+    }
+    if (raw.toLowerCase() === 'workshop-legal') {
+      return 'https://steamcommunity.com/sharedfiles/workshoplegalagreement';
+    }
+    var m = /^workshop:(\d{1,20})$/i.exec(raw);
+    return m ? 'https://steamcommunity.com/sharedfiles/filedetails/?id=' + m[1] : '';
+  }
 
   function resolveNodeBridge() {
     try {
@@ -52,6 +66,11 @@
         return httpSteamBridge().setPresence('status', '');
       },
       openOverlay: function (dialog) {
+        var url = workshopPageUrl(dialog, steamCache.appId);
+        if (url) {
+          try { window.open(url, '_blank', 'noopener,noreferrer'); } catch (_err) { /* ignore */ }
+          return true;
+        }
         postJson('/steam/overlay', { dialog: dialog });
         return true;
       },

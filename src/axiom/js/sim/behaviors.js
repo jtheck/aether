@@ -97,7 +97,11 @@ export const COMPRESSION_SPEED = 6;
 export const COMPRESSION_AMPLITUDE = 1.1;
 export const COMPRESSION_K = (Math.PI * 2) / COMPRESSION_WAVELENGTH;
 
-/** Scenery ico-spheres that emit compression waves (keep in sync with render backends). */
+/**
+ * Scenery ico-spheres that emit compression waves (keep in sync with render backends).
+ * Push another `{x,y,z}` to superpose — linear in S, bake at spawn.
+ * Point stores pack basis as `i * WAVE_SOURCES.length + s`.
+ */
 export const WAVE_SOURCES = [
   { x: 0, y: 0, z: 0 },
   { x: 0, y: 14, z: 0 },
@@ -105,37 +109,33 @@ export const WAVE_SOURCES = [
 
 /**
  * @param {object} store
- * @param {number} i
+ * @param {number} i particle index (rest xyz)
+ * @param {number} j basis index (`i * S + s`)
  * @param {number} ox
  * @param {number} oy
  * @param {number} oz
- * @param {string} nxKey
- * @param {string} nyKey
- * @param {string} nzKey
- * @param {string} cKey
- * @param {string} sKey
  */
-function bakeWaveFrom(store, i, ox, oy, oz, nxKey, nyKey, nzKey, cKey, sKey) {
+function bakeWaveFrom(store, i, j, ox, oy, oz) {
   const dx = store.hx[i] - ox;
   const dy = store.hy[i] - oy;
   const dz = store.hz[i] - oz;
   const r2 = dx * dx + dy * dy + dz * dz;
   if (r2 < 1e-8) {
-    store[nxKey][i] = 0;
-    store[nyKey][i] = 0;
-    store[nzKey][i] = 0;
-    store[cKey][i] = 1;
-    store[sKey][i] = 0;
+    store.wnx[j] = 0;
+    store.wny[j] = 0;
+    store.wnz[j] = 0;
+    store.waveC[j] = 1;
+    store.waveS[j] = 0;
     return;
   }
   const r = Math.sqrt(r2);
   const inv = 1 / r;
-  store[nxKey][i] = dx * inv;
-  store[nyKey][i] = dy * inv;
-  store[nzKey][i] = dz * inv;
+  store.wnx[j] = dx * inv;
+  store.wny[j] = dy * inv;
+  store.wnz[j] = dz * inv;
   const kr = COMPRESSION_K * r;
-  store[cKey][i] = Math.cos(kr);
-  store[sKey][i] = Math.sin(kr);
+  store.waveC[j] = Math.cos(kr);
+  store.waveS[j] = Math.sin(kr);
 }
 
 /**
@@ -144,10 +144,12 @@ function bakeWaveFrom(store, i, ox, oy, oz, nxKey, nyKey, nzKey, cKey, sKey) {
  * @param {number} i
  */
 export function bakeCompressionWaveRest(store, i) {
-  const a = WAVE_SOURCES[0];
-  const b = WAVE_SOURCES[1];
-  bakeWaveFrom(store, i, a.x, a.y, a.z, 'wnx', 'wny', 'wnz', 'waveC', 'waveS');
-  bakeWaveFrom(store, i, b.x, b.y, b.z, 'w2nx', 'w2ny', 'w2nz', 'wave2C', 'wave2S');
+  const S = WAVE_SOURCES.length;
+  const base = i * S;
+  for (let s = 0; s < S; s++) {
+    const src = WAVE_SOURCES[s];
+    bakeWaveFrom(store, i, base + s, src.x, src.y, src.z);
+  }
 }
 
 /**
@@ -215,47 +217,59 @@ export function behaviorOrbitCluster(store, time, center, radiansPerSec, tilt = 
 }
 
 /**
- * Spherical longitudinal compression waves from the scenery spheres.
- * Uses spawn-baked r̂ and cos/sin(k·r); per frame only shared sin/cos(ωt) + muls.
+ * Spherical longitudinal compression waves — write displaced xyz into `dest`.
+ * Spawn-baked r̂ and cos/sin(k·r); per frame only shared sin/cos(ωt) + muls.
  *   p = rest + Σ r̂_s * A * sin(k·r_s − ωt)  (sources phase-locked)
  *
- * @param {object} store
+ * @param {object} store point store (rest + baked basis)
+ * @param {Float32Array} dest interleaved xyz (usually flock staging)
+ * @param {number} destOffset particle index in dest (not float index)
  * @param {number} time seconds
  * @param {{ amplitude?: number, speed?: number }} [opts]
+ * @returns {number} destOffset + store.count
  */
-export function behaviorCompressionWave(store, time, opts = {}) {
-  const n = store.count;
-  const {
-    px,
-    py,
-    pz,
-    hx,
-    hy,
-    hz,
-    wnx,
-    wny,
-    wnz,
-    waveC,
-    waveS,
-    w2nx,
-    w2ny,
-    w2nz,
-    wave2C,
-    wave2S,
-  } = store;
+export function writeCompressionWavePositions(store, dest, destOffset, time, opts = {}) {
+  const n = store.count | 0;
+  if (n <= 0) return destOffset;
+  const S = WAVE_SOURCES.length;
   const A = opts.amplitude ?? COMPRESSION_AMPLITUDE;
   const speed = opts.speed ?? COMPRESSION_SPEED;
   const omega = (speed * Math.PI * 2) / COMPRESSION_WAVELENGTH;
   const wt = omega * time;
   const ct = Math.cos(wt);
   const st = Math.sin(wt);
+  const { hx, hy, hz, wnx, wny, wnz, waveC, waveS } = store;
+  let o = destOffset | 0;
+
+  if (S === 1) {
+    for (let i = 0; i < n; i++) {
+      const u = A * (waveS[i] * ct - waveC[i] * st);
+      const p = o * 3;
+      dest[p] = hx[i] + wnx[i] * u;
+      dest[p + 1] = hy[i] + wny[i] * u;
+      dest[p + 2] = hz[i] + wnz[i] * u;
+      o++;
+    }
+    return o;
+  }
 
   for (let i = 0; i < n; i++) {
-    // sin(kr − ωt) = sin(kr)cos(ωt) − cos(kr)sin(ωt) — both sources share ωt
-    const u0 = A * (waveS[i] * ct - waveC[i] * st);
-    const u1 = A * (wave2S[i] * ct - wave2C[i] * st);
-    px[i] = hx[i] + wnx[i] * u0 + w2nx[i] * u1;
-    py[i] = hy[i] + wny[i] * u0 + w2ny[i] * u1;
-    pz[i] = hz[i] + wnz[i] * u0 + w2nz[i] * u1;
+    let x = hx[i];
+    let y = hy[i];
+    let z = hz[i];
+    const base = i * S;
+    for (let s = 0; s < S; s++) {
+      const j = base + s;
+      const u = A * (waveS[j] * ct - waveC[j] * st);
+      x += wnx[j] * u;
+      y += wny[j] * u;
+      z += wnz[j] * u;
+    }
+    const p = o * 3;
+    dest[p] = x;
+    dest[p + 1] = y;
+    dest[p + 2] = z;
+    o++;
   }
+  return o;
 }

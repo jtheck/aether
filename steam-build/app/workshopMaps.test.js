@@ -107,6 +107,15 @@ describe('workshopMaps subscribed list', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('accepts array-like subscribed ids from the FFI binding', () => {
+    const workshop = {
+      getSubscribedItems: () => ({ 0: 99n, 1: 100n, length: 2 }),
+      getItemState: () => 0,
+    };
+    const items = maps.listSubscribedMaps(workshop);
+    assert.deepEqual(items.map((item) => item.id), ['99', '100']);
+  });
 });
 
 describe('workshop overlay url', () => {
@@ -154,6 +163,7 @@ describe('workshopMaps publish', () => {
       setItemTags: (_h, tags) => { calls.push(tags); return true; },
       setItemContent: (_h, folder) => {
         assert.equal(fs.existsSync(path.join(folder, 'map.garden')), true);
+        assert.equal(path.basename(folder), 'content');
         return true;
       },
       setItemPreview: () => { throw new Error('Access Denied'); },
@@ -169,6 +179,54 @@ describe('workshopMaps publish', () => {
     assert.equal(result.id, '55');
     assert.deepEqual(result.tags, ['Campaign', 'Adventure']);
     assert.deepEqual(calls[0], ['Campaign', 'Adventure']);
+  });
+
+  it('writes a jpeg preview from base64 and passes it to setItemPreview', async () => {
+    const previews = [];
+    const workshop = {
+      createItem: async () => 56n,
+      startItemUpdate: () => 1n,
+      setItemTitle: () => true,
+      setItemVisibility: () => true,
+      setItemTags: () => true,
+      setItemContent: () => true,
+      setItemPreview: (_h, file) => { previews.push(file); return true; },
+      submitItemUpdate: async () => true,
+    };
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    const result = await maps.publishWorkshopItem(workshop, { v: 4, n: 'Grove', w: 8, h: 8 }, {
+      appId: 5043860,
+      title: 'Grove',
+      previewJpeg: jpeg.toString('base64'),
+    });
+    assert.equal(result.ok, true);
+    assert.equal(previews.length, 1);
+    assert.equal(path.basename(previews[0]), 'preview.jpg');
+  });
+
+  it('retries submit with partner-safe tags after the first submit fails', async () => {
+    const tagRuns = [];
+    let submits = 0;
+    const workshop = {
+      createItem: async () => 57n,
+      startItemUpdate: () => 1n,
+      setItemTitle: () => true,
+      setItemVisibility: () => true,
+      setItemTags: (_h, tags) => { tagRuns.push(tags); return true; },
+      setItemContent: () => true,
+      setItemPreview: () => true,
+      submitItemUpdate: async () => (++submits === 1 ? false : true),
+    };
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    const result = await maps.publishWorkshopItem(workshop, { v: 4, n: 'Grove', w: 8, h: 8 }, {
+      appId: 5043860,
+      title: 'Grove',
+      previewJpeg: jpeg.toString('base64'),
+    });
+    assert.equal(result.ok, true);
+    assert.equal(submits, 2);
+    assert.deepEqual(tagRuns[0], ['Map', 'Skirmish']);
+    assert.deepEqual(result.tags, ['Map', 'Special']);
   });
 
   it('flags a legal-agreement failure', async () => {

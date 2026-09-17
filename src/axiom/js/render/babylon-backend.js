@@ -30,7 +30,7 @@ export function createBabylonBackend() {
   /** @type {any} */
   let chunkLineFocus = null;
   let chunkLineSignature = '';
-  let showChunkWireframes = true;
+  let showChunkWireframes = false;
 
   /** Shared hard-circle mask for alphatest billboards (created lazily). */
   let hardCircleTex = null;
@@ -177,12 +177,16 @@ export function createBabylonBackend() {
       matChaos.emissiveTexture = new B.Texture('./assets/sphere-q.jpg', scene);
       matChaos.ambientTexture = matChaos.emissiveTexture;
       matChaos.wireframe = true;
-      const s0 = B.MeshBuilder.CreateIcoSphere('icosphere', { radius: 1, subdivisions: 3 }, scene);
-      s0.position.set(WAVE_SOURCES[0].x, WAVE_SOURCES[0].y, WAVE_SOURCES[0].z);
-      s0.material = matChaos;
-      const s1 = B.MeshBuilder.CreateIcoSphere('icosphere2', { radius: 1, subdivisions: 3 }, scene);
-      s1.position.set(WAVE_SOURCES[1].x, WAVE_SOURCES[1].y, WAVE_SOURCES[1].z);
-      s1.material = matChaos;
+      for (let i = 0; i < WAVE_SOURCES.length; i++) {
+        const src = WAVE_SOURCES[i];
+        const ball = B.MeshBuilder.CreateIcoSphere(
+          i === 0 ? 'icosphere' : `icosphere${i}`,
+          { radius: 1, subdivisions: 3 },
+          scene,
+        );
+        ball.position.set(src.x, src.y, src.z);
+        ball.material = matChaos;
+      }
 
       createTetraField(B);
     },
@@ -236,11 +240,6 @@ export function createBabylonBackend() {
         // True GL points (1×1 device pixel). Note: GL_POINTS are square pixels, not circles.
         mode = 'points';
         mesh = new B.Mesh(`species_${spec.id}`, scene);
-        const positions = new Float32Array(cap * 3);
-        for (let i = 0; i < cap; i++) positions[i * 3 + 1] = -9999;
-        const vd = new B.VertexData();
-        vd.positions = positions;
-        vd.applyToMesh(mesh, true);
         mat.pointsCloud = true;
         mat.fillMode = B.Material.PointFillMode;
         mat.pointSize = 1;
@@ -251,13 +250,13 @@ export function createBabylonBackend() {
         mesh.isPickable = false;
         mesh.alwaysSelectAsActiveMesh = true;
         mesh.doNotSyncBoundingInfo = true;
-        // All slots start parked; upload only rewrites live + newly freed tails.
+        mesh.setEnabled(false);
+        // Vertex buffer binds to staging.positions on first upload.
         species.set(spec.id, {
           mesh,
           capacity: cap,
           bound: false,
           mode,
-          positions,
           liveCount: 0,
         });
         return;
@@ -319,9 +318,14 @@ export function createBabylonBackend() {
       if (mode === 'points') {
         if (!upload.positions) return;
         const B = globalThis.BABYLON;
-        const vb = mesh.getVertexBuffer(B.VertexBuffer.PositionKind);
-        if (count > 0) vb.updateDirectly(upload.positions, 0, count);
-        // PointFillMode draws submesh.verticesCount (not the parked tail).
+        if (!entry.bound) {
+          const vd = new B.VertexData();
+          vd.positions = upload.positions;
+          vd.applyToMesh(mesh, true);
+          entry.bound = true;
+        } else if (count > 0) {
+          mesh.getVertexBuffer(B.VertexBuffer.PositionKind).updateDirectly(upload.positions, 0, count);
+        }
         const sub = mesh.subMeshes?.[0];
         if (sub) {
           sub.verticesStart = 0;

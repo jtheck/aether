@@ -9,6 +9,10 @@ import {
   parseWorkshopRef,
   resolveNextGardenRef,
   STEAM_APP_ID,
+  isDefaultWorkshopName,
+  workshopDescriptionFor,
+  workshopListingTags,
+  workshopNameSuggestions,
   workshopPageUrl,
 } from './workshop.js';
 
@@ -42,6 +46,26 @@ describe('workshop refs', () => {
       'https://steamcommunity.com/sharedfiles/workshoplegalagreement',
     );
     assert.equal(workshopPageUrl('achievements', STEAM_APP_ID), '');
+  });
+
+  it('offers names and a boilerplate description when the title is blank', () => {
+    assert.equal(isDefaultWorkshopName(''), true);
+    assert.equal(isDefaultWorkshopName('Untitled garden'), true);
+    assert.equal(isDefaultWorkshopName('Grove'), false);
+    const garden = { v: 4, w: 144, h: 144, s: 12345 };
+    assert.deepEqual(workshopListingTags(garden), ['Map', 'Skirmish']);
+    assert.deepEqual(workshopNameSuggestions(garden, ''), ['Skirmish 144', 'Garden 12345', 'Skirmish Garden']);
+    assert.deepEqual(workshopNameSuggestions(garden, 'Grove'), ['Grove']);
+    const desc = workshopDescriptionFor(garden, 'Skirmish 144');
+    assert.match(desc, /Skirmish 144/);
+    assert.match(desc, /144×144/);
+    assert.match(desc, /seed 12345/);
+    assert.match(desc, /Made in Forge/);
+    const campaign = workshopDescriptionFor({
+      v: 4, w: 80, h: 80, s: 9, obj: [{ next: 'maps/02.garden' }],
+    }, 'Campaign 80');
+    assert.match(campaign, /Next/);
+    assert.deepEqual(workshopListingTags({ obj: [{ next: 'maps/02.garden' }] }), ['Campaign', 'Adventure']);
   });
 
   it('resolves a relative next against the current Workshop pack', () => {

@@ -43,7 +43,13 @@ import {
 } from '../sim/tableShape.js';
 import { TERRAIN } from '../sim/field.js';
 import { decodeGarden, encodeGarden, fieldFromGarden, GARDEN_SESSION_KEY } from '../sim/garden.js';
-import { formatWorkshopRef, loadGardenRef, workshopPageUrl } from '../app/workshop.js';
+import {
+  formatWorkshopRef,
+  loadGardenRef,
+  workshopDescriptionFor,
+  workshopNameSuggestions,
+  workshopPageUrl,
+} from '../app/workshop.js';
 import { RESOURCE_KINDS, STARTING_RESOURCES } from '../sim/resources.js';
 import { applyAuthoredScenery, populateScenery, paintSceneryBrush, SCENERY } from '../sim/scenery.js';
 import { UNIT_DEFS } from '../sim/unitTypes.js';
@@ -130,6 +136,9 @@ const pendingPaintTiles = [];
 let sceneryRaf = 0;
 const pendingSceneryTiles = [];
 let sceneryFullRebuild = false;
+let holdPreviewCamera = false;
+let workshopPreviewJpeg = '';
+let workshopDescEdited = false;
 let storyPlayer = null;
 let storyHud = null;
 let storySpeech = null;
@@ -1297,6 +1306,169 @@ async function refreshWorkshopMaps() {
   if (current && [...select.options].some((o) => o.value === current)) select.value = current;
 }
 
+function waitFrames(n) {
+  return new Promise((resolve) => {
+    let left = Math.max(1, n | 0);
+    function step() {
+      if (--left <= 0) resolve();
+      else requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  });
+}
+
+function previewLooksBlank(ctx, w, h) {
+  const sw = Math.min(w, 64);
+  const sh = Math.min(h, 64);
+  const data = ctx.getImageData(0, 0, sw, sh).data;
+  let lit = 0;
+  for (let i = 0; i < data.length; i += 16) {
+    if (data[i] + data[i + 1] + data[i + 2] > 30) lit++;
+  }
+  return lit < 8;
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function encodePreviewJpeg(srcCanvas) {
+  const w = srcCanvas.width || srcCanvas.clientWidth;
+  const h = srcCanvas.height || srcCanvas.clientHeight;
+  if (!w || !h) return '';
+  const maxEdge = 512;
+  const scale = Math.min(1, maxEdge / Math.max(w, h));
+  const tw = Math.max(1, Math.round(w * scale));
+  const th = Math.max(1, Math.round(h * scale));
+  const off = document.createElement('canvas');
+  off.width = tw;
+  off.height = th;
+  const ctx = off.getContext('2d');
+  if (!ctx) return '';
+  try {
+    if (typeof srcCanvas.convertToBlob === 'function') {
+      const blob = await srcCanvas.convertToBlob({ type: 'image/png' });
+      const bmp = await createImageBitmap(blob);
+      ctx.drawImage(bmp, 0, 0, tw, th);
+      bmp.close?.();
+    } else {
+      const bmp = await createImageBitmap(srcCanvas);
+      ctx.drawImage(bmp, 0, 0, tw, th);
+      bmp.close?.();
+    }
+  } catch {
+    try { ctx.drawImage(srcCanvas, 0, 0, tw, th); } catch { return ''; }
+  }
+  if (previewLooksBlank(ctx, tw, th)) return '';
+  const out = await new Promise((resolve) => off.toBlob(resolve, 'image/jpeg', 0.82));
+  if (!out || out.size > 1024 * 1024) return '';
+  const url = await blobToDataUrl(out);
+  return url.startsWith('data:image/jpeg') ? url : '';
+}
+
+async function captureWorkshopPreview() {
+  if (!canvas) return '';
+  const hide = [
+    document.getElementById('forge-ui'),
+    document.getElementById('story-sheet'),
+    document.getElementById('workshop-publish-dlg'),
+  ];
+  const prevDisplay = hide.map((el) => el?.style.display ?? '');
+  hide.forEach((el) => { if (el) el.style.display = 'none'; });
+  holdPreviewCamera = true;
+  try {
+    await waitFrames(2);
+    return await encodePreviewJpeg(canvas);
+  } catch {
+    return '';
+  } finally {
+    holdPreviewCamera = false;
+    hide.forEach((el, i) => { if (el) el.style.display = prevDisplay[i]; });
+  }
+}
+
+function closeWorkshopPublishDlg() {
+  document.getElementById('workshop-publish-dlg')?.classList.remove('open');
+}
+
+function fillWorkshopNameSuggestions(garden, current) {
+  const row = document.getElementById('workshop-publish-names');
+  if (!row) return workshopNameSuggestions(garden, current);
+  const names = workshopNameSuggestions(garden, current);
+  row.replaceChildren();
+  if (names.length <= 1 && current && names[0] === current) return names;
+  for (const name of names) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = name;
+    btn.addEventListener('click', () => {
+      const nameEl = document.getElementById('workshop-publish-name');
+      if (nameEl) nameEl.value = name;
+      syncWorkshopDescription(garden, name);
+    });
+    row.appendChild(btn);
+  }
+  return names;
+}
+
+function syncWorkshopDescription(garden, title) {
+  if (workshopDescEdited) return;
+  const descEl = document.getElementById('workshop-publish-desc');
+  if (descEl) descEl.value = workshopDescriptionFor(garden, title);
+}
+
+async function beginWorkshopPublish() {
+  if (!aetherSteam.isAvailable()) {
+    alert('Publishing needs the Steam build.');
+    return;
+  }
+  const garden = gardenPayload();
+  const dlg = document.getElementById('workshop-publish-dlg');
+  const nameEl = document.getElementById('workshop-publish-name');
+  const imgEl = document.getElementById('workshop-publish-preview');
+  const hint = document.getElementById('workshop-publish-hint');
+  workshopDescEdited = false;
+  const names = fillWorkshopNameSuggestions(garden, state.mapName);
+  if (nameEl) nameEl.value = names[0] || state.mapName || '';
+  syncWorkshopDescription(garden, nameEl?.value || names[0] || '');
+  if (imgEl) {
+    imgEl.removeAttribute('src');
+    imgEl.hidden = true;
+  }
+  if (hint) hint.textContent = 'Taking a snapshot…';
+  workshopPreviewJpeg = '';
+  dlg?.classList.add('open');
+  const preview = await captureWorkshopPreview();
+  workshopPreviewJpeg = preview.replace(/^data:image\/jpeg;base64,/, '');
+  if (imgEl && preview) {
+    imgEl.src = preview;
+    imgEl.hidden = false;
+  }
+  if (hint) {
+    hint.textContent = preview
+      ? 'This is your current view. Pick a name, edit the description if you want, then confirm.'
+      : 'Could not capture a thumbnail. Name it and confirm to publish without one.';
+  }
+}
+
+async function confirmWorkshopPublish() {
+  const name = document.getElementById('workshop-publish-name')?.value.trim() || '';
+  if (!name) {
+    alert('Name this garden before publishing.');
+    return;
+  }
+  state.mapName = name;
+  const mapName = document.getElementById('map-name');
+  if (mapName) mapName.value = name;
+  closeWorkshopPublishDlg();
+  await publishWorkshopMap();
+}
+
 async function publishWorkshopMap() {
   if (!aetherSteam.isAvailable()) {
     alert('Publishing needs the Steam build.');
@@ -1306,11 +1478,16 @@ async function publishWorkshopMap() {
   if (btn) btn.disabled = true;
   try {
     const garden = gardenPayload();
+    const description = document.getElementById('workshop-publish-desc')?.value.trim()
+      || workshopDescriptionFor(garden, state.mapName);
     const result = await aetherSteam.publishWorkshopGarden({
       garden,
-      title: state.mapName || garden.n || 'Untitled garden',
+      title: state.mapName || garden.n || workshopNameSuggestions(garden)[0] || 'Garden',
+      description,
+      previewJpeg: workshopPreviewJpeg || undefined,
     });
     if (!result?.ok) {
+      console.warn('[forge] workshop publish failed', result);
       if (result?.needsAgreement) aetherSteam.openOverlay('workshop-legal');
       alert(result?.error || 'Could not publish to the Workshop.');
       return;
@@ -1337,7 +1514,7 @@ function syncWorkshopChrome() {
   if (publish) publish.hidden = !steam;
   if (hint) {
     hint.textContent = steam
-      ? 'Steam can load subscribed Workshop items and publish this map. Campaigns use a relative Next garden (maps/02.garden). Play opens a solo match from this map.'
+      ? 'Subscribe to a map on Steam Workshop, then Load it here. Publish uploads this map. Campaigns use a relative Next garden (maps/02.garden). Play opens a solo match from this map.'
       : 'Subscribe and publish from the Steam build. On the web, export/import .garden files, or browse maps on Steam Workshop. Play opens a solo match from this map.';
   }
 }
@@ -1347,6 +1524,11 @@ async function loadWorkshopSelection() {
   const raw = select?.value;
   if (!raw) {
     await refreshWorkshopMaps();
+    if (!select?.value) {
+      alert(select && select.options.length > 1
+        ? 'Pick a subscribed map first.'
+        : 'No subscribed maps yet. Browse Workshop and subscribe, then Load.');
+    }
     return;
   }
   try {
@@ -1533,6 +1715,19 @@ function mountUi() {
       </div>
       <input id="import-file" type="file" accept=".garden,.json" style="display:none">
       <p class="hint" id="workshop-hint">Subscribe and publish from the Steam build. On the web, export/import .garden files, or browse maps on Steam Workshop. Play opens a solo match from this map.</p>
+    </div>
+    <div id="workshop-publish-dlg">
+      <label>Publish name</label>
+      <input id="workshop-publish-name" type="text" maxlength="64" placeholder="Garden name">
+      <div id="workshop-publish-names" class="row"></div>
+      <label>Description</label>
+      <textarea id="workshop-publish-desc" rows="6" maxlength="8000"></textarea>
+      <img id="workshop-publish-preview" alt="Workshop preview" hidden>
+      <p class="hint" id="workshop-publish-hint">Name it, then confirm.</p>
+      <div class="row">
+        <button id="btn-workshop-publish-confirm" type="button">Publish</button>
+        <button id="btn-workshop-publish-cancel" type="button">Cancel</button>
+      </div>
     </div>
     <div id="panel-table" class="panel">
       <p id="select-hint" class="hint">Click to select. Shift-click to add. Double-click to toggle on/off.</p>
@@ -1821,7 +2016,19 @@ function mountUi() {
     if (aetherSteam.openOverlay('workshop')) e.preventDefault();
   });
   document.getElementById('btn-workshop-publish')?.addEventListener('click', () => {
-    void publishWorkshopMap();
+    void beginWorkshopPublish();
+  });
+  document.getElementById('btn-workshop-publish-confirm')?.addEventListener('click', () => {
+    void confirmWorkshopPublish();
+  });
+  document.getElementById('btn-workshop-publish-cancel')?.addEventListener('click', () => {
+    closeWorkshopPublishDlg();
+  });
+  document.getElementById('workshop-publish-name')?.addEventListener('input', () => {
+    syncWorkshopDescription(gardenPayload(), document.getElementById('workshop-publish-name')?.value || '');
+  });
+  document.getElementById('workshop-publish-desc')?.addEventListener('input', () => {
+    workshopDescEdited = true;
   });
   syncWorkshopChrome();
 }
@@ -2019,7 +2226,7 @@ async function main() {
       storyPlayer?.tick(deltaMs);
       storySpeech?.tick();
     }
-    if (!storyDriving()) cam.tick(deltaMs);
+    if (!storyDriving() && !holdPreviewCamera) cam.tick(deltaMs);
     celestial?.update?.(deltaMs);
     terrain?.update?.(camera, deltaMs);
   });

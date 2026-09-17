@@ -14,7 +14,7 @@
     }
     #forge-ui h1 { margin: 0 0 8px; font-size: 16px; }
     #forge-ui label { display: block; margin: 6px 0 2px; color: #aaa; }
-    #forge-ui input, #forge-ui select { width: 100%; box-sizing: border-box; }
+    #forge-ui input, #forge-ui select, #forge-ui textarea { width: 100%; box-sizing: border-box; }
     #forge-ui button { margin: 2px 2px 2px 0; }
     .row { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
     .row button.active { outline: 1px solid #ccc; }
@@ -27,6 +27,19 @@
     #forge-ui a.kakko:visited { color: #fff; }
     #forge-ui a.kakko:before { content: "\300C\000A0"; }
     #forge-ui a.kakko:after { content: "\000A0\300D"; }
+    #workshop-publish-dlg {
+      display: none;
+      position: absolute;
+      left: 280px;
+      top: 0;
+      width: 280px;
+      background: rgba(18, 22, 28, 0.94);
+      border: 1px solid #333;
+      padding: 10px;
+      z-index: 8;
+    }
+    #workshop-publish-dlg.open { display: block; }
+    #workshop-publish-dlg img { width: 100%; margin: 6px 0; background: #111; }
     .panel { margin-top: 8px; }
     .hint { color: #888; font-size: 11px; }
     #story-sheet {

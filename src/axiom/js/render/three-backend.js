@@ -36,7 +36,7 @@ export function createThreeBackend() {
   /** @type {THREE.LineSegments | null} */
   let chunkLineGrid = null;
   let chunkLineSignature = '';
-  let showChunkWireframes = true;
+  let showChunkWireframes = false;
 
   /** @type {THREE.CanvasTexture | null} */
   let hardCircleTex = null;
@@ -319,12 +319,12 @@ export function createThreeBackend() {
         map: chaosTex,
         wireframe: true,
       });
-      const s0 = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 2), matChaos);
-      s0.position.set(WAVE_SOURCES[0].x, WAVE_SOURCES[0].y, WAVE_SOURCES[0].z);
-      scene.add(s0);
-      const s1 = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 2), matChaos);
-      s1.position.set(WAVE_SOURCES[1].x, WAVE_SOURCES[1].y, WAVE_SOURCES[1].z);
-      scene.add(s1);
+      for (let i = 0; i < WAVE_SOURCES.length; i++) {
+        const src = WAVE_SOURCES[i];
+        const ball = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 2), matChaos);
+        ball.position.set(src.x, src.y, src.z);
+        scene.add(ball);
+      }
 
       createTetraField();
 
@@ -404,10 +404,8 @@ export function createThreeBackend() {
       const hardCircle = !!spec.hardCircle || kind === 'plane';
 
       if (kind === 'point') {
-        const positions = new Float32Array(cap * 3);
-        for (let i = 0; i < cap; i++) positions[i * 3 + 1] = -9999;
         const geo = new THREE.BufferGeometry();
-        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
         geo.setDrawRange(0, 0);
         const mat = new THREE.PointsMaterial({
           color: new THREE.Color(tint.r, tint.g, tint.b),
@@ -423,7 +421,6 @@ export function createThreeBackend() {
           capacity: cap,
           bound: false,
           mode: 'points',
-          positions,
           liveCount: 0,
         });
         return;
@@ -476,20 +473,18 @@ export function createThreeBackend() {
 
       if (mode === 'points') {
         if (!upload.positions) return;
-        const dst = entry.positions;
-        const prev = entry.liveCount | 0;
-        dst.set(upload.positions.subarray(0, count * 3));
-        if (count < prev) {
-          for (let i = count; i < prev; i++) {
-            const p = i * 3;
-            dst[p] = 0;
-            dst[p + 1] = -9999;
-            dst[p + 2] = 0;
-          }
+        let attr = mesh.geometry.getAttribute('position');
+        if (!attr || attr.array !== upload.positions) {
+          attr = new THREE.BufferAttribute(upload.positions, 3);
+          if (typeof THREE.DynamicDrawUsage === 'number') attr.setUsage(THREE.DynamicDrawUsage);
+          mesh.geometry.setAttribute('position', attr);
         }
+        if (attr.updateRange) {
+          attr.updateRange.offset = 0;
+          attr.updateRange.count = count * 3;
+        }
+        attr.needsUpdate = count > 0;
         entry.liveCount = count;
-        const attr = mesh.geometry.getAttribute('position');
-        attr.needsUpdate = true;
         mesh.geometry.setDrawRange(0, count);
         mesh.visible = count > 0;
         return;

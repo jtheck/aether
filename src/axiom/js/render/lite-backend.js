@@ -127,7 +127,7 @@ export function createLiteBackend() {
   /** @type {any} */
   let chunkLineGrid = null;
   let chunkLineSignature = '';
-  let showChunkWireframes = true;
+  let showChunkWireframes = false;
 
   /** @type {any} */
   let hardCircleTex = null;
@@ -622,14 +622,28 @@ export function createLiteBackend() {
           x: 0,
           y: 0,
           z: 0,
+          forward: { x: 0, y: 0, z: 1 },
+          fov: 60,
+          aspect: 16 / 9,
           billboard: { rx: 1, ry: 0, rz: 0, ux: 0, uy: 1, uz: 0 },
         };
       }
       const w = camera.worldMatrix;
+      const cy = Math.cos(camera._yaw || 0);
+      const sy = Math.sin(camera._yaw || 0);
+      const cp = Math.cos(camera._pitch || 0);
+      const sp = Math.sin(camera._pitch || 0);
+      const aspect =
+        (canvas?.clientWidth || window.innerWidth || 16) /
+        Math.max(1, canvas?.clientHeight || window.innerHeight || 9);
       return {
         x: camera.position.x,
         y: camera.position.y,
         z: camera.position.z,
+        // Lite is LH / look +Z — same basis as attachFly.
+        forward: { x: sy * cp, y: sp, z: cy * cp },
+        fov: 60,
+        aspect,
         billboard: {
           rx: w[0],
           ry: w[1],

@@ -1,6 +1,6 @@
 /** Engine-agnostic SoA particle store. No Babylon imports. */
 
-import { bakeCompressionWaveRest } from './behaviors.js';
+import { bakeCompressionWaveRest, WAVE_SOURCES } from './behaviors.js';
 
 export const KIND_POINT = 'point';
 export const KIND_TRIANGLE = 'triangle';
@@ -8,32 +8,21 @@ export const KIND_PLANE = 'plane';
 export const KIND_TETRA = 'tetra';
 
 /**
+ * Mesh accent store (orbit / spin). No wave basis — points use createPointStore.
  * @param {number} capacity
  */
 export function createStore(capacity) {
   const cap = Math.max(1, capacity | 0);
   return {
+    kind: 'mesh',
     capacity: cap,
     count: 0,
     px: new Float32Array(cap),
     py: new Float32Array(cap),
     pz: new Float32Array(cap),
-    /** Rest / home position (compression wave etc. displaces from here). */
     hx: new Float32Array(cap),
     hy: new Float32Array(cap),
     hz: new Float32Array(cap),
-    /** Baked radial unit dir + cos/sin(k·r) for wave at origin sphere. */
-    wnx: new Float32Array(cap),
-    wny: new Float32Array(cap),
-    wnz: new Float32Array(cap),
-    waveC: new Float32Array(cap),
-    waveS: new Float32Array(cap),
-    /** Same bake for upper sphere wave (y=14). */
-    w2nx: new Float32Array(cap),
-    w2ny: new Float32Array(cap),
-    w2nz: new Float32Array(cap),
-    wave2C: new Float32Array(cap),
-    wave2S: new Float32Array(cap),
     vx: new Float32Array(cap),
     vy: new Float32Array(cap),
     vz: new Float32Array(cap),
@@ -48,9 +37,44 @@ export function createStore(capacity) {
     ori: new Float32Array(cap * 9),
     /** Preallocated render matrices: 16 floats per particle (column-major). */
     matrices: new Float32Array(cap * 16),
-    /** RGBA colors for thin-instance / point color. */
+    /** RGBA colors for thin-instance color. */
     colors: new Float32Array(cap * 4),
-    /** xyz positions for point-cloud upload (3 * capacity). */
+  };
+}
+
+/**
+ * Slim point chunk store: rest xyz + baked wave basis (`i * S + s`).
+ * @param {number} capacity
+ */
+export function createPointStore(capacity) {
+  const cap = Math.max(1, capacity | 0);
+  const S = Math.max(1, WAVE_SOURCES.length);
+  const wave = cap * S;
+  return {
+    kind: 'point',
+    capacity: cap,
+    count: 0,
+    hx: new Float32Array(cap),
+    hy: new Float32Array(cap),
+    hz: new Float32Array(cap),
+    wnx: new Float32Array(wave),
+    wny: new Float32Array(wave),
+    wnz: new Float32Array(wave),
+    waveC: new Float32Array(wave),
+    waveS: new Float32Array(wave),
+  };
+}
+
+/**
+ * Contiguous xyz the renderer can bind. Wave writes here once per frame.
+ * @param {number} capacity
+ */
+export function createPointStaging(capacity) {
+  const cap = Math.max(1, capacity | 0);
+  return {
+    kind: 'point-staging',
+    capacity: cap,
+    count: 0,
     positions: new Float32Array(cap * 3),
   };
 }
@@ -159,20 +183,23 @@ export function boxSphereOverlapFraction(bounds, sphere, samples = 40) {
   if (cornersIn === 8) return 1;
   const near = closestAabbPointToSphere(bounds, sphere);
   if (!inSphere(near.x, near.y, near.z, sphere)) return 0;
+  // Fixed grid — random samples made grazing `want` flicker every frame.
+  const n = Math.max(3, samples | 0);
+  const step = size / n;
+  const o = step * 0.5;
   let hit = 0;
-  for (let i = 0; i < samples; i++) {
-    if (
-      inSphere(
-        minX + Math.random() * size,
-        minY + Math.random() * size,
-        minZ + Math.random() * size,
-        sphere,
-      )
-    ) {
-      hit++;
+  let total = 0;
+  for (let iz = 0; iz < n; iz++) {
+    const z = minZ + o + iz * step;
+    for (let iy = 0; iy < n; iy++) {
+      const y = minY + o + iy * step;
+      for (let ix = 0; ix < n; ix++) {
+        total++;
+        if (inSphere(minX + o + ix * step, y, z, sphere)) hit++;
+      }
     }
   }
-  return hit / samples;
+  return hit / total;
 }
 
 /**
@@ -325,13 +352,16 @@ export function initParticleInBox(store, i, bounds) {
  * @param {number} z
  */
 export function initParticleAt(store, i, x, y, z) {
-  store.px[i] = x;
-  store.py[i] = y;
-  store.pz[i] = z;
   store.hx[i] = x;
   store.hy[i] = y;
   store.hz[i] = z;
-  bakeCompressionWaveRest(store, i);
+  if (store.kind === 'point') {
+    bakeCompressionWaveRest(store, i);
+    return;
+  }
+  store.px[i] = x;
+  store.py[i] = y;
+  store.pz[i] = z;
   store.vx[i] = (Math.random() - 0.5) * 0.08;
   store.vy[i] = (Math.random() - 0.5) * 0.08;
   store.vz[i] = (Math.random() - 0.5) * 0.08;
@@ -362,22 +392,12 @@ export function ensureCount(store, n) {
  * @param {ReturnType<typeof createStore>} store
  * @param {{ r: number, g: number, b: number }} tint
  * @param {number} [baseScale=1] extra scale multiplier for mesh kind
- * @param {{ billboard?: { rx: number, ry: number, rz: number, ux: number, uy: number, uz: number }, positionsOnly?: boolean }} [opts]
+ * @param {{ billboard?: { rx: number, ry: number, rz: number, ux: number, uy: number, uz: number } }} [opts]
  *   billboard: camera right/up axes — bake facing into matrices (thin-instance safe; mesh billboardMode is not)
- *   positionsOnly: point clouds — skip 4×4 / color (Three/BJS/Lite points use xyz)
  */
 export function packRenderBuffers(store, tint, baseScale = 1, opts = {}) {
   const n = store.count;
-  const { px, py, pz, size, matrices, colors, positions, spinC, spinS, ori } = store;
-  if (opts.positionsOnly) {
-    for (let i = 0; i < n; i++) {
-      const p = i * 3;
-      positions[p] = px[i];
-      positions[p + 1] = py[i];
-      positions[p + 2] = pz[i];
-    }
-    return;
-  }
+  const { px, py, pz, size, matrices, colors, spinC, spinS, ori } = store;
   const tr = tint.r;
   const tg = tint.g;
   const tb = tint.b;
@@ -455,10 +475,5 @@ export function packRenderBuffers(store, tint, baseScale = 1, opts = {}) {
     colors[c + 1] = tg;
     colors[c + 2] = tb;
     colors[c + 3] = 1;
-
-    const p = i * 3;
-    positions[p] = px[i];
-    positions[p + 1] = py[i];
-    positions[p + 2] = pz[i];
   }
 }

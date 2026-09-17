@@ -1,6 +1,21 @@
 'use strict';
 
 const steamClient = require('./steam-client');
+const workshopMaps = require('./workshopMaps');
+const DEFAULT_APP_ID = 5043860;
+
+function openWorkshopExternal(dialog) {
+  var appId = (lastInfo && lastInfo.appId) || DEFAULT_APP_ID;
+  var url = workshopMaps.workshopOverlayUrl(dialog, appId);
+  if (!url) return false;
+  try {
+    if (typeof nw !== 'undefined' && nw.Shell && typeof nw.Shell.openExternal === 'function') {
+      nw.Shell.openExternal(url);
+      return true;
+    }
+  } catch (_err) { /* inject / isolated context */ }
+  return false;
+}
 
 let workerReady = false;
 let lastInfo = { available: false, error: null };
@@ -109,7 +124,14 @@ function createBridgeApi() {
 
     openOverlay: function (dialog) {
       if (!shouldEnableSteam()) return false;
-      steamClient.openOverlay(String(dialog || '')).catch(function () {});
+      var raw = String(dialog || '');
+      // Overlay is bound to the main game HWND. Forge is a second window, so the
+      // overlay lands offset, covers the board, and eats clicks. Workshop pages
+      // go to the OS browser instead.
+      if (workshopMaps.workshopOverlayUrl(raw, (lastInfo && lastInfo.appId) || DEFAULT_APP_ID)) {
+        return openWorkshopExternal(raw);
+      }
+      steamClient.openOverlay(raw).catch(function () {});
       return true;
     },
 
@@ -125,6 +147,17 @@ function createBridgeApi() {
       return steamClient.loadWorkshopGarden(id, file).then(function (data) {
         return data && data.ok ? data.garden : null;
       }).catch(function () { return null; });
+    },
+
+    publishWorkshopGarden: function (body) {
+      if (!shouldEnableSteam()) {
+        return Promise.resolve({ ok: false, error: 'workshop unavailable' });
+      }
+      return steamClient.publishWorkshopGarden(body || {}).then(function (result) {
+        return result && typeof result === 'object' ? result : { ok: false, error: 'publish failed' };
+      }).catch(function (err) {
+        return { ok: false, error: err && err.message ? err.message : 'publish failed' };
+      });
     },
 
     downloadWorkshopItem: function (id, highPriority) {

@@ -57,6 +57,69 @@ export function isWorkshopRef(raw) {
   return !!parseWorkshopRef(raw);
 }
 
+function nextFromObjective(raw) {
+  if (Array.isArray(raw)) return String(raw[5] || '').trim();
+  if (raw && typeof raw === 'object') return String(raw.next || '').trim();
+  return '';
+}
+
+/** Steam listing tags: Map|Campaign and Skirmish|Adventure. */
+export function workshopListingTags(garden) {
+  const objs = Array.isArray(garden?.objectives) ? garden.objectives
+    : Array.isArray(garden?.obj) ? garden.obj
+      : [];
+  let campaign = false;
+  for (let i = 0; i < objs.length; i++) {
+    const next = nextFromObjective(objs[i]);
+    if (next && !next.startsWith('/') && !/^https?:/i.test(next) && !next.toLowerCase().startsWith(WORKSHOP_SCHEME)) {
+      campaign = true;
+      break;
+    }
+  }
+  return [campaign ? 'Campaign' : 'Map', (garden?.story || objs.length) ? 'Adventure' : 'Skirmish'];
+}
+
+export function isDefaultWorkshopName(name) {
+  const s = String(name || '').trim().toLowerCase();
+  return !s || s === 'untitled' || s === 'untitled garden' || s === 'map';
+}
+
+/** Offered titles when the File name is blank or a default. */
+export function workshopNameSuggestions(garden, current = '') {
+  const owned = String(current || garden?.n || '').trim();
+  if (owned && !isDefaultWorkshopName(owned)) return [owned];
+  const tags = workshopListingTags(garden);
+  const mode = tags.includes('Campaign') ? 'Campaign' : tags[1] || 'Skirmish';
+  const w = garden?.w | 0;
+  const seed = (garden?.s >>> 0) || 0;
+  const out = [];
+  if (w) out.push(`${mode} ${w}`);
+  if (seed) out.push(`Garden ${seed}`);
+  out.push(`${mode} Garden`);
+  return [...new Set(out)];
+}
+
+/** Editable Steam description — size, seed, and how to play. */
+export function workshopDescriptionFor(garden, title = '') {
+  const name = String(title || garden?.n || '').trim() || workshopNameSuggestions(garden)[0] || 'Garden';
+  const tags = workshopListingTags(garden);
+  const kind = (tags[0] || 'Map').toLowerCase();
+  const mode = tags[1] || 'Skirmish';
+  const w = garden?.w | 0;
+  const h = garden?.h | 0;
+  const seed = (garden?.s >>> 0) || 0;
+  const bits = [mode];
+  if (w && h) bits.push(`${w}×${h}`);
+  if (seed) bits.push(`seed ${seed}`);
+  const lines = [
+    `${name} — a Forge ${kind} for Æther.Garden.`,
+    bits.join(' · '),
+    'Made in Forge. Subscribe to play, or open it from the Field Editor.',
+  ];
+  if (tags[0] === 'Campaign') lines.push('This pack continues to another garden via Next.');
+  return lines.join('\n\n');
+}
+
 /**
  * Relative `next` (02.garden, maps/02.garden) stays inside the current Workshop pack.
  * Absolute / http / workshop: refs pass through.

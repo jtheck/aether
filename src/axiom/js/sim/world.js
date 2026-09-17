@@ -1,5 +1,7 @@
 import {
   createStore,
+  createPointStore,
+  createPointStaging,
   spawnInBoxSphere,
   spawnClusterInBox,
   randomClusterCenter,
@@ -16,11 +18,14 @@ import {
   chunkKey,
   forEachChunkInRadius,
   maxChunksForRadius,
-  sphereChunkEquivalent,
   chunkBounds,
+  estimateHotChunks,
+  lookQuant,
+  poseAxes,
+  chunkWanted,
 } from './chunks.js';
 import {
-  behaviorCompressionWave,
+  writeCompressionWavePositions,
   behaviorOrbitCluster,
   behaviorSpinSelf,
 } from './behaviors.js';
@@ -81,8 +86,9 @@ function splitByWeight(total, flocks) {
 /**
  * Chunk-streamed volumetric particle world.
  *
- * Chunks page in a Chebyshev cube. The *visible* volume is a smooth sphere
- * inscribed in that cube; grazing/corner chunks only fill AABB ∩ sphere.
+ * Chunks page in a padded view frustum + camera core. Particles still fill
+ * AABB ∩ a sphere around the focus (the old silhouette) so far cubes don't
+ * read as a box. Looking around must not thin the field in front of you.
  *
  * @param {object} opts
  * @param {number} [opts.capacity=50000] max live particles (staging / budget)
@@ -102,19 +108,18 @@ export function createWorld(opts = {}) {
   /** Live stream radius — FPS throttle may grow/shrink this. */
   let chunkRadius = Math.max(1, Math.min(radiusMax, opts.startRadius ?? radiusMax));
   const maxChunks = maxChunksForRadius(radiusMax);
-  const fillAtMax = Math.max(1, sphereChunkEquivalent(radiusMax));
+  const fillAtMax = Math.max(1, estimateHotChunks(radiusMax));
   const budget = opts.capacity ?? 50000;
   const highWaterCount = Math.min(budget, opts.initialCount ?? 15000);
   let targetTotal = Math.min(highWaterCount, opts.startCount ?? highWaterCount);
-  // Store caps from high-water / *sphere* fill — paging cube is larger than the
-  // live volume and must not dilute per-chunk density.
+  // Store caps from high-water / frustum-sized hot set (sphere is the fill shape).
   const highWaterPerChunk = Math.max(
     flockDefs.length,
     Math.floor(highWaterCount / fillAtMax),
   );
   let perChunkTotal = Math.max(
     flockDefs.length,
-    Math.floor(targetTotal / Math.max(1, sphereChunkEquivalent(chunkRadius))),
+    Math.floor(targetTotal / Math.max(1, estimateHotChunks(chunkRadius))),
   );
 
   // High-water caps (store sizing). Mesh accents use a fixed per-chunk recipe and
@@ -153,13 +158,15 @@ export function createWorld(opts = {}) {
       // Mesh: fixed accent. Points: filled by setTargetCount.
       chunkCap: storeCap,
       capacity,
-      staging: createStore(capacity),
+      staging: isPoint ? createPointStaging(capacity) : createStore(capacity),
     };
   });
 
   let time = 0;
   let focus = { x: 0, y: 0, z: 0 };
   let lastChunk = { cx: NaN, cy: NaN, cz: NaN };
+  let lastLookQ = '';
+  let lastCamera = { x: 0, y: 4, z: 0 };
   /** Bumps when the active chunk set changes (wireframe / debug consumers). */
   let chunksVersion = 0;
 
@@ -171,6 +178,7 @@ export function createWorld(opts = {}) {
       return s;
     }
     const f = flocks.find((x) => x.id === flockId);
+    if (f?.isPoint) return createPointStore(f.storeCap);
     return createStore(f?.storeCap ?? 1);
   }
 
@@ -193,42 +201,60 @@ export function createWorld(opts = {}) {
     };
   }
 
-  function fillChunk(ch, sphere) {
-    const frac = boxSphereOverlapFraction(ch.bounds, sphere);
+  function clusterInSphere(ch, sphere) {
     const c = ch.cluster;
-    const clusterIn =
+    return (
       !!c &&
       (c.x - sphere.x) ** 2 + (c.y - sphere.y) ** 2 + (c.z - sphere.z) ** 2 <=
-        sphere.r * sphere.r;
+        sphere.r * sphere.r
+    );
+  }
+
+  function sphereEpoch() {
+    return `${lastChunk.cx},${lastChunk.cy},${lastChunk.cz},${chunkRadius}`;
+  }
+
+  function chunkFrac(ch, sphere) {
+    const epoch = sphereEpoch();
+    if (ch.fracEpoch !== epoch) {
+      ch.frac = boxSphereOverlapFraction(ch.bounds, sphere);
+      ch.fracEpoch = epoch;
+    }
+    return ch.frac;
+  }
+
+  function fillChunk(ch, sphere) {
+    const frac = chunkFrac(ch, sphere);
+    const inBall = clusterInSphere(ch, sphere);
     for (let i = 0; i < flocks.length; i++) {
       const f = flocks[i];
       const store = ch.stores.get(f.id);
       if (!store) continue;
       const cap = Math.min(f.storeCap, f.chunkCap);
       if (f.cluster) {
-        if (clusterIn) {
+        if (inBall) {
           spawnClusterInBox(store, cap, ch.bounds, {
             spread: CLUSTER_SPREAD,
-            center: c,
+            center: ch.cluster,
           });
         } else {
           store.count = 0;
         }
       } else {
-        const want = Math.round(cap * frac);
-        if (frac >= 0.999) {
-          resizeInBoxSphere(store, want, ch.bounds, sphere);
-        } else {
-          spawnInBoxSphere(store, want, ch.bounds, sphere);
-        }
+        spawnInBoxSphere(store, Math.round(cap * frac), ch.bounds, sphere);
       }
     }
   }
 
-  function restockAll() {
+  /** Sphere moved — refresh cached overlap only. Ease drips the count change. */
+  function refreshFracs() {
     if (!Number.isFinite(lastChunk.cx)) return;
     const sphere = volumeSphere();
-    for (const ch of active.values()) fillChunk(ch, sphere);
+    const epoch = sphereEpoch();
+    for (const ch of active.values()) {
+      ch.frac = boxSphereOverlapFraction(ch.bounds, sphere);
+      ch.fracEpoch = epoch;
+    }
   }
 
   function activateChunk(cx, cy, cz) {
@@ -243,10 +269,10 @@ export function createWorld(opts = {}) {
       const f = flocks[i];
       stores.set(f.id, acquireStore(f.id));
     }
-    const ch = { cx, cy, cz, bounds, stores, cluster: clusterCenter };
+    const ch = { cx, cy, cz, bounds, stores, cluster: clusterCenter, retiring: false, frac: 0, fracEpoch: '' };
     active.set(key, ch);
-    fillChunk(ch, volumeSphere());
     chunksVersion++;
+    return ch;
   }
 
   function deactivateChunk(key) {
@@ -257,33 +283,49 @@ export function createWorld(opts = {}) {
     chunksVersion++;
   }
 
-  function syncChunks(camX, camY, camZ, force = false) {
+  function syncChunks(camera, force = false) {
+    if (camera) lastCamera = camera;
+    const camX = camera?.x ?? focus.x;
+    const camY = camera?.y ?? focus.y;
+    const camZ = camera?.z ?? focus.z;
     focus.x = camX;
     focus.y = camY;
     focus.z = camZ;
     const cx = coordToChunk(camX, chunkSize);
     const cy = coordToChunk(camY, chunkSize);
     const cz = coordToChunk(camZ, chunkSize);
-    // Same focus chunk → active set unchanged; skip Set rebuild (was 729 allocs/frame).
-    if (!force && cx === lastChunk.cx && cy === lastChunk.cy && cz === lastChunk.cz) return;
+    const axes = poseAxes(camera);
+    const lookQ = lookQuant(axes.fx, axes.fy, axes.fz);
+    const booting = !Number.isFinite(lastChunk.cx);
+    const focusMoved =
+      booting || cx !== lastChunk.cx || cy !== lastChunk.cy || cz !== lastChunk.cz;
+    if (!force && !focusMoved && lookQ === lastLookQ) return;
     lastChunk = { cx, cy, cz };
+    lastLookQ = lookQ;
 
     /** @type {Set<string>} */
     const wanted = new Set();
+    const focusCell = lastChunk;
     forEachChunkInRadius(cx, cy, cz, chunkRadius, (x, y, z) => {
-      wanted.add(chunkKey(x, y, z));
+      if (chunkWanted(x, y, z, focusCell, camera, chunkSize, chunkRadius)) {
+        wanted.add(chunkKey(x, y, z));
+      }
     });
 
-    for (const key of active.keys()) {
-      if (!wanted.has(key)) deactivateChunk(key);
+    for (const [key, ch] of active) {
+      ch.retiring = !wanted.has(key);
     }
+    const sphere = volumeSphere();
     for (const key of wanted) {
       if (!active.has(key)) {
         const [x, y, z] = key.split(',').map(Number);
-        activateChunk(x, y, z);
+        const ch = activateChunk(x, y, z);
+        if (booting) fillChunk(ch, sphere);
+      } else {
+        active.get(key).retiring = false;
       }
     }
-    restockAll();
+    if (focusMoved || force) refreshFracs();
   }
 
   function totalCount() {
@@ -297,10 +339,22 @@ export function createWorld(opts = {}) {
   /**
    * @param {{ rx: number, ry: number, rz: number, ux: number, uy: number, uz: number } | null} billboard
    */
-  function packStaging(billboard) {
+  function packStaging(billboard, time) {
     for (const f of flocks) {
-      let offset = 0;
       const st = f.staging;
+      if (f.isPoint) {
+        let offset = 0;
+        const dest = st.positions;
+        for (const ch of active.values()) {
+          const src = ch.stores.get(f.id);
+          if (!src || src.count === 0) continue;
+          if (offset + src.count > st.capacity) break;
+          offset = writeCompressionWavePositions(src, dest, offset, time);
+        }
+        st.count = offset;
+        continue;
+      }
+      let offset = 0;
       const needsBillboard =
         !!billboard && (f.meshKind === KIND_PLANE || f.meshKind === KIND_TRIANGLE);
       for (const ch of active.values()) {
@@ -308,15 +362,11 @@ export function createWorld(opts = {}) {
         if (!src || src.count === 0) continue;
         packRenderBuffers(src, f.tint, f.baseScale, {
           billboard: needsBillboard ? billboard : null,
-          positionsOnly: f.isPoint,
         });
         const n = src.count;
         if (offset + n > st.capacity) break;
-        if (!f.isPoint) {
-          st.matrices.set(src.matrices.subarray(0, n * 16), offset * 16);
-          st.colors.set(src.colors.subarray(0, n * 4), offset * 4);
-        }
-        st.positions.set(src.positions.subarray(0, n * 3), offset * 3);
+        st.matrices.set(src.matrices.subarray(0, n * 16), offset * 16);
+        st.colors.set(src.colors.subarray(0, n * 4), offset * 4);
         offset += n;
       }
       st.count = offset;
@@ -325,7 +375,7 @@ export function createWorld(opts = {}) {
 
   /** Update flock.chunkCap from a live target. Does not spawn/resize. */
   function applyTargetCaps(n) {
-    const liveChunks = Math.max(1, sphereChunkEquivalent(chunkRadius));
+    const liveChunks = Math.max(1, estimateHotChunks(chunkRadius));
     targetTotal = Math.max(0, Math.min(budget, n | 0));
     let meshPerChunk = 0;
     for (let i = 0; i < flocks.length; i++) {
@@ -344,9 +394,75 @@ export function createWorld(opts = {}) {
     }
   }
 
+  /** Drip point counts toward sphere ∩ chunkCap — share the bite across chunks. */
+  function easePointCounts() {
+    if (!Number.isFinite(lastChunk.cx)) return;
+    const sphere = volumeSphere();
+    /** @type {{ ch: any, store: any, want: number, cur: number }[]} */
+    const jobs = [];
+    let gap = 0;
+    for (const f of flocks) {
+      if (!f.isPoint) continue;
+      for (const ch of active.values()) {
+        const store = ch.stores.get(f.id);
+        if (!store) continue;
+        const want = ch.retiring
+          ? 0
+          : Math.round(Math.min(f.storeCap, f.chunkCap) * chunkFrac(ch, sphere));
+        const cur = store.count;
+        if (want === cur) continue;
+        jobs.push({ ch, store, want, cur });
+        gap += Math.abs(want - cur);
+      }
+    }
+    if (gap > 0 && jobs.length) {
+      const live = totalCount();
+      const slew = Math.min(24000, Math.max(24, Math.ceil(Math.max(gap / 18, live * 0.02))));
+      for (const job of jobs) {
+        const need = Math.abs(job.want - job.cur);
+        const share = Math.max(1, Math.min(need, Math.ceil((slew * need) / gap)));
+        if (job.cur < job.want) {
+          resizeInBoxSphere(job.store, job.cur + share, job.ch.bounds, sphere);
+        } else {
+          job.store.count = job.cur - share;
+        }
+      }
+    }
+
+    for (const f of flocks) {
+      if (!f.cluster) continue;
+      for (const ch of active.values()) {
+        const store = ch.stores.get(f.id);
+        if (!store) continue;
+        if (ch.retiring) {
+          store.count = 0;
+          continue;
+        }
+        if (store.count === 0 && clusterInSphere(ch, sphere)) {
+          spawnClusterInBox(store, Math.min(f.storeCap, f.chunkCap), ch.bounds, {
+            spread: CLUSTER_SPREAD,
+            center: ch.cluster,
+          });
+        }
+      }
+    }
+
+    const drop = [];
+    for (const [key, ch] of active) {
+      if (!ch.retiring) continue;
+      let livePts = 0;
+      for (const f of flocks) {
+        if (!f.isPoint) continue;
+        livePts += ch.stores.get(f.id)?.count ?? 0;
+      }
+      if (livePts === 0) drop.push(key);
+    }
+    for (const key of drop) deactivateChunk(key);
+  }
+
   // Caps first, then boot-load so chunks spawn at startCount (not high-water).
   applyTargetCaps(targetTotal);
-  syncChunks(0, 4, 0);
+  syncChunks({ x: 0, y: 4, z: 0 });
 
   return {
     flocks,
@@ -394,12 +510,12 @@ export function createWorld(opts = {}) {
       return chunksVersion;
     },
 
-    /** Max particles current store caps can hold in the live sphere at radius `r`. */
+    /** Max particles current store caps can hold in the hot frustum at radius `r`. */
     maxLiveForRadius(r) {
       const rr = Math.max(1, Math.min(radiusMax, r | 0));
       let per = 0;
       for (const f of flocks) per += f.storeCap;
-      return Math.min(budget, Math.floor(sphereChunkEquivalent(rr) * per));
+      return Math.min(budget, Math.floor(estimateHotChunks(rr) * per));
     },
 
     /**
@@ -435,28 +551,11 @@ export function createWorld(opts = {}) {
 
     /**
      * Target live particle count at the *current* radius.
-     * Only point flocks resize — mesh accents are set once per chunk and left alone.
+     * Caps update now; point flocks ease toward sphere ∩ cap on later ticks.
      * @param {number} n
      */
     setTargetCount(n) {
       applyTargetCaps(n);
-      if (!Number.isFinite(lastChunk.cx) || active.size === 0) return;
-      const sphere = volumeSphere();
-      for (const ch of active.values()) {
-        const frac = boxSphereOverlapFraction(ch.bounds, sphere);
-        for (let i = 0; i < flocks.length; i++) {
-          const f = flocks[i];
-          if (!f.isPoint) continue; // mesh: set and forget
-          const store = ch.stores.get(f.id);
-          if (!store) continue;
-          resizeInBoxSphere(
-            store,
-            Math.round(Math.min(f.storeCap, f.chunkCap) * frac),
-            ch.bounds,
-            sphere,
-          );
-        }
-      }
     },
 
     /**
@@ -471,14 +570,10 @@ export function createWorld(opts = {}) {
       const next = Math.max(1, Math.min(radiusMax, r | 0));
       if (next === chunkRadius && targetN == null) return false;
       chunkRadius = next;
-      const x = at?.x ?? focus.x;
-      const y = at?.y ?? focus.y;
-      const z = at?.z ?? focus.z;
+      const pose = at && typeof at.x === 'number' ? at : lastCamera;
       const want = targetN != null ? targetN : targetTotal;
-      // Caps first so newly activated chunks spawn at the right fill
       this.setTargetCount(want);
-      syncChunks(x, y, z, true);
-      // Fill any new shells / trim after unload
+      syncChunks(pose, true);
       this.setTargetCount(want);
       return true;
     },
@@ -493,16 +588,8 @@ export function createWorld(opts = {}) {
       // cellSize reserved for neighbor hash when that returns
       void opts.cellSize;
 
-      if (camera) syncChunks(camera.x, camera.y, camera.z);
-
-      // Points: spherical compression wave from origin.
-      for (const f of flocks) {
-        if (f.meshKind !== KIND_POINT) continue;
-        for (const ch of active.values()) {
-          const pts = ch.stores.get(f.id);
-          if (pts?.count) behaviorCompressionWave(pts, time);
-        }
-      }
+      if (camera) syncChunks(camera);
+      easePointCounts();
 
       // Circles + tetras: orbit shared cluster; tetras also spin about their own center.
       for (const ch of active.values()) {
@@ -523,7 +610,8 @@ export function createWorld(opts = {}) {
         }
       }
 
-      packStaging(camera?.billboard ?? null);
+      // Points: wave writes straight into staging xyz (no per-chunk pack / second copy).
+      packStaging(camera?.billboard ?? null, time);
     },
 
     getRenderSpecies(id) {

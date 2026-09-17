@@ -165,15 +165,6 @@ function requestPath(req) {
   return q < 0 ? raw : raw.slice(0, q);
 }
 
-function openWorkshopOverlay(dialog) {
-  var url = workshopMaps.workshopOverlayUrl(dialog, readAppId());
-  if (!url || !sdk || !sdk.overlay || typeof sdk.overlay.activateGameOverlayToWebPage !== 'function') {
-    return false;
-  }
-  sdk.overlay.activateGameOverlayToWebPage(url);
-  return true;
-}
-
 async function handle(req, res) {
   var urlPath = requestPath(req);
 
@@ -245,7 +236,12 @@ async function handle(req, res) {
     try {
       var body4 = await readBody(req);
       var dialog = String(body4.dialog || '');
-      if (openWorkshopOverlay(dialog)) return sendJson(res, 200, { ok: true });
+      var workshopUrl = workshopMaps.workshopOverlayUrl(dialog, readAppId());
+      if (workshopUrl) {
+        // Overlay is bound to the main game HWND. Forge is a second window, so
+        // the overlay lands offset and eats clicks. Caller opens this URL outside.
+        return sendJson(res, 200, { ok: false, url: workshopUrl });
+      }
       var panel = map[dialog.toLowerCase()];
       if (!panel) return sendJson(res, 200, { ok: false });
       sdk.overlay.activateGameOverlay(panel);
@@ -290,7 +286,11 @@ async function handle(req, res) {
         title: bodyPub.title,
         description: bodyPub.description,
         visibility: bodyPub.visibility,
+        previewJpeg: bodyPub.previewJpeg,
       });
+      if (!published || !published.ok) {
+        console.warn('[steam-worker] workshop publish failed', published);
+      }
       return sendJson(res, 200, published);
     } catch (err) {
       return sendJson(res, 200, { ok: false, error: err.message });

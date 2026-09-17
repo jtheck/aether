@@ -91,76 +91,62 @@ async function main() {
   const FPS_LO = 41.4; // below → shed
   const FPS_HI = 44.4; // above → add
 
+  /** Per ~100ms tune — ease spreads the actual fill so this can be brisk. */
+  function aimDelta(fps) {
+    const err = Math.abs(fps - FPS_TARGET);
+    let pct = 0.028;
+    if (err >= 20) pct = 0.07;
+    else if (err >= 10) pct = 0.045;
+    return Math.max(4000, Math.min(48000, Math.round(nAim * pct)));
+  }
+
   function climb(fps) {
     const pose = renderer.getCameraPose();
     const room = world.maxLiveForRadius(rAim);
-    // Far above target → big bites; near the band → creep
-    const grow =
-      fps >= 55 ? 1.35 : fps >= 48 ? 1.18 : 1.08;
-    const bump = fps >= 55 ? 16000 : fps >= 48 ? 8000 : 3000;
+    const bump = aimDelta(fps);
     if (nAim < nCeiling && world.count < room - 32) {
-      const next = Math.min(nCeiling, room, Math.max(nAim + bump, Math.ceil(nAim * grow)));
+      const next = Math.min(nCeiling, room, nAim + bump);
       if (next > nAim) {
         nAim = next;
         world.setTargetCount(nAim);
-        console.log(`[axiom] throttle ↑ aim→${nAim} live=${world.count} (fps ${fps})`);
         return true;
       }
-      // room already claimed (sphere fill < cube quota) — fall through to grow r
     }
     if (rAim < rCeiling) {
-      // Expand volume at current count (dilute) — do NOT fill the new shell to max
       rAim += 1;
       world.setChunkRadius(rAim, pose, nAim);
-      console.log(`[axiom] throttle ↑ r→${rAim} aim→${nAim} (fps ${fps})`);
       return true;
     }
     if (nAim < nCeiling) {
-      const next = Math.min(nCeiling, Math.max(nAim + bump, Math.ceil(nAim * grow)));
+      const next = Math.min(nCeiling, nAim + bump);
       if (next <= nAim) return false;
       nAim = next;
       world.setTargetCount(nAim);
-      console.log(`[axiom] throttle ↑ aim→${nAim} live=${world.count} (fps ${fps})`);
       return true;
     }
     return false;
   }
 
   function shed(fps) {
-    // Prefer cutting count before collapsing volume (r=1 + floor looked empty).
+    const bump = aimDelta(fps);
     if (nAim > nFloor) {
-      const factor = fps < 30 ? 0.6 : fps < 37 ? 0.78 : 0.9;
-      const next = Math.max(nFloor, Math.floor(nAim * factor));
+      const next = Math.max(nFloor, nAim - bump);
       if (next < nAim) {
         nAim = next;
         world.setTargetCount(nAim);
-        console.log(`[axiom] throttle ↓ aim→${nAim} live=${world.count} (fps ${fps})`);
         return true;
       }
     }
     if (rAim > rFloor) {
       rAim -= 1;
       world.setChunkRadius(rAim, renderer.getCameraPose(), nAim);
-      console.log(`[axiom] throttle ↓ r→${rAim} aim→${nAim} (fps ${fps})`);
       return true;
     }
     return false;
   }
 
   const fpsMeter = new FPSMeter({
-    onSample({ fps }) {
-      if (throttleOn) {
-        const now = performance.now();
-        const err = Math.abs(fps - FPS_TARGET);
-        const cool = err >= 15 ? 250 : err >= 8 ? 400 : 600;
-        if (now - lastAdjust >= cool) {
-          let moved = false;
-          if (fps > FPS_HI) moved = climb(fps);
-          else if (fps < FPS_LO) moved = shed(fps);
-          if (moved) lastAdjust = now;
-        }
-      }
-
+    onSample() {
       const fc = world.focusChunk;
       const th = throttleOn ? ` aim=${nAim} r=${rAim}` : '';
       fpsMeter.setExtra(
@@ -194,6 +180,7 @@ async function main() {
 
   const engine = renderer.getEngine();
   let lastChunksVersion = -1;
+  let workEma = 18;
   engine.runRenderLoop(() => {
     const t0 = performance.now();
     const dt = renderer.getDeltaTime();
@@ -208,8 +195,22 @@ async function main() {
     }
     renderer.tickScenery?.();
     renderer.render();
-    // Work ms (not RAF interval) — sees headroom when vsync pins FPS at 60
-    fpsMeter.tick(performance.now() - t0);
+    const work = performance.now() - t0;
+    fpsMeter.tick(work);
+    workEma = workEma * 0.88 + work * 0.12;
+    if (t0 - lastAdjust >= 100) {
+      if (throttleOn) {
+        const est = 1000 / Math.max(workEma, 6);
+        if (est > FPS_HI) climb(est);
+        else if (est < FPS_LO) shed(est);
+      }
+      lastAdjust = t0;
+      const fc = world.focusChunk;
+      const th = throttleOn ? ` aim=${nAim} r=${rAim}` : '';
+      fpsMeter.setExtra(
+        `live=${world.count}${th} chunks=${world.chunkCount} @${fc.cx},${fc.cy},${fc.cz}`,
+      );
+    }
   });
 
   console.log(

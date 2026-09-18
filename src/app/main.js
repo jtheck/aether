@@ -6,8 +6,15 @@ import {
   DROP_OFF_TYPES,
   GATHER_ACT,
   campWorkRadiusWorld,
+  siloWorkRadiusWorld,
 } from '../sim/gather.js';
-import { silosAttachedTo, sourcesAttachedToSilo } from '../sim/storage.js';
+import {
+  SILO_ATTACH_RANGE_F,
+  liveSiloSources,
+  silosAttachedTo,
+  sourcesAttachableAt,
+  sourcesAttachedToSilo,
+} from '../sim/storage.js';
 import * as fx from '../sim/fixed.js';
 import {
   PLAYER_ARMY,
@@ -35,8 +42,9 @@ import { TESTER_GARDEN_URL } from '../sim/testerGarden.js';
 import {
   applySerializedBuildingOccupancy,
   BUILDING_FOOTPRINTS,
-  buildingHasMenu,
+  buildingOffersMenuItem,
   canPreviewPlaceBuilding,
+  mergeBuildingMenus,
   defaultRallyWorld,
   isRallyBeyondBuilding,
   listRallyFlags,
@@ -64,6 +72,7 @@ import {
 import { ownerTint, setLocalOwnerTint, setOwnerTints } from '../render/ownerTints.js';
 import { TECH, TECH_BY_ID } from '../sim/tech.js';
 import { createRenderer } from '../render/renderer.js';
+import { rimKeyForBuildingType, sharedRimKey } from '../render/workRadiusRings.js';
 import { createFogOfWar } from '../render/fogOfWar.js';
 import { shareVisionOwnersFromCfg } from '../render/visionShare.js';
 import { selectionGroupsFromBuildings, selectionGroupsFromUnits } from '../render/selectionHud.js';
@@ -71,12 +80,15 @@ import { manaReadyCount } from '../sim/mana.js';
 import { createLiteExplorerToggle } from '../render/liteExplorer.js';
 import { setupMenu } from './menu.js';
 import {
+  ensureAaEnabledDefault,
   ensureFxModeDefault,
   ensureShadowModeDefault,
   fxTier,
   getExtraControlGroups,
   getPlayerColor,
   getUnitSkins,
+  msaaSamples,
+  resolveAaEnabled,
   resolveFxMode,
   resolveShadowMode,
   shadowTier,
@@ -101,10 +113,12 @@ import { isControlGroupDoubleTap } from './input/controlGroups.js';
 import {
   aggregateBuildingTracks,
   buildingHasWork,
+  canAcceptIssuedCommands,
+  canInspectBoard,
   groupHasUpgradeQueued,
   pickFirstBuiltIndex,
   pickLeastLoadedIndex,
-  sameOwnedBuildingType,
+  ownedActionBuildingGroup,
 } from './input/buildingSelect.js';
 import { chasePoseXZ } from './poseInterp.js';
 import { init as initAudio, playMatchStart, playThunder, thunderPlaysForStrikes } from './audio.js';
@@ -504,14 +518,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   // Seeds the saved tier from the GPU on first run only; no-op afterwards.
   await ensureShadowModeDefault();
   await ensureFxModeDefault();
+  await ensureAaEnabledDefault();
   const bootShadowMode = resolveShadowMode();
   const bootFxMode = resolveFxMode();
+  const bootAaEnabled = resolveAaEnabled();
   const bootLocalSkins = localSelectedSkins();
   setLocalHudSkins(bootLocalSkins);
   const renderer = await createRenderer(canvas, count, {
     shadowQuality: shadowTier(bootShadowMode),
     fxMode: bootFxMode,
     fxQuality: fxTier(bootFxMode),
+    msaaSamples: msaaSamples(bootAaEnabled),
     types: session.state.type,
     owners: session.state.owner,
     ownerSkins: bootCfg.localPlayerId >= 0
@@ -1038,7 +1055,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (list) {
       for (let i = 0; i < list.length; i++) {
         const a = list[i];
-        sig += `${a.owner}:${a.founder ?? a.owner}:${a.capturer}:${a.phase}:${a.progress}:${a.tug}|`;
+        sig += `${a.owner}:${a.founder ?? a.owner}:${a.capturer}:${a.phase}:${a.progress}:${a.tug}:${a.rite ?? 0}|`;
       }
     }
     if (sig === agoraOwnerPaintSig) return;
@@ -1149,8 +1166,14 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (actionBuildingIndex >= 0) {
       const live = liveActionIndices(list);
       if (!live.length) closeRadial();
-      else if (!live.includes(actionBuildingIndex)) {
-        openActionRadialForBuilding(live[0], actionBuildingIndices);
+      else if (
+        !live.includes(actionBuildingIndex) ||
+        actionMenuKeyFrom(live, list) !== actionMenuKey
+      ) {
+        const primary = live.includes(actionBuildingIndex)
+          ? actionBuildingIndex
+          : live[0];
+        openActionRadialForBuilding(primary, live);
       }
     }
   };
@@ -1281,12 +1304,71 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     });
   }
 
+  function buildingCollarPos(b) {
+    if (!b) return null;
+    const fp = BUILDING_FOOTPRINTS[b.type];
+    const size = fp && fp.w <= 2 ? 's' : 'm';
+    return { x: b.x, z: b.z, size };
+  }
+
+  /**
+   * While ghost-placing a silo: attach-range rings on every live source
+   * (camp / mine / farm), plus a matching ring on the ghost. Buildings the
+   * ghost can attach to get a collar and a draped link.
+   */
+  function syncSiloPlacePreview() {
+    const buildings = session.buildings;
+    const owner = localPlayerId;
+    const sources = liveSiloSources(buildings, owner);
+    const rings = [];
+    for (let i = 0; i < sources.length; i++) {
+      const b = sources[i];
+      rings.push({
+        x: b.x,
+        z: b.z,
+        radius: SILO_ATTACH_RANGE_F,
+        owner,
+        rimKey: rimKeyForBuildingType(b.type),
+      });
+    }
+    const gx = placingGhostX;
+    const gz = placingGhostZ;
+    if (gx != null && gz != null) {
+      const attached = sourcesAttachableAt(buildings, owner, gx, gz, 'world');
+      const ghostRim = sharedRimKey(attached.map((src) => rimKeyForBuildingType(src.type)));
+      rings.push({ x: gx, z: gz, radius: SILO_ATTACH_RANGE_F, owner, rimKey: ghostRim });
+      const collars = [];
+      const links = [];
+      for (let i = 0; i < attached.length; i++) {
+        const src = attached[i];
+        const pos = buildingCollarPos(src);
+        if (pos) collars.push(pos);
+        links.push({
+          x0: gx,
+          z0: gz,
+          x1: src.x,
+          z1: src.z,
+          rimKey: rimKeyForBuildingType(src.type),
+        });
+      }
+      renderer.setBuildingSelectionHighlight?.(collars.length ? collars : null);
+      renderer.setWorkRadiusRing?.(rings.length ? rings : null, links);
+    } else {
+      renderer.setBuildingSelectionHighlight?.(null);
+      renderer.setWorkRadiusRing?.(rings.length ? rings : null);
+    }
+  }
+
   /**
    * Ground rings showing gather reach for every drop-off of the selected type
    * (same owner), plus a matching extra circle on each attached silo.
    * Selecting an attached silo shows its source type's rings.
    */
   function syncWorkRadiusRing() {
+    if (placingType === 'silo') {
+      syncSiloPlacePreview();
+      return;
+    }
     const buildings = session.buildings;
     const keys = new Set();
     for (let i = 0; i < selectedBuildings.length; i++) {
@@ -1316,10 +1398,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       const b = buildings[i];
       if (!b || b.built === 0 || !keys.has(`${b.owner}:${b.type}`)) continue;
       const radius = campWorkRadiusWorld(st, b, buildings);
-      rings.push({ x: b.x, z: b.z, radius, owner: b.owner });
+      const rimKey = rimKeyForBuildingType(b.type);
+      rings.push({ x: b.x, z: b.z, radius, owner: b.owner, rimKey });
       const silos = silosAttachedTo(buildings, b, 'world');
       for (let s = 0; s < silos.length; s++) {
-        rings.push({ x: silos[s].x, z: silos[s].z, radius, owner: b.owner });
+        rings.push({
+          x: silos[s].x,
+          z: silos[s].z,
+          radius: siloWorkRadiusWorld(radius),
+          owner: b.owner,
+          rimKey,
+        });
       }
     }
     renderer.setWorkRadiusRing?.(rings);
@@ -1335,6 +1424,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   /** @type {number | null} */
   let placingGhostZ = null;
   let placingGhostValid = true;
+  /** Ghost is parked waiting for the in-scene 1^ confirm. */
+  let placementParked = false;
   /** True while setting a production building's train rally with the flag cursor. */
   let placingRally = false;
   /** @type {{ kind: 'agora' | 'building', index: number }[]} */
@@ -1542,16 +1633,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     const b = session.buildings?.[sel.index];
     // Placeables: S for 2×2 footprints, M otherwise.
-    if (!b) return null;
-    const fp = BUILDING_FOOTPRINTS[b.type];
-    const size = fp && fp.w <= 2 ? 's' : 'm';
-    return { x: b.x, z: b.z, size };
+    return buildingCollarPos(b);
   }
 
   /**
    * @param {{ kind: 'agora' | 'building', index: number } | { kind: 'agora' | 'building', index: number }[] | null | undefined} selOrList
    */
   function syncBuildingHighlight(selOrList) {
+    if (placingType === 'silo') {
+      syncSiloPlacePreview();
+      return;
+    }
     if (!selOrList) {
       renderer.setBuildingSelectionHighlight?.(null);
       return;
@@ -1566,7 +1658,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   }
 
   function openRadialForAgora(index) {
-    if (matchStory?.driving?.()) return;
     lastAgoraIndex = index;
     const a = session.agoras?.[index];
     if (!a) return;
@@ -1622,9 +1713,40 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   /** Selected placeable driving the action radial (for train / cancel cmds). */
   let actionBuildingIndex = -1;
-  /** Same-type group the open action radial represents. */
+  /** Placeable group the open action radial represents (may be mixed types). */
   /** @type {number[]} */
   let actionBuildingIndices = [];
+  /** Sorted type set for the open action radial — used to rebuild when it changes. */
+  let actionMenuKey = '';
+
+  function typesForActionGroup(indices, list = session.buildings) {
+    /** @type {string[]} */
+    const types = [];
+    const seen = new Set();
+    for (let k = 0; k < (indices?.length ?? 0); k++) {
+      const t = list?.[indices[k]]?.type;
+      if (!t || seen.has(t)) continue;
+      seen.add(t);
+      types.push(t);
+    }
+    return types;
+  }
+
+  function menuForActionGroup(indices, list = session.buildings) {
+    return mergeBuildingMenus(typesForActionGroup(indices, list));
+  }
+
+  function actionMenuKeyFrom(indices, list = session.buildings) {
+    return typesForActionGroup(indices, list).slice().sort().join('+');
+  }
+
+  function groupHasConstructionSite(indices, list = session.buildings) {
+    for (let k = 0; k < (indices?.length ?? 0); k++) {
+      const site = list?.[indices[k]];
+      if (site?.built === 0 && (site.hp == null || (site.hp | 0) > 0)) return true;
+    }
+    return false;
+  }
 
   function liveActionIndices(list = session.buildings) {
     const src = actionBuildingIndices.length
@@ -1654,10 +1776,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       closeRadial();
       return;
     }
-    if (!indices.includes(actionBuildingIndex)) {
-      actionBuildingIndex = indices[0];
+    const needReframe = !indices.includes(actionBuildingIndex);
+    if (needReframe) actionBuildingIndex = indices[0];
+    const nextKey = actionMenuKeyFrom(indices);
+    if (needReframe || nextKey !== actionMenuKey) {
+      actionMenuKey = nextKey;
       const next = session.buildings?.[actionBuildingIndex];
-      if (next) renderer.showActionRadial?.(next.x, next.z, next.type);
+      if (next) renderer.showActionRadial?.(next.x, next.z, next.type, menuForActionGroup(indices));
     }
     const b = session.buildings?.[actionBuildingIndex];
     if (!b) {
@@ -1691,23 +1816,38 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   }
 
   function openActionRadialForBuilding(index, indices) {
-    if (matchStory?.driving?.()) return;
-    const b = session.buildings?.[index];
-    if (!b || (!buildingHasMenu(b.type) && b.built !== 0)) {
+    const requested = (indices?.length ? indices : [index]).slice();
+    /** @type {number[]} */
+    const group = [];
+    const seen = new Set();
+    for (let k = 0; k < requested.length; k++) {
+      const i = requested[k] | 0;
+      if (seen.has(i)) continue;
+      const site = session.buildings?.[i];
+      if (!site || (site.hp != null && (site.hp | 0) <= 0)) continue;
+      seen.add(i);
+      group.push(i);
+    }
+    const primary = group.includes(index | 0) ? index | 0 : group[0];
+    const b = session.buildings?.[primary];
+    const menu = menuForActionGroup(group);
+    if (!b || (!menu && !groupHasConstructionSite(group))) {
       closeRadial();
       return;
     }
-    actionBuildingIndex = index;
-    actionBuildingIndices = (indices?.length ? indices : [index]).slice();
+    actionBuildingIndex = primary;
+    actionBuildingIndices = group;
+    actionMenuKey = actionMenuKeyFrom(group);
     renderer.hideBuildingRadial?.();
     syncRadialMenuGate();
-    renderer.showActionRadial?.(b.x, b.z, b.type);
+    renderer.showActionRadial?.(b.x, b.z, b.type, menu);
     syncActionRadialTracksFromSim();
   }
 
   function closeRadial() {
     actionBuildingIndex = -1;
     actionBuildingIndices = [];
+    actionMenuKey = '';
     renderer.setActionRadialArmed?.(null);
     renderer.hideBuildingRadial?.();
     renderer.hideActionRadial?.();
@@ -1721,14 +1861,38 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   }
 
   /** @param {string | null} t */
+  function applyPlacementParked(on) {
+    placementParked = !!on;
+    syncSceneConfirm();
+  }
+
+  function syncSceneConfirm() {
+    if (!placingType || !placementParked || placingGhostX == null || placingGhostZ == null) {
+      renderer.setSceneConfirm?.(null);
+      return;
+    }
+    renderer.setSceneConfirm?.({
+      x: placingGhostX,
+      z: placingGhostZ,
+      valid: placingGhostValid,
+    });
+  }
+
   function applyPlacingType(t) {
     if (t) endRallyPlacement();
     placingType = t ?? null;
     placingGhostX = null;
     placingGhostZ = null;
+    placementParked = false;
+    renderer.setSceneConfirm?.(null);
     if (!placingType) {
       placingYaw = 0;
       renderer.setBuildingGhost?.(null);
+    }
+    if (placingType === 'silo') syncSiloPlacePreview();
+    else {
+      syncWorkRadiusRing();
+      syncBuildingHighlight(selectedBuildings.length ? selectedBuildings : null);
     }
     renderer.setBuildingRadialCompact?.(placingType);
   }
@@ -1773,6 +1937,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       valid,
     });
     renderer.setBuildingRadialPlacingValid?.(valid);
+    if (placingType === 'silo') syncSiloPlacePreview();
     return { snapped, valid };
   }
 
@@ -1794,6 +1959,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       valid,
     });
     renderer.setBuildingRadialPlacingValid?.(valid);
+    syncSceneConfirm();
   }
 
   // Locked until boot/match ready — camera + commands stay quiet together.
@@ -2228,8 +2394,24 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   if (garden?.story || gardenObjectivesOf(garden).length) beginAdventure(garden);
   let ctxAdvanceChapter = null;
 
+  function playerInspectState() {
+    return {
+      role: session.role,
+      localPlayerId,
+      resetting: session.resetting,
+      replayingCatchUp: session.replayingCatchUp,
+      watchingReplay: session.watchingReplay,
+      pauseLockstep: session.pauseLockstep,
+      storyDriving: matchStory.driving(),
+    };
+  }
+
+  function playerCanInspect() {
+    return canInspectBoard(playerInspectState());
+  }
+
   function playerCanIssueCommands() {
-    return session.role === 'player' && localPlayerId >= 0 && !session.pauseLockstep && !matchStory.driving();
+    return canAcceptIssuedCommands(playerInspectState());
   }
 
   function submitIssuedCommand(cmd) {
@@ -2271,9 +2453,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       renderer.pingOrderMarker?.(x, z, y, tint, { forceMove: cmdType === CMD.MOVE });
     },
     onAbilityHold: null,
-    canInteract: () =>
-      session.role === 'player' && localPlayerId >= 0 && !session.pauseLockstep,
-    canIssueCommands: () => playerCanIssueCommands(),
+    canInteract: () => playerCanInspect(),
+    // Gestures + arrows + menus stay up while paused / story; submit still drops.
+    canIssueCommands: () => playerCanInspect(),
     getAgoras: () => session.agoras ?? [],
     getBuildings: () => session.buildings ?? [],
     getField: () => session.field ?? null,
@@ -2291,7 +2473,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         }
       }
       if (sel && list) {
-        const group = sameOwnedBuildingType(list, session.buildings, localPlayerId);
+        const group = ownedActionBuildingGroup(list, session.buildings, localPlayerId);
         if (group) {
           const primary =
             sel.kind === 'building' && group.indices.includes(sel.index | 0)
@@ -2349,21 +2531,31 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       placingYaw = snapBuildingYaw(yaw);
     },
     onPlacementMove: (x, z, yaw = placingYaw) => {
-      if (!placingType) return;
+      if (!placingType) return null;
       const yawRad = snapBuildingYaw(yaw ?? placingYaw);
       placingYaw = yawRad;
-      syncPlacementGhost(x, z, yawRad);
+      const preview = syncPlacementGhost(x, z, yawRad);
+      if (!preview) return null;
+      return {
+        x: fx.toFloat(preview.snapped.x),
+        z: fx.toFloat(preview.snapped.z),
+        valid: preview.valid,
+      };
+    },
+    onPlacementParked: (on) => {
+      applyPlacementParked(on);
     },
     onPlacementConfirm: (x, z, yaw = placingYaw) => {
-      if (!playerCanIssueCommands()) return;
-      if (!placingType) return;
+      if (!playerCanIssueCommands()) return false;
+      if (!placingType) return false;
       const type = placingType;
       const yawRad = snapBuildingYaw(yaw ?? placingYaw);
       placingYaw = yawRad;
       const preview = syncPlacementGhost(x, z, yawRad);
       if (!preview?.valid) {
-        // Stay in placement mode; ghost is red for blocked tiles or unaffordable cost.
-        return;
+        // Stay parked; ghost is red for blocked tiles or unaffordable cost.
+        applyPlacementParked(true);
+        return false;
       }
       session.submitCommand({
         type: CMD.PLACE_BUILDING,
@@ -2377,10 +2569,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       renderer.setBuildingGhost?.(null);
       placingGhostX = null;
       placingGhostZ = null;
+      applyPlacementParked(false);
       renderer.setBuildingRadialPlacingValid?.(null);
       if (lastAgoraIndex >= 0) {
         inputApi.setSelectedBuilding?.({ kind: 'agora', index: lastAgoraIndex });
       }
+      return true;
     },
     onPlacementCancel: () => {
       applyPlacingType(null);
@@ -2392,7 +2586,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     isRadialOpen: () => !placingType && isAnyRadialOpen(),
     pickRadialOption: (cx, cy) => renderer.pickBuildingRadial?.(cx, cy) ?? null,
     onRadialPick: (picked) => {
-      if (!picked || !playerCanIssueCommands()) return;
+      if (!picked) return;
+      const accept = playerCanIssueCommands();
       if (typeof picked === 'string') {
         applyPlacingType(picked);
         placingYaw = 0;
@@ -2400,9 +2595,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         return;
       }
       if (picked.kind === 'unit') {
+        if (!accept) return;
         renderer.setActionRadialArmed?.(null);
         if (actionBuildingIndex < 0 || localPlayerId < 0) return;
-        const target = pickLeastLoadedIndex(liveActionIndices(), session.buildings);
+        const capable = [];
+        const group = liveActionIndices();
+        for (let k = 0; k < group.length; k++) {
+          const i = group[k];
+          const site = session.buildings?.[i];
+          if (site && buildingOffersMenuItem(site.type, 'unit', picked.id)) capable.push(i);
+        }
+        const target = pickLeastLoadedIndex(capable, session.buildings);
         if (target < 0) return;
         session.submitCommand({
           type: CMD.QUEUE_TRAIN,
@@ -2413,6 +2616,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         return;
       }
       if (picked.kind === 'upgrade') {
+        if (!accept) return;
         renderer.setActionRadialArmed?.(null);
         if (actionBuildingIndex < 0 || localPlayerId < 0) return;
         const techId = picked.id;
@@ -2421,7 +2625,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         if (researchedUpgradeIdsFor(localPlayerId).includes(techId)) return;
         const group = liveActionIndices();
         if (groupHasUpgradeQueued(group, session.buildings, techId)) return;
-        const target = pickFirstBuiltIndex(group, session.buildings);
+        const capable = [];
+        for (let k = 0; k < group.length; k++) {
+          const i = group[k];
+          const site = session.buildings?.[i];
+          if (site && buildingOffersMenuItem(site.type, 'upgrade', techId)) capable.push(i);
+        }
+        const target = pickFirstBuiltIndex(capable, session.buildings);
         if (target < 0) return;
         session.submitCommand({
           type: CMD.RESEARCH,
@@ -2432,6 +2642,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         return;
       }
       if (picked.kind === 'pause') {
+        if (!accept) return;
         const group = liveActionIndices();
         let anyWork = false;
         let anyUnpaused = false;
@@ -2475,6 +2686,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         }
         if (!hasWork && !anySite) return;
         if (renderer.getActionRadialArmed?.() === 'cancel') {
+          if (!accept) return;
           if (localPlayerId >= 0) {
             for (let k = 0; k < group.length; k++) {
               const i = group[k];
@@ -2682,7 +2894,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       screenshotHud.release();
     }
   });
-  kothLobbyUi = setupKothLobby({
+  const kothLobbyOpts = {
     kothShard,
     onLeaveSolo: () => {
       const ctx = ctxRef?.current;
@@ -2704,13 +2916,16 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       });
     },
     onCloseMenu: () => sideMenu.close(),
-  });
+  };
 
   if (kothShard) {
     const gameLobby = createGameLobby({
       getP2p: () => kothShard.getP2p(),
       subscribeBroadcast: (fn) => kothShard.subscribeBroadcast(fn),
-      onChange: () => lobbyUi.refresh(),
+      onChange: () => {
+        lobbyUi.refresh();
+        kothLobbyUi.refresh();
+      },
     });
     const matchLobby = createMatchLobby({
       getP2p: () => kothShard.getP2p(),
@@ -2722,7 +2937,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       subscribePeerConnected: (fn) => kothShard.subscribePeerConnected(fn),
       subscribePeerDisconnected: (fn) => kothShard.subscribePeerDisconnected(fn),
       subscribeMatchLobbyConnected: (fn) => kothShard.subscribeMatchLobbyConnected(fn),
-      onChange: () => lobbyUi.refresh(),
+      onChange: () => {
+        lobbyUi.refresh();
+        kothLobbyUi.refresh();
+      },
       onChat: () => chatHud.refresh(),
       onStartMatch: (snap) => startLobbyMatch(ctxRef.current, snap, kothShard, matchLobby, sideMenu),
       onChapter: (msg) => ctxRef.current?.onChapterVote?.(msg),
@@ -2744,6 +2962,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       },
     });
     observerLobby = matchLobby;
+    kothLobbyUi = setupKothLobby({
+      ...kothLobbyOpts,
+      gameLobby,
+      matchLobby,
+    });
     lobbyUi = setupLobbyUi({
       gameLobby,
       matchLobby,
@@ -2773,6 +2996,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       },
     });
     kothShard.subscribeChat(() => chatHud.refresh());
+  } else {
+    kothLobbyUi = setupKothLobby(kothLobbyOpts);
   }
 
   replayCtl = createReplayController({
@@ -3410,6 +3635,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         tug: a.tug,
         phase: a.phase,
         contested: a.contested,
+        direction: a.direction,
+        hold: a.hold,
+        rite: a.rite,
       });
     };
     for (let i = 0; i < selectedBuildings.length; i++) {

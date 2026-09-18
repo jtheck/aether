@@ -16,6 +16,7 @@
 //     → pinch/rotate/pan. A finger already panning/soloing/edge never joins,
 //     except with build UI up: a second center finger may pull the solo into a
 //     chord so a 2-finger tap can cancel placement / building selection.
+//     While placing, a 1-finger drag previews the ghost; lift parks it for 1^.
 //   - Stationary 2-finger tap → back out of placement / building selection;
 //     otherwise force-move.
 //   - Parallel orders while camera-chording:
@@ -235,7 +236,11 @@ export function createTouchAdapter({ canvas, camera, game }) {
   let tapChordBaseline = null;
 
   function hitsBlockingHud(clientX, clientY) {
-    return !!(game.hitControlGroupHud?.(clientX, clientY) || game.hitSelectionHud?.(clientX, clientY));
+    return !!(
+      game.hitControlGroupHud?.(clientX, clientY)
+      || game.hitSelectionHud?.(clientX, clientY)
+      || game.hitSceneConfirm?.(clientX, clientY)
+    );
   }
 
   function edgeDists(clientX, clientY) {

@@ -5,6 +5,7 @@
 import * as THREE from '../../vendor/three.module.min.js';
 import { WAVE_BALL_CAP, WAVE_EMITTER_BALLS, wavePresetId } from '../sim/behaviors.js';
 import { getNanotubeLattice } from '../sim/nanotube.js';
+import { isImmersiveVrSupported, requestImmersiveVr } from '../xr.js';
 
 /**
  * @returns {import('./backend.js').AxiomRenderer & {
@@ -49,30 +50,78 @@ export function createThreeBackend() {
   /** @type {THREE.LineSegments | null} */
   let waveLattice = null;
 
-  // Fly controls (ESDF + R/C, pointer-drag look) — Babylon FreeCamera equivalent
-  const keys = new Set();
+  // Apply shared fly intent (app.js → applyGamepadFly). Speed/inertia match FreeCamera.
   let yaw = 0;
   let pitch = -0.7;
-  let dragging = false;
-  let lastPtrX = 0;
-  let lastPtrY = 0;
-  const lookSens = 0.0022;
-  // Match BABYLON.FreeCamera defaults (speed + inertia) so ESDF feels the same.
   const moveSpeed = 5.5;
   const moveInertia = 0.9;
   const velocity = new THREE.Vector3();
   const wish = new THREE.Vector3();
   const forward = new THREE.Vector3();
   const right = new THREE.Vector3();
-  let stickX = 0;
-  let stickZ = 0;
-  let padMX = 0;
-  let padMY = 0;
-  let padMZ = 0;
+  let flyMX = 0;
+  let flyMY = 0;
+  let flyMZ = 0;
+  let flyWheelX = 0;
+  let flyWheelZ = 0;
   let rafId = 0;
+  /** @type {THREE.Group | null} */
+  let xrDolly = null;
+  /** @type {THREE.Vector3 | null} */
+  let xrSavedPos = null;
+  /** @type {object | null} */
+  let xrSession = null;
 
   function assertReady() {
     if (!renderer || !scene || !camera) throw new Error('ThreeBackend: call init() first');
+  }
+
+  function xrPresenting() {
+    return !!(renderer?.xr?.isPresenting);
+  }
+
+  function poseCamera() {
+    if (xrPresenting()) {
+      const xrCam = renderer.xr.getCamera?.();
+      if (xrCam) return xrCam;
+    }
+    return camera;
+  }
+
+  function beginXrDolly() {
+    if (!camera || !scene || xrDolly) return;
+    xrSavedPos = camera.position.clone();
+    xrDolly = new THREE.Group();
+    xrDolly.position.copy(camera.position);
+    scene.add(xrDolly);
+    xrDolly.add(camera);
+    camera.position.set(0, 0, 0);
+    camera.rotation.set(0, 0, 0);
+  }
+
+  function endXrDolly() {
+    if (!camera || !xrDolly) return;
+    scene.attach(camera);
+    scene.remove(xrDolly);
+    xrDolly = null;
+    if (xrSavedPos) {
+      camera.position.copy(xrSavedPos);
+      xrSavedPos = null;
+    }
+    applyCameraOrientation();
+  }
+
+  function onXrSessionEnd() {
+    xrSession = null;
+    endXrDolly();
+  }
+
+  /** Dolly + headset → one world camera. Must run after fly, before pose/billboards. */
+  function syncXrCamera() {
+    if (!xrPresenting() || !camera || !renderer?.xr?.updateCamera) return;
+    xrDolly?.updateMatrixWorld?.(true);
+    camera.updateMatrixWorld(true);
+    renderer.xr.updateCamera(camera);
   }
 
   function syncWaveEmitters() {
@@ -121,27 +170,31 @@ export function createThreeBackend() {
   }
 
   function tickFly(dt) {
-    if (!camera) return;
+    const body = xrPresenting() && xrDolly ? xrDolly : camera;
+    if (!body) return;
     // FreeCamera._computeLocalCameraSpeed: speed * sqrt(dtMs / (100 * fps))
     const dtMs = Math.max(0, dt) * 1000;
     const fps = dt > 1e-6 ? 1 / dt : 60;
     const localSpeed = moveSpeed * Math.sqrt(dtMs / (100 * fps));
 
-    camera.getWorldDirection(forward);
-    right.crossVectors(forward, camera.up).normalize();
+    const view = xrPresenting() ? poseCamera() : camera;
+    if (view?.getWorldDirection) view.getWorldDirection(forward);
+    else if (view?.matrixWorld?.elements) {
+      const e = view.matrixWorld.elements;
+      forward.set(-e[8], -e[9], -e[10]).normalize();
+    }
+    if (xrPresenting()) {
+      // Strafe level to the floor; fly along look + world-up rise.
+      right.set(forward.z, 0, -forward.x);
+      if (right.lengthSq() < 1e-6) right.set(1, 0, 0);
+      else right.normalize();
+    } else {
+      right.crossVectors(forward, camera.up).normalize();
+    }
 
-    let mx = 0;
-    let my = 0;
-    let mz = 0;
-    if (keys.has('KeyE') || keys.has('ArrowUp')) mz += 1;
-    if (keys.has('KeyD') || keys.has('ArrowDown')) mz -= 1;
-    if (keys.has('KeyS') || keys.has('ArrowLeft')) mx -= 1;
-    if (keys.has('KeyF') || keys.has('ArrowRight')) mx += 1;
-    if (keys.has('KeyR')) my += 1;
-    if (keys.has('KeyC')) my -= 1;
-    mx += stickX + padMX;
-    my += padMY;
-    mz += stickZ + padMZ;
+    let mx = flyMX;
+    let my = flyMY;
+    let mz = flyMZ;
 
     if (mx || my || mz) {
       const len = Math.hypot(mx, my, mz) || 1;
@@ -158,7 +211,18 @@ export function createThreeBackend() {
       velocity.add(wish);
     }
 
-    camera.position.add(velocity);
+    if (flyWheelX || flyWheelZ) {
+      const boostX = flyWheelX;
+      const boostZ = flyWheelZ;
+      flyWheelX = 0;
+      flyWheelZ = 0;
+      // Cap dt so a hitch frame can't turn one notch into a teleport.
+      const wheelStep = moveSpeed * Math.sqrt(Math.min(dtMs, 32) / (100 * Math.max(fps, 30)));
+      if (boostZ) velocity.addScaledVector(forward, boostZ * wheelStep);
+      if (boostX) velocity.addScaledVector(right, boostX * wheelStep);
+    }
+
+    body.position.add(velocity);
     velocity.multiplyScalar(moveInertia);
   }
 
@@ -219,63 +283,6 @@ export function createThreeBackend() {
     return mat;
   }
 
-  function attachMobileStick() {
-    const want =
-      (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0) ||
-      window.matchMedia?.('(pointer: coarse)')?.matches;
-    if (!want) return;
-    const root = document.createElement('div');
-    root.id = 'mobi_move';
-    root.innerHTML = `
-      <div class="mobi-stick" id="mobi_stick">
-        <div class="mobi-stick-knob" id="mobi_knob"></div>
-      </div>
-    `;
-    document.body.appendChild(root);
-    root.style.display = 'flex';
-    const stickEl = root.querySelector('#mobi_stick');
-    const knobEl = root.querySelector('#mobi_knob');
-    let stickId = -1;
-    const maxR = 48;
-    const onDown = (e) => {
-      if (stickId !== -1) return;
-      stickId = e.pointerId;
-      stickEl.setPointerCapture?.(e.pointerId);
-      onMove(e);
-      e.preventDefault();
-      e.stopPropagation();
-    };
-    const onMove = (e) => {
-      if (e.pointerId !== stickId) return;
-      const rect = stickEl.getBoundingClientRect();
-      let dx = e.clientX - (rect.left + rect.width * 0.5);
-      let dy = e.clientY - (rect.top + rect.height * 0.5);
-      const len = Math.hypot(dx, dy) || 1;
-      if (len > maxR) {
-        dx = (dx / len) * maxR;
-        dy = (dy / len) * maxR;
-      }
-      stickX = dx / maxR;
-      stickZ = -dy / maxR;
-      knobEl.style.transform = `translate(${dx}px, ${dy}px)`;
-      e.preventDefault();
-      e.stopPropagation();
-    };
-    const onUp = (e) => {
-      if (e.pointerId !== stickId) return;
-      stickId = -1;
-      stickX = 0;
-      stickZ = 0;
-      knobEl.style.transform = 'translate(0px, 0px)';
-      e.preventDefault();
-      e.stopPropagation();
-    };
-    stickEl.addEventListener('pointerdown', onDown);
-    stickEl.addEventListener('pointermove', onMove);
-    stickEl.addEventListener('pointerup', onUp);
-    stickEl.addEventListener('pointercancel', onUp);
-  }
-
   function copyColorsRgb(dst, src, count) {
     for (let i = 0; i < count; i++) {
       const s = i * 4;
@@ -302,6 +309,8 @@ export function createThreeBackend() {
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       renderer.setSize(canvas.clientWidth || window.innerWidth, canvas.clientHeight || window.innerHeight, false);
       renderer.setClearColor(0x1a1a1a, 1);
+      renderer.xr.enabled = true;
+      renderer.xr.setReferenceSpaceType?.('local-floor');
 
       scene = new THREE.Scene();
       clock = new THREE.Clock();
@@ -366,40 +375,6 @@ export function createThreeBackend() {
       syncWaveEmitters();
 
       createTetraField();
-
-      window.addEventListener('keydown', (e) => {
-        keys.add(e.code);
-      });
-      window.addEventListener('keyup', (e) => {
-        keys.delete(e.code);
-      });
-      canvas.addEventListener('pointerdown', (e) => {
-        if (e.button !== 0) return;
-        dragging = true;
-        lastPtrX = e.clientX;
-        lastPtrY = e.clientY;
-        canvas.setPointerCapture?.(e.pointerId);
-        canvas.focus();
-      });
-      canvas.addEventListener('pointermove', (e) => {
-        if (!dragging) return;
-        const dx = e.clientX - lastPtrX;
-        const dy = e.clientY - lastPtrY;
-        lastPtrX = e.clientX;
-        lastPtrY = e.clientY;
-        yaw -= dx * lookSens;
-        pitch -= dy * lookSens;
-        applyCameraOrientation();
-      });
-      const endDrag = (e) => {
-        dragging = false;
-        canvas.releasePointerCapture?.(e.pointerId);
-      };
-      canvas.addEventListener('pointerup', endDrag);
-      canvas.addEventListener('pointercancel', endDrag);
-
-      attachMobileStick();
-      canvas.focus();
     },
 
     syncWaveEmitters,
@@ -422,7 +397,7 @@ export function createThreeBackend() {
     },
 
     resize() {
-      if (!renderer || !camera || !canvas) return;
+      if (!renderer || !camera || !canvas || xrPresenting()) return;
       const w = canvas.clientWidth || window.innerWidth;
       const h = Math.max(1, canvas.clientHeight || window.innerHeight);
       camera.aspect = w / h;
@@ -551,10 +526,14 @@ export function createThreeBackend() {
       entry.bound = true;
     },
 
+    prepareFrame() {
+      tickFly(this._lastDt ?? 1 / 60);
+      syncXrCamera();
+    },
+
     render() {
       if (!renderer || !scene || !camera) return;
-      // app.js samples getDeltaTime() before render — fly with that cached dt
-      tickFly(this._lastDt ?? 1 / 60);
+      syncXrCamera();
       renderer.render(scene, camera);
     },
 
@@ -572,6 +551,10 @@ export function createThreeBackend() {
       const self = this;
       return {
         runRenderLoop(cb) {
+          if (renderer?.setAnimationLoop) {
+            renderer.setAnimationLoop(cb);
+            return;
+          }
           const loop = () => {
             rafId = requestAnimationFrame(loop);
             cb();
@@ -579,6 +562,7 @@ export function createThreeBackend() {
           rafId = requestAnimationFrame(loop);
         },
         stopRenderLoop() {
+          renderer?.setAnimationLoop?.(null);
           if (rafId) cancelAnimationFrame(rafId);
           rafId = 0;
         },
@@ -587,24 +571,76 @@ export function createThreeBackend() {
       };
     },
 
+    async canEnterXR() {
+      return isImmersiveVrSupported(globalThis.navigator?.xr);
+    },
+
+    async enterXR() {
+      assertReady();
+      if (xrPresenting()) return true;
+      const xr = globalThis.navigator?.xr;
+      if (!xr?.requestSession) return false;
+      const session = await requestImmersiveVr(xr);
+      xrSession = session;
+      session.addEventListener?.('end', onXrSessionEnd);
+      beginXrDolly();
+      try {
+        renderer.xr.setReferenceSpaceType?.('local-floor');
+        await renderer.xr.setSession(session);
+        return true;
+      } catch (err) {
+        session.removeEventListener?.('end', onXrSessionEnd);
+        try {
+          renderer.xr.setReferenceSpaceType?.('local');
+          await renderer.xr.setSession(session);
+          return true;
+        } catch {
+          session.removeEventListener?.('end', onXrSessionEnd);
+          onXrSessionEnd();
+          throw err;
+        }
+      }
+    },
+
+    async exitXR() {
+      const session = xrSession ?? renderer?.xr.getSession?.();
+      if (!session) return false;
+      await session.end();
+      return true;
+    },
+
     getCamera() {
       return camera;
     },
 
+    getXRInputSources() {
+      const session = xrSession ?? renderer?.xr.getSession?.();
+      return session?.inputSources ?? [];
+    },
+
     applyGamepadFly(fly = {}) {
-      padMX = fly.mx || 0;
-      padMY = fly.my || 0;
-      padMZ = fly.mz || 0;
+      flyMX = fly.mx || 0;
+      flyMY = fly.my || 0;
+      flyMZ = fly.mz || 0;
+      flyWheelX = fly.wheelX || 0;
+      flyWheelZ = fly.wheelZ || 0;
       if (fly.lookYaw || fly.lookPitch) {
-        // Pointer: yaw -= dx (RH / look −Z). lookRight > 0 looks right.
-        yaw -= fly.lookYaw || 0;
-        pitch += fly.lookPitch || 0;
-        applyCameraOrientation();
+        if (xrPresenting() && xrDolly) {
+          // Head does pitch; right stick / pad yaws the rig.
+          xrDolly.rotation.y -= fly.lookYaw || 0;
+        } else {
+          // Pointer: yaw -= dx (RH / look −Z). lookRight > 0 looks right.
+          yaw -= fly.lookYaw || 0;
+          pitch += fly.lookPitch || 0;
+          applyCameraOrientation();
+        }
       }
     },
 
     getCameraPose() {
-      if (!camera) {
+      syncXrCamera();
+      const cam = poseCamera();
+      if (!cam) {
         return {
           x: 0,
           y: 0,
@@ -612,19 +648,20 @@ export function createThreeBackend() {
           billboard: { rx: 1, ry: 0, rz: 0, ux: 0, uy: 1, uz: 0 },
         };
       }
-      camera.updateMatrixWorld();
-      const e = camera.matrixWorld.elements;
+      cam.updateMatrixWorld?.();
+      const e = cam.matrixWorld?.elements;
+      const p = cam.position;
       return {
-        x: camera.position.x,
-        y: camera.position.y,
-        z: camera.position.z,
+        x: e?.[12] ?? p?.x ?? 0,
+        y: e?.[13] ?? p?.y ?? 0,
+        z: e?.[14] ?? p?.z ?? 0,
         billboard: {
-          rx: e[0],
-          ry: e[1],
-          rz: e[2],
-          ux: e[4],
-          uy: e[5],
-          uz: e[6],
+          rx: e?.[0] ?? 1,
+          ry: e?.[1] ?? 0,
+          rz: e?.[2] ?? 0,
+          ux: e?.[4] ?? 0,
+          uy: e?.[5] ?? 1,
+          uz: e?.[6] ?? 0,
         },
       };
     },
@@ -725,6 +762,12 @@ export function createThreeBackend() {
     },
 
     dispose() {
+      renderer?.setAnimationLoop?.(null);
+      if (xrSession) {
+        xrSession.removeEventListener?.('end', onXrSessionEnd);
+        xrSession.end?.();
+      }
+      onXrSessionEnd();
       if (rafId) cancelAnimationFrame(rafId);
       rafId = 0;
       for (const entry of species.values()) {

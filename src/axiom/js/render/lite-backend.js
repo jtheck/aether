@@ -137,25 +137,20 @@ export function createLiteBackend() {
   /** @type {any} */
   let waveLattice = null;
 
-  const keys = new Set();
-  let pointerDragging = false;
-  let lastPtrX = 0;
-  let lastPtrY = 0;
   let cdX = 0;
   let cdY = 0;
   let cdZ = 0;
-  let stickX = 0;
-  let stickZ = 0;
-  let padMX = 0;
-  let padMY = 0;
-  let padMZ = 0;
+  let flyMX = 0;
+  let flyMY = 0;
+  let flyMZ = 0;
+  let flyWheelX = 0;
+  let flyWheelZ = 0;
   let lastNow = 0;
   let lastDt = 1 / 60;
   let rafId = 0;
   /** @type {{ toggle: () => Promise<void>, dispose: () => void } | null} */
   let explorer = null;
 
-  const lookSens = 0.0022;
   const moveSpeed = 5.5;
   const moveInertia = 0.9;
 
@@ -222,24 +217,22 @@ export function createLiteBackend() {
     const dtMs = Math.max(1, dt * 1000);
     const step = moveSpeed * Math.sqrt((dtMs * dtMs) / 1e5);
 
-    let mx = 0;
-    let my = 0;
-    let mz = 0;
-    if (keys.has('KeyE') || keys.has('ArrowUp')) mz += 1;
-    if (keys.has('KeyD') || keys.has('ArrowDown')) mz -= 1;
-    if (keys.has('KeyS') || keys.has('ArrowLeft')) mx -= 1;
-    if (keys.has('KeyF') || keys.has('ArrowRight')) mx += 1;
-    if (keys.has('KeyR')) my += 1;
-    if (keys.has('KeyC')) my -= 1;
-    mx += stickX + padMX;
-    my += padMY;
-    mz += stickZ + padMZ;
+    const mx = flyMX;
+    const my = flyMY;
+    const mz = flyMZ;
 
     if (mx || my || mz) {
       const len = Math.hypot(mx, my, mz) || 1;
       cdX += (mx / len) * step;
       cdY += (my / len) * step;
       cdZ += (mz / len) * step;
+    }
+    if (flyWheelX || flyWheelZ) {
+      const wheelStep = moveSpeed * Math.sqrt((Math.min(dtMs, 32) ** 2) / 1e5);
+      if (flyWheelZ) cdZ += flyWheelZ * wheelStep;
+      if (flyWheelX) cdX += flyWheelX * wheelStep;
+      flyWheelX = 0;
+      flyWheelZ = 0;
     }
 
     if (cdX || cdY || cdZ) {
@@ -260,100 +253,6 @@ export function createLiteBackend() {
     if (Math.abs(cdX) < eps) cdX = 0;
     if (Math.abs(cdY) < eps) cdY = 0;
     if (Math.abs(cdZ) < eps) cdZ = 0;
-  }
-
-  function attachFly(canvasEl) {
-    canvasEl.tabIndex = 0;
-    canvasEl.style.outline = 'none';
-    const onKeyDown = (e) => keys.add(e.code);
-    const onKeyUp = (e) => keys.delete(e.code);
-    const onPtrDown = (e) => {
-      if (e.button !== 0 && e.button !== 2) return;
-      canvasEl.setPointerCapture?.(e.pointerId);
-      pointerDragging = true;
-      lastPtrX = e.clientX;
-      lastPtrY = e.clientY;
-      canvasEl.focus();
-    };
-    const onPtrMove = (e) => {
-      if (!pointerDragging) return;
-      // Lite is LH / look +Z — yaw must increase on drag-right (Three is RH / look -Z).
-      camera._yaw += (e.clientX - lastPtrX) * lookSens;
-      camera._pitch -= (e.clientY - lastPtrY) * lookSens;
-      lastPtrX = e.clientX;
-      lastPtrY = e.clientY;
-      applyLook();
-    };
-    const onPtrUp = (e) => {
-      pointerDragging = false;
-      canvasEl.releasePointerCapture?.(e.pointerId);
-    };
-    canvasEl.addEventListener('pointerdown', onPtrDown);
-    canvasEl.addEventListener('pointermove', onPtrMove);
-    canvasEl.addEventListener('pointerup', onPtrUp);
-    canvasEl.addEventListener('pointercancel', onPtrUp);
-    canvasEl.addEventListener('contextmenu', (e) => e.preventDefault());
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    canvasEl.addEventListener('pointerdown', () => canvasEl.focus());
-    canvasEl.focus();
-  }
-
-  function attachMobileStick() {
-    const want =
-      (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0) ||
-      window.matchMedia?.('(pointer: coarse)')?.matches;
-    if (!want) return;
-    const root = document.createElement('div');
-    root.id = 'mobi_move';
-    root.innerHTML = `
-      <div class="mobi-stick" id="mobi_stick">
-        <div class="mobi-stick-knob" id="mobi_knob"></div>
-      </div>
-    `;
-    document.body.appendChild(root);
-    root.style.display = 'flex';
-    const stickEl = root.querySelector('#mobi_stick');
-    const knobEl = root.querySelector('#mobi_knob');
-    let stickId = -1;
-    const maxR = 48;
-    const onDown = (e) => {
-      if (stickId !== -1) return;
-      stickId = e.pointerId;
-      stickEl.setPointerCapture?.(e.pointerId);
-      onMove(e);
-      e.preventDefault();
-      e.stopPropagation();
-    };
-    const onMove = (e) => {
-      if (e.pointerId !== stickId) return;
-      const rect = stickEl.getBoundingClientRect();
-      let dx = e.clientX - (rect.left + rect.width * 0.5);
-      let dy = e.clientY - (rect.top + rect.height * 0.5);
-      const len = Math.hypot(dx, dy) || 1;
-      if (len > maxR) {
-        dx = (dx / len) * maxR;
-        dy = (dy / len) * maxR;
-      }
-      stickX = dx / maxR;
-      stickZ = -dy / maxR;
-      knobEl.style.transform = `translate(${dx}px, ${dy}px)`;
-      e.preventDefault();
-      e.stopPropagation();
-    };
-    const onUp = (e) => {
-      if (e.pointerId !== stickId) return;
-      stickId = -1;
-      stickX = 0;
-      stickZ = 0;
-      knobEl.style.transform = 'translate(0px, 0px)';
-      e.preventDefault();
-      e.stopPropagation();
-    };
-    stickEl.addEventListener('pointerdown', onDown);
-    stickEl.addEventListener('pointermove', onMove);
-    stickEl.addEventListener('pointerup', onUp);
-    stickEl.addEventListener('pointercancel', onUp);
   }
 
   function createTetraField() {
@@ -426,8 +325,6 @@ export function createLiteBackend() {
       camera.nearPlane = 0.1;
       camera.farPlane = 4000;
       scene.camera = camera;
-      attachFly(canvas);
-      attachMobileStick();
 
       const sun = createDirectionalLight([-0.5, -1, -1.25], 0.8);
       addToScene(scene, sun);
@@ -656,9 +553,11 @@ export function createLiteBackend() {
     },
 
     applyGamepadFly(fly = {}) {
-      padMX = fly.mx || 0;
-      padMY = fly.my || 0;
-      padMZ = fly.mz || 0;
+      flyMX = fly.mx || 0;
+      flyMY = fly.my || 0;
+      flyMZ = fly.mz || 0;
+      flyWheelX = fly.wheelX || 0;
+      flyWheelZ = fly.wheelZ || 0;
       if (!camera) return;
       if (fly.lookYaw || fly.lookPitch) {
         // Pointer: yaw += dx (LH / look +Z). lookRight > 0 looks right.
@@ -692,7 +591,7 @@ export function createLiteBackend() {
         x: camera.position.x,
         y: camera.position.y,
         z: camera.position.z,
-        // Lite is LH / look +Z — same basis as attachFly.
+        // Lite is LH / look +Z — same basis as applyGamepadFly.
         forward: { x: sy * cp, y: sp, z: cy * cp },
         fov: 60,
         aspect,

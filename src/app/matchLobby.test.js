@@ -467,9 +467,16 @@ describe('match lobby', () => {
     assert.equal(room.sendChat('  hello   world  '), true);
     const outbound = p2p.lobbyMessages.find((m) => m.payload.type === MSG.CHAT);
     assert.equal(outbound.lobbyName, ch);
-    assert.equal(outbound.payload.text, 'hello world');
+    assert.equal(outbound.payload.content.text, 'hello world');
+    const own = room.getChatLog();
+    assert.equal(own.length, 1);
+    assert.equal(own[0].text, 'hello world');
+    assert.equal(own[0].from, 'host');
+    // Self-echo of the same id must not double-paint.
+    lobbyFn(outbound.payload, ch);
+    assert.equal(room.getChatLog().length, 1);
 
-    lobbyFn({ type: MSG.CHAT, id: 'guest:1:aa', from: 'guest', name: 'Guest', text: 'hi there', ts: 1 }, ch);
+    lobbyFn({ type: MSG.CHAT, content: { type: MSG.CHAT, id: 'guest:1:aa', from: 'guest', name: 'Guest', text: 'hi there', ts: 1 } }, ch);
     lobbyFn({ type: MSG.CHAT, id: 'guest:1:aa', from: 'guest', name: 'Guest', text: 'hi there', ts: 1 }, ch);
     const fromGuest = room.getChatLog().filter((m) => m.from === 'guest');
     assert.equal(fromGuest.length, 1);
@@ -478,6 +485,36 @@ describe('match lobby', () => {
     // Messages on a different room are ignored.
     lobbyFn({ type: MSG.CHAT, id: 'x:2:bb', from: 'other', text: 'nope', ts: 2 }, 'some-other-lobby');
     assert.equal(room.getChatLog().some((m) => m.from === 'other'), false);
+    room.leaveRoom();
+  });
+
+  it('logs chat from the data channel and type broadcast', () => {
+    const p2p = fakeP2p('host');
+    let dataFn = null;
+    let broadcastFn = null;
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      subscribeBroadcast: (fn) => { broadcastFn = fn; return () => {}; },
+      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+    });
+    room.createRoom('onevsone');
+    const { roomId, mode } = room.getState();
+    dataFn({ type: MSG.CHAT, id: 'p:1:aa', from: 'peer', name: 'Peer', text: 'via rtc', ts: 1 });
+    broadcastFn({
+      v: 1,
+      type: MSG.CHAT,
+      mode,
+      roomId,
+      id: 'p:2:bb',
+      from: 'peer',
+      name: 'Peer',
+      text: 'via air',
+      ts: 2,
+    });
+    const texts = room.getChatLog().map((m) => m.text);
+    assert.deepEqual(texts, ['via rtc', 'via air']);
     room.leaveRoom();
   });
 

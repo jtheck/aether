@@ -23,10 +23,21 @@ import {
   lookQuant,
   poseAxes,
   chunkWanted,
+  chunkHitsView,
+  chunkLookDepth,
+  chunkCameraDist,
+  frustumRushTarget,
+  streamDistanceScale,
 } from './chunks.js';
 import {
   writeCompressionWavePositions,
   bakeCompressionWaveRest,
+  bakeDirtyWaveStore,
+  beginWaveBakeFrame,
+  endWaveBakeFrame,
+  waveBakeParticleBudget,
+  waveBakeLeftCount,
+  waveChunkEmitDist2,
   behaviorOrbitCluster,
   behaviorSpinSelf,
 } from './behaviors.js';
@@ -168,6 +179,7 @@ export function createWorld(opts = {}) {
   let lastChunk = { cx: NaN, cy: NaN, cz: NaN };
   let lastLookQ = '';
   let lastCamera = { x: 0, y: 4, z: 0 };
+  let prevCamera = null;
   /** Bumps when the active chunk set changes (wireframe / debug consumers). */
   let chunksVersion = 0;
 
@@ -224,6 +236,22 @@ export function createWorld(opts = {}) {
     return ch.frac;
   }
 
+  function densityScale(ch, cam = lastCamera) {
+    if (!cam) return 1;
+    return streamDistanceScale(
+      chunkCameraDist(ch.cx, ch.cy, ch.cz, chunkSize, cam),
+      chunkSize,
+      chunkRadius,
+    );
+  }
+
+  function pointWant(ch, f, sphere) {
+    if (ch.retiring) return 0;
+    return Math.round(
+      Math.min(f.storeCap, f.chunkCap) * chunkFrac(ch, sphere) * densityScale(ch),
+    );
+  }
+
   function fillChunk(ch, sphere) {
     const frac = chunkFrac(ch, sphere);
     const inBall = clusterInSphere(ch, sphere);
@@ -242,7 +270,7 @@ export function createWorld(opts = {}) {
           store.count = 0;
         }
       } else {
-        spawnInBoxSphere(store, Math.round(cap * frac), ch.bounds, sphere);
+        spawnInBoxSphere(store, Math.round(cap * frac * densityScale(ch)), ch.bounds, sphere);
       }
     }
   }
@@ -395,7 +423,7 @@ export function createWorld(opts = {}) {
     }
   }
 
-  /** Drip point counts toward sphere ∩ chunkCap — share the bite across chunks. */
+  /** In-view cubes rush to min density first; pad / behind share whatever slew is left. */
   function easePointCounts() {
     if (!Number.isFinite(lastChunk.cx)) return;
     const sphere = volumeSphere();
@@ -407,25 +435,115 @@ export function createWorld(opts = {}) {
       for (const ch of active.values()) {
         const store = ch.stores.get(f.id);
         if (!store) continue;
-        const want = ch.retiring
-          ? 0
-          : Math.round(Math.min(f.storeCap, f.chunkCap) * chunkFrac(ch, sphere));
+        const want = pointWant(ch, f, sphere);
         const cur = store.count;
         if (want === cur) continue;
-        jobs.push({ ch, store, want, cur });
+        jobs.push({ ch, store, want, cur, emitD2: waveChunkEmitDist2(ch.bounds) });
         gap += Math.abs(want - cur);
       }
     }
     if (gap > 0 && jobs.length) {
       const live = totalCount();
-      const slew = Math.min(24000, Math.max(24, Math.ceil(Math.max(gap / 18, live * 0.02))));
+      const cam = lastCamera;
+      const farBand = chunkSize * 2.25;
+      /** @type {{ ch: any, store: any, want: number, cur: number, floor: number }[]} */
+      const rush = [];
+      /** @type {{ ch: any, store: any, want: number, cur: number, dist: number }[]} */
+      const shed = [];
+      /** @type {{ ch: any, store: any, want: number, cur: number }[]} */
+      const rest = [];
       for (const job of jobs) {
-        const need = Math.abs(job.want - job.cur);
-        const share = Math.max(1, Math.min(need, Math.ceil((slew * need) / gap)));
-        if (job.cur < job.want) {
-          resizeInBoxSphere(job.store, job.cur + share, job.ch.bounds, sphere);
-        } else {
-          job.store.count = job.cur - share;
+        const dist = cam ? chunkCameraDist(job.ch.cx, job.ch.cy, job.ch.cz, chunkSize, cam) : 0;
+        const receding =
+          !!(prevCamera && cam) &&
+          dist > chunkCameraDist(job.ch.cx, job.ch.cy, job.ch.cz, chunkSize, prevCamera) + 0.35;
+        if (
+          cam &&
+          job.cur < job.want &&
+          !job.ch.retiring &&
+          chunkHitsView(job.ch.cx, job.ch.cy, job.ch.cz, chunkSize, cam, chunkRadius)
+        ) {
+          const floor = frustumRushTarget(job.want);
+          if (job.cur < floor) {
+            rush.push({ ...job, floor });
+            continue;
+          }
+        }
+        if (job.cur > job.want && (job.ch.retiring || receding || dist > farBand)) {
+          shed.push({ ...job, dist });
+          continue;
+        }
+        rest.push(job);
+      }
+      const emitThenLook = (a, b) => {
+        const de = (a.emitD2 ?? 0) - (b.emitD2 ?? 0);
+        if (de !== 0) return de;
+        if (!cam) return 0;
+        return (
+          chunkLookDepth(a.ch.cx, a.ch.cy, a.ch.cz, chunkSize, cam) -
+          chunkLookDepth(b.ch.cx, b.ch.cy, b.ch.cz, chunkSize, cam)
+        );
+      };
+      if (rush.length) rush.sort(emitThenLook);
+      if (shed.length) shed.sort((a, b) => b.dist - a.dist);
+      let rushNeed = 0;
+      for (const job of rush) rushNeed += job.floor - job.cur;
+      let shedNeed = 0;
+      for (const job of shed) shedNeed += job.cur - job.want;
+      const busy = rushNeed > 0 || shedNeed > 0;
+      const cap = busy ? 48000 : 24000;
+      let left = Math.min(
+        cap,
+        Math.max(24, Math.ceil(Math.max(gap / 18, live * 0.02, rushNeed + shedNeed))),
+      );
+      const bakeRoom = () => {
+        const n = waveBakeLeftCount();
+        return n === Infinity ? 1e9 : Math.max(0, n);
+      };
+      for (const job of rush) {
+        if (left <= 0) break;
+        const add = Math.min(job.floor - job.cur, left, bakeRoom());
+        if (add <= 0) continue;
+        resizeInBoxSphere(job.store, job.cur + add, job.ch.bounds, sphere);
+        const grew = job.store.count - job.cur;
+        job.cur = job.store.count;
+        left -= Math.max(0, grew);
+        if (job.cur < job.want) rest.push(job);
+      }
+      for (const job of shed) {
+        if (left <= 0) break;
+        const sub = Math.min(job.cur - job.want, left);
+        if (sub <= 0) continue;
+        job.store.count = job.cur - sub;
+        left -= sub;
+        job.cur = job.store.count;
+        if (job.cur > job.want) rest.push(job);
+      }
+      if (left > 0 && rest.length) {
+        let restGap = 0;
+        for (const job of rest) {
+          job.cur = job.store.count;
+          restGap += Math.abs(job.want - job.cur);
+        }
+        if (restGap > 0) {
+          rest.sort((a, b) => {
+            const ga = a.cur < a.want;
+            const gb = b.cur < b.want;
+            if (ga !== gb) return ga ? -1 : 1;
+            return emitThenLook(a, b);
+          });
+          for (const job of rest) {
+            const need = Math.abs(job.want - job.cur);
+            if (need === 0) continue;
+            let share = Math.max(1, Math.min(need, Math.ceil((left * need) / restGap)));
+            if (job.cur < job.want) {
+              share = Math.min(share, bakeRoom());
+              if (share <= 0) continue;
+              resizeInBoxSphere(job.store, job.cur + share, job.ch.bounds, sphere);
+            } else {
+              job.store.count = job.cur - share;
+            }
+          }
         }
       }
     }
@@ -510,6 +628,9 @@ export function createWorld(opts = {}) {
     get chunksVersion() {
       return chunksVersion;
     },
+    get time() {
+      return time;
+    },
 
     /** Max particles current store caps can hold in the hot frustum at radius `r`. */
     maxLiveForRadius(r) {
@@ -590,29 +711,51 @@ export function createWorld(opts = {}) {
       void opts.cellSize;
 
       if (camera) syncChunks(camera);
-      easePointCounts();
+      beginWaveBakeFrame(waveBakeParticleBudget());
+      try {
+        easePointCounts();
+        prevCamera = lastCamera;
 
-      // Circles + tetras: orbit shared cluster; tetras also spin about their own center.
-      for (const ch of active.values()) {
-        if (!ch.cluster) continue;
-        for (const f of flocks) {
-          if (!f.cluster) continue;
-          const store = ch.stores.get(f.id);
-          if (!store?.count) continue;
-          const tetra = f.meshKind === KIND_TETRA;
-          behaviorOrbitCluster(
-            store,
-            time,
-            ch.cluster,
-            tetra ? 0.55 : 0.32,
-            tetra ? 0.45 : 0.16,
-          );
-          if (tetra) behaviorSpinSelf(store, step, 1.6);
+        // Circles + tetras: orbit shared cluster; tetras also spin about their own center.
+        for (const ch of active.values()) {
+          if (!ch.cluster) continue;
+          for (const f of flocks) {
+            if (!f.cluster) continue;
+            const store = ch.stores.get(f.id);
+            if (!store?.count) continue;
+            const tetra = f.meshKind === KIND_TETRA;
+            behaviorOrbitCluster(
+              store,
+              time,
+              ch.cluster,
+              tetra ? 0.55 : 0.32,
+              tetra ? 0.45 : 0.16,
+            );
+            if (tetra) behaviorSpinSelf(store, step, 1.6);
+          }
         }
-      }
 
-      // Points: wave writes straight into staging xyz (no per-chunk pack / second copy).
-      packStaging(camera?.billboard ?? null, time);
+        // Leftover budget: exact banks nearest the emitters first.
+        const dirty = [];
+        for (const ch of active.values()) {
+          for (const f of flocks) {
+            if (!f.isPoint) continue;
+            const store = ch.stores.get(f.id);
+            if (!store?.count) continue;
+            dirty.push({ store, d2: waveChunkEmitDist2(ch.bounds) });
+          }
+        }
+        dirty.sort((a, b) => a.d2 - b.d2);
+        for (const row of dirty) {
+          if (waveBakeLeftCount() <= 0) break;
+          bakeDirtyWaveStore(row.store);
+        }
+
+        // Points: wave writes straight into staging xyz (no per-chunk pack / second copy).
+        packStaging(camera?.billboard ?? null, time);
+      } finally {
+        endWaveBakeFrame();
+      }
     },
 
     rebakeWaves() {

@@ -49,17 +49,40 @@ export function radialClickKind(h) {
 
 /**
  * While ghost-placing, an agora mesh click exits place mode. Hub / chrome
- * only apply if a radial is still claiming hits (rally). Everything else confirms.
+ * only apply if a radial is still claiming hits (rally). World taps park
+ * the ghost — 1^ confirms, not the tap itself.
  * @param {'pick' | 'hub' | 'chrome' | 'world'} radialKind
  * @param {{ kind?: string } | null | undefined} buildingHit
- * @returns {'pick' | 'chrome' | 'exit' | 'confirm'}
+ * @returns {'pick' | 'chrome' | 'exit' | 'park'}
  */
 export function placementTapKind(radialKind, buildingHit) {
   if (radialKind === 'pick') return 'pick';
   if (radialKind === 'hub') return 'exit';
   if (radialKind === 'chrome') return 'chrome';
   if (buildingHit?.kind === 'agora') return 'exit';
-  return 'confirm';
+  return 'park';
+}
+
+/**
+ * Pointer-down while a building ghost is up. Confirm wins so the 1^ mark
+ * is not eaten by the footprint under it.
+ * @param {{ parked?: boolean, hitConfirm?: boolean, hitGhost?: boolean }} s
+ * @returns {'confirm' | 'rotate' | 'preview'}
+ */
+export function placementDownKind(s = {}) {
+  if (s.hitConfirm) return 'confirm';
+  if (s.parked && s.hitGhost) return 'rotate';
+  return 'preview';
+}
+
+/**
+ * Hover / drag-around moves the ghost until it is parked, or while a
+ * reposition drag is live. A parked ghost stays put (rotate + 1^ own it).
+ * @param {boolean} parked
+ * @param {boolean} previewDragging
+ */
+export function placementHoverFollowsPointer(parked, previewDragging) {
+  return !parked || !!previewDragging;
 }
 
 /**
@@ -76,13 +99,46 @@ export function radialHubFramedBuilding(h, framed) {
 /**
  * LMB on a foreign unit/building: inspect (collar + HP) when idle;
  * keep attack / a-move when the player already has orderable troops.
- * Story camera locks orders (`canIssueOrders` false) so the click inspects
+ * When order gestures are off (`canIssueOrders` false) the click inspects
  * even with a selection — select/look, do not issue.
  * @param {boolean} hasOwnOrderableSelection
  * @param {boolean} [canIssueOrders]
  */
 export function inspectForeignOnClick(hasOwnOrderableSelection, canIssueOrders = true) {
   return !hasOwnOrderableSelection || !canIssueOrders;
+}
+
+/**
+ * Select / menus / order markers while the sim is paused or a story reel is up.
+ * Catch-up, replay, and reset stay locked so we don't write into a live ledger.
+ * @param {{
+ *   role?: string,
+ *   localPlayerId?: number,
+ *   resetting?: boolean,
+ *   replayingCatchUp?: boolean,
+ *   watchingReplay?: boolean,
+ * }} s
+ */
+export function canInspectBoard(s = {}) {
+  if ((s.role ?? 'player') !== 'player') return false;
+  if ((s.localPlayerId ?? 0) < 0) return false;
+  return !s.resetting && !s.replayingCatchUp && !s.watchingReplay;
+}
+
+/**
+ * Sim actually takes MOVE / train / place. False while paused or story-driving.
+ * @param {{
+ *   role?: string,
+ *   localPlayerId?: number,
+ *   resetting?: boolean,
+ *   replayingCatchUp?: boolean,
+ *   watchingReplay?: boolean,
+ *   pauseLockstep?: boolean,
+ *   storyDriving?: boolean,
+ * }} s
+ */
+export function canAcceptIssuedCommands(s = {}) {
+  return canInspectBoard(s) && !s.pauseLockstep && !s.storyDriving;
 }
 
 /**
@@ -123,6 +179,41 @@ export function sameOwnedBuildingType(list, buildings, owner) {
     indices.push(sel.index | 0);
   }
   return type != null && indices.length ? { type, indices } : null;
+}
+
+/**
+ * Own living placeables for one action radial. Mixed types merge; agora is
+ * skipped so its build menu never mixes in. Rally flags are ignored.
+ * Foreign / dead buildings are skipped rather than rejecting the group.
+ * @param {{ kind?: string, index?: number }[] | null | undefined} list
+ * @param {{ owner?: number, type?: string, hp?: number }[] | null | undefined} buildings
+ * @param {number} owner
+ * @returns {{ types: string[], indices: number[] } | null}
+ */
+export function ownedActionBuildingGroup(list, buildings, owner) {
+  /** @type {number[]} */
+  const indices = [];
+  /** @type {string[]} */
+  const types = [];
+  const seenIdx = new Set();
+  const seenType = new Set();
+  for (let i = 0; i < (list?.length ?? 0); i++) {
+    const sel = list[i];
+    if (sel?.kind === 'rally' || sel?.kind === 'agora') continue;
+    if (sel?.kind !== 'building') continue;
+    const idx = sel.index | 0;
+    if (seenIdx.has(idx)) continue;
+    const b = buildings?.[idx];
+    if (!buildingAlive(b) || (b.owner | 0) !== (owner | 0)) continue;
+    seenIdx.add(idx);
+    indices.push(idx);
+    const type = b.type;
+    if (type != null && !seenType.has(type)) {
+      seenType.add(type);
+      types.push(type);
+    }
+  }
+  return indices.length ? { types, indices } : null;
 }
 
 export function buildingTrackLoad(b) {

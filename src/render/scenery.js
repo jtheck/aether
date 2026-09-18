@@ -448,7 +448,9 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     if (kind === SCENERY.TREE) {
       return (field.treeStock?.[tileIndex] | 0) > 0 ? SCENERY.TREE : SCENERY.NONE;
     }
-    if (kind >= SCENERY.ROCK_PLAIN) return kind;
+    if (kind >= SCENERY.ROCK_PLAIN) {
+      return (field.rockStock?.[tileIndex] | 0) > 0 ? kind : SCENERY.NONE;
+    }
     return SCENERY.NONE;
   }
 
@@ -672,17 +674,26 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
         const batch = batches[b];
         let moved = false;
         const tintTrees = batch.variant.kind === SCENERY.TREE;
+        const rocks = batch.variant.kind >= SCENERY.ROCK_PLAIN;
         let tinted = false;
+        const release = [];
         for (let i = 0; i < batch.instances.length; i++) {
           const p = batch.instances[i];
           const scaled = advanceInstanceScale(p, dt);
           const burned = tintTrees && advanceBurnVisual(p, dt);
+          if (rocks && (p.stock | 0) <= 0 && (p.stockScale ?? 0) <= 0 && !p.scaling && p.tileIndex >= 0) {
+            release.push(i);
+          }
           if (!scaled && !burned) continue;
           moved = true;
           if (tintTrees) {
             writeFogColor(batch, i);
             tinted = true;
           }
+        }
+        for (let r = 0; r < release.length; r++) {
+          releaseAuthoredInstance({ batch, index: release[r] });
+          moved = true;
         }
         if (moved) batch.dirty = true;
         if (tinted) flushBatchColors(batch);
@@ -789,19 +800,42 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     }
   }
 
+  function findInstanceRef(tile) {
+    const mapped = instanceByTile.get(tile);
+    if (mapped) return mapped;
+    for (let b = 0; b < batches.length; b++) {
+      const batch = batches[b];
+      const instances = batch.instances;
+      for (let i = 0; i < instances.length; i++) {
+        if (instances[i].tileIndex === tile) return { batch, index: i };
+      }
+    }
+    return null;
+  }
+
   function applyRockUpdates(updates) {
     if (!updates?.tiles?.length) return;
     const { tiles, stock } = updates;
     for (let i = 0; i < tiles.length; i++) {
-      const ref = instanceByTile.get(tiles[i]);
+      const tile = tiles[i];
+      const nextStock = stock[i] | 0;
+      const ref = findInstanceRef(tile);
       if (!ref) continue;
       const p = ref.batch.instances[ref.index];
       const kind = ref.batch.variant.kind;
-      const nextStock = stock[i] | 0;
       const prevScale = p.stockScale ?? 0;
       p.stock = nextStock;
-      const nextTarget = rockScaleForStage(rockStageFromStock(kind, nextStock));
-      if (Math.abs(nextTarget - (p.targetScale ?? prevScale)) > 0.001) {
+      const nextTarget = nextStock <= 0
+        ? 0
+        : rockScaleForStage(rockStageFromStock(kind, nextStock));
+      if (nextStock <= 0) {
+        p.fellDelayMs = 0;
+        if (prevScale <= 0.001 && !p.scaling) {
+          releaseAuthoredInstance(ref);
+          continue;
+        }
+        beginScaleAnim(p, 0, TREE_SHRINK_MS, 'stageDrop');
+      } else if (Math.abs(nextTarget - (p.targetScale ?? prevScale)) > 0.001) {
         p.fellDelayMs = 0;
         beginScaleAnim(
           p,
@@ -1181,13 +1215,14 @@ function collectInstances(field, variant, surfaceHeightAt) {
     for (let tx = 0; tx < width; tx++) {
       const i = tz * width + tx;
       if (sceneryType[i] !== variant.kind) continue;
+      const stock = variant.kind === SCENERY.TREE
+        ? (treeStock?.[i] ?? TREE_STAGE_FALLBACK_STOCK)
+        : (field.rockStock?.[i] | 0);
+      if (stock <= 0) continue;
       const placement = deterministicPlacement(tx, tz, seed, variant.kind);
       const x = (tx + 0.5) * TILE_SIZE_F - worldHalfFFromField(field) + placement.offsetX;
       const z = (tz + 0.5) * TILE_SIZE_F - worldHalfFFromField(field) + placement.offsetZ;
       const groundY = surfaceHeightAt(field, x, z);
-      const stock = variant.kind === SCENERY.TREE
-        ? (treeStock?.[i] ?? TREE_STAGE_FALLBACK_STOCK)
-        : (field.rockStock?.[i] | 0);
       const stockScale = variant.kind === SCENERY.TREE
         ? treeScaleForStage(treeStageFromStock(stock))
         : rockScaleForStage(rockStageFromStock(variant.kind, stock));

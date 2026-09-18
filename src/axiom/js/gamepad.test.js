@@ -1,11 +1,13 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { PAD } from '../../app/input/gamepad.js';
 import {
+  PAD,
   attachAxiomGamepad,
   axiomMenuRoot,
   flyIntentFromPad,
   listAxiomFocusables,
+  mergePadReads,
+  readXrControllers,
   shapeStepFromPad,
 } from './gamepad.js';
 
@@ -46,6 +48,47 @@ describe('flyIntentFromPad', () => {
       lookYaw: 0,
       lookPitch: 0,
     });
+  });
+});
+
+describe('readXrControllers', () => {
+  it('maps left stick / trigger and right stick / trigger', () => {
+    const read = readXrControllers([
+      {
+        handedness: 'left',
+        gamepad: { axes: [0, 0, 0.5, -1], buttons: [{ value: 0.25 }] },
+      },
+      {
+        handedness: 'right',
+        gamepad: { axes: [0, 0, 1, 0], buttons: [{ value: 0.8 }, { value: 1 }] },
+      },
+    ]);
+    assert.equal(read.lx, 0.5);
+    assert.equal(read.ly, -1);
+    assert.equal(read.rx, 1);
+    assert.equal(read.lt, 0.25);
+    assert.equal(read.rt, 0.8);
+    assert.equal(read.buttons[PAD.RB], true);
+  });
+
+  it('uses axes 0/1 when the controller has no touchpad pair', () => {
+    const read = readXrControllers([
+      { handedness: 'left', gamepad: { axes: [1, -1], buttons: [] } },
+    ]);
+    assert.equal(read.lx, 1);
+    assert.equal(read.ly, -1);
+  });
+});
+
+describe('mergePadReads', () => {
+  it('lets a standard pad and headset sticks add', () => {
+    const merged = mergePadReads(
+      { lx: 0.4, ly: 0, rx: 0, ry: 0, lt: 0, rt: 0, buttons: [] },
+      { lx: 0.4, ly: 0, rx: 1, ry: 0, lt: 0, rt: 0.5, buttons: [] },
+    );
+    assert.ok(merged.lx > 0.7);
+    assert.equal(merged.rx, 1);
+    assert.equal(merged.rt, 0.5);
   });
 });
 
@@ -135,6 +178,41 @@ describe('attachAxiomGamepad', () => {
     pad.tick();
     pad.tick();
     assert.deepEqual(steps, [1]);
+    pad.dispose();
+  });
+
+  it('flies from xr-standard hand controllers without a standard pad', () => {
+    const flies = [];
+    const renderer = { applyGamepadFly(fly) { flies.push(fly); } };
+    const sources = [
+      {
+        handedness: 'left',
+        gamepad: { axes: [0, 0, 1, 0], buttons: [{ value: 0 }, { value: 0 }] },
+      },
+    ];
+    const pad = attachAxiomGamepad(renderer, {
+      root: { getElementById: () => null, activeElement: null },
+      getGamepads: () => [],
+      getXrInputSources: () => sources,
+      autoStart: false,
+    });
+    pad.tick();
+    assert.ok(flies.at(-1).mx > 0);
+    pad.dispose();
+  });
+
+  it('can read without applying so app can merge desktop fly', () => {
+    const flies = [];
+    const renderer = { applyGamepadFly(fly) { flies.push(fly); } };
+    const pad = attachAxiomGamepad(renderer, {
+      root: { getElementById: () => null, activeElement: null },
+      getGamepads: () => [stdPad({ axes: [1, 0, 0, 0] })],
+      autoStart: false,
+      apply: false,
+    });
+    pad.tick();
+    assert.equal(flies.length, 0);
+    assert.ok(pad.read().mx > 0);
     pad.dispose();
   });
 

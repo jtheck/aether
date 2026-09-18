@@ -93,6 +93,25 @@ function endBuild(w, i) {
   clearPath(w, i);
 }
 
+/** Paper (1 hp) with nobody on-site; harden to maxHp when a builder is present. */
+function syncPaperSiteHp(w, b, onSite) {
+  if (b.hp == null) return;
+  const hp = b.hp | 0;
+  if (hp <= 0) return;
+  const maxHp = (b.maxHp != null ? b.maxHp : hp) | 0;
+  if (onSite) {
+    if (hp <= 1 && maxHp > 1) {
+      b.hp = maxHp;
+      w.buildingsDirty = 1;
+    }
+    return;
+  }
+  if (hp > 1) {
+    b.hp = 1;
+    w.buildingsDirty = 1;
+  }
+}
+
 /** Repath toward a target only when it changed or no path is active. */
 function seekTo(w, i, tx, ty) {
   if (
@@ -143,6 +162,7 @@ export function constructionSystem(w, field) {
     const b = buildings[bi];
     if (b.built !== 0 || (b.hp != null && (b.hp | 0) <= 0)) continue;
     const halves = _present[bi];
+    syncPaperSiteHp(w, b, halves > 0);
     const prevProg = b.buildProgress | 0;
     const time = b.buildTime | 0;
     if (halves > 0) {
@@ -165,6 +185,7 @@ export function constructionSystem(w, field) {
     if (b.buildProgress >= time) {
       b.buildProgress = time;
       b.built = 1;
+      if ((b.hp | 0) > 0 && (b.maxHp | 0) > 0) b.hp = b.maxHp | 0;
       // Turn on the finished building's live effects (e.g. farm food node).
       if (field) applyStructureOccupancyAt(field, b.type, b.x, b.z, /* built */ true);
       w.buildingsDirty = 1;

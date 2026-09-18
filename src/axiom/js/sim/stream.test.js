@@ -2,9 +2,17 @@ import assert from 'node:assert/strict';
 import {
   chunkSphereHitsFrustum,
   chunkWanted,
+  chunkHitsView,
+  chunkLookDepth,
+  chunkCameraDist,
   estimateHotChunks,
+  frustumRushTarget,
   lookQuant,
   poseAxes,
+  streamDistanceScale,
+  STREAM_DENSITY_FAR,
+  STREAM_DENSITY_NEAR,
+  STREAM_FRUSTUM_MIN_FRAC,
 } from './chunks.js';
 import { KIND_POINT, boxSphereOverlapFraction } from './store.js';
 import { createWorld } from './world.js';
@@ -136,6 +144,124 @@ import { createWorld } from './world.js';
     if (dx * dx + dy * dy + dz * dz > (r + 2.3) * (r + 2.3)) outside++;
   }
   assert.equal(outside, 0, `sphere cull leaked ${outside} / ${pts.count}`);
+}
+
+{
+  assert.equal(frustumRushTarget(0), 0);
+  assert.equal(frustumRushTarget(3), 3);
+  assert.equal(frustumRushTarget(100), Math.round(100 * STREAM_FRUSTUM_MIN_FRAC));
+  const look = {
+    x: 0,
+    y: 4,
+    z: 0,
+    forward: { x: 0, y: 0, z: -1 },
+    fov: 60,
+    aspect: 16 / 9,
+  };
+  assert.equal(chunkHitsView(0, 0, -2, 16, look, 4), true);
+  assert.equal(chunkHitsView(0, 0, 2, 16, look, 4), false);
+  assert.ok(chunkLookDepth(0, 0, -1, 16, look) < chunkLookDepth(0, 0, -3, 16, look));
+  assert.equal(streamDistanceScale(0, 16, 4), STREAM_DENSITY_NEAR);
+  assert.ok(streamDistanceScale(32, 16, 4) < streamDistanceScale(16, 16, 4));
+  assert.ok(Math.abs(streamDistanceScale(200, 16, 4) - STREAM_DENSITY_FAR) < 1e-6);
+  assert.ok(chunkCameraDist(0, 0, -1, 16, look) < chunkCameraDist(0, 0, -3, 16, look));
+}
+
+{
+  const poseAt = (z) => ({
+    x: 0,
+    y: 4,
+    z,
+    forward: { x: 0, y: 0, z: -1 },
+    fov: 60,
+    aspect: 16 / 9,
+    billboard: { rx: 1, ry: 0, rz: 0, ux: 0, uy: 1, uz: 0 },
+  });
+  const inView = (pts, pose) => {
+    const a = poseAxes(pose);
+    const halfV = Math.tan((a.fov * Math.PI) / 360);
+    const halfH = halfV * a.aspect;
+    let n = 0;
+    for (let i = 0; i < pts.count; i++) {
+      const dx = pts.positions[i * 3] - a.x;
+      const dy = pts.positions[i * 3 + 1] - a.y;
+      const dz = pts.positions[i * 3 + 2] - a.z;
+      const depth = dx * a.fx + dy * a.fy + dz * a.fz;
+      if (depth < 0.05) continue;
+      const sx = dx * a.rx + dy * a.ry + dz * a.rz;
+      const sy = dx * a.ux + dy * a.uy + dz * a.uz;
+      if (Math.abs(sx) <= depth * halfH && Math.abs(sy) <= depth * halfV) n++;
+    }
+    return n;
+  };
+  const world = createWorld({
+    capacity: 8000,
+    initialCount: 2400,
+    startCount: 2400,
+    chunkSize: 16,
+    chunkRadius: 4,
+    startRadius: 4,
+    flockDefs: [
+      { id: 'points', meshKind: KIND_POINT, tint: { r: 1, g: 1, b: 1 }, weight: 1, baseScale: 1 },
+    ],
+  });
+  const settled = poseAt(0);
+  for (let i = 0; i < 20; i++) world.tick(1 / 60, settled);
+  const jumped = poseAt(-64);
+  world.tick(1 / 60, jumped);
+  const seen = inView(world.getRenderSpecies('points'), jumped);
+  assert.ok(seen > 180, `frustum should rush min density after a look-ahead jump (got ${seen})`);
+}
+
+{
+  const pose = {
+    x: 0,
+    y: 4,
+    z: 0,
+    forward: { x: 0, y: 0, z: -1 },
+    fov: 60,
+    aspect: 16 / 9,
+    billboard: { rx: 1, ry: 0, rz: 0, ux: 0, uy: 1, uz: 0 },
+  };
+  const band = (pts, lo, hi) => {
+    const a = poseAxes(pose);
+    let n = 0;
+    for (let i = 0; i < pts.count; i++) {
+      const dx = pts.positions[i * 3] - a.x;
+      const dy = pts.positions[i * 3 + 1] - a.y;
+      const dz = pts.positions[i * 3 + 2] - a.z;
+      const depth = dx * a.fx + dy * a.fy + dz * a.fz;
+      if (depth >= lo && depth < hi) n++;
+    }
+    return n;
+  };
+  const world = createWorld({
+    capacity: 8000,
+    initialCount: 2400,
+    startCount: 2400,
+    chunkSize: 16,
+    chunkRadius: 4,
+    startRadius: 4,
+    flockDefs: [
+      { id: 'points', meshKind: KIND_POINT, tint: { r: 1, g: 1, b: 1 }, weight: 1, baseScale: 1 },
+    ],
+  });
+  for (let i = 0; i < 24; i++) world.tick(1 / 60, pose);
+  const pts = world.getRenderSpecies('points');
+  const near = band(pts, 4, 24);
+  const far = band(pts, 40, 72);
+  const nearDens = near / 20;
+  const farDens = far / 32;
+  assert.ok(
+    nearDens > farDens * 1.15,
+    `near should out-density far (near ${nearDens.toFixed(1)} vs far ${farDens.toFixed(1)})`,
+  );
+
+  const far0 = far;
+  const back = { ...pose, z: 28 };
+  for (let i = 0; i < 3; i++) world.tick(1 / 60, back);
+  const farAfter = band(world.getRenderSpecies('points'), 40, 72);
+  assert.ok(farAfter < far0 * 0.72, `backing up should shed far dots (was ${far0}, now ${farAfter})`);
 }
 
 console.log('stream.test.js ok');

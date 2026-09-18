@@ -69,9 +69,9 @@ export const ROCK_STAGE_MAX = 6;
 // (footprint tiles are pass-blockers with no stock). Yields are multiples of
 // ROCK_STAGE_MAX so each visual/collision stage is a clean bite of the pile.
 const ROCK_YIELD = {
-  [SCENERY.ROCK_PLAIN]: 90,
-  [SCENERY.ROCK_MOSS]: 180,
-  [SCENERY.ROCK_SNOW]: 300,
+  [SCENERY.ROCK_PLAIN]: 150,
+  [SCENERY.ROCK_MOSS]: 270,
+  [SCENERY.ROCK_SNOW]: 450,
 };
 
 /** Resource kind a rock of this scenery kind yields. */

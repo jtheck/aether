@@ -37,9 +37,9 @@ function stagesMatchYield() {
   assert.equal(rockYield(SCENERY.ROCK_PLAIN) % ROCK_STAGE_MAX, 0);
   assert.equal(rockYield(SCENERY.ROCK_MOSS) % ROCK_STAGE_MAX, 0);
   assert.equal(rockYield(SCENERY.ROCK_SNOW) % ROCK_STAGE_MAX, 0);
-  assert.ok(rockYield(SCENERY.ROCK_PLAIN) >= 80, 'plain rocks last several hauls');
-  assert.ok(rockYield(SCENERY.ROCK_MOSS) >= 160, 'moss rocks last a real deposit');
-  assert.ok(rockYield(SCENERY.ROCK_SNOW) >= 240, 'snow rocks are the big pile');
+  assert.ok(rockYield(SCENERY.ROCK_PLAIN) >= 140, 'plain rocks last several hauls');
+  assert.ok(rockYield(SCENERY.ROCK_MOSS) >= 240, 'moss rocks last a real deposit');
+  assert.ok(rockYield(SCENERY.ROCK_SNOW) >= 400, 'snow rocks are the big pile');
 }
 
 function stageFromRemainingStock() {

@@ -216,7 +216,7 @@ export function nanotubeCorners() {
 }
 
 /**
- * Well-spaced carbons for the wave sum (not every corner — that starves the field).
+ * LOD subsample: well-spaced carbons (not the live sum — that uses every corner).
  * Default: two rings of six along the tube.
  */
 export function nanotubeWaveSources(count = 12) {

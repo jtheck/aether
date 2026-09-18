@@ -5,8 +5,10 @@
 import { createWorld } from './sim/world.js';
 import { stepWavePreset, WAVE_SOURCES, WAVE_EMITTER_BALLS } from './sim/behaviors.js';
 import { FPSMeter } from './fps-meter.js';
-import { attachMobileMove } from './mobile-move.js';
+import { attachFieldProbe, probeSites } from './field-probe.js';
+import { attachAxiomFly, mergeFlyIntents } from './fly.js';
 import { attachAxiomGamepad } from './gamepad.js';
+import { bindXrButton, isImmersiveVrSupported } from './xr.js';
 
 const params = new URLSearchParams(location.search);
 const BACKEND_PARAM = (params.get('backend') || '').toLowerCase();
@@ -48,12 +50,6 @@ async function main() {
     renderer = createThreeBackend();
     await renderer.init(canvas);
   }
-  // Mobile stick is Babylon FreeCamera-shaped; Three uses ESDF/pointer on desktop.
-  const cam = renderer.getCamera?.();
-  const mobiMove =
-    cam && typeof cam.getDirectionToRef === 'function'
-      ? attachMobileMove(cam)
-      : { tick() {}, dispose() {} };
   function applyWaveShape(dir = 1) {
     const id = stepWavePreset(dir);
     renderer.syncWaveEmitters?.();
@@ -61,7 +57,13 @@ async function main() {
       id === 'tube' ? ` carbons=${WAVE_EMITTER_BALLS.length} waves=${WAVE_SOURCES.length}` : ` (${WAVE_SOURCES.length})`;
     console.log(`[axiom] wave emitters → ${id}${extra}`);
   }
-  const pad = attachAxiomGamepad(renderer, { onShape: applyWaveShape });
+  const desktop = attachAxiomFly(canvas);
+  const pad = attachAxiomGamepad(renderer, {
+    onShape: applyWaveShape,
+    autoStart: false,
+    apply: false,
+    getXrInputSources: () => renderer.getXRInputSources?.() ?? [],
+  });
 
   // Boot with a visible volume, seek 42.9 FPS. ?throttle=0 = full budget, no seek.
   const throttleOn = params.get('throttle') !== '0';
@@ -155,6 +157,7 @@ async function main() {
     return false;
   }
 
+  const probe = attachFieldProbe();
   const fpsMeter = new FPSMeter({
     onSample() {
       const fc = world.focusChunk;
@@ -182,7 +185,8 @@ async function main() {
       console.log(`[axiom] chunk wireframes ${on ? 'on' : 'off'}`);
       return;
     }
-    if ((evt.key === 'y' || evt.key === 'Y') && !evt.repeat) {
+    if ((evt.key === 'y' || evt.key === 'Y' || evt.code === 'Space') && !evt.repeat) {
+      if (evt.code === 'Space') evt.preventDefault();
       applyWaveShape(1);
     }
   });
@@ -198,8 +202,12 @@ async function main() {
   engine.runRenderLoop(() => {
     const t0 = performance.now();
     const dt = renderer.getDeltaTime();
-    mobiMove.tick(dt);
-    world.tick(dt, renderer.getCameraPose());
+    pad.tick();
+    renderer.applyGamepadFly?.(mergeFlyIntents(desktop.read(), pad.read()));
+    renderer.prepareFrame?.();
+    const pose = renderer.getCameraPose();
+    world.tick(dt, pose);
+    probe.show(probeSites(pose), world.time);
     const uploads = world.getRenderSpecies();
     for (const upload of uploads) renderer.uploadSpecies(upload);
     // Wireframes only when the streamed set changes — signature sort was GC hell every frame.
@@ -230,7 +238,7 @@ async function main() {
   console.log(
     `[axiom] backend=${BACKEND} chunk volume size=${CHUNK_SIZE} radius=${CHUNK_RADIUS} ` +
       `budget=${INITIAL}/${CAPACITY} boot=${nAim}/r${rAim} throttle=${throttleOn ? 'up' : 'off'} — ` +
-      `ESDF fly (R/C up/down), pad sticks + LT/RT, LB/RB shape, mobi stick (look-dir), G cube wires, Y emitter ring, F9 inspector`,
+      `ESDF fly (R/C up/down), wheel forward/back + side-strafe, pad sticks + LT/RT, LB/RB shape, mobi stick (look-dir), G cube wires, Y/Space emitter ring, F9 inspector`,
   );
 }
 
@@ -259,21 +267,35 @@ async function loadBabylonUmd() {
  * @param {import('./render/backend.js').AxiomRenderer & Record<string, any>} renderer
  */
 async function tryXR(renderer) {
-  const B = globalThis.BABYLON;
-  const scene = renderer.getScene();
   const xrButton = document.getElementById('xr_button');
-  if (!B?.WebXRExperienceHelper || !scene || !xrButton) return;
+  if (!xrButton) return;
+
+  const threeApi = renderer.enterXR && {
+    enterXR: () => renderer.enterXR(),
+    exitXR: () => renderer.exitXR?.(),
+  };
+  if (threeApi) {
+    const ok = renderer.canEnterXR
+      ? await renderer.canEnterXR()
+      : await isImmersiveVrSupported(globalThis.navigator?.xr);
+    if (!ok) return;
+    xrButton.style.display = 'block';
+    bindXrButton(xrButton, threeApi);
+    return;
+  }
+
+  const B = globalThis.BABYLON;
+  const scene = renderer.getScene?.();
+  if (!B?.WebXRExperienceHelper || !scene) return;
 
   const xrHelper = await B.WebXRExperienceHelper.CreateAsync(scene);
   const hasXR = await xrHelper.sessionManager.isSessionSupportedAsync('immersive-vr');
   if (!hasXR) return;
 
   xrButton.style.display = 'block';
-  xrButton.addEventListener('click', () => {
-    xrHelper.enterXRAsync('immersive-vr', 'local-floor').catch(() => {});
-  });
-  document.addEventListener('keydown', (evt) => {
-    if (evt.key === 'Escape') xrHelper.exitXRAsync?.();
+  bindXrButton(xrButton, {
+    enterXR: () => xrHelper.enterXRAsync('immersive-vr', 'local-floor'),
+    exitXR: () => xrHelper.exitXRAsync?.(),
   });
 }
 

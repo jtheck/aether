@@ -41,6 +41,7 @@ import { agoraCaptureSystem } from './agora.js';
 import { rebuildSpatialGrid, spatialCellId } from './spatialGrid.js';
 import { projectileSystem } from './projectiles.js';
 import { treeBurnSystem } from './trees.js';
+import { groveGrowthSystem } from './grove.js';
 import { fireZoneSystem } from './fireZones.js';
 import { pendingLightningSystem } from './lightning.js';
 import { pulseFireZoneBuildings } from './buildingCombat.js';
@@ -179,6 +180,7 @@ export function step(world, field, commands) {
   phase('frogs', () => frogSystem(world, field));
   phase('monkKick', () => monkKickSystem(world, field));
   phase('trees', () => treeBurnSystem(field));
+  phase('grove', () => groveGrowthSystem(world, field));
   phase('spore', () => sporeGrowthSystem(world, field));
   phase('koth', () => kothMetaStep(world));
   phase('matchEnd', () => matchWipeStep(world));

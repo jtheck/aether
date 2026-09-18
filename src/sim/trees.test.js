@@ -20,6 +20,10 @@ import {
   growTreeAt,
   igniteTree,
   takeTreeUpdates,
+  TREE_STAGE_GROVE_MAX,
+  TREE_STAGE_MAX,
+  TREE_STOCK_GROVE_MAX,
+  addTreeStock,
   treeScaleForStage,
   treeStageFromStock,
   treeBurnsToDeath,
@@ -54,6 +58,16 @@ function stagesAndScales() {
   assert.ok(treeScaleForStage(6) > treeScaleForStage(4));
   assert.ok(treeScaleForStage(1) < treeScaleForStage(2));
   assert.equal(treeScaleForStage(0), 0);
+  assert.equal(treeStageFromStock(TREE_STOCK_GROVE_MAX), TREE_STAGE_GROVE_MAX);
+  assert.ok(treeScaleForStage(TREE_STAGE_GROVE_MAX) > treeScaleForStage(TREE_STAGE_MAX));
+}
+
+function addStockGrowsExistingOnly() {
+  const { field, i } = fieldWithTree(22, 22, TREE_WOOD_PER_STAGE * 6);
+  assert.equal(addTreeStock(field, i, 7, TREE_STOCK_GROVE_MAX), 7);
+  assert.equal(field.treeStock[i], TREE_WOOD_PER_STAGE * 7);
+  const empty = (22 + 1) * field.width + 22;
+  assert.equal(addTreeStock(field, empty, 7, TREE_STOCK_GROVE_MAX), 0, 'does not plant');
 }
 
 function damageShrinksThenFells() {
@@ -226,6 +240,7 @@ function growTreeAtAndMainFieldSync() {
 }
 
 stagesAndScales();
+addStockGrowsExistingOnly();
 damageShrinksThenFells();
 destinedTreesBurnDown();
 burnConsumesStages();

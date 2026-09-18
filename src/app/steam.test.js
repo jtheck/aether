@@ -103,7 +103,7 @@ describe('createAetherSteam', () => {
     assert.equal(steam.notifyPlayReady(), true);
     assert.equal(steam.notifyPlayReady(), false);
     assert.deepEqual(stub.unlocked, [ACH_FIRST_LAUNCH]);
-    assert.deepEqual(stub.presence, [['status', 'In Garden']]);
+    assert.deepEqual(stub.presence, [['status', 'gardening']]);
   });
 
   it('unlocks a KOTH agora-capture defeat once', () => {
@@ -114,7 +114,7 @@ describe('createAetherSteam', () => {
     assert.equal(steam.notifyKothDefeat(loss), true);
     assert.equal(steam.notifyKothDefeat(loss), false);
     assert.deepEqual(stub.unlocked, [ACH_KOTH_DEFEAT]);
-    assert.deepEqual(stub.presence, [['status', 'Defeated']]);
+    assert.deepEqual(stub.presence, []);
   });
 
   it('unlocks linux launch on the native linux shell', () => {
@@ -145,7 +145,7 @@ describe('createAetherSteam', () => {
     assert.equal(steam.notifyForgeOpened(), true);
     assert.equal(steam.notifyForgeOpened(), false);
     assert.deepEqual(stub.unlocked, [ACH_FORGE_OPEN]);
-    assert.deepEqual(stub.presence, [['status', 'In Forge']]);
+    assert.deepEqual(stub.presence, [['status', 'forging garden']]);
   });
 
   it('unlocks first KOTH lobby create once', () => {
@@ -154,7 +154,7 @@ describe('createAetherSteam', () => {
     assert.equal(steam.notifyKothLobbyCreated(), true);
     assert.equal(steam.notifyKothLobbyCreated(), false);
     assert.deepEqual(stub.unlocked, [ACH_FIRST_MATCH]);
-    assert.deepEqual(stub.presence, [['status', 'Hosting KOTH']]);
+    assert.deepEqual(stub.presence, [['status', 'hosting garden']]);
   });
 
   it('test() unlocks the named achievement when available', () => {
@@ -164,6 +164,7 @@ describe('createAetherSteam', () => {
     assert.equal(result.unlocked, true);
     assert.equal(result.achievementId, ACH_FIRST_MATCH);
     assert.deepEqual(stub.unlocked, [ACH_FIRST_MATCH]);
+    assert.deepEqual(stub.presence, []);
   });
 });
 

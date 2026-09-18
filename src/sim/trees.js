@@ -19,7 +19,21 @@ const SCENERY_TREE = 1;
 /** Wood removed per visual stage (matches a single legacy gather bite). */
 export const TREE_WOOD_PER_STAGE = 7;
 export const TREE_STAGE_MIN = 2;
+/** Natural populate / paint cap (no grove). */
 export const TREE_STAGE_MAX = 6;
+/** Grove-fed trees may keep growing past the natural canopy. */
+export const TREE_STAGE_GROVE_MAX = 12;
+/** Uint8 tile stock — grove giants still fit. */
+export const TREE_STOCK_MAX = 255;
+export const TREE_STOCK_NATURAL_MAX = TREE_WOOD_PER_STAGE * TREE_STAGE_MAX;
+export const TREE_STOCK_GROVE_MAX = TREE_WOOD_PER_STAGE * TREE_STAGE_GROVE_MAX;
+
+/** Per-stage visual scale. 0 hidden; 1–6 natural; 7–12 grove mound. */
+const TREE_STAGE_SCALES = [
+  0,
+  0.42, 0.55, 0.68, 0.82, 0.95, 1.12,
+  1.26, 1.42, 1.60, 1.80, 2.02, 2.26,
+];
 
 /** Immediate chip on fireball splash — two visual stages, then the tree keeps burning. */
 export const TREE_IGNITE_DAMAGE = TREE_WOOD_PER_STAGE * 2;
@@ -34,15 +48,12 @@ export function treeStageFromStock(stock) {
   return Math.ceil(stock / TREE_WOOD_PER_STAGE);
 }
 
-/** Visual scale multiplier for a stage (1..6). Stage 0 → hidden. */
+/** Visual scale multiplier for a stage (1..12). Stage 0 → hidden. */
 export function treeScaleForStage(stage) {
-  if (stage <= 0) return 0;
-  if (stage === 1) return 0.42;
-  if (stage === 2) return 0.55;
-  if (stage === 3) return 0.68;
-  if (stage === 4) return 0.82;
-  if (stage === 5) return 0.95;
-  return 1.12;
+  const s = stage | 0;
+  if (s <= 0) return 0;
+  if (s < TREE_STAGE_SCALES.length) return TREE_STAGE_SCALES[s];
+  return TREE_STAGE_SCALES[TREE_STAGE_SCALES.length - 1];
 }
 
 export function ensureTreeArrays(field) {
@@ -158,6 +169,26 @@ export function growTreeAt(field, tileIndex, stock) {
   mixStockHash(field, tileIndex, amount);
   markTreeDirty(field, tileIndex);
   return true;
+}
+
+/**
+ * Add wood to a living tree (grove feed). Never plants a new tree.
+ * @returns {number} wood actually added
+ */
+export function addTreeStock(field, tileIndex, amount, cap = TREE_STOCK_MAX) {
+  ensureTreeArrays(field);
+  if (amount <= 0) return 0;
+  if (tileIndex < 0 || tileIndex >= field.treeStock.length) return 0;
+  const stock = field.treeStock[tileIndex];
+  if (stock <= 0) return 0;
+  const limit = Math.max(0, Math.min(TREE_STOCK_MAX, cap | 0));
+  if (stock >= limit) return 0;
+  const next = stock + amount > limit ? limit : stock + amount;
+  const added = next - stock;
+  field.treeStock[tileIndex] = next;
+  mixStockHash(field, tileIndex, next);
+  markTreeDirty(field, tileIndex);
+  return added;
 }
 
 /** Instantly fell a living tree (full stock wipe). */

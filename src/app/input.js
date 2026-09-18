@@ -19,7 +19,7 @@ import { createGamepadAdapter } from './input/gamepad.js';
  * @param {(x: number, z: number, y?: number) => void} [opts.onOrder]
  * @param {(x: number, z: number, y?: number) => void} [opts.onAbilityHold]
  * @param {() => boolean} [opts.canInteract]
- * @param {() => boolean} [opts.canIssueCommands] — false during story camera (select still works)
+ * @param {() => boolean} [opts.canIssueCommands] — when false, select/inspect only (no order markers)
  * @param {() => boolean} [opts.inputActive] — gates camera + game (boot splash)
  */
 export function setupInput(opts) {

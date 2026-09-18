@@ -2,10 +2,13 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CHAT_MAX_LEN,
+  chatSpeakPayload,
   createChatLog,
+  ingestChat,
   isChatMessage,
   makeChatMessage,
   sanitizeChatText,
+  unwrapChatMessage,
 } from './chat.js';
 
 describe('chat helpers', () => {
@@ -42,5 +45,17 @@ describe('chat helpers', () => {
     assert.equal(list[0].name, 'Player');
     // Evicted id can be re-added (seen set stays bounded).
     assert.equal(log.add({ type: 'chat', id: 'a', text: 'again', ts: 5 }), true);
+  });
+
+  it('unwraps GetFire speak wrappers and stripped relays', () => {
+    const inner = makeChatMessage({ from: 'u', name: 'Ada', text: 'yo' });
+    assert.equal(unwrapChatMessage(chatSpeakPayload(inner)), inner);
+    assert.equal(unwrapChatMessage({ type: 'chat', content: JSON.stringify(inner) }).id, inner.id);
+    const stripped = unwrapChatMessage({ type: 'chat', from: 'u', text: 'yo', ts: 9 });
+    assert.equal(stripped.text, 'yo');
+    assert.ok(stripped.id);
+    const log = createChatLog();
+    assert.equal(ingestChat(log, chatSpeakPayload(inner)), true);
+    assert.equal(ingestChat(log, inner), false);
   });
 });

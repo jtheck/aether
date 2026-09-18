@@ -1,5 +1,6 @@
-// Agora capture points — invade from the right, then a left-side tug of war.
-// Positions are Q16.16 world xz. Deterministic; included in checksum.
+// Agora capture — contest from the right while the pad is owned, then unlock
+// a neutral tug anyone can fight (about a third of the clock). Positions are
+// Q16.16 world xz. Deterministic; included in checksum.
 
 import * as fx from './fixed.js';
 
@@ -7,15 +8,26 @@ import * as fx from './fixed.js';
 export const AGORA_OCCUPATION_RADIUS = fx.fromFloat(20);
 const OCC_R2 = fx.mul(AGORA_OCCUPATION_RADIUS, AGORA_OCCUPATION_RADIUS);
 
-/** ~9s at 20 Hz while continuously invading (lock phase). */
+/** ~9s at 20 Hz while contesting an owned pad (lock phase). */
 export const AGORA_CAPTURE_TICKS = 180;
-/** Tug / occupy is shorter so the last phase feels decisive. */
+/** Neutral fight is about a third of the clock (~4.5s). */
 export const AGORA_TUG_TICKS = 90;
 
-/** Locked home — enemy color invades from the right. */
+/** Locked home — contest walks in from the right. */
 export const AGORA_PHASE_LOCK = 0;
-/** Unlocked — tug of war from the left until retake or occupy. */
+/** Unlocked / technically neutral — anyone can gain from the left. */
 export const AGORA_PHASE_TUG = 1;
+
+export const AGORA_RITE_NONE = 0;
+/** Halfway beat — melt the lock row, then seed-build the tug row. */
+export const AGORA_RITE_UNLOCK = 1;
+/** Last pip + all-dot wishes before occupy / retake / victory. */
+export const AGORA_RITE_FINALE = 2;
+
+/** ~1.7s at 20 Hz — covers the unlock line trick. */
+export const AGORA_UNLOCK_HOLD_TICKS = 34;
+/** ~1.3s at 20 Hz — last pip, then compiled wishes. */
+export const AGORA_FINALE_HOLD_TICKS = 26;
 
 /**
  * @param {number} owner
@@ -35,6 +47,9 @@ export function createAgora(owner, xF, zF) {
     contested: 0,
     captured: 0,
     phase: AGORA_PHASE_LOCK,
+    direction: 0,
+    hold: 0,
+    rite: AGORA_RITE_NONE,
   };
 }
 
@@ -46,7 +61,9 @@ export function createAgoras(list) {
 /** Capture chips only while someone is on the pad or the meter is still live. */
 export function agoraOverlayActive(a) {
   if (!a || (a.captured | 0)) return false;
-  return (a.contested | 0) !== 0
+  return (a.hold | 0) > 0
+    || (a.rite | 0) !== AGORA_RITE_NONE
+    || (a.contested | 0) !== 0
     || (a.capturer | 0) >= 0
     || (a.progress | 0) > 0
     || (a.tug | 0) > 0;
@@ -92,6 +109,9 @@ export function serializeAgoras(agoras) {
     contested: a.contested | 0,
     captured: a.captured | 0,
     phase: a.phase | 0,
+    direction: a.direction | 0,
+    hold: a.hold | 0,
+    rite: a.rite | 0,
   }));
 }
 
@@ -107,6 +127,10 @@ export function agoraCaptureSystem(w) {
   for (let ai = 0; ai < agoras.length; ai++) {
     const a = agoras[ai];
     if (a.captured) continue;
+    if (tickAgoraHold(w, a)) {
+      if (w.kothMatchOver) return;
+      continue;
+    }
 
     const counts = countOwnersNear(w, a.x, a.z);
     if ((a.phase | 0) === AGORA_PHASE_TUG) stepTug(w, a, counts);
@@ -154,7 +178,33 @@ function stepInvade(a, counts) {
     a.progress = 0;
     a.tug = 0;
     a.contested = 0;
+    a.direction = 0;
+    a.rite = AGORA_RITE_UNLOCK;
+    a.hold = AGORA_UNLOCK_HOLD_TICKS;
   }
+}
+
+function tickAgoraHold(w, a) {
+  if ((a.hold | 0) <= 0) return false;
+  a.hold -= 1;
+  if (a.hold > 0) return true;
+  const rite = a.rite | 0;
+  a.rite = AGORA_RITE_NONE;
+  if (rite === AGORA_RITE_FINALE) resolveAgoraFinale(w, a);
+  return true;
+}
+
+function beginAgoraFinale(a) {
+  a.rite = AGORA_RITE_FINALE;
+  a.hold = AGORA_FINALE_HOLD_TICKS;
+  a.contested = 0;
+  a.direction = 1;
+}
+
+function resolveAgoraFinale(w, a) {
+  if (a.capturer < 0) return;
+  if (a.capturer === (a.founder | 0)) retakeAgora(a);
+  else occupyAgora(w, a, a.capturer);
 }
 
 function stepTug(w, a, counts) {
@@ -162,13 +212,19 @@ function stepTug(w, a, counts) {
 
   if (lead.teams === 0) {
     a.contested = 0;
-    if (a.tug > 0) a.tug = Math.max(0, a.tug - 1);
+    if (a.tug > 0) {
+      a.direction = -1;
+      a.tug = Math.max(0, a.tug - 1);
+    } else {
+      a.direction = 0;
+    }
     if (a.tug <= 0) a.capturer = -1;
     return;
   }
 
   if (lead.teams > 1 && lead.bestN < lead.secondN * 2) {
     a.contested = 1;
+    a.direction = 0;
     return;
   }
 
@@ -176,19 +232,16 @@ function stepTug(w, a, counts) {
   const pusher = lead.best;
   if (a.capturer === pusher || a.capturer < 0 || a.tug <= 0) {
     a.capturer = pusher;
+    a.direction = 1;
     a.tug = Math.min(AGORA_TUG_TICKS, a.tug + 1);
   } else {
+    a.direction = -1;
     a.tug = Math.max(0, a.tug - 1);
     if (a.tug <= 0) a.capturer = -1;
   }
 
   if (a.tug < AGORA_TUG_TICKS || a.capturer < 0) return;
-
-  if (a.capturer === (a.founder | 0)) {
-    retakeAgora(a);
-    return;
-  }
-  occupyAgora(w, a, a.capturer);
+  beginAgoraFinale(a);
 }
 
 function retakeAgora(a) {
@@ -199,6 +252,9 @@ function retakeAgora(a) {
   a.capturer = -1;
   a.contested = 0;
   a.captured = 0;
+  a.direction = 0;
+  a.hold = 0;
+  a.rite = AGORA_RITE_NONE;
 }
 
 function occupyAgora(w, a, winner) {
@@ -210,6 +266,9 @@ function occupyAgora(w, a, winner) {
   a.tug = 0;
   a.capturer = -1;
   a.contested = 0;
+  a.direction = 0;
+  a.hold = 0;
+  a.rite = AGORA_RITE_NONE;
   if ((w.agoraOccupyEndsMatch ?? 1) !== 0) {
     a.captured = 1;
     w.matchWinner = next;
@@ -266,6 +325,9 @@ export function mixAgoraChecksum(h, mix, agoras) {
     mix(a.contested);
     mix(a.captured);
     mix(a.phase ?? 0);
+    mix(a.direction ?? 0);
+    mix(a.hold ?? 0);
+    mix(a.rite ?? 0);
   }
   return h;
 }

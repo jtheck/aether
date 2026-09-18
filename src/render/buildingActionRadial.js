@@ -27,6 +27,7 @@ import {
   BUILDING_MENU_UNITS,
   UPGRADE_MODEL_URLS,
   getBuildingMenu,
+  capActionMenu,
 } from '../sim/buildings.js';
 import {
   fitRadialInViewport,
@@ -1228,6 +1229,16 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   let hz = 1;
   /** @type {string | null} */
   let activeBuildingType = null;
+  /** @type {{ units?: any[], upgrades?: any[] } | null} */
+  let activeMenu = null;
+  /** @type {string} */
+  let activeMenuKey = '';
+
+  function menuKeyOf(menu) {
+    const u = (menu?.units ?? []).map((i) => i.id).join(',');
+    const g = (menu?.upgrades ?? []).map((i) => i.id).join(',');
+    return `${u}|${g}`;
+  }
 
   /** Pause is live while a queue/research track is running; Cancel also for sites. */
   let utilityAvailable = {
@@ -1586,7 +1597,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
 
   function pushSlotsForArc(items, category, arc) {
     if (!arc || !items.length) return;
-    const n = Math.min(items.length, MAX_OPTIONS - slots.length);
+    const n = items.length;
     for (let i = 0; i < n; i++) {
       const item = items[i];
       const ang = arc.start + ((i + 0.5) / n) * arc.span;
@@ -1622,9 +1633,10 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       arcs = { units: null, upgrades: null, pause: null, cancel: null };
       return;
     }
-    arcs = computeArcs(menu.units.length, menu.upgrades.length);
-    pushSlotsForArc(menu.units, 'unit', arcs.units);
-    pushSlotsForArc(menu.upgrades, 'upgrade', arcs.upgrades);
+    const shown = capActionMenu(menu, MAX_OPTIONS);
+    arcs = computeArcs(shown.units.length, shown.upgrades.length);
+    pushSlotsForArc(shown.units, 'unit', arcs.units);
+    pushSlotsForArc(shown.upgrades, 'upgrade', arcs.upgrades);
     for (const slot of slots) slot.gate = gateForSlot(slot);
     if (arcs.pause) {
       pauseSlot = {
@@ -2259,12 +2271,15 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
    * @param {number} z
    * @param {string} buildingType
    * @param {object | null} [camera]
+   * @param {{ units?: any[], upgrades?: any[] } | null} [menuOverride]
    */
-  function showAt(x, z, buildingType, camera = null) {
-    const menu = getBuildingMenu(buildingType) ?? { units: [], upgrades: [] };
+  function showAt(x, z, buildingType, camera = null, menuOverride = null) {
+    const menu = menuOverride ?? getBuildingMenu(buildingType) ?? { units: [], upgrades: [] };
     anchorX = x;
     anchorZ = z;
     activeBuildingType = buildingType;
+    activeMenu = menu;
+    activeMenuKey = menuKeyOf(menu);
     hoverIndex = -1;
     cancelHovered = false;
     pauseHovered = false;
@@ -2280,10 +2295,10 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     rebuildSlots(menu);
     open = true;
     layout();
-    const want = buildingType;
+    const want = activeMenuKey;
     void ensureMenuIcons(menu).then(() => {
-      if (open && activeBuildingType === want) {
-        rebuildSlots(getBuildingMenu(want) ?? { units: [], upgrades: [] });
+      if (open && activeMenuKey === want) {
+        rebuildSlots(activeMenu ?? { units: [], upgrades: [] });
         layout();
       }
     });
@@ -2330,6 +2345,8 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     prodPaused = false;
     tracks.clear();
     activeBuildingType = null;
+    activeMenu = null;
+    activeMenuKey = '';
     edgeOpacity = 1;
     lastFadeAt = 0;
     open = false;

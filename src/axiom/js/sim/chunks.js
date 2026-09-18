@@ -82,6 +82,27 @@ export const STREAM_CORE_RADIUS = 1;
 export const STREAM_FOV_PAD = 1.55;
 /** Look hash step (radians) — pad covers the gap between bins. */
 export const STREAM_LOOK_QUANT = (8 * Math.PI) / 180;
+/** In-view cubes rush to this fraction of their sphere-scaled want before pad / behind ease. */
+export const STREAM_FRUSTUM_MIN_FRAC = 0.45;
+/** Floor so a thin rim cube still reads as populated (clamped to want). */
+export const STREAM_FRUSTUM_MIN_DOTS = 8;
+/** Extra dots in the near cube (close was losing to the far slab). */
+export const STREAM_DENSITY_NEAR = 1.45;
+/** Far-rim multiplier — 1/r²-ish so the horizon doesn't read thicker than the near field. */
+export const STREAM_DENSITY_FAR = 0.2;
+
+/**
+ * Minimum live count for an in-view chunk. Scales with throttle via `want`.
+ * @param {number} want
+ * @param {{ minFrac?: number, minDots?: number }} [opts]
+ */
+export function frustumRushTarget(want, opts = {}) {
+  const w = Math.max(0, want | 0);
+  if (w <= 0) return 0;
+  const frac = opts.minFrac ?? STREAM_FRUSTUM_MIN_FRAC;
+  const floor = opts.minDots ?? STREAM_FRUSTUM_MIN_DOTS;
+  return Math.min(w, Math.max(floor, Math.round(w * frac)));
+}
 
 /**
  * Camera basis + look. `forward` wins when present; else up × right (RH, look −Z).
@@ -224,4 +245,42 @@ export function chunkWanted(cx, cy, cz, focus, camera, chunkSize, chunkRadius, o
     far: (chunkRadius + 0.5) * chunkSize + chunkSize * 1.5,
     ...opts,
   });
+}
+
+/** Tight view (no FOV pad) — what the camera actually sees. */
+export function chunkHitsView(cx, cy, cz, chunkSize, camera, chunkRadius, opts = {}) {
+  return chunkSphereHitsFrustum(cx, cy, cz, chunkSize, camera, {
+    far: (chunkRadius + 0.5) * chunkSize + chunkSize * 1.5,
+    ...opts,
+    fovPad: opts.fovPad ?? 1,
+  });
+}
+
+/** Chunk-center depth along look. Near first when rushing the view. */
+export function chunkLookDepth(cx, cy, cz, chunkSize, camera) {
+  const a = poseAxes(camera);
+  const h = chunkSize * 0.5;
+  return (cx * chunkSize + h - a.x) * a.fx + (cy * chunkSize + h - a.y) * a.fy + (cz * chunkSize + h - a.z) * a.fz;
+}
+
+/** Camera → chunk-center distance. */
+export function chunkCameraDist(cx, cy, cz, chunkSize, camera) {
+  const a = poseAxes(camera);
+  const h = chunkSize * 0.5;
+  return Math.hypot(cx * chunkSize + h - a.x, cy * chunkSize + h - a.y, cz * chunkSize + h - a.z);
+}
+
+/**
+ * Near cubes keep / gain density; far cubes thin out.
+ * @param {number} dist
+ * @param {number} chunkSize
+ * @param {number} chunkRadius
+ */
+export function streamDistanceScale(dist, chunkSize, chunkRadius) {
+  const near = Math.max(8, chunkSize * 1.15);
+  const far = Math.max(near + chunkSize, (chunkRadius + 0.5) * chunkSize);
+  const d = Math.max(0, dist);
+  if (d <= near) return STREAM_DENSITY_NEAR;
+  const t = Math.min(1, (d - near) / (far - near));
+  return STREAM_DENSITY_NEAR + (STREAM_DENSITY_FAR - STREAM_DENSITY_NEAR) * t * t;
 }

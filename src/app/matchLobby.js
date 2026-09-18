@@ -21,7 +21,13 @@ import {
   setSeatReady,
   startBlockReason,
 } from '../lobby/roster.js';
-import { CHAT_MIN_INTERVAL_MS, createChatLog, makeChatMessage } from '../lobby/chat.js';
+import {
+  CHAT_MIN_INTERVAL_MS,
+  chatSpeakPayload,
+  createChatLog,
+  ingestChat,
+  makeChatMessage,
+} from '../lobby/chat.js';
 import { getPlayerColor, getPlayerName, getUnitSkins } from './settings.js';
 import { localOwnedPacks, selectedSkins } from './dlcCatalog.js';
 import { aetherSteam } from './steam.js';
@@ -179,7 +185,16 @@ export function createMatchLobby({
     gameLobby?.announce?.(stamp(msg));
   }
 
-  /** Chat over the persistent match-room socket — reaches all subscribers. */
+  function noteChat(raw) {
+    if (ingestChat(chatLog, raw)) {
+      onChat?.();
+      return true;
+    }
+    return false;
+  }
+
+  /** Chat over the match room. Local paint first; wire uses GetFire `content`
+   *  plus RTC/broadcast backups so other clients see the line. */
   function sendChat(text) {
     if (phase === 'idle') return false;
     const now = Date.now();
@@ -187,11 +202,15 @@ export function createMatchLobby({
     const me = profile();
     const msg = makeChatMessage({ from: me.userId, name: me.name, color: me.color, text });
     if (!msg) return false;
+    lastChatSendAt = now;
+    if (chatLog.add(msg)) onChat?.();
     const ch = channel();
     const p2p = getP2p?.();
-    if (!ch || !p2p?.sendLobbyMessage) return false;
-    if (!p2p.sendLobbyMessage(ch, msg)) return false;
-    lastChatSendAt = now;
+    if (ch && p2p?.sendLobbyMessage) p2p.sendLobbyMessage(ch, chatSpeakPayload(msg));
+    sendData(msg);
+    if (mode && roomId) {
+      gameLobby?.announce?.({ type: MSG.CHAT, mode, roomId, ...msg });
+    }
     return true;
   }
 
@@ -641,6 +660,7 @@ export function createMatchLobby({
   subscribeBroadcast?.((data) => {
     if (!data || data.v !== LOBBY_PROTOCOL_VERSION) return;
     if (phase === 'idle' || !roomId || data.roomId !== roomId) return;
+    if (noteChat(data)) return;
     if (data.type === MSG.CLOSED && !hosting) {
       if (phase === 'countdown' || phase === 'starting' || phase === 'playing') return;
       const restoreWorld = hadMatch;
@@ -692,10 +712,7 @@ export function createMatchLobby({
     if (phase === 'idle') return;
     const ch = channel();
     if (!ch || lobbyName !== ch) return;
-    if (data?.type === MSG.CHAT) {
-      if (chatLog.add(data)) onChat?.();
-      return;
-    }
+    if (noteChat(data)) return;
     if (data?.type !== 'player_join' && data?.type !== 'player_rejoin') return;
     if (data.from && !sameUserId(data.from, localId())) dial(data.from);
   });
@@ -738,6 +755,7 @@ export function createMatchLobby({
   });
 
   subscribeDataMessage?.((msg, fromPeerId) => {
+    if (phase !== 'idle' && noteChat(msg)) return;
     if (!msg || msg.v !== LOBBY_PROTOCOL_VERSION) return;
     if (phase === 'idle') return;
     if (msg.roomId && roomId && msg.roomId !== roomId) return;

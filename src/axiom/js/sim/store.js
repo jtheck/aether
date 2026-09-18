@@ -1,6 +1,6 @@
 /** Engine-agnostic SoA particle store. No Babylon imports. */
 
-import { bakeCompressionWaveRest, WAVE_SOURCE_CAP } from './behaviors.js';
+import { WAVE_COEFF_STRIDE, tryBakeWaveBank } from './behaviors.js';
 
 export const KIND_POINT = 'point';
 export const KIND_TRIANGLE = 'triangle';
@@ -43,13 +43,11 @@ export function createStore(capacity) {
 }
 
 /**
- * Slim point chunk store: rest xyz + baked wave basis (`i * S + s`).
+ * Slim point chunk store: rest xyz + collapsed wave banks (`i * WAVE_COEFF_STRIDE`).
  * @param {number} capacity
  */
 export function createPointStore(capacity) {
   const cap = Math.max(1, capacity | 0);
-  const S = WAVE_SOURCE_CAP;
-  const wave = cap * S;
   return {
     kind: 'point',
     capacity: cap,
@@ -57,11 +55,9 @@ export function createPointStore(capacity) {
     hx: new Float32Array(cap),
     hy: new Float32Array(cap),
     hz: new Float32Array(cap),
-    wnx: new Float32Array(wave),
-    wny: new Float32Array(wave),
-    wnz: new Float32Array(wave),
-    waveC: new Float32Array(wave),
-    waveS: new Float32Array(wave),
+    waveK: new Float32Array(cap * WAVE_COEFF_STRIDE),
+    /** Bit p set when preset bank p is collapsed for that slot. */
+    waveMask: new Uint8Array(cap),
   };
 }
 
@@ -356,7 +352,8 @@ export function initParticleAt(store, i, x, y, z) {
   store.hy[i] = y;
   store.hz[i] = z;
   if (store.kind === 'point') {
-    bakeCompressionWaveRest(store, i);
+    if (store.waveMask) store.waveMask[i] = 0;
+    tryBakeWaveBank(store, i);
     return;
   }
   store.px[i] = x;

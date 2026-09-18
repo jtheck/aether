@@ -436,6 +436,9 @@ function exportAgoras(agoras) {
     contested: a.contested | 0,
     captured: a.captured | 0,
     phase: a.phase | 0,
+    direction: a.direction | 0,
+    hold: a.hold | 0,
+    rite: a.rite | 0,
   }));
 }
 
@@ -455,6 +458,9 @@ function importAgoras(w, data) {
     contested: a.contested | 0,
     captured: a.captured | 0,
     phase: a.phase | 0,
+    direction: a.direction | 0,
+    hold: a.hold | 0,
+    rite: a.rite | 0,
   }));
 }
 

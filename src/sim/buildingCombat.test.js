@@ -11,6 +11,8 @@ import {
   createBuilding,
   snapBuildingWorld,
 } from './buildings.js';
+import { applyDamageBuilding } from './buildingCombat.js';
+import { beginBuild } from './construction.js';
 import { combatSystem } from './combat.js';
 import { step } from './step.js';
 import { UNIT } from './unitTypes.js';
@@ -297,6 +299,34 @@ describe('building combat', () => {
     assert.equal(w.hp[foe], hp, 'arrow damage waits for travel');
     for (let t = 0; t < 24; t++) step(w, field);
     assert.ok(w.hp[foe] < hp, 'arrow eventually hits');
+  });
+
+  it('unattended construction sites die on the first hit', () => {
+    const w = richWorld(20);
+    const field = buildField(20, { width: 64, height: 64 });
+    const b = createBuilding({ owner: 1, type: 'camp', x: 16, z: 16, built: 0 });
+    // Leftover full hp (checkpoint / workers just left) still 1-shots.
+    b.hp = b.maxHp;
+    w.buildings.push(b);
+    applyStructureOccupancyAt(field, b.type, b.x, b.z, false);
+    assert.ok(applyDamageBuilding(w, field, 0, 1) > 0);
+    assert.equal(w.buildings[0].hp, 0);
+  });
+
+  it('construction sites with an on-site builder keep full hp', () => {
+    const w = richWorld(21);
+    const field = buildField(21, { width: 64, height: 64 });
+    field.pass.fill(1);
+    const b = createBuilding({ owner: 1, type: 'camp', x: 16, z: 16, built: 0 });
+    w.buildings.push(b);
+    applyStructureOccupancyAt(field, b.type, b.x, b.z, false);
+    const vill = spawn(w, { x: b.x, y: b.z, type: UNIT.VILLAGER, owner: 1 });
+    beginBuild(w, vill, 0);
+    step(w, field);
+    const hp = w.buildings[0].hp;
+    assert.ok(hp > 1, 'on-site builder hardens the site');
+    applyDamageBuilding(w, field, 0, 10);
+    assert.equal(w.buildings[0].hp, hp - 10);
   });
 
   it('construction-site towers do not fire', () => {

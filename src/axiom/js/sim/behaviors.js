@@ -1,6 +1,6 @@
 /** Particle behavior steps — pure SoA math, no engine imports. */
 
-import { nanotubeCorners, nanotubeWaveSources } from './nanotube.js';
+import { nanotubeCorners } from './nanotube.js';
 
 /**
  * Wind field with wrap inside a cubic chunk volume.
@@ -116,33 +116,22 @@ export function wavePresetRing() {
   return out;
 }
 
-/** All carbon corners (icos). Wave sum uses `WAVE_PRESET_TUBE` only. */
+export const WAVE_PRESET_RING = wavePresetRing();
+/** Every carbon is a wave source. Collapse at bake keeps the per-frame sum O(1). */
 export const WAVE_PRESET_TUBE_CORNERS = nanotubeCorners();
-/** Two rings of six — enough to read as a cylinder without starving the field. */
-export const WAVE_PRESET_TUBE = nanotubeWaveSources(12);
+export const WAVE_PRESET_TUBE = WAVE_PRESET_TUBE_CORNERS;
 
-function slotsFrom(start, n) {
-  const out = [];
-  for (let i = 0; i < n; i++) out.push(start + i);
-  return out;
-}
-
-/** Pair, ring, then the 12-site tube wave. Spawn bakes every slot; toggle only remaps. */
-export const WAVE_CATALOG = WAVE_PRESET_PAIR.concat(wavePresetRing(), WAVE_PRESET_TUBE);
-
-/** Point stores pack basis as `i * WAVE_SOURCE_CAP + s`. */
-export const WAVE_SOURCE_CAP = WAVE_CATALOG.length;
-
-const WAVE_SLOTS_PAIR = slotsFrom(0, WAVE_PRESET_PAIR.length);
-const WAVE_SLOTS_RING = slotsFrom(WAVE_SLOTS_PAIR.length, 6);
-const WAVE_SLOTS_TUBE = slotsFrom(WAVE_SLOTS_PAIR.length + WAVE_SLOTS_RING.length, WAVE_PRESET_TUBE.length);
+/** Pair, ring, tube — spawn collapses each; toggle only picks a baked bank. */
+export const WAVE_PRESETS = [WAVE_PRESET_PAIR, WAVE_PRESET_RING, WAVE_PRESET_TUBE];
+export const WAVE_PRESET_CAP = WAVE_PRESETS.length;
+/** Interleaved [Bx,By,Bz,Cx,Cy,Cz] per preset per particle. */
+export const WAVE_COEFF_STRIDE = WAVE_PRESET_CAP * 6;
 
 /** Ico-spheres: pair/ring follow sources; tube shows every carbon. */
-export const WAVE_BALL_CAP = Math.max(WAVE_SOURCE_CAP, WAVE_PRESET_TUBE_CORNERS.length);
+export const WAVE_BALL_CAP = WAVE_PRESET_TUBE_CORNERS.length;
 
 /**
- * Live ico-sphere positions. Same as `WAVE_SOURCES` except on the tube
- * (all corners vs the 12-site wave sum).
+ * Live ico-sphere positions. Same as `WAVE_SOURCES` (tube = all carbons).
  */
 export const WAVE_EMITTER_BALLS = WAVE_PRESET_PAIR.map((s) => ({ ...s }));
 
@@ -156,15 +145,121 @@ export function waveSourceAmplitude(sourceCount, base = COMPRESSION_AMPLITUDE) {
   return base * (6 / n);
 }
 
-/** Catalog indices the wave sum uses. Mutate in place — do not rebind. */
-const waveActiveSlots = WAVE_SLOTS_PAIR.slice();
+const WAVE_PRESET_AMP = WAVE_PRESETS.map((s) => waveSourceAmplitude(s.length));
+
+function packPresetXyz(sources) {
+  const xyz = new Float32Array(sources.length * 3);
+  for (let i = 0; i < sources.length; i++) {
+    const s = sources[i];
+    xyz[i * 3] = s.x;
+    xyz[i * 3 + 1] = s.y;
+    xyz[i * 3 + 2] = s.z;
+  }
+  return xyz;
+}
+
+const WAVE_PRESET_XYZ = WAVE_PRESETS.map(packPresetXyz);
+
+function centroidOf(sources) {
+  let x = 0;
+  let y = 0;
+  let z = 0;
+  const n = sources.length || 1;
+  for (let i = 0; i < sources.length; i++) {
+    x += sources[i].x;
+    y += sources[i].y;
+    z += sources[i].z;
+  }
+  return { x: x / n, y: y / n, z: z / n };
+}
+
+const WAVE_PRESET_CENTROIDS = WAVE_PRESETS.map(centroidOf);
+
+/** Live-preset emitter centroid (tube ≈ axis mid). */
+export function waveEmitterFocus() {
+  return WAVE_PRESET_CENTROIDS[presetIndex];
+}
+
+/** Min distance² from an AABB to any live emitter — 0 if a source sits inside. */
+export function waveChunkEmitDist2(bounds) {
+  const { minX, minY, minZ, size } = bounds;
+  const maxX = minX + size;
+  const maxY = minY + size;
+  const maxZ = minZ + size;
+  const xyz = WAVE_PRESET_XYZ[presetIndex];
+  let best = Infinity;
+  const n = xyz.length / 3;
+  for (let s = 0; s < n; s++) {
+    const i = s * 3;
+    const sx = xyz[i];
+    const sy = xyz[i + 1];
+    const sz = xyz[i + 2];
+    const dx = sx < minX ? minX - sx : sx > maxX ? sx - maxX : 0;
+    const dy = sy < minY ? minY - sy : sy > maxY ? sy - maxY : 0;
+    const dz = sz < minZ ? minZ - sz : sz > maxZ ? sz - maxZ : 0;
+    const d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 < best) best = d2;
+  }
+  return best;
+}
+
+/** ~5 ms of collapse — pair/ring are cheap, tube is not. */
+export function waveBakeParticleBudget() {
+  const s = WAVE_PRESETS[presetIndex].length;
+  if (s <= 6) return 10000;
+  return Math.max(400, Math.floor(4500 / 5.2));
+}
+
+let waveBakeBudgeted = false;
+let waveBakeLeft = 0;
+
+/** Cap how many dirty banks the next write may collapse. Omit to bake all. */
+export function beginWaveBakeFrame(n) {
+  waveBakeBudgeted = true;
+  waveBakeLeft = n == null ? Infinity : Math.max(0, n);
+}
+
+export function endWaveBakeFrame() {
+  waveBakeBudgeted = false;
+  waveBakeLeft = 0;
+}
+
+export function waveBakeLeftCount() {
+  return waveBakeBudgeted ? waveBakeLeft : Infinity;
+}
+
+/**
+ * Collapse one live bank if the frame still has room.
+ * @returns {boolean}
+ */
+export function tryBakeWaveBank(store, i, p = presetIndex) {
+  if (waveBakeBudgeted && waveBakeLeft <= 0) return false;
+  bakeWaveBank(store, i, p);
+  if (waveBakeBudgeted && waveBakeLeft !== Infinity) waveBakeLeft--;
+  return true;
+}
+
+/** Drain leftover budget on dirty slots, nearest-emitter chunks first. */
+export function bakeDirtyWaveStore(store, p = presetIndex) {
+  const mask = store.waveMask;
+  if (!mask) return 0;
+  const bit = 1 << p;
+  const n = store.count | 0;
+  let baked = 0;
+  for (let i = 0; i < n; i++) {
+    if (mask[i] & bit) continue;
+    if (!tryBakeWaveBank(store, i, p)) break;
+    baked++;
+  }
+  return baked;
+}
 
 /** @type {'pair'|'ring'|'tube'} */
 let presetId = 'pair';
+let presetIndex = 0;
 
 /**
- * Live scenery (ico-spheres). Same positions as `waveActiveSlots`.
- * Mutate via `toggleWavePreset` — do not rebind.
+ * Live wave sources (and ico-spheres). Mutate via `toggleWavePreset` — do not rebind.
  */
 export const WAVE_SOURCES = WAVE_PRESET_PAIR.map((s) => ({ ...s }));
 
@@ -182,34 +277,29 @@ function setEmitterBalls(list) {
   for (const s of list) WAVE_EMITTER_BALLS.push({ x: s.x, y: s.y, z: s.z });
 }
 
-function setSlots(slots) {
-  waveActiveSlots.length = 0;
-  for (const s of slots) waveActiveSlots.push(s);
-}
-
 const PRESET_ORDER = /** @type {const} */ (['pair', 'ring', 'tube']);
 
 function applyWavePreset(id) {
   if (id === 'ring') {
     presetId = 'ring';
-    setSlots(WAVE_SLOTS_RING);
-    setLiveSources(wavePresetRing());
-    setEmitterBalls(wavePresetRing());
+    presetIndex = 1;
+    setLiveSources(WAVE_PRESET_RING);
+    setEmitterBalls(WAVE_PRESET_RING);
   } else if (id === 'tube') {
     presetId = 'tube';
-    setSlots(WAVE_SLOTS_TUBE);
+    presetIndex = 2;
     setLiveSources(WAVE_PRESET_TUBE);
     setEmitterBalls(WAVE_PRESET_TUBE_CORNERS);
   } else {
     presetId = 'pair';
-    setSlots(WAVE_SLOTS_PAIR);
+    presetIndex = 0;
     setLiveSources(WAVE_PRESET_PAIR);
     setEmitterBalls(WAVE_PRESET_PAIR);
   }
   return presetId;
 }
 
-/** Swap which baked slots the write loop sums. No rebake. @returns {'pair'|'ring'|'tube'} */
+/** Swap which baked bank the write loop uses. No rebake. @returns {'pair'|'ring'|'tube'} */
 export function toggleWavePreset() {
   return stepWavePreset(1);
 }
@@ -222,47 +312,148 @@ export function stepWavePreset(dir) {
 }
 
 /**
- * @param {object} store
- * @param {number} i particle index (rest xyz)
- * @param {number} j basis index (`i * S + s`)
- * @param {number} ox
- * @param {number} oy
- * @param {number} oz
+ * Phase-locked spherical sources are linear in (cos ωt, sin ωt):
+ *   r̂ sin(kr − ωt) = r̂ sin(kr) cos(ωt) − r̂ cos(kr) sin(ωt)
+ * Any emitter set collapses to two vectors (B, C) plus scalar (uS, uC).
+ * Exact — not an LOD. Displacement = B cos(ωt) − C sin(ωt).
+ *
+ * @param {number} x
+ * @param {number} y
+ * @param {number} z
+ * @param {{ x: number, y: number, z: number }[]} sources
+ * @param {number} A
+ * @param {{ bx: number, by: number, bz: number, cx: number, cy: number, cz: number, uS: number, uC: number }} [out]
  */
-function bakeWaveFrom(store, i, j, ox, oy, oz) {
-  const dx = store.hx[i] - ox;
-  const dy = store.hy[i] - oy;
-  const dz = store.hz[i] - oz;
-  const r2 = dx * dx + dy * dy + dz * dz;
-  if (r2 < 1e-8) {
-    store.wnx[j] = 0;
-    store.wny[j] = 0;
-    store.wnz[j] = 0;
-    store.waveC[j] = 1;
-    store.waveS[j] = 0;
-    return;
+export function collapseWaveEmitters(x, y, z, sources, A, out) {
+  let bx = 0;
+  let by = 0;
+  let bz = 0;
+  let cx = 0;
+  let cy = 0;
+  let cz = 0;
+  let uS = 0;
+  let uC = 0;
+  const n = sources.length;
+  for (let s = 0; s < n; s++) {
+    const src = sources[s];
+    const rx = x - src.x;
+    const ry = y - src.y;
+    const rz = z - src.z;
+    const r2 = rx * rx + ry * ry + rz * rz;
+    if (r2 < 1e-8) continue;
+    const r = Math.sqrt(r2);
+    const inv = 1 / r;
+    const kr = COMPRESSION_K * r;
+    const as = A * Math.sin(kr);
+    const ac = A * Math.cos(kr);
+    const nx = rx * inv;
+    const ny = ry * inv;
+    const nz = rz * inv;
+    bx += nx * as;
+    by += ny * as;
+    bz += nz * as;
+    cx += nx * ac;
+    cy += ny * ac;
+    cz += nz * ac;
+    uS += as;
+    uC += ac;
   }
-  const r = Math.sqrt(r2);
-  const inv = 1 / r;
-  store.wnx[j] = dx * inv;
-  store.wny[j] = dy * inv;
-  store.wnz[j] = dz * inv;
-  const kr = COMPRESSION_K * r;
-  store.waveC[j] = Math.cos(kr);
-  store.waveS[j] = Math.sin(kr);
+  if (!out) return { bx, by, bz, cx, cy, cz, uS, uC };
+  out.bx = bx;
+  out.by = by;
+  out.bz = bz;
+  out.cx = cx;
+  out.cy = cy;
+  out.cz = cz;
+  out.uS = uS;
+  out.uC = uC;
+  return out;
+}
+
+const _collapse = { bx: 0, by: 0, bz: 0, cx: 0, cy: 0, cz: 0, uS: 0, uC: 0 };
+
+/**
+ * Packed xyz sibling of `collapseWaveEmitters` — same sum, fewer object hits.
+ * @param {number} x
+ * @param {number} y
+ * @param {number} z
+ * @param {Float32Array} xyz
+ * @param {number} A
+ * @param {{ bx: number, by: number, bz: number, cx: number, cy: number, cz: number }} out
+ */
+function collapseWaveEmittersXyz(x, y, z, xyz, A, out) {
+  let bx = 0;
+  let by = 0;
+  let bz = 0;
+  let cx = 0;
+  let cy = 0;
+  let cz = 0;
+  const n = xyz.length / 3;
+  for (let s = 0; s < n; s++) {
+    const i = s * 3;
+    const rx = x - xyz[i];
+    const ry = y - xyz[i + 1];
+    const rz = z - xyz[i + 2];
+    const r2 = rx * rx + ry * ry + rz * rz;
+    if (r2 < 1e-8) continue;
+    const r = Math.sqrt(r2);
+    const inv = 1 / r;
+    const kr = COMPRESSION_K * r;
+    const as = A * Math.sin(kr);
+    const ac = A * Math.cos(kr);
+    bx += rx * inv * as;
+    by += ry * inv * as;
+    bz += rz * inv * as;
+    cx += rx * inv * ac;
+    cy += ry * inv * ac;
+    cz += rz * inv * ac;
+  }
+  out.bx = bx;
+  out.by = by;
+  out.bz = bz;
+  out.cx = cx;
+  out.cy = cy;
+  out.cz = cz;
+  return out;
+}
+
+function markWaveBank(store, i, p) {
+  if (store.waveMask) store.waveMask[i] |= 1 << p;
 }
 
 /**
- * Bake radial basis + cos/sin(k·r) at spawn for each wave source.
+ * Collapse one preset bank at rest.
+ * @param {object} store
+ * @param {number} i
+ * @param {number} [p] preset index (default: live)
+ */
+export function bakeWaveBank(store, i, p = presetIndex) {
+  const c = collapseWaveEmittersXyz(
+    store.hx[i],
+    store.hy[i],
+    store.hz[i],
+    WAVE_PRESET_XYZ[p],
+    WAVE_PRESET_AMP[p],
+    _collapse,
+  );
+  const o = i * WAVE_COEFF_STRIDE + p * 6;
+  const k = store.waveK;
+  k[o] = c.bx;
+  k[o + 1] = c.by;
+  k[o + 2] = c.bz;
+  k[o + 3] = c.cx;
+  k[o + 4] = c.cy;
+  k[o + 5] = c.cz;
+  markWaveBank(store, i, p);
+}
+
+/**
+ * Collapse every preset at rest (tests / forced rebake).
  * @param {object} store
  * @param {number} i
  */
 export function bakeCompressionWaveRest(store, i) {
-  const base = i * WAVE_SOURCE_CAP;
-  for (let s = 0; s < WAVE_SOURCE_CAP; s++) {
-    const src = WAVE_CATALOG[s];
-    bakeWaveFrom(store, i, base + s, src.x, src.y, src.z);
-  }
+  for (let p = 0; p < WAVE_PRESET_CAP; p++) bakeWaveBank(store, i, p);
 }
 
 /**
@@ -331,10 +522,11 @@ export function behaviorOrbitCluster(store, time, center, radiansPerSec, tilt = 
 
 /**
  * Spherical longitudinal compression waves — write displaced xyz into `dest`.
- * Spawn-baked r̂ and cos/sin(k·r); per frame only shared sin/cos(ωt) + muls.
- *   p = rest + Σ r̂_s * A * sin(k·r_s − ωt)  (sources phase-locked)
+ * Emitters are collapsed at bake to B,C; per frame only shared sin/cos(ωt).
+ *   p = rest + B cos(ωt) − C sin(ωt)
+ *     = rest + Σ r̂_s * A * sin(k·r_s − ωt)  (sources phase-locked)
  *
- * @param {object} store point store (rest + baked basis)
+ * @param {object} store point store (rest + baked B,C)
  * @param {Float32Array} dest interleaved xyz (usually flock staging)
  * @param {number} destOffset particle index in dest (not float index)
  * @param {number} time seconds
@@ -344,35 +536,122 @@ export function behaviorOrbitCluster(store, time, center, radiansPerSec, tilt = 
 export function writeCompressionWavePositions(store, dest, destOffset, time, opts = {}) {
   const n = store.count | 0;
   if (n <= 0) return destOffset;
-  const slots = waveActiveSlots;
-  const S = slots.length;
-  const stride = WAVE_SOURCE_CAP;
-  const A = opts.amplitude ?? waveSourceAmplitude(S);
+  const bakedA = WAVE_PRESET_AMP[presetIndex];
+  const gain = opts.amplitude != null && bakedA ? opts.amplitude / bakedA : 1;
   const speed = opts.speed ?? COMPRESSION_SPEED;
   const omega = (speed * Math.PI * 2) / COMPRESSION_WAVELENGTH;
   const wt = omega * time;
-  const ct = Math.cos(wt);
-  const st = Math.sin(wt);
-  const { hx, hy, hz, wnx, wny, wnz, waveC, waveS } = store;
+  const ct = Math.cos(wt) * gain;
+  const st = Math.sin(wt) * gain;
+  const { hx, hy, hz, waveK, waveMask } = store;
+  const stride = WAVE_COEFF_STRIDE;
+  const pref = presetIndex * 6;
+  const bit = 1 << presetIndex;
+  const focus = WAVE_PRESET_CENTROIDS[presetIndex];
+  const standA = COMPRESSION_AMPLITUDE;
+  const ct0 = Math.cos(wt);
+  const st0 = Math.sin(wt);
   let o = destOffset | 0;
 
   for (let i = 0; i < n; i++) {
-    let x = hx[i];
-    let y = hy[i];
-    let z = hz[i];
-    const base = i * stride;
-    for (let s = 0; s < S; s++) {
-      const j = base + slots[s];
-      const u = A * (waveS[j] * ct - waveC[j] * st);
-      x += wnx[j] * u;
-      y += wny[j] * u;
-      z += wnz[j] * u;
+    if (waveMask && !(waveMask[i] & bit)) {
+      if (!waveBakeBudgeted) {
+        bakeWaveBank(store, i, presetIndex);
+      } else {
+        const p = o * 3;
+        writeLiveMonopole(hx[i], hy[i], hz[i], dest, p, focus, standA, ct0, st0);
+        o++;
+        continue;
+      }
     }
+    const k = i * stride + pref;
     const p = o * 3;
-    dest[p] = x;
-    dest[p + 1] = y;
-    dest[p + 2] = z;
+    dest[p] = hx[i] + waveK[k] * ct - waveK[k + 3] * st;
+    dest[p + 1] = hy[i] + waveK[k + 1] * ct - waveK[k + 4] * st;
+    dest[p + 2] = hz[i] + waveK[k + 2] * ct - waveK[k + 5] * st;
     o++;
   }
   return o;
+}
+
+/**
+ * One monopole at the emitter centroid — cheap live motion until the exact bank bakes.
+ * @param {number} x
+ * @param {number} y
+ * @param {number} z
+ * @param {Float32Array} dest
+ * @param {number} p
+ * @param {{ x: number, y: number, z: number }} origin
+ * @param {number} A
+ * @param {number} ct cos(ωt)
+ * @param {number} st sin(ωt)
+ */
+export function writeLiveMonopole(x, y, z, dest, p, origin, A, ct, st) {
+  const rx = x - origin.x;
+  const ry = y - origin.y;
+  const rz = z - origin.z;
+  const r2 = rx * rx + ry * ry + rz * rz;
+  if (r2 < 1e-8) {
+    dest[p] = x;
+    dest[p + 1] = y;
+    dest[p + 2] = z;
+    return;
+  }
+  const r = Math.sqrt(r2);
+  const u = A * (Math.sin(COMPRESSION_K * r) * ct - Math.cos(COMPRESSION_K * r) * st);
+  const inv = 1 / r;
+  dest[p] = x + rx * inv * u;
+  dest[p + 1] = y + ry * inv * u;
+  dest[p + 2] = z + rz * inv * u;
+}
+
+/**
+ * Live field at any point — same sum the dots bake at rest.
+ * `u` is the scalar sine sum; `dx,dy,dz` is the radial displacement.
+ * @param {number} x
+ * @param {number} y
+ * @param {number} z
+ * @param {number} time seconds
+ * @param {{ amplitude?: number, speed?: number, sources?: { x: number, y: number, z: number }[] }} [opts]
+ */
+export function sampleCompressionWave(x, y, z, time, opts = {}) {
+  const sources = opts.sources ?? WAVE_SOURCES;
+  const A = opts.amplitude ?? waveSourceAmplitude(sources.length);
+  const speed = opts.speed ?? COMPRESSION_SPEED;
+  const wt = ((speed * Math.PI * 2) / COMPRESSION_WAVELENGTH) * time;
+  const c = collapseWaveEmitters(x, y, z, sources, A);
+  const ct = Math.cos(wt);
+  const st = Math.sin(wt);
+  const dx = c.bx * ct - c.cx * st;
+  const dy = c.by * ct - c.cy * st;
+  const dz = c.bz * ct - c.cz * st;
+  return { x: x + dx, y: y + dy, z: z + dz, dx, dy, dz, u: c.uS * ct - c.uC * st };
+}
+
+/**
+ * Instant scope at a fixed point: `dest[i] = u(x,y,z, t)` over one period ending at `time`.
+ * Position is frozen — moving the probe replaces the whole curve, no travel smear.
+ * @param {number} x
+ * @param {number} y
+ * @param {number} z
+ * @param {number} time seconds (rightmost sample)
+ * @param {Float32Array|number[]} dest
+ * @param {{ amplitude?: number, speed?: number, sources?: { x: number, y: number, z: number }[], window?: number }} [opts]
+ */
+export function sampleCompressionWaveTrace(x, y, z, time, dest, opts = {}) {
+  const n = dest?.length | 0;
+  if (n <= 0) return dest;
+  const sources = opts.sources ?? WAVE_SOURCES;
+  const A = opts.amplitude ?? waveSourceAmplitude(sources.length);
+  const speed = opts.speed ?? COMPRESSION_SPEED;
+  const omega = (speed * Math.PI * 2) / COMPRESSION_WAVELENGTH;
+  const window = opts.window ?? COMPRESSION_WAVELENGTH / speed;
+  const c = collapseWaveEmitters(x, y, z, sources, A);
+  const denom = Math.max(1, n - 1);
+  for (let i = 0; i < n; i++) {
+    const ti = time - window * (1 - i / denom);
+    const wt = omega * ti;
+    dest[i] = c.uS * Math.cos(wt) - c.uC * Math.sin(wt);
+  }
+  return dest;
 }

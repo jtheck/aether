@@ -81,9 +81,34 @@ export function ruinBuilding(w, field, bi) {
   w.buildingsDirty = 1;
 }
 
+/** world.ORDER.BUILD — numeric to stay off the world → path → buildingCombat cycle. */
+const ORDER_BUILD = 6;
+/** Same slack as construction.js BUILD_MARGIN_F — on-site workers harden a foundation. */
+const BUILD_SITE_MARGIN_F = 6;
+
+/** True when a villager/engineer is in reach on a BUILD order for this site. */
+export function constructionSiteHasWorkers(w, bi) {
+  const b = w?.buildings?.[bi];
+  if (!b || b.built !== 0) return false;
+  const reach = buildingFootprintHalf(b.type) + fx.fromFloat(BUILD_SITE_MARGIN_F);
+  const reachSq = fx.mul(reach, reach);
+  for (let i = 0; i < w.count; i++) {
+    if (!w.alive[i] || w.order[i] !== ORDER_BUILD) continue;
+    if ((w.buildTarget[i] | 0) !== (bi | 0)) continue;
+    if (fx.dist2(w.px[i], w.py[i], b.x, b.z) <= reachSq) return true;
+  }
+  return false;
+}
+
 export function applyDamageBuilding(w, field, bi, amount) {
   const b = w.buildings?.[bi];
   if (!isBuildingAlive(b) || amount <= 0) return 0;
+  // Empty foundations are paper — any hit ruins them. On-site builders harden.
+  if (b.built === 0 && !constructionSiteHasWorkers(w, bi)) {
+    const dealt = Math.max(1, b.hp | 0);
+    ruinBuilding(w, field, bi);
+    return dealt;
+  }
   const next = Math.max(0, (b.hp | 0) - (amount | 0));
   const dealt = (b.hp | 0) - next;
   b.hp = next;

@@ -16,11 +16,13 @@ import {
   nearestDropOff,
   refreshEngineerAssists,
   CAMP_WORK_RADIUS_F,
+  SILO_WORK_RADIUS_PENALTY_F,
+  siloWorkRadiusWorld,
   CREW_RADIUS_BONUS_F,
   ENGINEER_RADIUS_BONUS_F,
   ENGINEER_BONUS_LINGER_TICKS,
 } from './gather.js';
-import { createBuilding } from './buildings.js';
+import { applyWorldStructureOccupancy, createBuilding } from './buildings.js';
 
 function plantRockAt(field, tx, tz, kind, stock, footRadius) {
   const tile = tz * field.width + tx;
@@ -580,9 +582,11 @@ engineerRadiusBonusLingers();
 overflowCutsIncomeWithoutASilo();
 siloBesideCampBanksTheFullLoad();
 attachedSiloAcceptsDropOff();
+attachedSiloDropOffWalksOntoOccupancy();
 unattachedSiloIsNotADropOff();
 unbuiltSiloIsNotADropOff();
 attachedSiloExtendsGatherRadius();
+siloGatherRadiusIsOneTileTighter();
 unattachedSiloDoesNotExtendRadius();
 attachedSiloExtendsFarmRadius();
 console.log('gather.test.js: ok (wood + stone + mineral + food + wander + specialize + defend + storage + silo reach)');
@@ -661,6 +665,28 @@ function attachedSiloAcceptsDropOff() {
   );
 }
 
+function attachedSiloDropOffWalksOntoOccupancy() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(61);
+  // Start past DROP_RANGE so the villager must walk onto the stamped footprint.
+  const vill = spawn(w, { x: fx.fromFloat(28), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  w.carriedAmt[vill] = 10;
+  w.carriedKind[vill] = 1;
+  w.buildings = [
+    createBuilding({ owner: 0, type: 'camp', x: 0, z: 0 }),
+    createBuilding({ owner: 0, type: 'silo', x: 16, z: 0 }),
+  ];
+  applyWorldStructureOccupancy(field, w);
+
+  for (let t = 0; t < 200; t++) {
+    if ((w.carriedAmt[vill] | 0) === 0) break;
+    step(w, field, []);
+  }
+  assert.equal(w.carriedAmt[vill], 0, 'walked onto the silo and deposited');
+  assert.ok(getResource(w, 0, 'wood') > 0, 'silo occupancy does not block drop-off');
+}
+
 function unattachedSiloIsNotADropOff() {
   const field = createField(1);
   field.pass.fill(1);
@@ -692,8 +718,8 @@ function attachedSiloExtendsGatherRadius() {
   const field = createField(1);
   field.pass.fill(1);
   const w = createWorld(57);
-  // Camp reach 28. Silo at 16 (attached). Villager + tree at 34 sit outside
-  // the camp circle and inside the silo's copy of that circle.
+  // Camp reach 28. Silo at 16 (attached, gather 24). Villager + tree at 34
+  // sit outside the camp circle and inside the silo's tighter circle.
   const vill = spawn(w, { x: fx.fromFloat(34), y: 0, type: UNIT.VILLAGER, owner: 0 });
   plantTreeAt(field, fx.fromFloat(32), 0, 30);
   w.buildings = [
@@ -704,6 +730,25 @@ function attachedSiloExtendsGatherRadius() {
   for (let t = 0; t < 220; t++) step(w, field, []);
   assert.equal(w.order[vill], ORDER.GATHER, 'silo circle recruits past the camp ring');
   assert.ok(getResource(w, 0, 'wood') > 0, 'silo-extended camp banks wood');
+}
+
+function siloGatherRadiusIsOneTileTighter() {
+  assert.equal(siloWorkRadiusWorld(CAMP_WORK_RADIUS_F), CAMP_WORK_RADIUS_F - SILO_WORK_RADIUS_PENALTY_F);
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(62);
+  // Camp 28, silo gather 24. Villager at 41 is past the camp and past the
+  // silo circle, but would have been inside the old full-size silo ring.
+  const vill = spawn(w, { x: fx.fromFloat(41), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  plantTreeAt(field, fx.fromFloat(40), 0, 30);
+  w.buildings = [
+    createBuilding({ owner: 0, type: 'camp', x: 0, z: 0 }),
+    createBuilding({ owner: 0, type: 'silo', x: 16, z: 0 }),
+  ];
+
+  for (let t = 0; t < 80; t++) step(w, field, []);
+  assert.notEqual(w.order[vill], ORDER.GATHER, 'silo circle is one tile shorter than the camp');
+  assert.equal(getResource(w, 0, 'wood'), 0);
 }
 
 function unattachedSiloDoesNotExtendRadius() {
@@ -728,8 +773,8 @@ function attachedSiloExtendsFarmRadius() {
   const w = createWorld(59);
   const farmTile = worldToTile(0) * field.width + worldToTile(0);
   field.foodNode[farmTile] = 1;
-  // Farm reach 16. Silo at 12. Villager at 20 is outside the plot ring and
-  // inside the silo's extra circle.
+  // Farm reach 16 (silo 12). Silo at 12. Villager at 20 is outside the plot
+  // ring and inside the silo's extra circle.
   w.buildings = [
     createBuilding({ owner: 0, type: 'farm', x: 0, z: 0 }),
     createBuilding({ owner: 0, type: 'silo', x: 12, z: 0 }),

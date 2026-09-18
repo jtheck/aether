@@ -1,8 +1,13 @@
-// Live KOTH lobby browser — HUD is the quick list; the side menu is the full copy.
+// Live match browser — glass HUD lists any open game; the side menu is the full copy.
 
 import { formatMatchTime, matchSecondsFromTick } from './simSession.js';
-import { shortId } from '../koth/protocol.js';
+import { SHARD_ANNOUNCE_MS, shortId } from '../koth/protocol.js';
 import { resolveLobbyName } from '../koth/lobbyName.js';
+import { MODE_IDS, getMode } from '../lobby/modes.js';
+import { formatTypeLobbyRow } from './lobbyUi.js';
+
+/** Wait one KOTH presence tick before joining 1v1 / Teams / Adventure. */
+export const TYPE_LISTEN_FALLBACK_MS = SHARD_ANNOUNCE_MS;
 
 /**
  * @param {object} lobby
@@ -58,10 +63,55 @@ export function lobbyPeople(presence) {
   return [...players, ...spectators];
 }
 
-/** Hide the KOTH browser while another game type is live. Courtesy maps keep it. */
-export function shouldShowKothBrowser(presence) {
+/** Hide the browser while another game type is live or a type lobby is open. */
+export function shouldShowKothBrowser(presence, extra = {}) {
   if (!presence) return false;
-  return !presence.parked;
+  if (presence.parked || extra.typeLobbyActive) return false;
+  return true;
+}
+
+/** After a quiet KOTH window, opt into the type-match channels. */
+export function shouldAutoListenTypeLobbies({
+  browsing = false,
+  parked = false,
+  typeLobbyActive = false,
+  kothCount = 0,
+  emptyForMs = 0,
+} = {}) {
+  if (!browsing || parked || typeLobbyActive) return false;
+  if (kothCount > 0) return false;
+  return emptyForMs >= TYPE_LISTEN_FALLBACK_MS;
+}
+
+export function browseRowId(row) {
+  if (row?.kind === 'type') return `type:${row.mode}:${row.roomId}`;
+  return `koth:${row?.matchId ?? ''}`;
+}
+
+export function formatBrowseRow(row) {
+  if (row?.kind === 'type') {
+    const mode = getMode(row.mode);
+    const base = formatTypeLobbyRow(row);
+    const name = mode?.name ?? 'Lobby';
+    return {
+      title: base.title,
+      meta: `${name}  ·  ${base.meta}`,
+      label: `Join ${name}, ${base.title}, ${base.meta}`,
+    };
+  }
+  return formatLobbyRow(row);
+}
+
+export function collectTypeBrowseLobbies(gameLobby) {
+  if (!gameLobby?.listLobbies) return [];
+  const out = [];
+  for (const mode of MODE_IDS) {
+    if (gameLobby.isListening && !gameLobby.isListening(mode)) continue;
+    for (const lobby of gameLobby.listLobbies(mode)) {
+      out.push({ kind: 'type', mode, ...lobby });
+    }
+  }
+  return out;
 }
 
 /** Center the HUD while forming a match; keep it cornered while browsing or mid-match lag. */
@@ -125,19 +175,27 @@ export function syncLobbyPlayers(listEl, players) {
  * @param {string} [rowClass]
  */
 export function syncLobbyList(listEl, emptyEl, lobbies, rowClass = 'koth-lobby-row') {
-  if (emptyEl) emptyEl.hidden = lobbies.length > 0;
-  const keep = new Set(lobbies.map((lobby) => lobby.matchId));
-  for (const btn of [...listEl.querySelectorAll('[data-match-id]')]) {
-    if (!keep.has(btn.dataset.matchId)) btn.remove();
+  const rows = lobbies.map((lobby) => {
+    const kind = lobby.kind === 'type' ? 'type' : 'koth';
+    const row = { ...lobby, kind };
+    return { row, id: browseRowId(row), formatted: formatBrowseRow(row) };
+  });
+  if (emptyEl) emptyEl.hidden = rows.length > 0;
+  const keep = new Set(rows.map((item) => item.id));
+  for (const btn of [...listEl.querySelectorAll('[data-browse-id], [data-match-id]')]) {
+    const id = btn.dataset.browseId
+      || (btn.dataset.matchId ? `koth:${btn.dataset.matchId}` : '');
+    if (!keep.has(id)) btn.remove();
   }
-  for (const lobby of lobbies) {
-    const row = formatLobbyRow(lobby);
-    let btn = listEl.querySelector(`[data-match-id="${CSS.escape(lobby.matchId)}"]`);
+  for (const { row, id, formatted } of rows) {
+    let btn = listEl.querySelector(`[data-browse-id="${CSS.escape(id)}"]`);
+    if (!btn && row.kind !== 'type' && row.matchId) {
+      btn = listEl.querySelector(`[data-match-id="${CSS.escape(row.matchId)}"]`);
+    }
     if (!btn) {
       btn = document.createElement('button');
       btn.type = 'button';
       btn.className = rowClass;
-      btn.dataset.matchId = lobby.matchId;
       const name = document.createElement('span');
       name.className = 'koth-lobby-name';
       const meta = document.createElement('span');
@@ -145,19 +203,32 @@ export function syncLobbyList(listEl, emptyEl, lobbies, rowClass = 'koth-lobby-r
       btn.append(name, meta);
       listEl.append(btn);
     }
-    if (lobby.from && btn.dataset.from !== lobby.from) btn.dataset.from = lobby.from;
-    if (btn.getAttribute('aria-label') !== row.label) btn.setAttribute('aria-label', row.label);
+    btn.dataset.browseId = id;
+    btn.dataset.kind = row.kind;
+    if (row.kind === 'type') {
+      btn.dataset.mode = row.mode;
+      btn.dataset.roomId = row.roomId;
+      if (btn.dataset.matchId) delete btn.dataset.matchId;
+    } else {
+      btn.dataset.matchId = row.matchId;
+      if (btn.dataset.mode) delete btn.dataset.mode;
+      if (btn.dataset.roomId) delete btn.dataset.roomId;
+    }
+    if (row.from && btn.dataset.from !== row.from) btn.dataset.from = row.from;
+    if (btn.getAttribute('aria-label') !== formatted.label) btn.setAttribute('aria-label', formatted.label);
     const nameEl = btn.querySelector('.koth-lobby-name');
     const metaEl = btn.querySelector('.koth-lobby-meta');
-    if (nameEl && nameEl.textContent !== row.title) nameEl.textContent = row.title;
-    if (metaEl && metaEl.textContent !== row.meta) metaEl.textContent = row.meta;
+    if (nameEl && nameEl.textContent !== formatted.title) nameEl.textContent = formatted.title;
+    if (metaEl && metaEl.textContent !== formatted.meta) metaEl.textContent = formatted.meta;
   }
-  const wanted = lobbies.map((lobby) => lobby.matchId);
-  const current = [...listEl.querySelectorAll('[data-match-id]')].map((btn) => btn.dataset.matchId);
+  const wanted = rows.map((item) => item.id);
+  const current = [...listEl.querySelectorAll('[data-browse-id], [data-match-id]')].map((btn) => (
+    btn.dataset.browseId || (btn.dataset.matchId ? `koth:${btn.dataset.matchId}` : '')
+  ));
   const orderChanged = wanted.length !== current.length || wanted.some((id, i) => id !== current[i]);
   if (orderChanged) {
     for (const id of wanted) {
-      const btn = listEl.querySelector(`[data-match-id="${CSS.escape(id)}"]`);
+      const btn = listEl.querySelector(`[data-browse-id="${CSS.escape(id)}"]`);
       if (btn) listEl.append(btn);
     }
   }
@@ -166,11 +237,20 @@ export function syncLobbyList(listEl, emptyEl, lobbies, rowClass = 'koth-lobby-r
 /**
  * @param {object} opts
  * @param {object} opts.kothShard
+ * @param {object} [opts.gameLobby]
+ * @param {object} [opts.matchLobby]
  * @param {() => void} [opts.onLeaveSolo]
  * @param {() => unknown} [opts.onRestoreBackdrop]
  * @param {() => void} [opts.onCloseMenu]
  */
-export function setupKothLobby({ kothShard, onLeaveSolo, onRestoreBackdrop, onCloseMenu }) {
+export function setupKothLobby({
+  kothShard,
+  gameLobby,
+  matchLobby,
+  onLeaveSolo,
+  onRestoreBackdrop,
+  onCloseMenu,
+}) {
   const controls = document.getElementById('koth-controls');
   const lobbyEl = document.getElementById('koth-lobby');
   const listEl = document.getElementById('koth-lobby-list');
@@ -203,9 +283,15 @@ export function setupKothLobby({ kothShard, onLeaveSolo, onRestoreBackdrop, onCl
 
   if (menuKoth) menuKoth.hidden = false;
 
-  function paintLists(lobbies) {
-    syncLobbyList(listEl, emptyEl, lobbies);
-    if (menuList) syncLobbyList(menuList, menuEmpty, lobbies, 'btn koth-lobby-row');
+  let kothEmptySince = 0;
+
+  function paintLists(kothLobbies, extra = []) {
+    syncLobbyList(listEl, emptyEl, kothLobbies.concat(extra));
+    if (menuList) syncLobbyList(menuList, menuEmpty, kothLobbies, 'btn koth-lobby-row');
+  }
+
+  function syncTypeFallback(want) {
+    gameLobby?.setAutoListen?.(want);
   }
 
   function setText(el, text) {
@@ -237,10 +323,13 @@ export function setupKothLobby({ kothShard, onLeaveSolo, onRestoreBackdrop, onCl
     const presence = kothShard.getLobbyPresence?.() ?? { browsing: kothShard.canStartOrJoinLive?.() };
     const browsing = Boolean(presence.browsing ?? kothShard.canStartOrJoinLive?.());
     const canJoin = Boolean(presence.canJoin ?? kothShard.canJoin?.());
+    const typeLobbyActive = Boolean(matchLobby?.isActive?.());
     const center = shouldCenterKothLobby(presence);
     const showWaiting = shouldShowKothWaitingHud(presence);
 
-    if (!shouldShowKothBrowser(presence)) {
+    if (!shouldShowKothBrowser(presence, { typeLobbyActive })) {
+      kothEmptySince = 0;
+      syncTypeFallback(false);
       setHidden(controls, true);
       setHidden(menuKoth, true);
       return;
@@ -250,15 +339,34 @@ export function setupKothLobby({ kothShard, onLeaveSolo, onRestoreBackdrop, onCl
     controls.classList.toggle('koth-controls-center', center);
 
     if (browsing && !canJoin && !showWaiting) {
+      const kothLobbies = kothShard.listLiveLobbies?.() ?? [];
+      if (kothLobbies.length > 0) {
+        kothEmptySince = 0;
+        syncTypeFallback(false);
+      } else {
+        if (!kothEmptySince) kothEmptySince = Date.now();
+        const emptyForMs = Date.now() - kothEmptySince;
+        syncTypeFallback(shouldAutoListenTypeLobbies({
+          browsing: true,
+          parked: Boolean(presence.parked),
+          typeLobbyActive,
+          kothCount: 0,
+          emptyForMs,
+        }));
+      }
+      const typeLobbies = kothLobbies.length === 0 ? collectTypeBrowseLobbies(gameLobby) : [];
       setHidden(controls, false);
       setHidden(lobbyEl, false);
       setHidden(waitingEl, true);
       setHidden(join, true);
-      paintLists(kothShard.listLiveLobbies?.() ?? []);
+      paintLists(kothLobbies, typeLobbies);
       setHidden(menuBrowse, false);
       setHidden(menuLive, true);
       return;
     }
+
+    kothEmptySince = 0;
+    syncTypeFallback(false);
 
     if (showWaiting || canJoin) {
       setHidden(controls, false);
@@ -276,7 +384,15 @@ export function setupKothLobby({ kothShard, onLeaveSolo, onRestoreBackdrop, onCl
   }
 
   function joinRow(btn) {
-    if (!btn?.dataset.matchId) return;
+    if (!btn) return;
+    if (btn.dataset.kind === 'type' || btn.dataset.roomId) {
+      if (!matchLobby?.joinRoom || matchLobby.isActive?.()) return;
+      onCloseMenu?.();
+      matchLobby.joinRoom(btn.dataset.mode, btn.dataset.roomId, btn.dataset.from);
+      refresh();
+      return;
+    }
+    if (!btn.dataset.matchId) return;
     onLeaveSolo?.();
     onCloseMenu?.();
     kothShard.joinLiveLobby?.(btn.dataset.matchId, btn.dataset.from);
@@ -318,10 +434,10 @@ export function setupKothLobby({ kothShard, onLeaveSolo, onRestoreBackdrop, onCl
   }
 
   listEl.addEventListener('click', (e) => {
-    joinRow(e.target instanceof Element ? e.target.closest('[data-match-id]') : null);
+    joinRow(e.target instanceof Element ? e.target.closest('[data-browse-id], [data-match-id]') : null);
   });
   menuList?.addEventListener('click', (e) => {
-    joinRow(e.target instanceof Element ? e.target.closest('[data-match-id]') : null);
+    joinRow(e.target instanceof Element ? e.target.closest('[data-browse-id], [data-match-id]') : null);
   });
   start.addEventListener('click', () => startLobby(start));
   menuStart?.addEventListener('click', () => startLobby(menuStart));

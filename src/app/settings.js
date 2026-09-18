@@ -7,6 +7,7 @@ import { DEFAULT_SKIN_ID, isDlcPackId, sanitizeSkins } from './dlcCatalog.js';
 
 const SHADOW_KEY = 'shadowMode';
 const FX_KEY = 'fxMode';
+const AA_KEY = 'aaLevel';
 const VOLUME_KEY = 'volumeLevel';
 const NAME_KEY = 'playerName';
 const COLOR_KEY = 'playerColor';
@@ -92,6 +93,14 @@ export const FX_TIERS = [
 /** Fallback when the GPU is unrecognised or storage is unavailable. */
 export const DEFAULT_FX_MODE = 3;
 
+/**
+ * Lite only distinguishes 1× (off) vs 4× MSAA. Same v1 key (`aaLevel`); any
+ * positive stored value is on so a browser that used FXAA / 2× / 4× stays on.
+ */
+export const DEFAULT_AA_ENABLED = true;
+export const MSAA_SAMPLES_OFF = 1;
+export const MSAA_SAMPLES_ON = 4;
+
 /** Master volume 0–100. Same key and default as v1. */
 export const DEFAULT_VOLUME_LEVEL = 25;
 
@@ -144,7 +153,7 @@ function normalizeHex(hex) {
 /** Storage throws in private-mode Safari and when cookies are blocked. */
 function read(key) {
   try {
-    return localStorage.getItem(key);
+    return globalThis.localStorage.getItem(key);
   } catch {
     return null;
   }
@@ -152,7 +161,7 @@ function read(key) {
 
 function write(key, value) {
   try {
-    localStorage.setItem(key, value);
+    globalThis.localStorage.setItem(key, value);
   } catch {
     /* preference just won't survive the session */
   }
@@ -215,6 +224,34 @@ export function fxTier(mode) {
   return FX_TIERS[Math.max(0, Math.min(FX_TIERS.length - 1, mode | 0))];
 }
 
+export function getAaEnabled() {
+  const raw = Number.parseInt(read(AA_KEY) ?? '', 10);
+  if (!Number.isInteger(raw) || raw < 0) return DEFAULT_AA_ENABLED;
+  return raw > 0;
+}
+
+export function setAaEnabled(on) {
+  const next = !!on;
+  write(AA_KEY, next ? String(MSAA_SAMPLES_ON) : '0');
+  return next;
+}
+
+/**
+ * AA for this session. `?aa=0` / `?aa=1` are one-off overrides for profiling —
+ * they do not overwrite the saved preference.
+ */
+export function resolveAaEnabled() {
+  const q = new URLSearchParams(location.search).get('aa');
+  if (q === '0') return false;
+  if (q === '1' || q === '4') return true;
+  return getAaEnabled();
+}
+
+/** Lite swapchain sample count: 1 or 4. */
+export function msaaSamples(enabled = getAaEnabled()) {
+  return enabled ? MSAA_SAMPLES_ON : MSAA_SAMPLES_OFF;
+}
+
 /** @returns {number} 0..100 */
 export function getVolumeLevel() {
   const raw = Number.parseInt(read(VOLUME_KEY) ?? '', 10);
@@ -258,6 +295,22 @@ export function shadowModeForAdapter(info) {
   return DEFAULT_SHADOW_MODE;
 }
 
+/**
+ * 4× MSAA is cheap on discrete parts and Lite's own default. Skip it on
+ * software rasterisers and tile-based mobile GPUs.
+ */
+export function aaEnabledForAdapter(info) {
+  const vendor = String(info?.vendor ?? '').toLowerCase();
+  const arch = String(info?.architecture ?? '').toLowerCase();
+  if (!vendor) return DEFAULT_AA_ENABLED;
+  if (vendor === 'microsoft' || vendor === 'mesa' || arch.includes('swiftshader')) return false;
+  if (vendor === 'qualcomm' || vendor === 'arm' || vendor === 'imagination' || vendor === 'broadcom') {
+    return false;
+  }
+  if (vendor === 'intel') return !arch.startsWith('gen-');
+  return true;
+}
+
 /** Same GPU-class heuristic as shadows; mobile parts start on Low FX. */
 export function fxModeForAdapter(info) {
   const vendor = String(info?.vendor ?? '').toLowerCase();
@@ -278,7 +331,7 @@ export function fxModeForAdapter(info) {
  */
 async function probeAdapterInfo() {
   try {
-    const adapter = await navigator.gpu?.requestAdapter();
+    const adapter = await globalThis.navigator?.gpu?.requestAdapter();
     if (!adapter) return { fallback: true, info: null };
     if (adapter.isFallbackAdapter) return { fallback: true, info: null };
     // adapter.info is the current surface; requestAdapterInfo() the older one.
@@ -313,6 +366,21 @@ export async function ensureFxModeDefault() {
   else mode = fxModeForAdapter(info);
 
   return setFxMode(mode);
+}
+
+/**
+ * Seed AA from the GPU on first run. No-op once a preference exists, including
+ * a leftover v1 `aaLevel`.
+ */
+export async function ensureAaEnabledDefault() {
+  if (read(AA_KEY) !== null) return getAaEnabled();
+
+  let enabled = DEFAULT_AA_ENABLED;
+  const { fallback, info } = await probeAdapterInfo();
+  if (fallback) enabled = false;
+  else enabled = aaEnabledForAdapter(info);
+
+  return setAaEnabled(enabled);
 }
 
 export function shadowTier(mode) {

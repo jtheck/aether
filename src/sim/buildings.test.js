@@ -29,6 +29,9 @@ import {
   VILLAGE_VILLAGER_TICKS,
   BUILDING_MENUS,
   getBuildingMenu,
+  mergeBuildingMenus,
+  buildingOffersMenuItem,
+  capActionMenu,
   createBuilding,
   getBuildingRequires,
   ownerHasBuildingType,
@@ -325,6 +328,31 @@ describe('buildings place', () => {
       false,
       'left the footprint',
     );
+  });
+
+  it('silo footprint is slow but passable, like a camp', () => {
+    const w = createWorld(4);
+    w.buildings = [];
+    const field = buildField(4, { width: 64, height: 64 });
+    const x = 32;
+    const z = 32;
+    clearClaim(field, 'silo', x, z);
+    applyCommands(w, field, [
+      {
+        type: CMD.PLACE_BUILDING,
+        playerId: 0,
+        buildingType: 'silo',
+        tx: fx.fromFloat(x),
+        ty: fx.fromFloat(z),
+      },
+    ]);
+    const tiles = footprintTiles('silo', x, z);
+    assert.equal(tiles.length, 4);
+    for (const { tx, tz } of tiles) {
+      assert.equal(isPassable(field, tx, tz), true, `passable ${tx},${tz}`);
+      assert.equal(isSlowTile(field, tx, tz), true, `slow ${tx},${tz}`);
+      assert.equal(field.structureSlowMask[tz * field.width + tx], 1);
+    }
   });
 
   it('farm footprint is slow but passable', () => {
@@ -925,6 +953,27 @@ describe('village and workshop menus', () => {
     const menu = getBuildingMenu('village');
     assert.equal(menu.units.find((u) => u.id === 'engineer')?.cost.pop, 1);
     assert.equal(menu.units.find((u) => u.id === 'monk')?.cost.pop, 1);
+  });
+
+  it('merges mixed-type action menus and keeps units and upgrades grouped', () => {
+    const menu = mergeBuildingMenus(['barracks', 'tavern']);
+    assert.deepEqual(menu.units.map((u) => u.id), ['warrior', 'archer', 'warlock']);
+    assert.deepEqual(menu.upgrades.map((u) => u.id), ['drayage', 'patronage']);
+    assert.equal(mergeBuildingMenus(['farm', 'mine']), null);
+    assert.equal(buildingOffersMenuItem('barracks', 'unit', 'warrior'), true);
+    assert.equal(buildingOffersMenuItem('barracks', 'unit', 'warlock'), false);
+    assert.equal(buildingOffersMenuItem('tavern', 'upgrade', 'patronage'), true);
+  });
+
+  it('caps a combined menu without dropping an entire side', () => {
+    const menu = {
+      units: [1, 2, 3, 4, 5, 6].map((i) => ({ id: `u${i}` })),
+      upgrades: [1, 2, 3, 4].map((i) => ({ id: `g${i}` })),
+    };
+    const capped = capActionMenu(menu, 8);
+    assert.equal(capped.units.length + capped.upgrades.length, 8);
+    assert.ok(capped.units.length >= 1);
+    assert.ok(capped.upgrades.length >= 1);
   });
 
   it('slows the villager trickle at the soft cap but still trains', () => {

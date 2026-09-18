@@ -3,8 +3,8 @@
 // owner's bank, repeat. Farms are the exception: food is banked in place while
 // the villager wanders the plot (no haul, no carry visual). Wood/rock harvest
 // plays chop; carry (VAT + overhead prop) starts only on the walk back.
-// An attached silo is a satellite drop-off and an extra gather circle of the
-// source building's work radius.
+// An attached silo is a satellite drop-off and an extra gather circle one
+// tile tighter than the source building's work radius.
 //
 // Modeled on repair.js: a per-tick system drives locomotion via queuePath and
 // holds the unit in range while it works. All state lives on the world (SoA +
@@ -134,6 +134,8 @@ const DEPOSIT_TYPES = new Set(['camp', 'mine']);
 export const CAMP_WORK_RADIUS_F = 28;
 /** Farm plots only recruit from the 3×3 and a tile of grass around it. */
 export const FARM_WORK_RADIUS_F = 16;
+/** Attached silo satellite circle is one tile tighter than the source. */
+export const SILO_WORK_RADIUS_PENALTY_F = TILE_SIZE_F;
 /** Reach added per engineer loitering near the drop-off (world units). */
 export const ENGINEER_RADIUS_BONUS_F = 8;
 /** How close an engineer must be to a drop-off to extend it (world units). */
@@ -169,6 +171,7 @@ const DEFEND_PHASE = 6;
 
 const CAMP_WORK_RADIUS = fx.fromFloat(CAMP_WORK_RADIUS_F);
 const FARM_WORK_RADIUS = fx.fromFloat(FARM_WORK_RADIUS_F);
+const SILO_WORK_RADIUS_PENALTY = fx.fromFloat(SILO_WORK_RADIUS_PENALTY_F);
 const ENGINEER_RADIUS_BONUS = fx.fromFloat(ENGINEER_RADIUS_BONUS_F);
 const CREW_RADIUS_BONUS = fx.fromFloat(CREW_RADIUS_BONUS_F);
 const ENGINEER_ASSIST_RANGE = fx.fromFloat(ENGINEER_ASSIST_RANGE_F);
@@ -660,15 +663,30 @@ export function campWorkRadiusWorld(w, b, buildings) {
   return base + eng * ENGINEER_RADIUS_BONUS_F + crew * CREW_RADIUS_BONUS_F;
 }
 
+/** Satellite gather reach for an attached silo (world units). */
+export function siloWorkRadiusWorld(sourceRadius) {
+  const r = sourceRadius - SILO_WORK_RADIUS_PENALTY_F;
+  return r > 0 ? r : 0;
+}
+
+function siloWorkRadiusFx(sourceRadius) {
+  const r = sourceRadius - SILO_WORK_RADIUS_PENALTY;
+  return r > 0 ? r : 0;
+}
+
 /**
  * True when (px, py) sits inside the drop-off's work circle or any attached
  * silo's copy of that circle.
  */
-function inDropOffReach(buildings, b, px, py, radiusSq) {
+function inDropOffReach(buildings, b, px, py, radius) {
+  const radiusSq = fx.mul(radius, radius);
   if (fx.dist2(px, py, b.x, b.z) <= radiusSq) return true;
   const silos = silosAttachedTo(buildings, b, 'fixed');
+  if (!silos.length) return false;
+  const siloR = siloWorkRadiusFx(radius);
+  const siloR2 = fx.mul(siloR, siloR);
   for (let i = 0; i < silos.length; i++) {
-    if (fx.dist2(px, py, silos[i].x, silos[i].z) <= radiusSq) return true;
+    if (fx.dist2(px, py, silos[i].x, silos[i].z) <= siloR2) return true;
   }
   return false;
 }
@@ -726,7 +744,7 @@ function nearestNodeForDropOff(field, buildings, b, radius, fromX, fromY, wantCl
     bestD = fx.dist2(fromX, fromY, tileCenterX(own % width), tileCenterY((own / width) | 0));
   }
   for (let i = 0; i < silos.length; i++) {
-    const tile = nearestNodeWithinRadius(field, silos[i], radius, fromX, fromY, wantClass);
+    const tile = nearestNodeWithinRadius(field, silos[i], siloWorkRadiusFx(radius), fromX, fromY, wantClass);
     if (tile < 0) continue;
     const d = fx.dist2(fromX, fromY, tileCenterX(tile % width), tileCenterY((tile / width) | 0));
     if (d < bestD) {
@@ -775,7 +793,6 @@ export function campAutoAssignSystem(w, field) {
     if (wantClass < 0) continue; // agora-like: deposit only, never recruits
     const owner = b.owner;
     const radius = campWorkRadius(w, b, field);
-    const radiusSq = fx.mul(radius, radius);
     const cap = maxWorkersFor(b.type);
 
     // Crew is per-building (farm tile / nearest camp or mine), not "anyone
@@ -787,7 +804,7 @@ export function campAutoAssignSystem(w, field) {
       if (!w.alive[i] || w.owner[i] !== owner || w.type[i] !== UNIT.VILLAGER) continue;
       if (w.order[i] !== ORDER.IDLE) continue;
       if ((w.carriedAmt[i] | 0) > 0) continue; // sendIdleCarriersHome owns these
-      if (!inDropOffReach(w.buildings, b, w.px[i], w.py[i], radiusSq)) continue;
+      if (!inDropOffReach(w.buildings, b, w.px[i], w.py[i], radius)) continue;
       const tile = nearestNodeForDropOff(field, w.buildings, b, radius, w.px[i], w.py[i], wantClass);
       if (tile < 0) break; // no matching nodes in reach — nothing to recruit for
       beginGather(w, field, i, tile);

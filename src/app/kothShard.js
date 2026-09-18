@@ -72,8 +72,11 @@ import { generateLobbyName } from '../koth/lobbyName.js';
 import {
   CHAT_MIN_INTERVAL_MS,
   CHAT_TYPE,
+  chatSpeakPayload,
   createChatLog,
+  ingestChat,
   makeChatMessage,
+  unwrapChatMessage,
 } from '../lobby/chat.js';
 import { isLiveMatchMember, isMatchLeavePresence, isSpectatorMember } from '../koth/presence.js';
 import {
@@ -730,7 +733,15 @@ export function createKothShard(options = {}) {
     return appState !== KOTH_APP_STATE.PRIVATE_SANDBOX;
   }
 
-  /** Chat over the shard's persistent socket room — reaches players + spectators. */
+  function noteChat(raw, { requireMatchId = false } = {}) {
+    if (!unwrapChatMessage(raw)) return false;
+    if (requireMatchId && raw?.matchId && raw.matchId !== matchId) return true;
+    if (isChatActive() && ingestChat(chatLog, raw)) emitListeners(chatListeners);
+    return true;
+  }
+
+  /** Chat over the shard room. Local paint first; wire uses GetFire `content`
+   *  plus the presence broadcast and RTC so other clients actually receive it. */
   function sendChat(text) {
     if (!isChatActive()) return false;
     const now = Date.now();
@@ -742,9 +753,14 @@ export function createKothShard(options = {}) {
       text,
     });
     if (!msg) return false;
-    if (!p2p?.sendLobbyMessage) return false;
-    if (!p2p.sendLobbyMessage(shardLobbyName(matchId), msg)) return false;
     lastChatSendAt = now;
+    if (chatLog.add(msg)) emitListeners(chatListeners);
+    const room = appState === KOTH_APP_STATE.MATCHMAKING
+      ? MATCHMAKING_LOBBY
+      : shardLobbyName(matchId);
+    p2p?.sendLobbyMessage?.(room, chatSpeakPayload(msg));
+    p2p?.broadcast?.({ ...msg, matchId }, BROADCAST);
+    p2p?.sendData?.(msg);
     return true;
   }
 
@@ -3426,6 +3442,7 @@ export function createKothShard(options = {}) {
     }
     emitListeners(dataListeners, msg, fromPeerId);
     if (!msg?.type) return;
+    if (noteChat(msg, { requireMatchId: true })) return;
     if (msg.v !== KOTH_PROTOCOL_VERSION) return;
     if (msg._mid) {
       if (seenMessageIds.has(msg._mid)) return;
@@ -4080,6 +4097,7 @@ export function createKothShard(options = {}) {
     const data = raw && raw.type === 'broadcast' && raw.content ? raw.content : raw;
     emitListeners(broadcastListeners, data, raw);
     if (!data?.type) return;
+    if (noteChat(data, { requireMatchId: true })) return;
     if (data.type !== MSG.SHARD_PRESENCE) {
       onGameBroadcastMessage(data);
       return;
@@ -4090,14 +4108,13 @@ export function createKothShard(options = {}) {
   function onGameLobbyMessage(data, lobbyName) {
     emitListeners(lobbyMessageListeners, data, lobbyName);
     if (!data?.type) return;
+    const shard = shardLobbyName(matchId);
+    const lobbyChat = lobbyName === shard
+      || (lobbyName === MATCHMAKING_LOBBY && appState === KOTH_APP_STATE.MATCHMAKING);
+    if (lobbyChat && noteChat(data)) return;
     // Discovery lobby — track nothing, never RTC here.
     if (lobbyName === MATCHMAKING_LOBBY) return;
-    if (data.type === CHAT_TYPE) {
-      if (lobbyName === shardLobbyName(matchId) && chatLog.add(data)) {
-        emitListeners(chatListeners);
-      }
-      return;
-    }
+    if (data.type === CHAT_TYPE) return;
     if (data.type === 'player_join' || data.type === 'player_rejoin') {
       if (userIdsMatch(data.from, localUserId)) {
         broadcastPresence();

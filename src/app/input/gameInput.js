@@ -33,6 +33,8 @@ import {
   boxSelectWinner,
   inspectForeignOnClick,
   mergeBuildingSels,
+  placementDownKind,
+  placementHoverFollowsPointer,
   placementTapKind,
   radialClickKind,
   radialHubFramedBuilding,
@@ -75,14 +77,15 @@ const ABILITY_HOLD_MS = 400;
  * @param {(x: number, z: number, y?: number, cmdType?: number, tile?: number, extra?: { arrow?: number }) => void} [opts.onOrder]
  * @param {(x: number, z: number, y?: number) => void} [opts.onAbilityHold]
  * @param {() => boolean} [opts.canInteract]
- * @param {() => boolean} [opts.canIssueCommands] — select/inspect when false; no orders
+ * @param {() => boolean} [opts.canIssueCommands] — when false, select/inspect only (no order markers)
  * @param {() => { owner: number, x: number, z: number }[]} [opts.getAgoras]
  * @param {() => { owner: number, type: string, x: number, z: number, yaw?: number }[]} [opts.getBuildings]
  * @param {(sel: { kind: 'agora' | 'building', index: number } | null, ptr?: { clientX: number, clientY: number }, all?: { kind: 'agora' | 'building', index: number }[]) => void} [opts.onBuildingSelected]
  * @param {() => string | null} [opts.getPlacingType]
  * @param {(buildingType: string | null) => void} [opts.setPlacingType]
- * @param {(x: number, z: number, yaw?: number) => void} [opts.onPlacementMove]
- * @param {(x: number, z: number, yaw?: number) => void} [opts.onPlacementConfirm]
+ * @param {(x: number, z: number, yaw?: number) => { x: number, z: number, valid?: boolean } | null | void} [opts.onPlacementMove]
+ * @param {(x: number, z: number, yaw?: number) => boolean | void} [opts.onPlacementConfirm]
+ * @param {(parked: boolean) => void} [opts.onPlacementParked]
  * @param {() => void} [opts.onPlacementCancel]
  * @param {() => boolean} [opts.isPlacingRally]
  * @param {(x: number, z: number) => void} [opts.onRallyMove]
@@ -122,6 +125,7 @@ export function createGameInput(opts) {
     setPlacingType,
     onPlacementMove,
     onPlacementConfirm,
+    onPlacementParked,
     onPlacementCancel,
     isPlacingRally,
     onRallyMove,
@@ -231,6 +235,9 @@ export function createGameInput(opts) {
   let lastCtrlGroupTap = null;
   /** @type {{ x: number, z: number } | null} */
   let placeAnchor = null;
+  let placeParked = false;
+  /** @type {'preview' | 'rotate' | 'confirm' | null} */
+  let placeDownKind = null;
   let placeRotating = false;
   let boxLastL = NaN;
   let boxLastT = NaN;
@@ -260,7 +267,7 @@ export function createGameInput(opts) {
     return inputEnabled && localPlayerId >= 0 && (canInteract?.() ?? true);
   }
 
-  /** Selection stays up during story camera; orders / casts / place / train do not. */
+  /** Order gestures (arrows, menus, place/rally). Submit may still drop the command. */
   function canIssueOrders() {
     return canUseInput() && (canIssueCommands?.() ?? true);
   }
@@ -275,7 +282,7 @@ export function createGameInput(opts) {
    */
   function abandonPlacement() {
     if (!isPlacing()) return;
-    resetPlaceGesture();
+    clearPlacementPark();
     if (isPlacingRally?.()) {
       if (clearRallyPlacement) clearRallyPlacement();
       else onRallyCancel?.();
@@ -287,12 +294,55 @@ export function createGameInput(opts) {
   }
 
   function emitPlacementGhost(x, z, yaw = currentYaw()) {
-    onPlacementMove?.(x, z, yaw);
+    const snapped = onPlacementMove?.(x, z, yaw);
+    if (snapped && Number.isFinite(snapped.x) && Number.isFinite(snapped.z)) {
+      return { x: snapped.x, z: snapped.z };
+    }
+    return { x, z };
   }
 
-  function resetPlaceGesture() {
+  function parkPlacement(x, z, yaw = currentYaw()) {
+    placeAnchor = emitPlacementGhost(x, z, yaw);
+    placeParked = true;
+    onPlacementParked?.(true);
+  }
+
+  function clearPlacementPark() {
+    placeParked = false;
     placeAnchor = null;
     placeRotating = false;
+    placeDownKind = null;
+    onPlacementParked?.(false);
+  }
+
+  /** In-flight press only — a parked ghost survives cancelDrag / 2-finger camera. */
+  function resetPlaceGesture() {
+    placeRotating = false;
+    placeDownKind = null;
+  }
+
+  function hitSceneConfirm(clientX, clientY) {
+    return renderer.hitSceneConfirm?.(clientX, clientY) === true;
+  }
+
+  function hitPlacementGhost(clientX, clientY) {
+    if (!placeParked || !placeAnchor) return false;
+    const type = getPlacingType?.();
+    if (!type) return false;
+    const ray = renderer.clientPickingRay?.(clientX, clientY) ?? null;
+    if (!ray) return false;
+    const { halfW, halfD } = buildingFootHalf(type);
+    const gy = renderer.groundYAt?.(placeAnchor.x, placeAnchor.z) ?? 0;
+    return rayHitYawBox(
+      ray,
+      placeAnchor.x,
+      placeAnchor.z,
+      currentYaw(),
+      halfW,
+      gy - 0.2,
+      halfD,
+      gy + BUILDING_PICK_HEIGHT,
+    ) != null;
   }
 
   function showSelectionBox(x0, y0, x1, y1) {
@@ -1466,23 +1516,32 @@ export function createGameInput(opts) {
       return true;
     }
 
-    // Placement: LMB down locks anchor; drag past threshold rotates (30° snaps).
+    // Placement: drag-around previews; release parks; ghost click rotates; 1^ stamps.
     // Agora build radial is hidden while placing (clicks pass through).
-    // Rally mode: click-to-set (no rotate).
+    // Rally mode: click-to-set (no rotate / park).
     if (isPlacing()) {
       radialGesture = Boolean(isRadialOpen?.() && hitRadial?.(e.clientX, e.clientY));
       placeRotating = false;
-      placeAnchor = null;
-      if (!radialGesture) {
-        const g = renderer.screenToGround?.(e.clientX, e.clientY);
-        if (g) {
-          if (isPlacingRally?.()) {
-            onRallyMove?.(g.x, g.z);
-          } else {
-            placeAnchor = { x: g.x, z: g.z };
-            emitPlacementGhost(g.x, g.z, currentYaw());
-          }
+      placeDownKind = null;
+      if (isPlacingRally?.()) {
+        if (!radialGesture) {
+          const g = renderer.screenToGround?.(e.clientX, e.clientY);
+          if (g) onRallyMove?.(g.x, g.z);
         }
+        return true;
+      }
+      placeDownKind = placementDownKind({
+        parked: placeParked,
+        hitConfirm: hitSceneConfirm(e.clientX, e.clientY),
+        hitGhost: hitPlacementGhost(e.clientX, e.clientY),
+      });
+      if (placeDownKind === 'preview') {
+        if (placeParked) {
+          placeParked = false;
+          onPlacementParked?.(false);
+        }
+        const g = renderer.screenToGround?.(e.clientX, e.clientY);
+        if (g) placeAnchor = emitPlacementGhost(g.x, g.z, currentYaw());
       }
       return true;
     }
@@ -1512,25 +1571,24 @@ export function createGameInput(opts) {
         return true;
       }
 
-      // LMB held with an anchor → rotate once dragged far enough.
-      if (dragPointerId === e.pointerId && placeAnchor && lmbDownPos) {
+      if (placeDownKind === 'confirm') return true;
+
+      // Parked ghost: drag past threshold yaws in 30° snaps. Release stays parked.
+      if (placeDownKind === 'rotate' && placeAnchor && lmbDownPos) {
         const moved = Math.hypot(e.clientX - lmbDownPos.x, e.clientY - lmbDownPos.y);
         if (moved > PLACE_ROTATE_THRESHOLD_PX) {
           placeRotating = true;
           const yaw = snapBuildingYaw(Math.atan2(g.x - placeAnchor.x, g.z - placeAnchor.z));
           setPlacementYaw?.(yaw);
           emitPlacementGhost(placeAnchor.x, placeAnchor.z, yaw);
-          return true;
-        }
-        if (placeRotating) {
+        } else if (placeRotating) {
           emitPlacementGhost(placeAnchor.x, placeAnchor.z, currentYaw());
-          return true;
         }
+        return true;
       }
 
-      // Free cursor move (or pre-threshold hold): ghost follows pointer.
-      if (dragPointerId !== e.pointerId || !placeRotating) {
-        emitPlacementGhost(g.x, g.z, currentYaw());
+      if (placementHoverFollowsPointer(placeParked, placeDownKind === 'preview')) {
+        placeAnchor = emitPlacementGhost(g.x, g.z, currentYaw());
       }
       return true;
     }
@@ -1804,12 +1862,21 @@ export function createGameInput(opts) {
           }
         } else {
           const yaw = currentYaw();
-          if (placeRotating && placeAnchor) {
-            if (canIssueOrders()) onPlacementConfirm?.(placeAnchor.x, placeAnchor.z, yaw);
+          const tap =
+            d &&
+            Math.hypot(e.clientX - d.x, e.clientY - d.y) <= DRAG_THRESHOLD_PX;
+          if (placeDownKind === 'confirm') {
+            lastTap = null;
+            if (tap && hitSceneConfirm(e.clientX, e.clientY) && placeAnchor && canIssueOrders()) {
+              if (onPlacementConfirm?.(placeAnchor.x, placeAnchor.z, yaw) === true) {
+                placeParked = false;
+                placeAnchor = null;
+                onPlacementParked?.(false);
+              }
+            }
+          } else if (placeDownKind === 'rotate') {
+            lastTap = null;
           } else {
-            const tap =
-              d &&
-              Math.hypot(e.clientX - d.x, e.clientY - d.y) <= DRAG_THRESHOLD_PX;
             const ray = tap
               ? renderer.clientPickingRay?.(e.clientX, e.clientY) ?? null
               : null;
@@ -1826,11 +1893,11 @@ export function createGameInput(opts) {
               cancelPlacement();
             } else if (tapKind === 'chrome') {
               lastTap = null;
-            } else if (tap) {
+            } else {
               const g =
                 placeAnchor ??
                 renderer.screenToGround?.(e.clientX, e.clientY);
-              if (g && canIssueOrders()) onPlacementConfirm?.(g.x, g.z, yaw);
+              if (g) parkPlacement(g.x, g.z, yaw);
             }
           }
         }
@@ -2055,7 +2122,7 @@ export function createGameInput(opts) {
   /** Esc while placing — cancel ghost and return to the agora radial. */
   function cancelPlacement() {
     if (!isPlacing()) return false;
-    resetPlaceGesture();
+    clearPlacementPark();
     if (isPlacingRally?.()) {
       onRallyCancel?.();
       return true;
@@ -2159,6 +2226,7 @@ export function createGameInput(opts) {
     },
     hitControlGroupHud,
     hitSelectionHud,
+    hitSceneConfirm,
     handleControlGroupKeyDown,
     handleControlGroupKeyUp,
     clearControlGroups() {

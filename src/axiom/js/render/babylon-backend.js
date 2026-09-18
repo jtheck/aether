@@ -44,6 +44,15 @@ export function createBabylonBackend() {
     if (!engine || !scene) throw new Error('BabylonBackend: call init() first');
   }
 
+  /** Look / right / up. getForwardRay honors LH (+Z) vs RH (−Z); Axis.Z does not. */
+  function cameraLookBasis() {
+    const B = globalThis.BABYLON;
+    const forward = camera.getForwardRay?.().direction ?? camera.getDirection(B.Axis.Z);
+    const right = camera.getDirection(B.Axis.X);
+    const up = camera.getDirection(B.Axis.Y);
+    return { forward, right, up };
+  }
+
   function syncWaveEmitters() {
     const tube = wavePresetId() === 'tube';
     if (waveLattice) waveLattice.setEnabled(tube);
@@ -142,22 +151,16 @@ export function createBabylonBackend() {
       scene.clearColor = new B.Color3(0.1, 0.1, 0.1);
       scene.shadowsEnabled = false;
 
+      // Same seat as Three: (0, 5, −5), look −Z, pitch down 0.7.
+      // Default FreeCamera + setTarget(origin) looks +Z — 180° off the default backend.
+      const startPitch = 0.7;
       camera = new B.FreeCamera('camera', new B.Vector3(0, 5, -5), scene);
-      camera.setTarget(B.Vector3.Zero());
+      camera.setTarget(new B.Vector3(0, 5 - Math.sin(startPitch), -5 - Math.cos(startPitch)));
       camera.speed = 5.5;
-      // Canvas must be focusable for FreeCamera keyboard input
+      // Fly comes from app.js → applyGamepadFly (same intent as Three / Lite).
       canvas.tabIndex = 0;
       canvas.style.outline = 'none';
       canvas.addEventListener('pointerdown', () => canvas.focus());
-      camera.attachControl(canvas, true);
-      // ESDF (not WASD) — keyCode: E=69 S=83 D=68 F=70; arrows as fallback
-      camera.keysUp = [69, 38]; // E, ↑
-      camera.keysDown = [68, 40]; // D, ↓
-      camera.keysLeft = [83, 37]; // S, ←
-      camera.keysRight = [70, 39]; // F, →
-      // Vertical: R up, C down (keep hand on ESDF row)
-      camera.keysUpward = [82]; // R
-      camera.keysDownward = [67]; // C
       canvas.focus();
 
       const light = new B.DirectionalLight(
@@ -426,22 +429,27 @@ export function createBabylonBackend() {
 
     applyGamepadFly(fly = {}) {
       if (!camera) return;
-      const B = globalThis.BABYLON;
       if (fly.lookYaw || fly.lookPitch) {
+        // LH / look +Z local: same signs as Lite. lookRight > 0 looks right.
         camera.cameraRotation.y += fly.lookYaw || 0;
         camera.cameraRotation.x -= fly.lookPitch || 0;
       }
       const mx = fly.mx || 0;
       const my = fly.my || 0;
       const mz = fly.mz || 0;
-      if (!mx && !my && !mz) return;
+      const wheelX = fly.wheelX || 0;
+      const wheelZ = fly.wheelZ || 0;
+      if (!mx && !my && !mz && !wheelX && !wheelZ) return;
       const speed = (camera.speed || 5.5) * (1 / 60) * 16;
-      const forward = camera.getDirection(B.Axis.Z);
-      const right = camera.getDirection(B.Axis.X);
-      // FreeCamera local +Z is behind the view — forward uses −Z
-      camera.cameraDirection.addInPlace(forward.scale(-mz * speed));
-      camera.cameraDirection.addInPlace(right.scale(mx * speed));
-      if (my) camera.cameraDirection.y += my * speed;
+      const { forward, right } = cameraLookBasis();
+      if (mx || my || mz) {
+        const len = Math.hypot(mx, my, mz) || 1;
+        camera.cameraDirection.addInPlace(forward.scale((mz / len) * speed));
+        camera.cameraDirection.addInPlace(right.scale((mx / len) * speed));
+        if (my) camera.cameraDirection.y += (my / len) * speed;
+      }
+      if (wheelZ) camera.cameraDirection.addInPlace(forward.scale(wheelZ * speed));
+      if (wheelX) camera.cameraDirection.addInPlace(right.scale(wheelX * speed));
     },
 
     /**
@@ -454,16 +462,24 @@ export function createBabylonBackend() {
           x: 0,
           y: 0,
           z: 0,
+          forward: { x: 0, y: 0, z: -1 },
+          fov: 60,
+          aspect: 16 / 9,
           billboard: { rx: 1, ry: 0, rz: 0, ux: 0, uy: 1, uz: 0 },
         };
       }
-      const B = globalThis.BABYLON;
-      const right = camera.getDirection(B.Axis.X);
-      const up = camera.getDirection(B.Axis.Y);
+      const { forward, right, up } = cameraLookBasis();
+      const aspect =
+        engine?.getAspectRatio?.(camera) ||
+        (canvas?.clientWidth || 16) / Math.max(1, canvas?.clientHeight || 9);
       return {
         x: camera.position.x,
         y: camera.position.y,
         z: camera.position.z,
+        // LH right × up is +Z; poseAxes defaults to RH (up × right = −Z).
+        forward: { x: forward.x, y: forward.y, z: forward.z },
+        fov: camera.fov,
+        aspect,
         billboard: {
           rx: right.x,
           ry: right.y,

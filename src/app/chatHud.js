@@ -1,6 +1,8 @@
 // Match chat HUD. Self-contained overlay (bottom-left) that renders the active
 // room's chat log and sends on the persistent lobby socket. Works in the
 // waiting room and during a live match; players and spectators share the room.
+// Send appends locally so a line appears above the composer without waiting
+// for the socket echo.
 //
 // Tap-driven so mobile works without a hardware keyboard: a Chat button opens
 // the composer (input + Send); desktop can also press Enter as a shortcut.
@@ -163,7 +165,8 @@ export function setupChatHud({ resolveChat, getUserId } = {}) {
   function trySend() {
     const chat = resolveChat();
     const text = input.value;
-    if (chat?.active && text.trim()) chat.send(text);
+    if (!chat?.active || !text.trim()) return;
+    if (!chat.send(text)) return;
     input.value = '';
     // Stay open so mobile users can keep typing without re-tapping.
     refresh();

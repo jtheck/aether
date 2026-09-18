@@ -1,11 +1,16 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  TYPE_LISTEN_FALLBACK_MS,
+  browseRowId,
+  collectTypeBrowseLobbies,
+  formatBrowseRow,
   formatInLobbyStatus,
   formatLobbyPlayerLine,
   formatLobbyRow,
   lobbyPeople,
   lobbyRowSignature,
+  shouldAutoListenTypeLobbies,
   shouldCenterKothLobby,
   shouldShowKothBrowser,
   shouldShowKothWaitingHud,
@@ -107,6 +112,55 @@ describe('koth lobby rows', () => {
   it('hides the KOTH browser while another game type is live', () => {
     assert.equal(shouldShowKothBrowser({ browsing: true }), true);
     assert.equal(shouldShowKothBrowser({ parked: true, browsing: true }), false);
+    assert.equal(shouldShowKothBrowser({ browsing: true }, { typeLobbyActive: true }), false);
+  });
+
+  it('waits out a quiet KOTH window before joining type channels', () => {
+    assert.equal(shouldAutoListenTypeLobbies({
+      browsing: true,
+      emptyForMs: TYPE_LISTEN_FALLBACK_MS - 1,
+    }), false);
+    assert.equal(shouldAutoListenTypeLobbies({
+      browsing: true,
+      emptyForMs: TYPE_LISTEN_FALLBACK_MS,
+    }), true);
+    assert.equal(shouldAutoListenTypeLobbies({
+      browsing: true,
+      kothCount: 1,
+      emptyForMs: TYPE_LISTEN_FALLBACK_MS,
+    }), false);
+    assert.equal(shouldAutoListenTypeLobbies({
+      browsing: false,
+      emptyForMs: TYPE_LISTEN_FALLBACK_MS,
+    }), false);
+  });
+
+  it('labels type rows in the glass box with the mode name', () => {
+    const row = formatBrowseRow({
+      kind: 'type',
+      mode: 'onevsone',
+      roomId: 'lobby-abc',
+      hostName: 'Blind',
+      playerCount: 1,
+      maxPlayers: 2,
+      settings: { fieldSize: 'tiny' },
+    });
+    assert.equal(row.title, 'Blind');
+    assert.equal(row.meta, '1 vs 1  ·  1/2  ·  tiny');
+    assert.equal(browseRowId({ kind: 'type', mode: 'teams', roomId: 'r1' }), 'type:teams:r1');
+  });
+
+  it('collects type lobbies only for channels we are listening to', () => {
+    const rows = collectTypeBrowseLobbies({
+      isListening: (mode) => mode === 'teams',
+      listLobbies: (mode) => (mode === 'teams'
+        ? [{ roomId: 'r1', hostName: 'Aria', playerCount: 2, maxPlayers: 4 }]
+        : [{ roomId: 'ignored', hostName: 'Nope' }]),
+    });
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].kind, 'type');
+    assert.equal(rows[0].mode, 'teams');
+    assert.equal(rows[0].roomId, 'r1');
   });
 
   it('centers the HUD while waiting, not while browsing, playing, or lagging', () => {

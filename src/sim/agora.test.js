@@ -9,10 +9,15 @@ import {
   agoraCaptureSystem,
   agoraOverlayActive,
   AGORA_CAPTURE_TICKS,
+  AGORA_FINALE_HOLD_TICKS,
   AGORA_OCCUPATION_RADIUS,
   AGORA_PHASE_LOCK,
   AGORA_PHASE_TUG,
+  AGORA_RITE_FINALE,
+  AGORA_RITE_NONE,
+  AGORA_RITE_UNLOCK,
   AGORA_TUG_TICKS,
+  AGORA_UNLOCK_HOLD_TICKS,
 } from './agora.js';
 import * as fx from './fixed.js';
 
@@ -73,11 +78,21 @@ describe('agora capture', () => {
     assert.equal(w.agoras[0].phase, AGORA_PHASE_TUG);
     assert.equal(w.agoras[0].progress, 0);
     assert.equal(w.agoras[0].tug, 0);
+    assert.equal(w.agoras[0].rite, AGORA_RITE_UNLOCK);
+    assert.equal(w.agoras[0].hold, AGORA_UNLOCK_HOLD_TICKS);
     assert.equal(w.agoras[0].owner, 0);
     assert.equal(w.agoras[0].founder, 0);
     assert.equal(w.agoras[0].captured, 0);
     assert.equal(w.kothMatchOver, 0);
     assert.equal(agoraOverlayActive(w.agoras[0]), true);
+    agoraCaptureSystem(w);
+    assert.equal(w.agoras[0].tug, 0);
+    assert.equal(w.agoras[0].hold, AGORA_UNLOCK_HOLD_TICKS - 1);
+    for (let i = 1; i < AGORA_UNLOCK_HOLD_TICKS; i++) agoraCaptureSystem(w);
+    assert.equal(w.agoras[0].rite, AGORA_RITE_NONE);
+    assert.equal(w.agoras[0].hold, 0);
+    agoraCaptureSystem(w);
+    assert.ok(w.agoras[0].tug >= 1);
   });
 
   it('hides capture chips until the pad is contested or filling', () => {
@@ -93,6 +108,9 @@ describe('agora capture', () => {
     idle.capturer = -1;
     idle.phase = AGORA_PHASE_TUG;
     assert.equal(agoraOverlayActive(idle), false);
+    idle.hold = 4;
+    idle.rite = AGORA_RITE_UNLOCK;
+    assert.equal(agoraOverlayActive(idle), true);
   });
 
   it('occupying the tug ends the match when the mode says so', () => {
@@ -107,6 +125,11 @@ describe('agora capture', () => {
     w.agoras[0].phase = AGORA_PHASE_TUG;
     w.agoras[0].tug = AGORA_TUG_TICKS - 1;
     agoraCaptureSystem(w);
+    assert.equal(w.agoras[0].captured, 0);
+    assert.equal(w.agoras[0].rite, AGORA_RITE_FINALE);
+    assert.equal(w.agoras[0].hold, AGORA_FINALE_HOLD_TICKS);
+    assert.equal(w.kothMatchOver, 0);
+    for (let i = 0; i < AGORA_FINALE_HOLD_TICKS; i++) agoraCaptureSystem(w);
     assert.equal(w.agoras[0].captured, 1);
     assert.equal(w.agoras[0].owner, 1);
     assert.equal(w.agoras[0].founder, 1);
@@ -126,6 +149,8 @@ describe('agora capture', () => {
     w.agoras[0].phase = AGORA_PHASE_TUG;
     w.agoras[0].tug = AGORA_TUG_TICKS - 1;
     agoraCaptureSystem(w);
+    assert.equal(w.agoras[0].rite, AGORA_RITE_FINALE);
+    for (let i = 0; i < AGORA_FINALE_HOLD_TICKS; i++) agoraCaptureSystem(w);
     assert.equal(w.agoras[0].owner, 1);
     assert.equal(w.agoras[0].phase, AGORA_PHASE_LOCK);
     assert.equal(w.agoras[0].captured, 0);
@@ -142,6 +167,8 @@ describe('agora capture', () => {
     spawnNear(w, 0, 0, 0);
 
     agoraCaptureSystem(w);
+    assert.equal(w.agoras[0].rite, AGORA_RITE_FINALE);
+    for (let i = 0; i < AGORA_FINALE_HOLD_TICKS; i++) agoraCaptureSystem(w);
     assert.equal(w.agoras[0].phase, AGORA_PHASE_LOCK);
     assert.equal(w.agoras[0].owner, 0);
     assert.equal(w.agoras[0].tug, 0);

@@ -88,11 +88,13 @@ import { createFireballFx } from './fireballFx.js';
 import { createMushroomPreviews } from './mushrooms.js';
 import { createCarryLoads } from './carryLoads.js';
 import { createAgoraProps } from './agoras.js';
+import { AGORA_DECK_Y, agoraWalkPadsFromList, agoraWalkYAt } from './agoraWalk.js';
 import { createBuildingProps } from './buildings.js';
 import { createBuildingRadialMenu } from './buildingRadial.js';
 import { createBuildingActionRadial } from './buildingActionRadial.js';
 import { createSelectionHud } from './selectionHud.js';
 import { createControlGroupHud } from './controlGroupHud.js';
+import { createSceneConfirm } from './sceneConfirm.js';
 import { createSelectionBoxOverlay } from './selectionBox.js';
 import {
   FX_DISTANCE_SQ,
@@ -211,7 +213,7 @@ function rayHitGround(ray) {
  */
 function rayHitTerrain(ray, heightAt) {
   if (!heightAt) return rayHitGround(ray);
-  const maxH = HEIGHT_AMPLITUDE + 1;
+  const maxH = HEIGHT_AMPLITUDE + 1 + AGORA_DECK_Y;
   const minH = -0.5;
   // Looking down: march from sky band to below min surface.
   let t0 = 0;
@@ -737,7 +739,7 @@ async function createTypeBatch(engine, typeId, activeCount, gpuCap, packId = nul
 /**
  * @param {HTMLCanvasElement} canvas
  * @param {number} capacity
- * @param {{ types?: Int8Array | Uint8Array | number[], owners?: Uint8Array | number[], gpuCapacity?: number, field?: object | null, onAnimLoadProgress?: (done: number, total: number) => void }} [opts]
+ * @param {{ types?: Int8Array | Uint8Array | number[], owners?: Uint8Array | number[], gpuCapacity?: number, field?: object | null, onAnimLoadProgress?: (done: number, total: number) => void, msaaSamples?: 1 | 4 }} [opts]
  */
 function normalizeOwnerSkins(raw) {
   /** @type {Record<string, Record<number, string>>} */
@@ -779,7 +781,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     const skins = ownerSkins[owner] ?? ownerSkins[String(owner)];
     return packForUnit(skins, typeId);
   }
-  const engine = await createEngine(canvas, { msaaSamples: 1 });
+  // Lite only honors 1 (off) vs 4 (4× MSAA); sample count is fixed on the
+  // swapchain at construction — the settings toggle persists and reloads.
+  const msaaSamples = opts.msaaSamples === 4 ? 4 : 1;
+  const engine = await createEngine(canvas, { msaaSamples });
   bootLog('engine');
   const scene = createSceneContext(engine);
   const buildingMenuFontPromise = loadFont('/assets/fonts/Roboto-Regular.ttf').catch((err) => {
@@ -914,12 +919,26 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let selectionBoxClient = null;
   /** @type {{ x: number, z: number, radius: number, owner?: number }[] | { x: number, z: number, radius: number, owner?: number } | null} */
   let lastWorkRadiusSpec = null;
+  /** @type {{ x0: number, z0: number, x1: number, z1: number }[] | null} */
+  let lastWorkRadiusLinks = null;
   /** @type {unknown} */
   let lastBuildingHighlight = null;
   /** @type {{ setFocus: Function, dispose: () => void } | null} */
   let placementGrid = null;
   /** @type {{ type: string, x: number, z: number, valid?: boolean } | null} */
   let placementFocus = null;
+  /** @type {{ x: number, z: number, y?: number, valid?: boolean } | null} */
+  let lastSceneConfirm = null;
+  /** @type {any} */
+  let sceneConfirm = {
+    set() {},
+    update() {},
+    pick() { return false; },
+    clear() {},
+    registerLabels() {},
+    disposeLabels() {},
+    ensureText() {},
+  };
   let ground = null;
   /** @type {object | null} */
   let fieldSnap = opts.field ?? null;
@@ -969,8 +988,19 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     };
   }
 
-  function groundYAt(x, z) {
+  function terrainYAt(x, z) {
     return fieldSnap ? surfaceHeightAt(fieldSnap, x, z) : 0;
+  }
+
+  /** Agora pads currently drawn — walk Y follows this list, not fog-hidden ones. */
+  let agoraWalkPads = [];
+
+  function syncAgoraWalk(list) {
+    agoraWalkPads = agoraWalkPadsFromList(list, terrainYAt);
+  }
+
+  function groundYAt(x, z) {
+    return agoraWalkYAt(agoraWalkPads, x, z, terrainYAt(x, z));
   }
 
   function cameraEyePos() {
@@ -1011,13 +1041,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     placementGrid.setFocus(fieldSnap, placementFocus);
   }
 
-  function applyWorkRadiusSpec(spec) {
+  function applyWorkRadiusSpec(spec, links) {
     if (!spec) {
       workRadiusRings.clear();
       return;
     }
     const list = Array.isArray(spec) ? spec : [spec];
-    workRadiusRings.sync(list);
+    workRadiusRings.sync(list, links);
   }
 
   function hideScreenshotHudChrome() {
@@ -1031,6 +1061,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     objectiveRings.clear();
     tileGrid?.setVisible(false);
     placementGrid?.setFocus(null);
+    sceneConfirm.clear?.();
     for (const mesh of selRingParts) mesh.visible = false;
     if (orderMarker) orderMarker.visible = false;
     buildingProps.setSelectionHighlight?.(null);
@@ -1038,12 +1069,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
 
   function restoreScreenshotHudChrome() {
-    applyWorkRadiusSpec(lastWorkRadiusSpec);
+    applyWorkRadiusSpec(lastWorkRadiusSpec, lastWorkRadiusLinks);
     if (lastObjectiveRingSpec) objectiveRings.sync(lastObjectiveRingSpec);
     buildingProps.setSelectionHighlight?.(lastBuildingHighlight);
     if (tileGridVisible && tileGridOccupancyDirty) refreshTileGridOccupancy();
     tileGrid?.setVisible(tileGridVisible);
     syncPlacementGrid();
+    applySceneConfirm(lastSceneConfirm);
     applyUnitMeshVisibility();
   }
 
@@ -2082,6 +2114,29 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
 
   try {
+    sceneConfirm = createSceneConfirm(engine, scene, radialScreen);
+  } catch (err) {
+    console.warn('[sceneConfirm] init failed', err);
+  }
+
+  function applySceneConfirm(pos) {
+    lastSceneConfirm = pos ?? null;
+    if (screenshotHudHidden || !lastSceneConfirm) {
+      sceneConfirm.set?.(null);
+      return;
+    }
+    const y = Number.isFinite(lastSceneConfirm.y)
+      ? lastSceneConfirm.y
+      : groundYAt(lastSceneConfirm.x, lastSceneConfirm.z);
+    sceneConfirm.set?.({
+      x: lastSceneConfirm.x,
+      y,
+      z: lastSceneConfirm.z,
+      valid: lastSceneConfirm.valid !== false,
+    });
+  }
+
+  try {
     selectionBoxOverlay = createSelectionBoxOverlay(engine, scene);
   } catch (err) {
     console.warn('[selectionBox] init failed', err);
@@ -2144,6 +2199,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     buildingRadial.disposeLabels?.();
     actionRadial.disposeLabels?.();
     selectionHud.disposeLabels?.();
+    sceneConfirm.disposeLabels?.();
     controlGroupHud.clear?.();
   });
 
@@ -3268,6 +3324,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       if (actionRadial.isOpen()) actionRadial.hide();
       selectionHud.clear();
       controlGroupHud.clear();
+      sceneConfirm.clear?.();
     } else {
       if (buildingRadial.isOpen()) {
         buildingRadial.update?.(camera);
@@ -3277,6 +3334,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       }
       selectionHud.update?.(camera);
       controlGroupHud.update?.(camera);
+      sceneConfirm.update?.(camera);
     }
     syncSelectionBoxOverlay();
     buildingProps.updateHarvestPing?.();
@@ -3713,7 +3771,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const propsP = Promise.all([
         createFrogRenderer(engine, scene, groundYAt, frogLandBurst),
         createMushroomPreviews(engine, scene, groundYAt),
-        createAgoraProps(engine, scene, groundYAt),
+        createAgoraProps(engine, scene, terrainYAt, {
+          emit: (init) => particles.emit(init),
+          emitBurst: (init) => particles.emitBurst(init),
+        }),
         createBuildingProps(engine, scene, groundYAt, {
           emit: (init) => particles.emit(init),
           emitBurst: (init) => particles.emitBurst(init),
@@ -3761,6 +3822,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
           buildingRadial.registerLabels?.();
           actionRadial.registerLabels?.();
           selectionHud.registerLabels?.();
+          sceneConfirm.ensureText?.();
+          sceneConfirm.registerLabels?.();
           bootLog('radials');
         } catch (err) {
           console.error('[boot] radials failed', err);
@@ -3810,6 +3873,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     /** Place static agora meshes (init / world rebuild). */
     placeAgoras(list) {
+      syncAgoraWalk(list);
       agoraProps.place(list ?? []);
       agoraProps.forEachShadowMesh?.(noteShadowMesh);
       if (shadowsEnabled) applyShadowState();
@@ -3859,15 +3923,19 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     /**
      * Draw (or clear with null / []) flat ground rings for drop-off work radii.
-     * @param {{ x: number, z: number, radius: number } | { x: number, z: number, radius: number }[] | null} spec
+     * Optional `links` are terrain-draped attach lines (silo ghost → source).
+     * `rimKey` tints the outer rim by resource (wood / stone / mineral / food).
+     * @param {{ x: number, z: number, radius: number, rimKey?: string } | { x: number, z: number, radius: number, rimKey?: string }[] | null} spec
+     * @param {{ x0: number, z0: number, x1: number, z1: number, rimKey?: string }[] | null} [links]
      */
-    setWorkRadiusRing(spec) {
+    setWorkRadiusRing(spec, links) {
       lastWorkRadiusSpec = spec ?? null;
+      lastWorkRadiusLinks = spec ? (links ?? null) : null;
       if (screenshotHudHidden) {
         workRadiusRings.clear();
         return;
       }
-      applyWorkRadiusSpec(lastWorkRadiusSpec);
+      applyWorkRadiusSpec(lastWorkRadiusSpec, lastWorkRadiusLinks);
     },
 
     /** Gold chapter-exit pads. Clear with null / []. */
@@ -3964,11 +4032,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
      * @param {number} x
      * @param {number} z
      * @param {string} buildingType
+     * @param {{ units?: any[], upgrades?: any[] } | null} [menu]
      */
-    showActionRadial(x, z, buildingType) {
+    showActionRadial(x, z, buildingType, menu) {
       if (screenshotHudHidden) return;
       buildingRadial.hide();
-      actionRadial.showAt(x, z, buildingType, camera);
+      actionRadial.showAt(x, z, buildingType, camera, menu);
     },
 
     hideActionRadial() {
@@ -4896,6 +4965,20 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     pickSelectionHud(clientX, clientY) {
       const cc = canvasCoords(clientX, clientY);
       return selectionHud.pickSlot?.(cc.x, cc.y) ?? null;
+    },
+
+    /**
+     * Parked in-scene 1^ mark. Pass null to hide.
+     * @param {{ x: number, z: number, y?: number, valid?: boolean } | null} pos
+     */
+    setSceneConfirm(pos) {
+      applySceneConfirm(pos);
+    },
+
+    /** True when a client point is on the 1^ confirm mark. */
+    hitSceneConfirm(clientX, clientY) {
+      const cc = canvasCoords(clientX, clientY);
+      return sceneConfirm.pick?.(cc.x, cc.y) === true;
     },
 
     /** Extra black + white pads (three per side). */

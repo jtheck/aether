@@ -62,6 +62,7 @@ function placementMakesASite() {
   assert.equal(w.buildings.length, 1, 'camp placed');
   assert.equal(w.buildings[0].built, 0, 'placed as an unbuilt site');
   assert.equal(w.buildings[0].buildProgress, 0, 'no progress yet');
+  assert.equal(w.buildings[0].hp, 1, 'empty foundation is paper');
   assert.ok(w.buildings[0].buildTime > 0, 'has a build time');
 }
 

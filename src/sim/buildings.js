@@ -99,7 +99,7 @@ export const BUILDING_FOOTPRINTS = {
   // Basic
   camp: { w: 2, h: 2, mode: 'slow' },
   village: { w: 3, h: 3, mode: 'slow' },
-  silo: { w: 2, h: 2, mode: 'block' },
+  silo: { w: 2, h: 2, mode: 'slow' },
   farm: { w: 3, h: 3, mode: 'slow' },
   mine: { w: 2, h: 2, mode: 'slow' },
   // Advanced
@@ -426,6 +426,65 @@ export function getBuildingMenu(typeId) {
 
   if (!units.length && !upgrades.length) return null;
   return { units, upgrades };
+}
+
+/**
+ * One action menu for several placeable types. Units share one list, upgrades
+ * the other; first-seen order wins when two buildings offer the same id.
+ * @param {Iterable<string> | null | undefined} typeIds
+ * @returns {{ units: { id: string, name: string, unitType: number, cost: Record<string, number> }[], upgrades: { id: string, name: string, cost: Record<string, number> }[] } | null}
+ */
+export function mergeBuildingMenus(typeIds) {
+  /** @type {Map<string, { id: string, name: string, unitType: number, cost: Record<string, number> }>} */
+  const unitsById = new Map();
+  /** @type {Map<string, { id: string, name: string, cost: Record<string, number> }>} */
+  const upgradesById = new Map();
+  for (const typeId of typeIds ?? []) {
+    const menu = getBuildingMenu(typeId);
+    if (!menu) continue;
+    for (const item of menu.units) {
+      if (!unitsById.has(item.id)) unitsById.set(item.id, item);
+    }
+    for (const item of menu.upgrades) {
+      if (!upgradesById.has(item.id)) upgradesById.set(item.id, item);
+    }
+  }
+  if (!unitsById.size && !upgradesById.size) return null;
+  return { units: [...unitsById.values()], upgrades: [...upgradesById.values()] };
+}
+
+/** Whether that placeable type can queue this unit key or upgrade id. */
+export function buildingOffersMenuItem(typeId, kind, itemId) {
+  const raw = BUILDING_MENUS[typeId];
+  if (!raw || !itemId) return false;
+  if (kind === 'unit') return (raw.units ?? []).includes(itemId);
+  if (kind === 'upgrade') return (raw.upgrades ?? []).includes(itemId);
+  return false;
+}
+
+/**
+ * Fit units + upgrades into a pad budget, keeping both sides when possible.
+ * @template {{ id?: string }} T
+ * @param {{ units?: T[], upgrades?: T[] } | null | undefined} menu
+ * @param {number} maxOptions
+ */
+export function capActionMenu(menu, maxOptions) {
+  const units = menu?.units ?? [];
+  const upgrades = menu?.upgrades ?? [];
+  const cap = maxOptions | 0;
+  if (cap <= 0) return { units: [], upgrades: [] };
+  const total = units.length + upgrades.length;
+  if (total <= cap) return { units, upgrades };
+  if (!units.length) return { units, upgrades: upgrades.slice(0, cap) };
+  if (!upgrades.length) return { units: units.slice(0, cap), upgrades };
+  let uN = Math.max(1, Math.round(cap * (units.length / total)));
+  uN = Math.min(units.length, uN);
+  let gN = Math.min(upgrades.length, cap - uN);
+  if (gN < 1) {
+    gN = 1;
+    uN = Math.min(units.length, cap - 1);
+  }
+  return { units: units.slice(0, uN), upgrades: upgrades.slice(0, gN) };
 }
 
 /** @param {string} typeId */
@@ -976,7 +1035,8 @@ export function createBuilding(opts) {
     /** Ticks until a watchtower may fire again. */
     attackCd: 0,
     maxHp: getBuildingHp(type),
-    hp: opts.hp != null ? opts.hp | 0 : getBuildingHp(type),
+    // Unfinished sites are paper until a builder is on-site (see buildingCombat.js).
+    hp: opts.hp != null ? opts.hp | 0 : (built ? getBuildingHp(type) : 1),
     locustTicks: 0,
     locustStacks: 0,
     locustAcc: 0,
@@ -1297,7 +1357,7 @@ export function applyPlaceBuilding(w, field, cmd) {
     engBonusUntil: 0,
     attackCd: 0,
     maxHp: getBuildingHp(type),
-    hp: getBuildingHp(type),
+    hp: 1,
   });
   if (field) {
     // Block tiles now (the foundation occupies space) but defer the farm food

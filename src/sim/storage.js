@@ -44,9 +44,9 @@ const SILO_SOURCE_TYPE_SET = new Set(SILO_SOURCE_TYPES);
 
 /**
  * Center-to-center reach. Adjacent farm (3) + silo (2) is 10; this allows a
- * tile or two of slack so a silo can sit on the path beside the worksite.
+ * few tiles of slack so a silo can sit on the path beside the worksite.
  */
-export const SILO_ATTACH_RANGE_F = 20;
+export const SILO_ATTACH_RANGE_F = 28;
 const SILO_ATTACH_RANGE = fx.fromFloat(SILO_ATTACH_RANGE_F);
 const SILO_ATTACH_RANGE_SQ = fx.mul(SILO_ATTACH_RANGE, SILO_ATTACH_RANGE);
 const SILO_ATTACH_RANGE_SQ_F = SILO_ATTACH_RANGE_F * SILO_ATTACH_RANGE_F;
@@ -146,6 +146,46 @@ export function sourcesAttachedToSilo(buildings, silo, space = 'fixed') {
  * @param {object | null | undefined} silo
  * @param {'fixed' | 'world'} [space]
  */
+/**
+ * Live camp / mine / farm a silo of this owner can sit next to.
+ * @param {object[] | null | undefined} buildings
+ * @param {number} owner
+ * @returns {object[]}
+ */
+export function liveSiloSources(buildings, owner) {
+  if (!buildings?.length) return [];
+  const o = owner | 0;
+  /** @type {object[]} */
+  const out = [];
+  for (let i = 0; i < buildings.length; i++) {
+    const b = buildings[i];
+    if ((b.owner | 0) !== o || !isSiloSourceType(b.type) || !isLiveStorageBuilding(b)) continue;
+    out.push(b);
+  }
+  return out;
+}
+
+/**
+ * Live sources whose attach ring covers the ghost point (world or fixed).
+ * @param {object[] | null | undefined} buildings
+ * @param {number} owner
+ * @param {number} x
+ * @param {number} z
+ * @param {'fixed' | 'world'} [space]
+ * @returns {object[]}
+ */
+export function sourcesAttachableAt(buildings, owner, x, z, space = 'fixed') {
+  const sources = liveSiloSources(buildings, owner);
+  if (!sources.length) return [];
+  const ghost = { x, z };
+  /** @type {object[]} */
+  const out = [];
+  for (let i = 0; i < sources.length; i++) {
+    if (withinSiloAttach(ghost, sources[i], space)) out.push(sources[i]);
+  }
+  return out;
+}
+
 export function siloIsAttached(buildings, silo, space = 'fixed') {
   if (!silo || silo.type !== 'silo' || !isLiveStorageBuilding(silo) || !buildings?.length) {
     return false;

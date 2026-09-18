@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   sameOwnedBuildingType,
+  ownedActionBuildingGroup,
   pickLeastLoadedIndex,
   groupHasUpgradeQueued,
   aggregateBuildingTracks,
@@ -57,6 +58,59 @@ describe('sameOwnedBuildingType', () => {
         buildings,
         0,
       ),
+      null,
+    );
+  });
+});
+
+describe('ownedActionBuildingGroup', () => {
+  const buildings = [
+    { owner: 0, type: 'barracks', hp: 10 },
+    { owner: 0, type: 'tavern', hp: 10 },
+    { owner: 0, type: 'camp', hp: 10 },
+    { owner: 1, type: 'barracks', hp: 10 },
+    { owner: 0, type: 'barracks', hp: 0 },
+  ];
+
+  it('groups mixed own living placeables', () => {
+    const g = ownedActionBuildingGroup(
+      [{ kind: 'building', index: 0 }, { kind: 'building', index: 1 }],
+      buildings,
+      0,
+    );
+    assert.deepEqual(g, { types: ['barracks', 'tavern'], indices: [0, 1] });
+  });
+
+  it('skips agora and rally instead of rejecting the group', () => {
+    const g = ownedActionBuildingGroup(
+      [
+        { kind: 'agora', index: 0 },
+        { kind: 'building', index: 0 },
+        { kind: 'rally', index: 0, hop: 0 },
+        { kind: 'building', index: 1 },
+      ],
+      buildings,
+      0,
+    );
+    assert.deepEqual(g, { types: ['barracks', 'tavern'], indices: [0, 1] });
+  });
+
+  it('skips foreign and dead buildings', () => {
+    const g = ownedActionBuildingGroup(
+      [
+        { kind: 'building', index: 0 },
+        { kind: 'building', index: 3 },
+        { kind: 'building', index: 4 },
+      ],
+      buildings,
+      0,
+    );
+    assert.deepEqual(g, { types: ['barracks'], indices: [0] });
+  });
+
+  it('returns null when nothing qualifies', () => {
+    assert.equal(
+      ownedActionBuildingGroup([{ kind: 'agora', index: 0 }], buildings, 0),
       null,
     );
   });

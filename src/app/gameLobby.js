@@ -1,7 +1,7 @@
 // Type-channel discovery for 1v1 / Teams / Adventure.
 
 import { sameUserId, senderUserId } from '../lobby/ids.js';
-import { getMode, isLobbyMode } from '../lobby/modes.js';
+import { getMode, isLobbyMode, MODE_IDS } from '../lobby/modes.js';
 import { ANNOUNCE_TTL_MS, LOBBY_PROTOCOL_VERSION, MSG, typeChannel } from '../lobby/protocol.js';
 
 /**
@@ -15,6 +15,8 @@ export function createGameLobby({ getP2p, subscribeBroadcast, onChange } = {}) {
   const listening = new Set();
   /** @type {Set<string>} */
   const held = new Set();
+  /** @type {Set<string>} */
+  const auto = new Set();
   /** @type {Map<string, Map<string, object>>} */
   const lists = new Map();
 
@@ -60,24 +62,34 @@ export function createGameLobby({ getP2p, subscribeBroadcast, onChange } = {}) {
     }
   });
 
-  function listen(mode) {
-    if (!isLobbyMode(mode)) return;
+  function stillWanted(mode) {
+    return listening.has(mode) || held.has(mode) || auto.has(mode);
+  }
+
+  function joinMode(mode) {
     const p2p = getP2p?.();
     const channel = typeChannel(mode);
     if (p2p && channel) p2p.joinBroadcast?.(channel);
-    listening.add(mode);
     bucket(mode);
+  }
+
+  function leaveMode(mode) {
+    const channel = typeChannel(mode);
+    if (channel) getP2p?.()?.leaveBroadcast?.(channel);
+    lists.delete(mode);
+  }
+
+  function listen(mode) {
+    if (!isLobbyMode(mode)) return;
+    listening.add(mode);
+    joinMode(mode);
     emit();
   }
 
   function unlisten(mode, { force = false } = {}) {
     if (!force && held.has(mode)) return;
     listening.delete(mode);
-    if (!held.has(mode)) {
-      const channel = typeChannel(mode);
-      if (channel) getP2p?.()?.leaveBroadcast?.(channel);
-      lists.delete(mode);
-    }
+    if (!stillWanted(mode)) leaveMode(mode);
     emit();
   }
 
@@ -89,7 +101,27 @@ export function createGameLobby({ getP2p, subscribeBroadcast, onChange } = {}) {
 
   function release(mode) {
     held.delete(mode);
-    if (!listening.has(mode)) unlisten(mode, { force: true });
+    if (!listening.has(mode) && !auto.has(mode)) unlisten(mode, { force: true });
+    else emit();
+  }
+
+  /** Join every type channel without opening a drawer. Drawer unlisten cannot drop this. */
+  function setAutoListen(on) {
+    const want = Boolean(on);
+    let changed = false;
+    for (const mode of MODE_IDS) {
+      const has = auto.has(mode);
+      if (want && !has) {
+        auto.add(mode);
+        joinMode(mode);
+        changed = true;
+      } else if (!want && has) {
+        auto.delete(mode);
+        if (!stillWanted(mode)) leaveMode(mode);
+        changed = true;
+      }
+    }
+    if (changed) emit();
   }
 
   function announce(payload) {
@@ -118,7 +150,8 @@ export function createGameLobby({ getP2p, subscribeBroadcast, onChange } = {}) {
     release,
     announce,
     listLobbies,
-    isListening: (mode) => listening.has(mode) || held.has(mode),
+    setAutoListen,
+    isListening: (mode) => stillWanted(mode),
     getMode: (mode) => getMode(mode),
   };
 }

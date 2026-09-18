@@ -24,9 +24,14 @@
  * @property {() => void} resize
  * @property {(spec: SpeciesRegister) => void} registerSpecies
  * @property {(upload: SpeciesUpload) => void} uploadSpecies
+ * @property {(fly: object) => void} [applyGamepadFly]  // one fly intent (keys/pad/wheel/stick)
+ * @property {() => void} [prepareFrame]  // integrate fly + compose XR camera before pose
  * @property {() => void} render
  * @property {() => number} getDeltaTime  // seconds
  * @property {() => any} [getScene]       // classic-only (inspector / XR)
+ * @property {() => Promise<boolean>} [canEnterXR]
+ * @property {() => Promise<boolean>} [enterXR]
+ * @property {() => Promise<boolean>} [exitXR]
  * @property {() => void} [dispose]
  */
 

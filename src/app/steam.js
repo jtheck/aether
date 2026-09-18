@@ -149,7 +149,7 @@ export function createAetherSteam(opts = {}) {
       api._firstLaunchHandled = true;
       api.unlockAchievement(ACH_FIRST_LAUNCH);
       if (isLinuxRuntime(api.getInfo(), root)) api.unlockAchievement(ACH_LINUX_LAUNCH);
-      api.setPresence('status', 'In Garden');
+      api.setPresence('status', 'gardening');
       return true;
     },
 
@@ -159,7 +159,7 @@ export function createAetherSteam(opts = {}) {
       if (!api.isAvailable()) return false;
       api._firstMatchHandled = true;
       api.unlockAchievement(ACH_FIRST_MATCH);
-      api.setPresence('status', 'Hosting KOTH');
+      api.setPresence('status', 'hosting garden');
       return true;
     },
 
@@ -169,7 +169,7 @@ export function createAetherSteam(opts = {}) {
       if (!api.isAvailable()) return false;
       api._forgeOpenedHandled = true;
       api.unlockAchievement(ACH_FORGE_OPEN);
-      api.setPresence('status', 'In Forge');
+      api.setPresence('status', 'forging garden');
       return true;
     },
 
@@ -180,7 +180,6 @@ export function createAetherSteam(opts = {}) {
       if (!api.isAvailable()) return false;
       api._kothDefeatHandled = true;
       api.unlockAchievement(ACH_KOTH_DEFEAT);
-      api.setPresence('status', 'Defeated');
       return true;
     },
 
@@ -193,7 +192,6 @@ export function createAetherSteam(opts = {}) {
         return info;
       }
       const unlocked = api.unlockAchievement(id);
-      api.setPresence('status', 'Testing Steam');
       const result = { achievementId: id, unlocked, info };
       console.log('[aetherSteam] test', result);
       return result;

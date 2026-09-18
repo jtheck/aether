@@ -44,6 +44,55 @@ export function isChatMessage(msg) {
 }
 
 /**
+ * GetFire lobby `speak` keeps a small field set (type/from/content/…). Put the
+ * full chat body in `content` so name/text/id survive the relay.
+ * @param {object} msg
+ */
+export function chatSpeakPayload(msg) {
+  return { type: CHAT_TYPE, content: msg };
+}
+
+/**
+ * Accept a flat chat, a `content`-wrapped speak, stringified content, or a
+ * stripped speak that still has `type` + `text`.
+ * @param {any} raw
+ */
+export function unwrapChatMessage(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  if (isChatMessage(raw)) return raw;
+  const nested = raw.content;
+  if (nested && typeof nested === 'object' && isChatMessage(nested)) return nested;
+  if (typeof nested === 'string') {
+    try {
+      const parsed = JSON.parse(nested);
+      if (isChatMessage(parsed)) return parsed;
+    } catch {
+      /* not json */
+    }
+  }
+  if (raw.type === CHAT_TYPE && typeof raw.text === 'string') {
+    const text = sanitizeChatText(raw.text);
+    if (!text) return null;
+    return {
+      type: CHAT_TYPE,
+      from: raw.from ?? null,
+      name: raw.name,
+      color: raw.color,
+      text,
+      ts: raw.ts,
+      id: raw.id || `${raw.from ?? '?'}:${Number(raw.ts) || 0}:${text}`,
+    };
+  }
+  return null;
+}
+
+/** @param {{ add: (raw: object) => boolean }} log @param {any} raw */
+export function ingestChat(log, raw) {
+  const msg = unwrapChatMessage(raw);
+  return Boolean(msg && log.add(msg));
+}
+
+/**
  * Ring buffer that ignores duplicates by id (covers ActionCable self-echo and
  * any relay repeats).
  * @param {number} [limit]

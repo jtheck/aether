@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import * as fx from './fixed.js';
 import { createWorld } from './world.js';
 import { createBuilding } from './buildings.js';
 import { addResource, getResource, grantStartingResources } from './resources.js';
@@ -18,6 +19,8 @@ import {
   ownerSlotCount,
   siloIsAttached,
   silosAttachedTo,
+  liveSiloSources,
+  sourcesAttachableAt,
   slotVisual,
   sourcesAttachedToSilo,
   takeStorageOverflow,
@@ -113,6 +116,25 @@ describe('silo pairing', () => {
     const buildings = [camp(0, 0), silo(SILO_ATTACH_RANGE_F + 8, 0)];
     assert.equal(silosAttachedTo(buildings, buildings[0]).length, 0);
     assert.equal(siloIsAttached(buildings, buildings[1]), false);
+  });
+
+  it('lists every live source a ghost silo can attach to', () => {
+    const buildings = [camp(0, 0), farm(40, 0), mine(0, 8)];
+    const near = sourcesAttachableAt(buildings, 0, fx.fromFloat(8), 0);
+    assert.equal(near.length, 2);
+    assert.deepEqual(near.map((b) => b.type).sort(), ['camp', 'mine']);
+    assert.equal(sourcesAttachableAt(buildings, 0, fx.fromFloat(40), 0).length, 1);
+    assert.equal(sourcesAttachableAt(buildings, 0, fx.fromFloat(80), 0).length, 0);
+  });
+
+  it('skips unfinished, wrecked, and foreign sources', () => {
+    const buildings = [
+      camp(0, 0, { built: 0 }),
+      farm(0, 0, { hp: 0 }),
+      createBuilding({ owner: 1, type: 'mine', x: 0, z: 0 }),
+    ];
+    assert.equal(liveSiloSources(buildings, 0).length, 0);
+    assert.equal(sourcesAttachableAt(buildings, 0, 0, 0).length, 0);
   });
 });
 

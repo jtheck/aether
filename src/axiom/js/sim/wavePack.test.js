@@ -1,45 +1,48 @@
 import assert from 'node:assert/strict';
 import {
+  WAVE_SOURCES,
+  WAVE_PRESET_CAP,
+  WAVE_COEFF_STRIDE,
+  WAVE_EMITTER_BALLS,
+  WAVE_PRESET_TUBE,
+  WAVE_PRESET_TUBE_CORNERS,
   COMPRESSION_K,
   COMPRESSION_SPEED,
   COMPRESSION_WAVELENGTH,
-  WAVE_SOURCES,
-  WAVE_SOURCE_CAP,
-  WAVE_EMITTER_BALLS,
-  WAVE_PRESET_TUBE,
+  COMPRESSION_AMPLITUDE,
   bakeCompressionWaveRest,
+  collapseWaveEmitters,
+  beginWaveBakeFrame,
+  endWaveBakeFrame,
+  writeLiveMonopole,
+  waveEmitterFocus,
+  waveChunkEmitDist2,
   toggleWavePreset,
   stepWavePreset,
-  waveSourceAmplitude,
   writeCompressionWavePositions,
+  sampleCompressionWave,
+  sampleCompressionWaveTrace,
+  waveSourceAmplitude,
 } from './behaviors.js';
 import { getNanotubeLattice } from './nanotube.js';
 import { createPointStore, createPointStaging, KIND_POINT } from './store.js';
 import { createWorld } from './world.js';
 
 assert.equal(WAVE_SOURCES.length, 2, 'origin + upper sphere');
+{
+  const live = sampleCompressionWave(10, 0, 0, 5 / 12);
+  assert.ok(Number.isFinite(live.u));
+  assert.ok(Math.abs(live.u) > 1e-6, 'field should be nonzero off a node');
+  const t = 2.5;
+  const dest = new Float32Array(8);
+  sampleCompressionWaveTrace(10, 0, 0, t, dest);
+  assert.ok(Math.abs(dest[7] - sampleCompressionWave(10, 0, 0, t).u) < 1e-6);
+  assert.ok(Math.abs(dest[0] - dest[7]) < 1e-5, 'one-period window should close');
+}
 
 function expectedAt(hx, hy, hz, time) {
-  const omega = (COMPRESSION_SPEED * Math.PI * 2) / COMPRESSION_WAVELENGTH;
-  const wt = omega * time;
-  const A = waveSourceAmplitude(WAVE_SOURCES.length);
-  let x = hx;
-  let y = hy;
-  let z = hz;
-  for (const src of WAVE_SOURCES) {
-    const dx = hx - src.x;
-    const dy = hy - src.y;
-    const dz = hz - src.z;
-    const r2 = dx * dx + dy * dy + dz * dz;
-    if (r2 < 1e-8) continue;
-    const r = Math.sqrt(r2);
-    const u = A * Math.sin(COMPRESSION_K * r - wt);
-    const inv = 1 / r;
-    x += dx * inv * u;
-    y += dy * inv * u;
-    z += dz * inv * u;
-  }
-  return { x, y, z };
+  const s = sampleCompressionWave(hx, hy, hz, time);
+  return { x: s.x, y: s.y, z: s.z };
 }
 
 {
@@ -126,14 +129,17 @@ function expectedAt(hx, hy, hz, time) {
 }
 
 {
-  assert.equal(WAVE_SOURCE_CAP, 2 + 6 + WAVE_PRESET_TUBE.length);
-  assert.equal(WAVE_PRESET_TUBE.length, 12);
+  assert.equal(WAVE_PRESET_CAP, 3);
+  assert.equal(WAVE_COEFF_STRIDE, 18);
+  assert.equal(WAVE_PRESET_TUBE.length, WAVE_PRESET_TUBE_CORNERS.length);
+  assert.equal(WAVE_PRESET_TUBE.length, getNanotubeLattice().vertices.length);
   const store = createPointStore(1);
   store.count = 1;
   store.hx[0] = 10;
   store.hy[0] = 7;
   store.hz[0] = 0;
   bakeCompressionWaveRest(store, 0);
+  assert.equal(store.waveK.length, WAVE_COEFF_STRIDE);
   const dest = new Float32Array(3);
   const t = 0.4;
 
@@ -146,7 +152,7 @@ function expectedAt(hx, hy, hz, time) {
   assert.ok(Math.abs(dest[2] - ring.z) < 1e-5);
 
   assert.equal(toggleWavePreset(), 'tube');
-  assert.equal(WAVE_SOURCES.length, 12);
+  assert.equal(WAVE_SOURCES.length, WAVE_PRESET_TUBE_CORNERS.length);
   assert.equal(WAVE_EMITTER_BALLS.length, getNanotubeLattice().vertices.length);
   writeCompressionWavePositions(store, dest, 0, t);
   const tube = expectedAt(10, 7, 0, t);
@@ -163,6 +169,83 @@ function expectedAt(hx, hy, hz, time) {
   assert.ok(Math.abs(dest[0] - pair.x) < 1e-5);
   assert.ok(Math.abs(dest[1] - pair.y) < 1e-5);
   assert.ok(Math.abs(dest[2] - pair.z) < 1e-5);
+}
+
+function bruteDisplacement(x, y, z, time, sources) {
+  const A = waveSourceAmplitude(sources.length);
+  const wt = ((COMPRESSION_SPEED * Math.PI * 2) / COMPRESSION_WAVELENGTH) * time;
+  let dx = 0;
+  let dy = 0;
+  let dz = 0;
+  let uSum = 0;
+  for (const src of sources) {
+    const rx = x - src.x;
+    const ry = y - src.y;
+    const rz = z - src.z;
+    const r2 = rx * rx + ry * ry + rz * rz;
+    if (r2 < 1e-8) continue;
+    const r = Math.sqrt(r2);
+    const u = A * Math.sin(COMPRESSION_K * r - wt);
+    const inv = 1 / r;
+    dx += rx * inv * u;
+    dy += ry * inv * u;
+    dz += rz * inv * u;
+    uSum += u;
+  }
+  return { x: x + dx, y: y + dy, z: z + dz, u: uSum };
+}
+
+{
+  const sources = WAVE_PRESET_TUBE;
+  const t = 5 / 12;
+  const A = waveSourceAmplitude(sources.length);
+  const c = collapseWaveEmitters(10, 7, 0, sources, A);
+  const wt = ((COMPRESSION_SPEED * Math.PI * 2) / COMPRESSION_WAVELENGTH) * t;
+  const ct = Math.cos(wt);
+  const st = Math.sin(wt);
+  const collapsed = {
+    x: 10 + c.bx * ct - c.cx * st,
+    y: 7 + c.by * ct - c.cy * st,
+    z: 0 + c.bz * ct - c.cz * st,
+    u: c.uS * ct - c.uC * st,
+  };
+  const brute = bruteDisplacement(10, 7, 0, t, sources);
+  assert.ok(Math.abs(collapsed.x - brute.x) < 1e-9);
+  assert.ok(Math.abs(collapsed.y - brute.y) < 1e-9);
+  assert.ok(Math.abs(collapsed.z - brute.z) < 1e-9);
+  assert.ok(Math.abs(collapsed.u - brute.u) < 1e-9);
+  const sampled = sampleCompressionWave(10, 7, 0, t, { sources });
+  assert.ok(Math.abs(sampled.u - brute.u) < 1e-9);
+}
+
+{
+  const store = createPointStore(1);
+  store.count = 1;
+  store.hx[0] = 10;
+  store.hy[0] = 7;
+  store.hz[0] = 0;
+  store.waveMask[0] = 0;
+  const dest = new Float32Array(3);
+  beginWaveBakeFrame(0);
+  writeCompressionWavePositions(store, dest, 0, 0.4);
+  endWaveBakeFrame();
+  const stand = new Float32Array(3);
+  const wt = ((COMPRESSION_SPEED * Math.PI * 2) / COMPRESSION_WAVELENGTH) * 0.4;
+  writeLiveMonopole(10, 7, 0, stand, 0, waveEmitterFocus(), COMPRESSION_AMPLITUDE, Math.cos(wt), Math.sin(wt));
+  assert.ok(Math.abs(dest[0] - stand[0]) < 1e-6);
+  assert.ok(Math.abs(dest[1] - stand[1]) < 1e-6);
+  assert.ok(Math.abs(dest[2] - stand[2]) < 1e-6);
+  assert.ok(dest[0] !== 10 || dest[1] !== 7 || dest[2] !== 0, 'unbaked should still move');
+  assert.equal(store.waveMask[0], 0);
+
+  assert.equal(waveChunkEmitDist2({ minX: -1, minY: -1, minZ: -1, size: 2 }), 0);
+
+  writeCompressionWavePositions(store, dest, 0, 0.4);
+  const live = expectedAt(10, 7, 0, 0.4);
+  assert.ok(Math.abs(dest[0] - live.x) < 1e-5);
+  assert.ok(Math.abs(dest[1] - live.y) < 1e-5);
+  assert.ok(Math.abs(dest[2] - live.z) < 1e-5);
+  assert.ok(store.waveMask[0] !== 0);
 }
 
 console.log('wavePack.test.js ok');

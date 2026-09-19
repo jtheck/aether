@@ -952,6 +952,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let padCursorFollow = false;
   let padCursorOx = 0;
   let padCursorOy = 0;
+  let padCursorBrushPx = 0;
   /** @type {{ x: number, y: number, z: number } | null} */
   let lastGamepadCursor = null;
   let selectionPathHideCursor = true;
@@ -2040,6 +2041,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     setHoverByType() {},
     setHoverFromPick() {},
     clearHover() {},
+    stickTargets() { return null; },
     pickOptionAtRay() { return null; },
     hitAtRay() { return false; },
     hitHubHoleAtRay() { return false; },
@@ -2121,7 +2123,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let controlGroupHud = {
     update() {},
     pick() { return null; },
-    setExtra() {},
     setFilled() {},
     setHold() {},
     clear() {},
@@ -2161,12 +2162,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     });
   }
 
-  function resolveViewCenterHit() {
+  function resolveViewCenterHit(extraOx = 0, extraOy = 0) {
     const { width, height } = canvasCoords(0, 0);
     if (!(width > 8) || !(height > 8)) return null;
     const ray = pickingRay(
-      width * 0.5 + padCursorOx,
-      height * 0.5 + padCursorOy,
+      width * 0.5 + padCursorOx + extraOx,
+      height * 0.5 + padCursorOy + extraOy,
       viewProjection(),
       width,
       height,
@@ -2184,7 +2185,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     const hit = resolveViewCenterHit();
     lastGamepadCursor = hit;
     gamepadCursor.set(hit);
-    gamepadCursor.update?.(camera);
+    let brushWorld = 0;
+    if (padCursorBrushPx > 0 && hit) {
+      const side = resolveViewCenterHit(padCursorBrushPx, 0);
+      if (side) brushWorld = Math.hypot(side.x - hit.x, side.z - hit.z);
+    }
+    gamepadCursor.update?.(camera, { brushWorld });
   }
 
   try {
@@ -4125,6 +4131,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       if (!padCursorFollow) {
         padCursorOx = 0;
         padCursorOy = 0;
+        padCursorBrushPx = 0;
         lastGamepadCursor = null;
         gamepadCursor.clear?.();
       }
@@ -4135,6 +4142,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     setGamepadCursorOffset(ox, oy) {
       padCursorOx = Number.isFinite(ox) ? ox : 0;
       padCursorOy = Number.isFinite(oy) ? oy : 0;
+    },
+
+    /** Screen-space paint-select radius; 0 restores the idle plus. */
+    setGamepadCursorBrush(px) {
+      padCursorBrushPx = Number.isFinite(px) && px > 0 ? px : 0;
     },
 
     getGamepadCursor() {
@@ -4248,6 +4260,36 @@ export async function createRenderer(canvas, capacity, opts = {}) {
      * @param {number} clientX
      * @param {number} clientY
      */
+    /** Stick pie layout for the open radial, or null. */
+    getRadialStickTargets() {
+      if (buildingRadial.isOpen()) return buildingRadial.stickTargets?.() ?? null;
+      if (actionRadial.isOpen()) return actionRadial.stickTargets?.() ?? null;
+      return null;
+    },
+
+    /**
+     * Hover from a stick pick. Same page-flip rules as pointer hover.
+     * @param {{ kind?: string, id?: string } | null | undefined} pick
+     * @param {boolean} [switchCategory]
+     */
+    hoverRadialPick(pick, switchCategory = false) {
+      if (buildingRadial.isOpen()) {
+        if (
+          switchCategory &&
+          pick?.kind === 'category' &&
+          !buildingRadial.categoryLocked
+        ) {
+          buildingRadial.setCategory?.(pick.id);
+        }
+        if (pick) buildingRadial.setHoverFromPick?.(pick);
+        else buildingRadial.clearHover?.();
+        return;
+      }
+      if (actionRadial.isOpen()) {
+        actionRadial.setHoverFromPick?.(pick ?? null);
+      }
+    },
+
     hoverBuildingRadial(clientX, clientY, switchCategory = false) {
       const ray = radialPickingRay(clientX, clientY);
       if (buildingRadial.isOpen()) {
@@ -5104,11 +5146,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     hitSceneConfirm(clientX, clientY) {
       const cc = canvasCoords(clientX, clientY);
       return sceneConfirm.pick?.(cc.x, cc.y) === true;
-    },
-
-    /** Extra black + white pads (three per side). */
-    setExtraControlGroups(on) {
-      controlGroupHud.setExtra?.(!!on);
     },
 
     /**

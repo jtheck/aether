@@ -1159,8 +1159,8 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     const cat = categoryDef(activeCategory);
     const mat = pad.mat;
     if (hovered) {
-      mat.diffuseColor = liftRgb(cat.pad, 0.42);
-      mat.emissiveColor = liftRgb(cat.padEm, 0.5);
+      mat.diffuseColor = liftRgb(cat.pad, 0.7);
+      mat.emissiveColor = liftRgb(cat.padEm, 0.95);
     } else {
       mat.diffuseColor = [...cat.pad];
       mat.emissiveColor = [...cat.padEm];
@@ -1177,27 +1177,26 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       const cat = categoryDef(slice.id);
       const selected = slice.id === activeCategory;
       const hovered = slice.id === pieHoverId;
-      // Inactive wedges stay readable — only a mild dim vs the active page.
-      const boost = selected ? 1 : hovered ? 0.9 : 0.78;
+      const boost = hovered ? 1.18 : selected ? 1 : 0.78;
       slice.mat.diffuseColor = [
         cat.color[0] * boost,
         cat.color[1] * boost,
         cat.color[2] * boost,
       ];
       slice.mat.emissiveColor = [
-        cat.emissive[0] * (selected || hovered ? 1.15 : 0.75),
-        cat.emissive[1] * (selected || hovered ? 1.15 : 0.75),
-        cat.emissive[2] * (selected || hovered ? 1.15 : 0.75),
+        cat.emissive[0] * (hovered ? 1.7 : selected ? 1.15 : 0.75),
+        cat.emissive[1] * (hovered ? 1.7 : selected ? 1.15 : 0.75),
+        cat.emissive[2] * (hovered ? 1.7 : selected ? 1.15 : 0.75),
       ];
-      setMatAlpha(slice.mat, selected ? 0.95 : hovered ? 0.88 : 0.72);
-      if (selected) {
+      setMatAlpha(slice.mat, hovered ? 1 : selected ? 0.95 : 0.72);
+      if (hovered) {
+        slice.outlineMat.diffuseColor = liftRgb(cat.color, 0.88);
+        slice.outlineMat.emissiveColor = liftRgb(cat.emissive, 1);
+        setMatAlpha(slice.outlineMat, 1);
+      } else if (selected) {
         slice.outlineMat.diffuseColor = liftRgb(cat.color, 0.72);
         slice.outlineMat.emissiveColor = liftRgb(cat.emissive, 0.78);
         setMatAlpha(slice.outlineMat, 1);
-      } else if (hovered) {
-        slice.outlineMat.diffuseColor = liftRgb(cat.color, 0.45);
-        slice.outlineMat.emissiveColor = liftRgb(cat.emissive, 0.5);
-        setMatAlpha(slice.outlineMat, 0.95);
       } else {
         slice.outlineMat.diffuseColor = liftRgb(cat.color, 0.18);
         slice.outlineMat.emissiveColor = [...cat.emissive];
@@ -1910,6 +1909,23 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     return open;
   }
 
+  /** Stick pie targets — inner categories, outer buildings. */
+  function stickTargets() {
+    if (!open || placingPreviewType) return null;
+    return {
+      inner: pieSlices.map((s) => ({
+        kind: /** @type {const} */ ('category'),
+        id: s.id,
+        ang: s.startAng + (s.endAng - s.startAng) * 0.5,
+      })),
+      outer: slots.map((s) => ({
+        kind: /** @type {const} */ ('building'),
+        id: s.type,
+        ang: s.ang,
+      })),
+    };
+  }
+
   function setHover(index) {
     if (!open) return;
     const next = index | 0;
@@ -2128,6 +2144,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     update,
     hide,
     isOpen,
+    stickTargets,
     setCompact,
     setPlacingValid,
     setCategory,

@@ -1,6 +1,6 @@
 // Control-group pads — camera-locked hollow rounded triangles on the
-// left/right edges, nested in/out/in so they interlock. Four colours by
-// default; settings can add black + white as a third pad on each side.
+// left/right edges, nested in/out/in so they interlock. Six colours
+// (red / green / black left, blue / yellow / white right).
 
 import {
   addToScene,
@@ -11,12 +11,12 @@ import {
 } from '../vendor/lite/liteVendor.js';
 
 export const CONTROL_GROUP_DEFS = Object.freeze([
-  { id: 0, name: 'red', rgb: [0.86, 0.2, 0.2], side: 'left', extra: false },
-  { id: 1, name: 'green', rgb: [0.2, 0.72, 0.24], side: 'left', extra: false },
-  { id: 2, name: 'blue', rgb: [0.22, 0.44, 0.95], side: 'right', extra: false },
-  { id: 3, name: 'yellow', rgb: [0.9, 0.78, 0.16], side: 'right', extra: false },
-  { id: 4, name: 'black', rgb: [0.16, 0.16, 0.18], side: 'left', extra: true },
-  { id: 5, name: 'white', rgb: [0.93, 0.93, 0.95], side: 'right', extra: true },
+  { id: 0, name: 'red', rgb: [0.86, 0.2, 0.2], side: 'left' },
+  { id: 1, name: 'green', rgb: [0.2, 0.72, 0.24], side: 'left' },
+  { id: 2, name: 'blue', rgb: [0.22, 0.44, 0.95], side: 'right' },
+  { id: 3, name: 'yellow', rgb: [0.9, 0.78, 0.16], side: 'right' },
+  { id: 4, name: 'black', rgb: [0.16, 0.16, 0.18], side: 'left' },
+  { id: 5, name: 'white', rgb: [0.93, 0.93, 0.95], side: 'right' },
 ]);
 
 export const CONTROL_GROUP_SIZE_PX = 54;
@@ -44,25 +44,24 @@ const HUD_RENDER_ORDER = 425;
 const HOVER_LERP = 14;
 const HOVER_SCALE = 0.08;
 
-export function visibleControlGroupDefs(extra) {
-  return extra ? CONTROL_GROUP_DEFS : CONTROL_GROUP_DEFS.filter((d) => !d.extra);
+export function visibleControlGroupDefs() {
+  return CONTROL_GROUP_DEFS;
 }
 
 /**
- * Screen-space pad rects (CSS px). Vertically centered, two/three per side,
+ * Screen-space pad rects (CSS px). Vertically centered, three per side,
  * nested so in/out triangles interlock with a gap between them.
  * `dir` is +1 (point right) or -1 (point left).
  * @param {number} vw
  * @param {number} vh
- * @param {boolean} extra
  * @returns {{ id: number, name: string, rgb: number[], x: number, y: number, w: number, h: number, dir: number }[]}
  */
-export function layoutControlGroups(vw, vh, extra) {
+export function layoutControlGroups(vw, vh) {
   /** @type {typeof CONTROL_GROUP_DEFS[number][]} */
   const left = [];
   /** @type {typeof CONTROL_GROUP_DEFS[number][]} */
   const right = [];
-  const defs = visibleControlGroupDefs(extra);
+  const defs = visibleControlGroupDefs();
   for (let i = 0; i < defs.length; i++) {
     const d = defs[i];
     (d.side === 'right' ? right : left).push(d);
@@ -476,7 +475,6 @@ export function createControlGroupHud(engine, scene, screen = {}) {
     };
   });
 
-  let extra = false;
   let holdId = -1;
   /** @type {{ id: number, x: number, y: number, w: number, h: number, dir: number }[]} */
   let hitRects = [];
@@ -498,10 +496,6 @@ export function createControlGroupHud(engine, scene, screen = {}) {
 
   function pick(px, py) {
     return pickControlGroupAt(hitRects, px, py);
-  }
-
-  function setExtra(on) {
-    extra = !!on;
   }
 
   function setCount(id, n) {
@@ -533,7 +527,7 @@ export function createControlGroupHud(engine, scene, screen = {}) {
       return;
     }
 
-    const rects = layoutControlGroups(vw, vh, extra);
+    const rects = layoutControlGroups(vw, vh);
     hitRects = rects;
     /** @type {Set<number>} */
     const shown = new Set();
@@ -628,5 +622,5 @@ export function createControlGroupHud(engine, scene, screen = {}) {
     }
   }
 
-  return { update, pick, setExtra, setFilled, setCount, setHold, clear: hideAll };
+  return { update, pick, setFilled, setCount, setHold, clear: hideAll };
 }

@@ -15,42 +15,31 @@ import {
 } from './controlGroupHud.js';
 
 describe('control group HUD layout', () => {
-  it('shows four pads by default and six when extra is on', () => {
-    assert.equal(visibleControlGroupDefs(false).length, 4);
-    assert.equal(visibleControlGroupDefs(true).length, 6);
+  it('always shows the six colour pads', () => {
+    assert.equal(visibleControlGroupDefs().length, 6);
     assert.deepEqual(
-      visibleControlGroupDefs(false).map((d) => d.name),
-      ['red', 'green', 'blue', 'yellow'],
-    );
-    assert.deepEqual(
-      visibleControlGroupDefs(true).map((d) => d.name),
+      visibleControlGroupDefs().map((d) => d.name),
       ['red', 'green', 'blue', 'yellow', 'black', 'white'],
     );
   });
 
-  it('puts two (or three) pads on each side, vertically centered', () => {
+  it('puts three pads on each side, vertically centered', () => {
     const vw = 1280;
     const vh = 720;
-    const four = layoutControlGroups(vw, vh, false);
-    assert.equal(four.length, 4);
-    const left = four.filter((r) => r.x < vw * 0.5);
-    const right = four.filter((r) => r.x > vw * 0.5);
-    assert.equal(left.length, 2);
-    assert.equal(right.length, 2);
-    assert.equal(left[0].name, 'red');
-    assert.equal(left[1].name, 'green');
-    assert.equal(right[0].name, 'blue');
-    assert.equal(right[1].name, 'yellow');
+    const six = layoutControlGroups(vw, vh);
+    assert.equal(six.length, 6);
+    const left = six.filter((r) => r.x < vw * 0.5);
+    const right = six.filter((r) => r.x > vw * 0.5);
+    assert.equal(left.length, 3);
+    assert.equal(right.length, 3);
+    assert.deepEqual(left.map((r) => r.name), ['red', 'green', 'black']);
+    assert.deepEqual(right.map((r) => r.name), ['blue', 'yellow', 'white']);
     assert.equal(left[0].x, CONTROL_GROUP_EDGE_PX);
     assert.equal(left[0].w, CONTROL_GROUP_WIDTH_PX);
     assert.equal(left[0].h, CONTROL_GROUP_SIZE_PX);
     assert.equal(right[0].x, vw - CONTROL_GROUP_EDGE_PX - CONTROL_GROUP_WIDTH_PX);
-    const stackMid = (left[0].y + left[1].y + left[1].h) * 0.5;
+    const stackMid = (left[0].y + left[2].y + left[2].h) * 0.5;
     assert.ok(Math.abs(stackMid - vh * 0.5) < 1);
-
-    const six = layoutControlGroups(vw, vh, true);
-    assert.equal(six.filter((r) => r.x < vw * 0.5).length, 3);
-    assert.equal(six.filter((r) => r.x > vw * 0.5).length, 3);
     assert.equal(six.find((r) => r.name === 'black')?.x, CONTROL_GROUP_EDGE_PX);
     assert.ok(six.find((r) => r.name === 'white')?.x > vw * 0.5);
   });
@@ -63,7 +52,7 @@ describe('control group HUD layout', () => {
     assert.equal(controlGroupFacing('right', 1), 1);
     assert.equal(controlGroupFacing('right', 2), -1);
 
-    const six = layoutControlGroups(1280, 720, true);
+    const six = layoutControlGroups(1280, 720);
     const left = six.filter((r) => r.x < 640);
     const right = six.filter((r) => r.x > 640);
     assert.deepEqual(left.map((r) => r.dir), [1, -1, 1]);
@@ -105,7 +94,7 @@ describe('control group HUD layout', () => {
   });
 
   it('picks the pad under a canvas point (including slop)', () => {
-    const rects = layoutControlGroups(800, 600, false);
+    const rects = layoutControlGroups(800, 600);
     const red = rects.find((r) => r.name === 'red');
     const green = rects.find((r) => r.name === 'green');
     assert.equal(pickControlGroupAt(rects, red.x + 4, red.y + 4), red.id);

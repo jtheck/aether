@@ -2356,6 +2356,23 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     return open;
   }
 
+  /** Stick pie targets — one ring of units / upgrades / pause / cancel. */
+  function stickTargets() {
+    if (!open) return null;
+    const outer = slots.map((s) => ({
+      kind: s.kind,
+      id: s.id,
+      ang: s.ang,
+    }));
+    if (utilityAvailable.pause && pauseSlot) {
+      outer.push({ kind: /** @type {const} */ ('pause'), ang: pauseSlot.ang });
+    }
+    if (utilityAvailable.cancel && cancelSlot) {
+      outer.push({ kind: /** @type {const} */ ('cancel'), ang: cancelSlot.ang });
+    }
+    return { inner: [], outer };
+  }
+
   function setHover(index) {
     if (!open) return;
     const next = index | 0;
@@ -2639,6 +2656,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     update,
     hide,
     isOpen,
+    stickTargets,
     setHover,
     setHoverFromPick,
     clearHover,

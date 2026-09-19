@@ -5,7 +5,6 @@ import {
   SHADOW_LABELS,
   fxTier,
   getAaEnabled,
-  getExtraControlGroups,
   getFxMode,
   getPlayerColor,
   getPlayerName,
@@ -15,7 +14,6 @@ import {
   resolveAaEnabled,
   resolveShadowMode,
   setAaEnabled,
-  setExtraControlGroups,
   setFxMode,
   setVolumeLevel,
   setPlayerColor,
@@ -97,7 +95,6 @@ export function setupMenu({
   const nameInput = /** @type {HTMLInputElement} */ (drawer.querySelector('#name_input'));
   const aaEnabled = /** @type {HTMLInputElement | null} */ (drawer.querySelector('#aa_enabled'));
   const aaNote = /** @type {HTMLElement | null} */ (drawer.querySelector('#aa_note'));
-  const extraGroups = /** @type {HTMLInputElement | null} */ (drawer.querySelector('#extra_groups'));
   const hideHudBtn = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#hide_hud_b'));
   const unitSkinsRow = /** @type {HTMLElement | null} */ (drawer.querySelector('#unit_skins_row'));
   const unitSkinsHost = /** @type {HTMLElement | null} */ (drawer.querySelector('#unit_skins'));
@@ -204,10 +201,6 @@ export function setupMenu({
 
   unitSkinsHost?.addEventListener('keydown', (e) => e.stopPropagation());
 
-  extraGroups?.addEventListener('change', () => {
-    renderer.setExtraControlGroups?.(setExtraControlGroups(extraGroups.checked));
-  });
-
   aaEnabled?.addEventListener('change', () => {
     paintAa(setAaEnabled(aaEnabled.checked));
   });
@@ -306,7 +299,7 @@ export function setupMenu({
   // Camera/hotkeys listen on window. Stop keydown so typing a name does not
   // pan or trip B/G/H. Leave keyup alone so a held pan key still releases.
   const keyStop = [
-    nameInput, colorPicker, extraGroups, aaEnabled, hideHudBtn, slider, fxSlider, volumeSlider, soloBtn, openReplayBtn, testerBtn, stressBtn,
+    nameInput, colorPicker, aaEnabled, hideHudBtn, slider, fxSlider, volumeSlider, soloBtn, openReplayBtn, testerBtn, stressBtn,
     menuKothStart, menuKothClaim, menuKothLeave,
     menuMatchReady, menuMatchStart, menuMatchLeave,
     ...lobbyDrawerToggles,
@@ -328,10 +321,6 @@ export function setupMenu({
     paintVolume(volume);
     nameInput.value = getPlayerName();
     colorPicker.value = getPlayerColor();
-    if (extraGroups) {
-      extraGroups.checked = getExtraControlGroups();
-      renderer.setExtraControlGroups?.(extraGroups.checked);
-    }
     if (aaEnabled) {
       const enabled = getAaEnabled();
       aaEnabled.checked = enabled;

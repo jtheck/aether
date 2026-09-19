@@ -6,6 +6,8 @@
 import { isBuildingAlive } from '../../sim/buildings.js';
 
 export const CONTROL_GROUP_COUNT = 6;
+/** Black pad — home agora is assigned here when a match starts. */
+export const CONTROL_GROUP_BLACK = 4;
 /** Hold this long on a pad to assign the current selection (click selects). */
 export const CONTROL_GROUP_HOLD_MS = 400;
 /** Second tap of the same group within this window centers the camera. */
@@ -31,6 +33,20 @@ export function createEmptyControlGroups() {
     units: [],
     buildings: [],
   }));
+}
+
+/**
+ * First agora owned by `owner`, or -1. Match start binds this to black.
+ * @param {{ owner?: number }[] | null | undefined} agoras
+ * @param {number} owner
+ */
+export function firstOwnedAgoraIndex(agoras, owner) {
+  if (!agoras) return -1;
+  const o = owner | 0;
+  for (let i = 0; i < agoras.length; i++) {
+    if ((agoras[i]?.owner | 0) === o) return i;
+  }
+  return -1;
 }
 
 /**

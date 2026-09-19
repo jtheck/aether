@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { gamepadCursorScale, gamepadCursorWorldPos } from './gamepadCursor.js';
+import { gamepadCursorBrushScale, gamepadCursorScale, gamepadCursorWorldPos } from './gamepadCursor.js';
 
 describe('gamepadCursorScale', () => {
   it('holds the reference size at the mid orbit', () => {
@@ -10,6 +10,14 @@ describe('gamepadCursorScale', () => {
   it('clamps so close / far zoom stay readable', () => {
     assert.ok(gamepadCursorScale(12) >= 3.6 * 0.45);
     assert.ok(gamepadCursorScale(400) <= 3.6 * 2.2);
+  });
+});
+
+describe('gamepadCursorBrushScale', () => {
+  it('keeps the idle size until the brush is larger than the ring', () => {
+    const base = gamepadCursorScale(80);
+    assert.equal(gamepadCursorBrushScale(base, 0), base);
+    assert.ok(gamepadCursorBrushScale(base, 8) > base);
   });
 });
 

@@ -85,7 +85,6 @@ import {
   ensureFxModeDefault,
   ensureShadowModeDefault,
   fxTier,
-  getExtraControlGroups,
   getPlayerColor,
   getUnitSkins,
   msaaSamples,
@@ -803,7 +802,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   if (bootShadowMode === 0) {
     renderer.setShadowsEnabled?.(false);
   }
-  renderer.setExtraControlGroups?.(getExtraControlGroups());
   /** Filled just before return so the menu callback can reach the live ctx. */
   const ctxRef = { current: null };
   /** Filled when screenshot HUD is created — settings can lock chrome off. */
@@ -2585,6 +2583,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
     },
     isRadialOpen: () => !placingType && isAnyRadialOpen(),
+    getRadialStickTargets: () => renderer.getRadialStickTargets?.() ?? null,
+    onRadialStickHover: (pick) => renderer.hoverRadialPick?.(pick, !placingType),
+    onRadialCancel: () => closeRadial(),
     pickRadialOption: (cx, cy) => renderer.pickBuildingRadial?.(cx, cy) ?? null,
     onRadialPick: (picked) => {
       if (!picked) return;

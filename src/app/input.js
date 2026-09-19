@@ -1,5 +1,7 @@
 // app/input.js — wires camera + game selection behind a single pointer hub.
-// Mouse + touch + standard-mapping gamepad (leash cursor, LT/RT orders, LB/RB select).
+// Mouse + touch + standard-mapping gamepad (leash cursor, LT/RT orders, LB/RB
+// paint-select, B / D-pad Left cast, D-pad U/R/D + Y/X/A control groups).
+// Place overlay: aim walks the ghost; A / LT / RT stamp, B cancels, bumpers yaw.
 
 import { createGameInput } from './input/gameInput.js';
 import { setupPointerHub } from './input/pointerHub.js';
@@ -56,13 +58,13 @@ export function setupInput(opts) {
       const c = aimClient();
       if (c) game.forceMoveAt?.(c.clientX, c.clientY);
     },
-    onSelectStart() {
+    onSelectStart(chord = {}) {
       const c = aimClient();
-      if (c) game.beginSelectDrag?.(c.clientX, c.clientY);
+      if (c) game.beginSelectDrag?.(c.clientX, c.clientY, chord);
     },
-    onSelectHold() {
+    onSelectHold(chord = {}) {
       const c = aimClient();
-      if (c) game.updateSelectDrag?.(c.clientX, c.clientY);
+      if (c) game.updateSelectDrag?.(c.clientX, c.clientY, chord);
     },
     onSelectEnd() {
       const c = aimClient();
@@ -70,6 +72,41 @@ export function setupInput(opts) {
     },
     onSelectCancel() {
       game.cancelSelectDrag?.();
+    },
+    onCast() {
+      const c = aimClient();
+      if (c) game.castAbilityAt?.(c.clientX, c.clientY);
+    },
+    onControlGroupDown(id) {
+      game.handleControlGroupDown?.(id);
+    },
+    onControlGroupUp(id) {
+      game.handleControlGroupUp?.(id);
+    },
+    onControlGroupCancel() {
+      game.handleControlGroupCancel?.();
+    },
+    radialOpen: () => opts.isRadialOpen?.() ?? false,
+    getRadialTargets: () => opts.getRadialStickTargets?.() ?? null,
+    onRadialHover: (pick) => opts.onRadialStickHover?.(pick),
+    onRadialConfirm: (pick) => {
+      if (pick) opts.onRadialPick?.(pick);
+    },
+    onRadialCancel: () => opts.onRadialCancel?.(),
+    placing: () => game.isPlacing?.() ?? false,
+    onPlaceAim() {
+      const c = aimClient();
+      if (c) game.previewPlacementAt?.(c.clientX, c.clientY);
+    },
+    onPlaceConfirm() {
+      const c = aimClient();
+      if (c) game.confirmPlacementAt?.(c.clientX, c.clientY);
+    },
+    onPlaceCancel() {
+      game.cancelPlacement?.();
+    },
+    onPlaceRotate(dir) {
+      game.nudgePlacementYaw?.(dir);
     },
   });
 

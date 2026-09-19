@@ -1,12 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CONTROL_GROUP_BLACK,
   CONTROL_GROUP_COUNT,
   CONTROL_GROUP_DOUBLE_MS,
   assignControlGroup,
   controlGroupFilled,
   controlGroupIdFromCode,
   createEmptyControlGroups,
+  firstOwnedAgoraIndex,
   isControlGroupDoubleTap,
   livingControlGroup,
 } from './controlGroups.js';
@@ -23,6 +25,14 @@ function fakeWorld(entries) {
 }
 
 describe('control groups', () => {
+  it('picks the first agora owned by the local seat', () => {
+    assert.equal(CONTROL_GROUP_BLACK, 4);
+    assert.equal(firstOwnedAgoraIndex(null, 0), -1);
+    assert.equal(firstOwnedAgoraIndex([], 0), -1);
+    assert.equal(firstOwnedAgoraIndex([{ owner: 1 }, { owner: 0 }, { owner: 0 }], 0), 1);
+    assert.equal(firstOwnedAgoraIndex([{ owner: 1 }], 0), -1);
+  });
+
   it('maps number keys 1-6 (and numpad) onto the six pads', () => {
     assert.equal(controlGroupIdFromCode('Digit1'), 0);
     assert.equal(controlGroupIdFromCode('Digit6'), 5);

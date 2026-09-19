@@ -27,6 +27,20 @@ export function gamepadCursorScale(radius, refRadius = REF_RADIUS, base = BASE_S
 }
 
 /**
+ * Grow the plus so its ring matches a world-space brush radius.
+ * Quad is 1×1 local XZ; the painted ring sits near |p| = 0.90.
+ * @param {number} baseScale
+ * @param {number} [brushWorld]
+ * @param {number} [ringNdc]
+ */
+export function gamepadCursorBrushScale(baseScale, brushWorld, ringNdc = 0.90) {
+  const base = Number.isFinite(baseScale) && baseScale > 0 ? baseScale : BASE_SIZE;
+  if (!(brushWorld > 0)) return base;
+  const ringFrac = 0.5 * (Number.isFinite(ringNdc) && ringNdc > 0.1 ? ringNdc : 0.90);
+  return Math.max(base, brushWorld / ringFrac);
+}
+
+/**
  * Sit the mark just above the sampled ground.
  * @param {number} x
  * @param {number} y
@@ -139,13 +153,17 @@ export function createGamepadCursor(engine, scene) {
     };
   }
 
-  function update(camera) {
+  /**
+   * @param {object} [camera]
+   * @param {{ brushWorld?: number }} [opts]
+   */
+  function update(camera, opts) {
     if (!target) {
       hide();
       return;
     }
     const world = gamepadCursorWorldPos(target.x, target.y, target.z);
-    const s = gamepadCursorScale(camera?.radius);
+    const s = gamepadCursorBrushScale(gamepadCursorScale(camera?.radius), opts?.brushWorld);
     if (mesh.position) {
       mesh.position.x = world.x;
       mesh.position.y = world.y;

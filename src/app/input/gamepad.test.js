@@ -8,12 +8,19 @@ import {
   activeMenuRoot,
   adjustMenuEl,
   buttonEdges,
+  buttonReleased,
   canAdjustMenuEl,
+  controlGroupIdFromPad,
   createGamepadAdapter,
   deadzone,
   heldRepeat,
   rotStickPair,
+  placePadIntent,
+  playCastIntent,
+  playConfirmIntent,
+  playControlGroupIntent,
   playOrderIntent,
+  playSelectBoth,
   playSelectHeld,
   stickPlayAxes,
   isMenuFocusable,
@@ -166,6 +173,8 @@ describe('readStandardPad / buttonEdges', () => {
     const e2 = buttonEdges(a, a);
     assert.equal(e1[PAD.A], true);
     assert.equal(e2[PAD.A], false);
+    assert.equal(buttonReleased([], a)[PAD.A], true);
+    assert.equal(buttonReleased(a, a)[PAD.A], false);
   });
 });
 
@@ -284,14 +293,83 @@ describe('playOrderIntent', () => {
     assert.deepEqual(playOrderIntent([]), { attackMove: false, forceMove: false });
   });
 
+  it('treats A and both triggers as confirm', () => {
+    const a = [];
+    a[PAD.A] = true;
+    const lt = [];
+    lt[PAD.LT] = true;
+    const rt = [];
+    rt[PAD.RT] = true;
+    assert.equal(playConfirmIntent(a), true);
+    assert.equal(playConfirmIntent(lt), true);
+    assert.equal(playConfirmIntent(rt), true);
+    assert.equal(playConfirmIntent([]), false);
+  });
+
+  it('maps place bumpers to yaw and A/B to stamp / cancel', () => {
+    const a = [];
+    a[PAD.A] = true;
+    assert.deepEqual(placePadIntent(a), { confirm: true, cancel: false, rotate: 0 });
+    const b = [];
+    b[PAD.B] = true;
+    assert.deepEqual(placePadIntent(b), { confirm: false, cancel: true, rotate: 0 });
+    const lb = [];
+    lb[PAD.LB] = true;
+    assert.deepEqual(placePadIntent(lb), { confirm: false, cancel: false, rotate: -1 });
+    const rb = [];
+    rb[PAD.RB] = true;
+    assert.deepEqual(placePadIntent(rb), { confirm: false, cancel: false, rotate: 1 });
+    const both = [];
+    both[PAD.LB] = true;
+    both[PAD.RB] = true;
+    assert.deepEqual(placePadIntent(both), { confirm: false, cancel: false, rotate: 0 });
+  });
+
   it('holds select on either bumper', () => {
     const lb = [];
     lb[PAD.LB] = true;
     const rb = [];
     rb[PAD.RB] = true;
+    const both = [];
+    both[PAD.LB] = true;
+    both[PAD.RB] = true;
     assert.equal(playSelectHeld(lb), true);
     assert.equal(playSelectHeld(rb), true);
+    assert.equal(playSelectHeld(both), true);
     assert.equal(playSelectHeld([]), false);
+    assert.equal(playSelectBoth(lb), false);
+    assert.equal(playSelectBoth(rb), false);
+    assert.equal(playSelectBoth(both), true);
+    assert.equal(playSelectBoth([]), false);
+  });
+});
+
+describe('play control groups / cast', () => {
+  it('maps U/R/D to the left stack and Y/X/A to the right', () => {
+    assert.equal(controlGroupIdFromPad(PAD.UP), 0);
+    assert.equal(controlGroupIdFromPad(PAD.RIGHT), 1);
+    assert.equal(controlGroupIdFromPad(PAD.DOWN), 4);
+    assert.equal(controlGroupIdFromPad(PAD.Y), 2);
+    assert.equal(controlGroupIdFromPad(PAD.X), 3);
+    assert.equal(controlGroupIdFromPad(PAD.A), 5);
+    assert.equal(controlGroupIdFromPad(PAD.B), null);
+    assert.equal(controlGroupIdFromPad(PAD.LEFT), null);
+  });
+
+  it('collects group downs and ups; B and Left cast', () => {
+    const down = [];
+    down[PAD.UP] = true;
+    down[PAD.Y] = true;
+    const up = [];
+    up[PAD.A] = true;
+    assert.deepEqual(playControlGroupIntent(down, up), { downs: [0, 2], ups: [5] });
+    const cast = [];
+    cast[PAD.B] = true;
+    assert.equal(playCastIntent(cast), true);
+    const left = [];
+    left[PAD.LEFT] = true;
+    assert.equal(playCastIntent(left), true);
+    assert.equal(playCastIntent([]), false);
   });
 });
 
@@ -438,6 +516,31 @@ describe('createGamepadAdapter', () => {
     pad.dispose();
   });
 
+  it('LT and RT also click the focused menu control', () => {
+    const { doc, side, solo } = menuDoc();
+    side.classList.add('is-open');
+    doc.activeElement = solo;
+    const lt = [];
+    lt[PAD.LT] = btn(true);
+    let pads = [stdPad({ buttons: lt })];
+    const pad = createGamepadAdapter({
+      camera: {},
+      root: doc,
+      getGamepads: () => pads,
+      now: () => 50,
+      autoStart: false,
+    });
+    pad.tick();
+    assert.equal(solo.clicks, 1);
+
+    const rt = [];
+    rt[PAD.RT] = btn(true);
+    pads = [stdPad({ buttons: rt })];
+    pad.tick();
+    assert.equal(solo.clicks, 2);
+    pad.dispose();
+  });
+
   it('aims the field cursor while a pad can play and hides it in the menu', () => {
     const aims = [];
     const { doc, side } = menuDoc();
@@ -563,6 +666,27 @@ describe('createGamepadAdapter', () => {
     pad.dispose();
   });
 
+  it('reports both bumpers on the select chord', () => {
+    const chords = [];
+    const { doc } = menuDoc();
+    const both = [];
+    both[PAD.LB] = btn(true);
+    both[PAD.RB] = btn(true);
+    const pad = createGamepadAdapter({
+      camera: { nudgeLookPan() {} },
+      active: () => true,
+      root: doc,
+      getGamepads: () => [stdPad({ buttons: both })],
+      onSelectStart: (c) => chords.push(['start', !!c?.both]),
+      onSelectHold: (c) => chords.push(['hold', !!c?.both]),
+      autoStart: false,
+    });
+    pad.tick();
+    assert.deepEqual(chords[0], ['start', true]);
+    assert.deepEqual(chords[1], ['hold', true]);
+    pad.dispose();
+  });
+
   it('LB and RB hold the same select drag', () => {
     const phases = [];
     const { doc } = menuDoc();
@@ -668,6 +792,218 @@ describe('createGamepadAdapter', () => {
     });
     pad.tick();
     assert.deepEqual(focused, ['next']);
+    pad.dispose();
+  });
+
+  it('sticks aim an open radial; A confirms and B cancels', () => {
+    const pans = [];
+    const hovers = [];
+    const confirms = [];
+    const cancels = [];
+    const { doc } = menuDoc();
+    const targets = {
+      inner: [{ kind: 'category', id: 'basic', ang: -Math.PI / 2 }],
+      outer: [{ kind: 'building', id: 'house', ang: -Math.PI / 2 }],
+    };
+    const a = [];
+    a[PAD.A] = btn(true);
+    let pads = [stdPad({ axes: [0, -0.45, 0, 0], buttons: a })];
+    const pad = createGamepadAdapter({
+      camera: { nudgeLookPan() { pans.push(1); } },
+      active: () => true,
+      root: doc,
+      getGamepads: () => pads,
+      radialOpen: () => true,
+      getRadialTargets: () => targets,
+      onRadialHover: (pick) => hovers.push(pick),
+      onRadialConfirm: (pick) => confirms.push(pick),
+      onRadialCancel: () => cancels.push(1),
+      autoStart: false,
+    });
+    pad.tick();
+    assert.deepEqual(pans, []);
+    assert.equal(hovers.at(-1)?.kind, 'category');
+    assert.equal(hovers.at(-1)?.id, 'basic');
+    assert.equal(confirms.at(-1)?.id, 'basic');
+
+    const b = [];
+    b[PAD.B] = btn(true);
+    pads = [stdPad({ axes: [0, -0.9, 0, 0], buttons: b })];
+    pad.tick();
+    assert.equal(hovers.at(-1)?.kind, 'building');
+    assert.equal(cancels.length, 1);
+    pad.dispose();
+  });
+
+  it('LT confirms an aimed radial slice', () => {
+    const confirms = [];
+    const { doc } = menuDoc();
+    const targets = {
+      inner: [{ kind: 'category', id: 'basic', ang: -Math.PI / 2 }],
+      outer: [{ kind: 'building', id: 'house', ang: -Math.PI / 2 }],
+    };
+    const lt = [];
+    lt[PAD.LT] = btn(true);
+    const pad = createGamepadAdapter({
+      camera: { nudgeLookPan() {} },
+      active: () => true,
+      root: doc,
+      getGamepads: () => [stdPad({ axes: [0, -0.45, 0, 0], buttons: lt })],
+      radialOpen: () => true,
+      getRadialTargets: () => targets,
+      onRadialConfirm: (pick) => confirms.push(pick),
+      autoStart: false,
+    });
+    pad.tick();
+    assert.equal(confirms.at(-1)?.id, 'basic');
+    pad.dispose();
+  });
+
+  it('while placing, sticks still aim; A/LT stamp, B cancels, bumpers yaw', () => {
+    const pans = [];
+    const aims = [];
+    const confirms = [];
+    const cancels = [];
+    const rotates = [];
+    const attacks = [];
+    const { doc } = menuDoc();
+    const a = [];
+    a[PAD.A] = btn(true);
+    let pads = [stdPad({ axes: [1, 0, 0, 0], buttons: a })];
+    const pad = createGamepadAdapter({
+      camera: { nudgeLookPan() { pans.push(1); } },
+      active: () => true,
+      root: doc,
+      getGamepads: () => pads,
+      placing: () => true,
+      onPlaceAim: () => aims.push(1),
+      onPlaceConfirm: () => confirms.push(1),
+      onPlaceCancel: () => cancels.push(1),
+      onPlaceRotate: (dir) => rotates.push(dir),
+      onAttackMove: () => attacks.push(1),
+      autoStart: false,
+    });
+    pad.tick();
+    assert.equal(pans.length, 1);
+    assert.equal(aims.length, 1);
+    assert.equal(confirms.length, 1);
+    assert.equal(attacks.length, 0);
+
+    const b = [];
+    b[PAD.B] = btn(true);
+    pads = [stdPad({ buttons: b })];
+    pad.tick();
+    assert.equal(cancels.length, 1);
+
+    const lb = [];
+    lb[PAD.LB] = btn(true);
+    pads = [stdPad({ buttons: lb })];
+    pad.tick();
+    assert.deepEqual(rotates, [-1]);
+
+    const rt = [];
+    rt[PAD.RT] = btn(true);
+    pads = [stdPad({ buttons: rt })];
+    pad.tick();
+    assert.equal(confirms.length, 2);
+    pad.dispose();
+  });
+
+  it('U/R/D and Y/X/A press and release control groups in play, not in the menu', () => {
+    const downs = [];
+    const ups = [];
+    const { doc, side } = menuDoc();
+    const up = [];
+    up[PAD.UP] = btn(true);
+    let pads = [stdPad({ buttons: up })];
+    const pad = createGamepadAdapter({
+      camera: { nudgeLookPan() {} },
+      active: () => true,
+      root: doc,
+      getGamepads: () => pads,
+      onControlGroupDown: (id) => downs.push(id),
+      onControlGroupUp: (id) => ups.push(id),
+      autoStart: false,
+    });
+    pad.tick();
+    assert.deepEqual(downs, [0]);
+    pads = [stdPad({ buttons: [] })];
+    pad.tick();
+    assert.deepEqual(ups, [0]);
+
+    const face = [];
+    face[PAD.Y] = btn(true);
+    face[PAD.X] = btn(true);
+    face[PAD.A] = btn(true);
+    pads = [stdPad({ buttons: face })];
+    pad.tick();
+    assert.deepEqual(downs.slice(1), [2, 3, 5]);
+
+    side.classList.add('is-open');
+    const right = [];
+    right[PAD.RIGHT] = btn(true);
+    pads = [stdPad({ buttons: right })];
+    pad.tick();
+    assert.deepEqual(downs, [0, 2, 3, 5]);
+    pad.dispose();
+  });
+
+  it('cancels a held control group when the menu opens', () => {
+    const cancels = [];
+    const { doc, side, menuBtn } = menuDoc();
+    const y = [];
+    y[PAD.Y] = btn(true);
+    let pads = [stdPad({ buttons: y })];
+    const pad = createGamepadAdapter({
+      camera: { nudgeLookPan() {} },
+      active: () => true,
+      root: doc,
+      getGamepads: () => pads,
+      onControlGroupDown: () => {},
+      onControlGroupCancel: () => cancels.push(1),
+      autoStart: false,
+    });
+    pad.tick();
+    assert.equal(cancels.length, 0);
+    menuBtn.click();
+    assert.equal(side.classList.contains('is-open'), true);
+    pad.tick();
+    assert.equal(cancels.length, 1);
+    pad.dispose();
+  });
+
+  it('B and D-pad Left cast on press, not hold or in the menu', () => {
+    const casts = [];
+    const { doc, side } = menuDoc();
+    const b = [];
+    b[PAD.B] = btn(true);
+    let pads = [stdPad({ buttons: b })];
+    const pad = createGamepadAdapter({
+      camera: { nudgeLookPan() {} },
+      active: () => true,
+      root: doc,
+      getGamepads: () => pads,
+      onCast: () => casts.push(1),
+      autoStart: false,
+    });
+    pad.tick();
+    assert.equal(casts.length, 1);
+    pad.tick();
+    assert.equal(casts.length, 1);
+
+    const left = [];
+    left[PAD.LEFT] = btn(true);
+    pads = [stdPad({ buttons: left })];
+    pad.tick();
+    assert.equal(casts.length, 2);
+
+    side.classList.add('is-open');
+    const both = [];
+    both[PAD.B] = btn(true);
+    both[PAD.LEFT] = btn(true);
+    pads = [stdPad({ buttons: both })];
+    pad.tick();
+    assert.equal(casts.length, 2);
     pad.dispose();
   });
 

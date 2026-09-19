@@ -1,11 +1,18 @@
 // Standard-mapping gamepad (Xbox 360 indices). Camera sticks + menu tab.
 // DualSense / Switch / Series pads work when the browser sets mapping === 'standard'.
 // Both sticks look/aim; L3 or R3 puts both sticks into rotate/zoom.
-// Play reports onAim so a field cursor can roam the view, then camera at the edges.
-// LT / RT issue orders at that aim (A-move / force-move). LB / RB drag-select.
+// An open agora / action radial steals the sticks as a pie menu (A / LT / RT
+// confirm, B back). Ghost-place keeps the aim: A / LT / RT stamp, B cancels,
+// bumpers yaw. Play reports onAim so a field cursor can roam the view, then
+// camera at the edges. LT / RT issue orders at that aim (A-move / force-move)
+// unless a menu, radial, or place overlay owns them. LB / RB paint-select
+// (brush lasso; both bumpers double the max radius).
+// D-pad U/R/D and Y/X/A are the left/right control-group stacks (tap / hold /
+// second-tap jump). B and D-pad Left cast at the aim.
 
 import { isCameraFollowTypingTarget } from './cameraFollow.js';
 import { leashLimit, settleCursorLeash, stepCursorLeash } from './gamepadCursor.js';
+import { radialStickPick } from './radialStick.js';
 
 export const PAD = {
   A: 0,
@@ -122,9 +129,84 @@ export function playOrderIntent(edges) {
   };
 }
 
-/** Either bumper held — same mouse rubber-band / freedraw. */
+/**
+ * Left HUD stack (red / green / black) then right (blue / yellow / white).
+ * U/R/D skip D-pad Left; Y/X/A skip B — those two leftover buttons cast.
+ */
+export const PAD_CONTROL_GROUP_BUTTONS = [
+  [PAD.UP, 0],
+  [PAD.RIGHT, 1],
+  [PAD.DOWN, 4],
+  [PAD.Y, 2],
+  [PAD.X, 3],
+  [PAD.A, 5],
+];
+
+/** @param {number} button */
+export function controlGroupIdFromPad(button) {
+  for (let i = 0; i < PAD_CONTROL_GROUP_BUTTONS.length; i++) {
+    const pair = PAD_CONTROL_GROUP_BUTTONS[i];
+    if (pair[0] === button) return pair[1];
+  }
+  return null;
+}
+
+/** Falling edges — hold-to-assign control groups need the release. */
+export function buttonReleased(cur, prev) {
+  const up = [];
+  const n = Math.max(cur?.length ?? 0, prev?.length ?? 0);
+  for (let i = 0; i < n; i++) up[i] = !!(!cur?.[i] && prev?.[i]);
+  return up;
+}
+
+/**
+ * Play control-group edges. Several downs/ups can land in one frame.
+ * @param {boolean[]} downEdges
+ * @param {boolean[]} upEdges
+ */
+export function playControlGroupIntent(downEdges, upEdges) {
+  const downs = [];
+  const ups = [];
+  for (let i = 0; i < PAD_CONTROL_GROUP_BUTTONS.length; i++) {
+    const [btn, id] = PAD_CONTROL_GROUP_BUTTONS[i];
+    if (downEdges?.[btn]) downs.push(id);
+    if (upEdges?.[btn]) ups.push(id);
+  }
+  return { downs, ups };
+}
+
+/** B or D-pad Left — cast primary ability at the aim. */
+export function playCastIntent(edges) {
+  return !!(edges?.[PAD.B] || edges?.[PAD.LEFT]);
+}
+
+/** A / LT / RT — activate a menu button, radial slice, or place stamp. */
+export function playConfirmIntent(edges) {
+  return !!(edges?.[PAD.A] || edges?.[PAD.LT] || edges?.[PAD.RT]);
+}
+
+/**
+ * Ghost-place: confirm / cancel / yaw. Both bumpers in one frame is a no-op.
+ * @param {boolean[]} edges
+ */
+export function placePadIntent(edges) {
+  const lb = !!edges?.[PAD.LB];
+  const rb = !!edges?.[PAD.RB];
+  return {
+    confirm: playConfirmIntent(edges),
+    cancel: !!edges?.[PAD.B],
+    rotate: lb === rb ? 0 : rb ? 1 : -1,
+  };
+}
+
+/** Either bumper held — paint-select at the aim. */
 export function playSelectHeld(buttons) {
   return !!(buttons?.[PAD.LB] || buttons?.[PAD.RB]);
+}
+
+/** Both bumpers — brush jumps to double the single-bumper max. */
+export function playSelectBoth(buttons) {
+  return !!(buttons?.[PAD.LB] && buttons?.[PAD.RB]);
 }
 
 /**
@@ -344,14 +426,28 @@ function showMenuMain(doc) {
  * @param {() => { width?: number, height?: number } | null} [opts.getViewport]
  * @param {() => void} [opts.onAttackMove] — LT press
  * @param {() => void} [opts.onForceMove] — RT press
- * @param {() => void} [opts.onSelectStart] — LB / RB press
- * @param {() => void} [opts.onSelectHold] — LB / RB held (after sticks this frame)
- * @param {() => void} [opts.onSelectEnd] — LB / RB release
+ * @param {() => void} [opts.onCast] — B / D-pad Left press
+ * @param {(id: number) => void} [opts.onControlGroupDown] — U/R/D / Y/X/A press
+ * @param {(id: number) => void} [opts.onControlGroupUp] — matching release
+ * @param {() => void} [opts.onControlGroupCancel] — menu / idle / disconnect mid-hold
+ * @param {(chord?: { both: boolean }) => void} [opts.onSelectStart] — LB / RB press
+ * @param {(chord?: { both: boolean }) => void} [opts.onSelectHold] — LB / RB held (after sticks this frame)
+ * @param {(chord?: { both: boolean }) => void} [opts.onSelectEnd] — LB / RB release
  * @param {() => void} [opts.onSelectCancel] — menu / idle / disconnect mid-drag
  * @param {(doc: Document) => Element | null} [opts.menuRoot]
  * @param {(root: Element | null) => Element[]} [opts.listFocusables]
  * @param {boolean} [opts.menuExclusive] — when true (default), sticks stop while a menu is open
  * @param {boolean} [opts.stickMenuNav] — left stick tabs (default true)
+ * @param {boolean | (() => boolean)} [opts.radialOpen] — world pie menu (agora / action)
+ * @param {() => { inner?: object[], outer?: object[] } | null} [opts.getRadialTargets]
+ * @param {(pick: object | null) => void} [opts.onRadialHover]
+ * @param {(pick: object) => void} [opts.onRadialConfirm]
+ * @param {() => void} [opts.onRadialCancel]
+ * @param {boolean | (() => boolean)} [opts.placing] — ghost / rally place overlay
+ * @param {() => void} [opts.onPlaceAim] — after sticks, walk the ghost to the aim
+ * @param {() => void} [opts.onPlaceConfirm] — A / LT / RT
+ * @param {() => void} [opts.onPlaceCancel] — B
+ * @param {(dir: number) => void} [opts.onPlaceRotate] — bumper edge, ±1 snap
  * @param {(el: Element | null) => boolean} [opts.isTyping]
  */
 export function createGamepadAdapter(opts = {}) {
@@ -385,6 +481,7 @@ export function createGamepadAdapter(opts = {}) {
   let aimOx = 0;
   let aimOy = 0;
   let padSelecting = false;
+  let padGroupId = null;
 
   function resetEdges() {
     prevButtons = [];
@@ -406,6 +503,12 @@ export function createGamepadAdapter(opts = {}) {
     if (!padSelecting) return;
     padSelecting = false;
     opts.onSelectCancel?.();
+  }
+
+  function cancelPadGroup() {
+    if (padGroupId == null) return;
+    padGroupId = null;
+    opts.onControlGroupCancel?.();
   }
 
   function aim(on) {
@@ -475,7 +578,7 @@ export function createGamepadAdapter(opts = {}) {
     if (tabRep.fire) stepMenuFocus(items, focused ?? root?.activeElement, intent.tab);
     if (adjRep.fire && focused) adjustMenuEl(focused, intent.adj);
 
-    if (edges[PAD.A]) {
+    if (playConfirmIntent(edges)) {
       const after = listFocusables(menuRoot);
       const cur = after.includes(root?.activeElement) ? root.activeElement : null;
       if (!cur) stepMenuFocus(after, null, 1);
@@ -488,12 +591,14 @@ export function createGamepadAdapter(opts = {}) {
     if (!pad) {
       resetEdges();
       cancelPadSelect();
+      cancelPadGroup();
       aim(false);
       opts.onIdle?.();
       return;
     }
     const read = readStandardPad(pad);
     const edges = buttonEdges(read.buttons, prevButtons);
+    const released = buttonReleased(read.buttons, prevButtons);
     prevButtons = read.buttons;
     const t = now();
     const menuRoot = resolveMenuRoot(root);
@@ -502,6 +607,7 @@ export function createGamepadAdapter(opts = {}) {
       handleMenu(menuRoot, read, edges, t);
       if (menuExclusive) {
         cancelPadSelect();
+        cancelPadGroup();
         aim(false);
         return;
       }
@@ -515,6 +621,7 @@ export function createGamepadAdapter(opts = {}) {
         if (items[0]) items[0].focus?.();
         if (menuExclusive) {
           cancelPadSelect();
+          cancelPadGroup();
           aim(false);
           return;
         }
@@ -523,29 +630,70 @@ export function createGamepadAdapter(opts = {}) {
 
     if (!(active?.() ?? true)) {
       cancelPadSelect();
+      cancelPadGroup();
       aim(false);
       return;
     }
     if (isTyping(root?.activeElement)) {
       cancelPadSelect();
+      cancelPadGroup();
       aim(false);
       return;
     }
+
+    const radialOpen = typeof opts.radialOpen === 'function' ? !!opts.radialOpen() : !!opts.radialOpen;
+    if (radialOpen) {
+      cancelPadSelect();
+      cancelPadGroup();
+      aim(false);
+      const pick = radialStickPick(read, opts.getRadialTargets?.() ?? null);
+      opts.onRadialHover?.(pick);
+      if (edges[PAD.B]) opts.onRadialCancel?.();
+      else if (playConfirmIntent(edges) && pick) opts.onRadialConfirm?.(pick);
+      return;
+    }
+
+    const placing = typeof opts.placing === 'function' ? !!opts.placing() : !!opts.placing;
+    if (placing) {
+      cancelPadSelect();
+      cancelPadGroup();
+      aim(true);
+      applyPlay(read);
+      opts.onPlaceAim?.();
+      const place = placePadIntent(edges);
+      if (place.cancel) opts.onPlaceCancel?.();
+      else if (place.confirm) opts.onPlaceConfirm?.();
+      else if (place.rotate) opts.onPlaceRotate?.(place.rotate);
+      return;
+    }
+
     aim(true);
     const selectHeld = playSelectHeld(read.buttons);
+    const chord = { both: playSelectBoth(read.buttons) };
     if (selectHeld && !padSelecting) {
       padSelecting = true;
-      opts.onSelectStart?.();
+      opts.onSelectStart?.(chord);
     }
     applyPlay(read);
-    if (padSelecting && selectHeld) opts.onSelectHold?.();
+    if (padSelecting && selectHeld) opts.onSelectHold?.(chord);
     if (padSelecting && !selectHeld) {
       padSelecting = false;
-      opts.onSelectEnd?.();
+      opts.onSelectEnd?.(chord);
     }
     const orders = playOrderIntent(edges);
     if (orders.attackMove) opts.onAttackMove?.();
     if (orders.forceMove) opts.onForceMove?.();
+    const groups = playControlGroupIntent(edges, released);
+    for (let i = 0; i < groups.downs.length; i++) {
+      padGroupId = groups.downs[i];
+      opts.onControlGroupDown?.(groups.downs[i]);
+    }
+    for (let i = 0; i < groups.ups.length; i++) {
+      const id = groups.ups[i];
+      if (padGroupId === id) padGroupId = null;
+      opts.onControlGroupUp?.(id);
+    }
+    if (playCastIntent(edges)) opts.onCast?.();
   }
 
   function loop() {
@@ -556,6 +704,7 @@ export function createGamepadAdapter(opts = {}) {
   function onLost() {
     resetEdges();
     cancelPadSelect();
+    cancelPadGroup();
     aim(false);
   }
 
@@ -577,6 +726,7 @@ export function createGamepadAdapter(opts = {}) {
       doc?.removeEventListener?.('visibilitychange', onLost);
       resetEdges();
       cancelPadSelect();
+      cancelPadGroup();
       aim(false);
     },
   };

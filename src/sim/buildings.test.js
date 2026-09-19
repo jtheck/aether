@@ -826,7 +826,7 @@ describe('building production pause', () => {
     ]);
   }
 
-  it('PAUSE_TRAIN freezes progress until resumed', () => {
+  it('PAUSE_TRAIN still cooks, then holds the finished unit until resumed', () => {
     const w = createWorld(23);
     w.buildings = [];
     const field = buildField(23, { width: 64, height: 64 });
@@ -842,9 +842,14 @@ describe('building production pause', () => {
     ]);
     assert.equal(w.buildings[0].prodPaused, 1);
     assert.equal(serializeBuildings(w.buildings)[0].prodPaused, 1);
-    for (let i = 0; i < TRAIN_TICKS + 4; i++) buildingProductionSystem(w, field);
+    for (let i = 0; i < (TRAIN_TICKS >> 1); i++) buildingProductionSystem(w, field);
+    const mid = Number(w.buildings[0].tracks?.[0]?.progress) || 0;
+    assert.ok(mid > 0 && mid < 1, 'progress still advances while paused');
     assert.equal(w.count, before);
+    for (let i = 0; i < TRAIN_TICKS; i++) buildingProductionSystem(w, field);
+    assert.equal(w.count, before, 'finished unit stays inside while paused');
     assert.ok((w.buildings[0].tracks?.[0]?.count | 0) >= 1);
+    assert.equal(Number(w.buildings[0].tracks?.[0]?.progress) || 0, 1);
     applyCommands(w, field, [
       {
         type: CMD.PAUSE_TRAIN,
@@ -854,8 +859,8 @@ describe('building production pause', () => {
       },
     ]);
     assert.equal(w.buildings[0].prodPaused, 0);
-    for (let i = 0; i < TRAIN_TICKS + 4; i++) buildingProductionSystem(w, field);
-    assert.ok(w.count > before);
+    buildingProductionSystem(w, field);
+    assert.ok(w.count > before, 'held unit walks out on the resume tick');
   });
 
   it('CANCEL_TRAIN clears a paused queue', () => {

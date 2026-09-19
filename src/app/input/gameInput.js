@@ -1,5 +1,5 @@
 // Selection + orders (LMB). Camera pan / force-move on RMB via pointerHub.
-// Touch later synthesizes into the hub; gamepad can call order helpers / enqueueCommand.
+// Touch later synthesizes into the hub; gamepad LT/RT orders, LB/RB drag-select.
 
 import * as fx from '../../sim/fixed.js';
 import { CMD } from '../../sim/commands.js';
@@ -32,15 +32,18 @@ import { USE_GPU_PICK } from '../../render/pickMode.js';
 import {
   boxSelectWinner,
   inspectForeignOnClick,
+  lassoStaysLoop,
   mergeBuildingSels,
   placementDownKind,
   placementHoverFollowsPointer,
   placementTapKind,
   radialClickKind,
   radialHubFramedBuilding,
+  screenPosInPoly,
   screenPosInRect,
   twoFingerConsumesBuildUi,
 } from './buildingSelect.js';
+import { lassoOuterLoop } from './gamepadLasso.js';
 import { projectWorldToCanvas } from '../../render/screenProject.js';
 import { pickGatherNodeOnRay, rayHitYawBox, rayTToPoint } from './gatherPick.js';
 
@@ -56,6 +59,10 @@ const EMPTY_HITS = Object.freeze([]);
 
 /** v1 lasso drag threshold. */
 export const DRAG_THRESHOLD_PX = 25;
+/** Sentinel so a bumper drag does not collide with a live mouse pointerId. */
+const PAD_SELECT_PTR = -2;
+const LASSO_SAMPLE_PX = 10;
+const LASSO_MAX_PTS = 80;
 /** Hold-drag past this while placing enters rotate mode. */
 const PLACE_ROTATE_THRESHOLD_PX = 18;
 /** Manual double-tap window — PointerEvent.detail is not a click count. */
@@ -216,6 +223,11 @@ export function createGameInput(opts) {
   let selectedBuildings = [];
 
   let boxStart = null;
+  /** Client-space samples for a freeform lasso (start first). */
+  const lassoPts = [];
+  const lassoView = [];
+  /** True after this drag has broken out of the rubber-band. */
+  let lassoLatched = false;
   let dragPointerId = null;
   let lmbDownPos = null;
   /** Latched once pointer exceeds DRAG_THRESHOLD_PX — keeps box updating inside the grace. */
@@ -345,7 +357,44 @@ export function createGameInput(opts) {
     ) != null;
   }
 
+  function resetLasso() {
+    lassoPts.length = 0;
+    lassoView.length = 0;
+    lassoLatched = false;
+  }
+
+  function noteLassoPoint(x, y) {
+    const n = lassoPts.length;
+    if (n === 0) {
+      lassoPts.push({ x, y });
+      return;
+    }
+    const last = lassoPts[n - 1];
+    if (Math.hypot(x - last.x, y - last.y) < LASSO_SAMPLE_PX) return;
+    if (n >= LASSO_MAX_PTS) {
+      lassoPts[n - 1] = { x, y };
+      return;
+    }
+    lassoPts.push({ x, y });
+  }
+
+  function fillLassoView(x, y) {
+    lassoView.length = 0;
+    for (let i = 0; i < lassoPts.length; i++) lassoView.push(lassoPts[i]);
+    const last = lassoView[lassoView.length - 1];
+    if (!last || last.x !== x || last.y !== y) lassoView.push({ x, y });
+    return lassoView;
+  }
+
   function showSelectionBox(x0, y0, x1, y1) {
+    noteLassoPoint(x1, y1);
+    const path = fillLassoView(x1, y1);
+    if (lassoStaysLoop(lassoLatched, path)) {
+      lassoLatched = true;
+      boxLastL = NaN;
+      renderer.setSelectionPath?.(lassoOuterLoop(path), { tip: { x: x1, y: y1 } });
+      return;
+    }
     const l = Math.min(x0, x1);
     const t = Math.min(y0, y1);
     const w = Math.abs(x1 - x0);
@@ -363,6 +412,7 @@ export function createGameInput(opts) {
     boxLastT = NaN;
     boxLastW = NaN;
     boxLastH = NaN;
+    resetLasso();
     renderer.setSelectionBox?.(null);
   }
 
@@ -917,7 +967,7 @@ export function createGameInput(opts) {
    * rect. Copies ids out of the center pool.
    * @returns {{ kind: 'agora' | 'building', index: number }[]}
    */
-  function buildingsInScreenRect(minX, maxX, minY, maxY, proj) {
+  function buildingsInScreenHits(hit, proj) {
     /** @type {{ kind: 'agora' | 'building', index: number }[]} */
     const matched = [];
     const screen = proj ?? renderer.captureScreenProjection?.();
@@ -928,14 +978,18 @@ export function createGameInput(opts) {
         if (!projectWorldToCanvas(screen.vp, sp.x, sp.y, sp.z, screen.width, screen.height, screenScratch)) {
           continue;
         }
-        if (!screenPosInRect(screenScratch, minX, maxX, minY, maxY)) continue;
+        if (!hit(screenScratch)) continue;
       } else {
         const p = renderer.worldToScreen(sp.x, sp.y, sp.z);
-        if (!screenPosInRect(p, minX, maxX, minY, maxY)) continue;
+        if (!hit(p)) continue;
       }
       matched.push({ kind: sp.id.kind, index: sp.id.index });
     }
     return matched;
+  }
+
+  function buildingsInScreenRect(minX, maxX, minY, maxY, proj) {
+    return buildingsInScreenHits((p) => screenPosInRect(p, minX, maxX, minY, maxY), proj);
   }
 
   function selectionOwnerForBuildingType(typeKey, primary) {
@@ -1196,6 +1250,24 @@ export function createGameInput(opts) {
     onSelectionChanged?.();
   }
 
+  function finishMarqueeSelect(unitHits, buildings, add) {
+    const winner = boxSelectWinner(unitHits, buildings.length);
+    if (winner === 'units') {
+      clearBuildingSelection();
+      syncSelectionSquad();
+      onSelectionChanged?.();
+      return;
+    }
+    if (winner === 'buildings') {
+      clearUnitSelection();
+      setBuildingSelection(buildings, add, buildings[0]);
+      return;
+    }
+    if (!add) clearBuildingSelection();
+    syncSelectionSquad();
+    onSelectionChanged?.();
+  }
+
   function boxSelect(x0, y0, x1, y1, add) {
     if (!canUseInput()) return;
     // Selecting units / buildings leaves build/place UI.
@@ -1233,21 +1305,67 @@ export function createGameInput(opts) {
       unitHits++;
     }
     const buildings = unitHits > 0 ? [] : buildingsInScreenRect(minX, maxX, minY, maxY, proj);
-    const winner = boxSelectWinner(unitHits, buildings.length);
-    if (winner === 'units') {
-      clearBuildingSelection();
-      syncSelectionSquad();
-      onSelectionChanged?.();
+    finishMarqueeSelect(unitHits, buildings, add);
+  }
+
+  function polySelect(clientPts, add) {
+    if (!canUseInput() || !clientPts || clientPts.length < 3) return;
+    abandonPlacement();
+    const rect = canvas.getBoundingClientRect();
+    const pts = [];
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i < clientPts.length; i++) {
+      const x = clientPts[i].x - rect.left;
+      const y = clientPts[i].y - rect.top;
+      pts.push({ x, y });
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+    const hit = (p) =>
+      screenPosInRect(p, minX, maxX, minY, maxY) && screenPosInPoly(p, pts);
+    const proj = renderer.captureScreenProjection?.(rect.width, rect.height);
+    if (!add) clearUnitSelectionBits();
+    else dropUnitsNotOwnedBy(localPlayerId);
+    const world = getWorld();
+    let unitHits = 0;
+    for (let i = 0; i < world.count; i++) {
+      if (!world.alive[i] || world.owner[i] !== localPlayerId) continue;
+      if (world.carriedBy && world.carriedBy[i] >= 0) continue;
+      getUnitWorldPos(i, posScratch);
+      if (proj) {
+        if (!projectWorldToCanvas(
+          proj.vp,
+          posScratch.x,
+          posScratch.y,
+          posScratch.z,
+          proj.width,
+          proj.height,
+          screenScratch,
+        )) continue;
+        if (!hit(screenScratch)) continue;
+      } else {
+        const p = renderer.worldToScreen(posScratch.x, posScratch.y, posScratch.z);
+        if (!hit(p)) continue;
+      }
+      selectEntity(i, false);
+      unitHits++;
+    }
+    const buildings = unitHits > 0 ? [] : buildingsInScreenHits(hit, proj);
+    finishMarqueeSelect(unitHits, buildings, add);
+  }
+
+  function marqueeSelect(x0, y0, x1, y1, add) {
+    const path = fillLassoView(x1, y1);
+    if (lassoStaysLoop(lassoLatched, path)) {
+      polySelect(lassoOuterLoop(path), add);
       return;
     }
-    if (winner === 'buildings') {
-      clearUnitSelection();
-      setBuildingSelection(buildings, add, buildings[0]);
-      return;
-    }
-    if (!add) clearBuildingSelection();
-    syncSelectionSquad();
-    onSelectionChanged?.();
+    boxSelect(x0, y0, x1, y1, add);
   }
 
   /**
@@ -1495,6 +1613,7 @@ export function createGameInput(opts) {
 
     // Latch pointer state synchronously — never await before this or pointerup is lost.
     boxStart = { x: e.clientX, y: e.clientY };
+    resetLasso();
     lmbDownPos = { x: e.clientX, y: e.clientY };
     dragPointerId = e.pointerId;
     boxDragging = false;
@@ -1605,6 +1724,7 @@ export function createGameInput(opts) {
       boxDragging = true;
       abilityHoldGen++;
       clearAbilityHold();
+      noteLassoPoint(boxStart.x, boxStart.y);
     }
     if (boxDragging) showSelectionBox(boxStart.x, boxStart.y, e.clientX, e.clientY);
     else {
@@ -1625,6 +1745,7 @@ export function createGameInput(opts) {
    *   prevTap?: { t: number, x: number, y: number, kind: 'unit' | 'ground' | 'enemy' | 'building', typeId?: number, buildingTypeKey?: string } | null,
    *   epoch?: number,
    *   hubPassThrough?: boolean,
+   *   selectOnly?: boolean,
    * }} [click]
    */
   async function handleWorldClick(e, d, click = {}) {
@@ -1653,6 +1774,7 @@ export function createGameInput(opts) {
       // Riders + room on transport → embark. Otherwise always re-select (never
       // ground-move onto a friendly — full vehicles / random infantry included).
       const canEmbark =
+        !click.selectOnly &&
         !e.shiftKey &&
         !e.ctrlKey &&
         !e.metaKey &&
@@ -1753,6 +1875,9 @@ export function createGameInput(opts) {
 
     // Hub frames the selected building — a miss must not rally / deselect.
     if (click.hubPassThrough) return;
+
+    // Bumper tap is select-only — do not a-move / rally / wipe on a miss.
+    if (click.selectOnly) return;
 
     if (hasOrderableSelection() && canIssueOrders()) {
       if (!clickCurrent(epoch)) return;
@@ -1939,7 +2064,7 @@ export function createGameInput(opts) {
             lastTap = null;
           } else if (wasDragging && boxStart) {
             lastTap = null;
-            boxSelect(boxStart.x, boxStart.y, e.clientX, e.clientY, e.shiftKey);
+            marqueeSelect(boxStart.x, boxStart.y, e.clientX, e.clientY, e.shiftKey);
           } else {
             const epoch = ++worldClickEpoch;
             await handleWorldClick(e, d, { tapAt, prevTap, epoch });
@@ -1951,6 +2076,102 @@ export function createGameInput(opts) {
     hideSelectionBox();
     boxStart = null;
     dragPointerId = null;
+    return true;
+  }
+
+  /**
+   * Gamepad LT / explicit A-move at a screen point. Picks hostiles / nodes;
+   * does not re-select friendlies (that's LMB).
+   */
+  function attackMoveAt(clientX, clientY) {
+    if (!canIssueOrders() || isPlacing()) return false;
+    if (hasRallySelection()) {
+      lastTap = null;
+      const g = renderer.screenToGround?.(clientX, clientY);
+      if (!g) return false;
+      return rallyOrderAt(g.x, g.z, CMD.ATTACK_MOVE);
+    }
+    if (!hasOrderableSelection()) return false;
+    lastTap = null;
+    const epoch = ++worldClickEpoch;
+    void (async () => {
+      let hit = -1;
+      let bld = null;
+      if (USE_GPU_PICK) {
+        hit = await pickUnitAt(clientX, clientY);
+        if (!clickCurrent(epoch)) return;
+        bld = await pickBuildingAt(clientX, clientY);
+      } else {
+        const ray = renderer.clientPickingRay?.(clientX, clientY) ?? null;
+        const hits = pickUnitsAtRay(ray);
+        hit = hits.length > 0 ? hits[0] : -1;
+        bld = pickBuildingAtRay(ray);
+      }
+      if (!clickCurrent(epoch)) return;
+      await orderAt(clientX, clientY, CMD.ATTACK_MOVE, hit, epoch, bld);
+    })();
+    return true;
+  }
+
+  /**
+   * Gamepad LB / RB — same rubber-band / freedraw as LMB. Anchor on press,
+   * hatch follows the aim while held, release commits.
+   */
+  function beginSelectDrag(clientX, clientY) {
+    if (!canUseInput()) return false;
+    if (dragPointerId != null && dragPointerId !== PAD_SELECT_PTR) return false;
+    boxStart = { x: clientX, y: clientY };
+    resetLasso();
+    lmbDownPos = { x: clientX, y: clientY };
+    dragPointerId = PAD_SELECT_PTR;
+    boxDragging = false;
+    hideSelectionBox();
+    return true;
+  }
+
+  function updateSelectDrag(clientX, clientY) {
+    if (!canUseInput() || dragPointerId !== PAD_SELECT_PTR || !boxStart) return false;
+    const moved = Math.hypot(clientX - boxStart.x, clientY - boxStart.y);
+    if (!boxDragging && moved > DRAG_THRESHOLD_PX) {
+      boxDragging = true;
+      noteLassoPoint(boxStart.x, boxStart.y);
+    }
+    if (boxDragging) showSelectionBox(boxStart.x, boxStart.y, clientX, clientY);
+    return true;
+  }
+
+  function endSelectDrag(clientX, clientY, add = false) {
+    if (dragPointerId !== PAD_SELECT_PTR) return false;
+    const start = boxStart;
+    const wasDragging = boxDragging;
+    boxDragging = false;
+    if (canUseInput() && start) {
+      if (wasDragging) {
+        lastTap = null;
+        marqueeSelect(start.x, start.y, clientX, clientY, add);
+      } else {
+        const epoch = ++worldClickEpoch;
+        void handleWorldClick(
+          { clientX, clientY, shiftKey: !!add, ctrlKey: false, metaKey: false },
+          start,
+          { selectOnly: true, epoch },
+        );
+      }
+    }
+    hideSelectionBox();
+    boxStart = null;
+    dragPointerId = null;
+    lmbDownPos = null;
+    return true;
+  }
+
+  function cancelSelectDrag() {
+    if (dragPointerId !== PAD_SELECT_PTR) return false;
+    hideSelectionBox();
+    boxStart = null;
+    dragPointerId = null;
+    lmbDownPos = null;
+    boxDragging = false;
     return true;
   }
 
@@ -2179,6 +2400,11 @@ export function createGameInput(opts) {
     handlePointerMove,
     handlePointerUp,
     forceMoveAt,
+    attackMoveAt,
+    beginSelectDrag,
+    updateSelectDrag,
+    endSelectDrag,
+    cancelSelectDrag,
     castAbilityAt,
     cancelDrag,
     clearSelection,

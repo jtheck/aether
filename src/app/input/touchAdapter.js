@@ -33,6 +33,8 @@ import { DRAG_THRESHOLD_PX } from './gameInput.js';
 
 /** Screen-rim band that *candidates* a finger for camera (commit on drag). */
 export const EDGE_ZONE_PX = 47;
+/** Visual rails sit closer to the bezel than the hit band. */
+export const EDGE_ZONE_GUIDE_PX = 14;
 /** After the full-strength rim, fade over this many px (2× zone). */
 export const EDGE_FADE_PX = EDGE_ZONE_PX * 2;
 /** Follow while the fade still has weight — not into the open field. */
@@ -118,8 +120,8 @@ function mountEdgeZoneGuides(canvas) {
     layer.style.top = `${r.top}px`;
     layer.style.width = `${r.width}px`;
     layer.style.height = `${r.height}px`;
-    left.style.left = `${EDGE_ZONE_PX}px`;
-    right.style.right = `${EDGE_ZONE_PX}px`;
+    left.style.left = `${EDGE_ZONE_GUIDE_PX}px`;
+    right.style.right = `${EDGE_ZONE_GUIDE_PX}px`;
   }
   layout();
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(layout) : null;

@@ -122,7 +122,6 @@ export function buildingProductionSystem(w, field) {
       w.buildingsDirty = 1;
       continue;
     }
-    if (b.prodPaused) continue;
     let dirty = false;
     for (let ti = tracks.length - 1; ti >= 0; ti--) {
       const t = tracks[ti];
@@ -133,7 +132,19 @@ export function buildingProductionSystem(w, field) {
       }
       const ticks = t.kind === 'upgrade' ? RESEARCH_TICKS : TRAIN_TICKS;
       const stepProg = 1 / (ticks * active);
-      t.progress = (Number(t.progress) || 0) + stepProg;
+      let progress = Number(t.progress) || 0;
+      // Pause still cooks the current item at normal speed; hold at ready
+      // so the unit does not walk out until resume.
+      if (b.prodPaused) {
+        if (progress < 1) {
+          progress += stepProg;
+          t.progress = progress >= 1 ? 1 : progress;
+          dirty = true;
+        }
+        continue;
+      }
+      if (progress < 1) progress += stepProg;
+      t.progress = progress;
       while (t.progress >= 1 && (t.count | 0) > 0) {
         t.progress -= 1;
         t.count = (t.count | 0) - 1;

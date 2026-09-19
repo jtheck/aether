@@ -151,8 +151,27 @@ const ENEMY_ARMY = [
   { type: UNIT.APC, count: 1 },
 ];
 
+/** KOTH drop — combat only, plus a dirigible and APC on the flanks. */
+const KOTH_ARMY = [
+  { type: UNIT.WARRIOR, count: 8 },
+  { type: UNIT.ARCHER, count: 6 },
+  { type: UNIT.WARLOCK, count: 3 },
+  { type: UNIT.PRIEST, count: 2 },
+  { type: UNIT.MYCO, count: 2 },
+  { type: UNIT.SHAMAN, count: 2 },
+  { type: UNIT.WIZARD, count: 2 },
+  { type: UNIT.MONK, count: 3 },
+  { type: UNIT.DIRIGIBLE, count: 1 },
+  { type: UNIT.APC, count: 1 },
+];
+
 const COL_SPACING = 22;
 const ROW_SPACING = 16;
+/** Compact KOTH ranks facing the hill. */
+const KOTH_FILE_SPACING = 12;
+const KOTH_RANK_SPACING = 16;
+const KOTH_FRONT_FORWARD = 16;
+const KOTH_FLANK_PAD = 26;
 
 /** Relative combat mix for the pie-ring mass: baseline 10, casters 5. */
 function stressTypeWeight(def) {
@@ -195,9 +214,10 @@ const STRESS_MAX_RADIUS_FRAC = 0.90;
 const STRESS_SPACING_MAX = 14;
 const STRESS_SPACING_MIN = 4;
 
-export { PLAYER_ARMY, ENEMY_ARMY };
+export { PLAYER_ARMY, ENEMY_ARMY, KOTH_ARMY };
 
 export const UNITS_PER_ARMY = PLAYER_ARMY.reduce((s, c) => s + c.count, 0);
+export const KOTH_UNITS_PER_ARMY = KOTH_ARMY.reduce((s, c) => s + c.count, 0);
 export const KOTH_MAX_SLOTS = 5;
 export const KOTH_MAX_ENTITIES = UNITS_PER_ARMY * KOTH_MAX_SLOTS;
 
@@ -227,15 +247,14 @@ export function kothMaxUnitsOfType(typeId) {
   return perArmy * KOTH_MAX_SLOTS;
 }
 
-/** Scale the default mix so counts sum to `n` (deterministic). */
-export function scaledArmyLayout(n) {
+function scaledLayoutFrom(source, sourceTotal, n) {
   const target = Math.max(1, n | 0);
-  if (target === UNITS_PER_ARMY) {
-    return PLAYER_ARMY.map((c) => ({ type: c.type, count: c.count }));
+  if (target === sourceTotal) {
+    return source.map((c) => ({ type: c.type, count: c.count }));
   }
-  const layout = PLAYER_ARMY.map((c) => ({
+  const layout = source.map((c) => ({
     type: c.type,
-    count: Math.floor((c.count * target) / UNITS_PER_ARMY),
+    count: Math.floor((c.count * target) / sourceTotal),
   }));
   let sum = layout.reduce((s, c) => s + c.count, 0);
   let i = 0;
@@ -247,6 +266,15 @@ export function scaledArmyLayout(n) {
   return layout.filter((c) => c.count > 0);
 }
 
+/** Scale the default mix so counts sum to `n` (deterministic). */
+export function scaledArmyLayout(n) {
+  return scaledLayoutFrom(PLAYER_ARMY, UNITS_PER_ARMY, n);
+}
+
+function scaledKothArmyLayout(n) {
+  return scaledLayoutFrom(KOTH_ARMY, KOTH_UNITS_PER_ARMY, n);
+}
+
 /** Spawn one army — default layout, or packed scaled mix when armyPerSide > 0. */
 function spawnConfiguredArmy(w, owner, baseX, baseZ) {
   if (_armyPerSide > 0) {
@@ -254,6 +282,16 @@ function spawnConfiguredArmy(w, owner, baseX, baseZ) {
   } else {
     spawnArmy(w, PLAYER_ARMY, owner, baseX, baseZ);
   }
+}
+
+function spawnConfiguredKothArmy(w, owner, baseX, baseZ) {
+  const layout = _armyPerSide > 0 ? scaledKothArmyLayout(_armyPerSide) : KOTH_ARMY;
+  const total = layout.reduce((s, c) => s + c.count, 0);
+  if (total > AGORA_CAMP_PACKED_ABOVE) {
+    spawnArmyPacked(w, layout, owner, baseX, baseZ);
+    return;
+  }
+  spawnKothFormation(w, owner, baseX, baseZ, layout);
 }
 
 function activeArmyLayout() {
@@ -276,7 +314,7 @@ export function spawnKothSlot(w, slot) {
   const half = w.worldHalfF ?? activeWorldHalfF();
   const bases = spawnBases(half, { mapW: w.mapW });
   const base = bestKothSpawnPoint(w, slot, bases);
-  spawnConfiguredArmy(w, slot, base[0], base[1]);
+  spawnConfiguredKothArmy(w, slot, base[0], base[1]);
 }
 
 export function stressPerSideFromSearch(search = '') {
@@ -449,6 +487,104 @@ function spawnArmyAroundAgora(w, layout, owner, baseX, baseZ) {
     const types = typesMatching(layout, (t) => agoraCampRole(t) === role);
     const rows = spawnRanks(w, owner, types, baseX, baseZ, fX, fZ, rX, rZ, forward);
     if (rows) forward += rows * AGORA_RANK_SPACING;
+  }
+}
+
+function kothInfantryRole(type) {
+  if (type === UNIT.WARRIOR || type === UNIT.MONK) return 'front';
+  if (type === UNIT.ARCHER || type === UNIT.MYCO) return 'mid';
+  if (type === UNIT.DIRIGIBLE || type === UNIT.APC) return 'flank';
+  return 'rear';
+}
+
+function peelTypes(types, pred) {
+  const keep = [];
+  const take = [];
+  for (const t of types) (pred(t) ? take : keep).push(t);
+  return { keep, take };
+}
+
+/** Place `extras` evenly along `core`, pinning the first/last extra to the ends. */
+function sprinkleEnds(core, extras) {
+  if (!extras.length) return core.slice();
+  if (!core.length) return extras.slice();
+  const total = core.length + extras.length;
+  const extraAt = new Set();
+  if (extras.length === 1) extraAt.add((total / 2) | 0);
+  else {
+    for (let i = 0; i < extras.length; i++) {
+      extraAt.add(Math.round((i * (total - 1)) / (extras.length - 1)));
+    }
+  }
+  const out = [];
+  let e = 0;
+  let c = 0;
+  for (let i = 0; i < total; i++) {
+    if (extraAt.has(i) && e < extras.length) out.push(extras[e++]);
+    else if (c < core.length) out.push(core[c++]);
+    else if (e < extras.length) out.push(extras[e++]);
+  }
+  return out;
+}
+
+function nestCenter(wings, center) {
+  if (!center.length) return wings.slice();
+  if (!wings.length) return center.slice();
+  const left = wings.slice(0, Math.ceil(wings.length / 2));
+  return [...left, ...center, ...wings.slice(left.length)];
+}
+
+function arrangeKothFront(types) {
+  const { keep, take } = peelTypes(types, (t) => t === UNIT.MONK);
+  return sprinkleEnds(keep, take);
+}
+
+function arrangeKothMid(types) {
+  const { keep, take } = peelTypes(types, (t) => t === UNIT.MYCO);
+  return sprinkleEnds(keep, take);
+}
+
+function arrangeKothRear(types) {
+  const { keep, take } = peelTypes(types, (t) => t === UNIT.PRIEST);
+  return nestCenter(keep, take);
+}
+
+/**
+ * Combat ranks facing the hill: melee screen, missile line, casters behind,
+ * dirigible on the left flank and APC on the right.
+ */
+function spawnKothFormation(w, owner, baseX, baseZ, layout) {
+  const { fX, fZ, rX, rZ } = facingCenter(baseX, baseZ);
+  const front = arrangeKothFront(typesMatching(layout, (t) => kothInfantryRole(t) === 'front'));
+  const mid = arrangeKothMid(typesMatching(layout, (t) => kothInfantryRole(t) === 'mid'));
+  const rear = arrangeKothRear(typesMatching(layout, (t) => kothInfantryRole(t) === 'rear'));
+  // Closest to the spawn first, so melee ends nearest the hill.
+  const ranks = [rear, mid, front].filter((rank) => rank.length);
+
+  let forward = KOTH_FRONT_FORWARD;
+  let maxHalf = 0;
+  for (const rank of ranks) {
+    spawnRank(w, owner, rank, baseX, baseZ, fX, fZ, rX, rZ, forward, KOTH_FILE_SPACING);
+    maxHalf = Math.max(maxHalf, ((rank.length - 1) * KOTH_FILE_SPACING) / 2);
+    forward += KOTH_RANK_SPACING;
+  }
+
+  const dirigibles = typesMatching(layout, (t) => t === UNIT.DIRIGIBLE);
+  const apcs = typesMatching(layout, (t) => t === UNIT.APC);
+  const midRank = ranks.length > 2 ? 1 : 0;
+  const flankFwd = KOTH_FRONT_FORWARD + KOTH_RANK_SPACING * midRank;
+  const flankLat = maxHalf + KOTH_FLANK_PAD;
+  for (let i = 0; i < dirigibles.length; i++) {
+    spawnOffset(
+      w, owner, dirigibles[i], baseX, baseZ, fX, fZ, rX, rZ,
+      flankFwd, -(flankLat + i * KOTH_FLANK_PAD),
+    );
+  }
+  for (let i = 0; i < apcs.length; i++) {
+    spawnOffset(
+      w, owner, apcs[i], baseX, baseZ, fX, fZ, rX, rZ,
+      flankFwd, flankLat + i * KOTH_FLANK_PAD,
+    );
   }
 }
 
@@ -781,7 +917,7 @@ export function buildWorldFromConfig({
         agoraSpecs.push({ owner: slot, x: base[0], z: base[1] });
         spawnConfiguredArmyAtAgora(w, slot, base[0], base[1]);
       } else {
-        spawnConfiguredArmy(w, slot, base[0], base[1]);
+        spawnConfiguredKothArmy(w, slot, base[0], base[1]);
       }
       grantStartingResources(w, slot);
     }

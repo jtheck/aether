@@ -95,6 +95,7 @@ import { createBuildingActionRadial } from './buildingActionRadial.js';
 import { createSelectionHud } from './selectionHud.js';
 import { createControlGroupHud } from './controlGroupHud.js';
 import { createSceneConfirm } from './sceneConfirm.js';
+import { createGamepadCursor } from './gamepadCursor.js';
 import { createSelectionBoxOverlay } from './selectionBox.js';
 import {
   FX_DISTANCE_SQ,
@@ -913,10 +914,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let tileGridOccupancyDirty = false;
   /** O-key screenshot chrome — HUD / collars / grids off, world stays. */
   let screenshotHudHidden = false;
-  /** @type {{ hide: () => void, showCanvasRect: Function }} */
+  /** @type {{ hide: () => void, showCanvasRect: Function, showCanvasPath?: Function }} */
   let selectionBoxOverlay = { hide() {}, showCanvasRect() {} };
   /** @type {{ x0: number, y0: number, x1: number, y1: number } | null} */
   let selectionBoxClient = null;
+  /** @type {{ x: number, y: number }[] | null} */
+  let selectionPathClient = null;
   /** @type {{ x: number, z: number, radius: number, owner?: number }[] | { x: number, z: number, radius: number, owner?: number } | null} */
   let lastWorkRadiusSpec = null;
   /** @type {{ x0: number, z0: number, x1: number, z1: number }[] | null} */
@@ -939,6 +942,21 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     disposeLabels() {},
     ensureText() {},
   };
+  /** @type {{ set: Function, update: Function, clear: Function, get: Function }} */
+  let gamepadCursor = {
+    set() {},
+    update() {},
+    clear() {},
+    get() { return null; },
+  };
+  let padCursorFollow = false;
+  let padCursorOx = 0;
+  let padCursorOy = 0;
+  /** @type {{ x: number, y: number, z: number } | null} */
+  let lastGamepadCursor = null;
+  let selectionPathHideCursor = true;
+  /** @type {{ x: number, y: number } | null} */
+  let selectionPathTip = null;
   let ground = null;
   /** @type {object | null} */
   let fieldSnap = opts.field ?? null;
@@ -1062,6 +1080,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     tileGrid?.setVisible(false);
     placementGrid?.setFocus(null);
     sceneConfirm.clear?.();
+    gamepadCursor.clear?.();
     for (const mesh of selRingParts) mesh.visible = false;
     if (orderMarker) orderMarker.visible = false;
     buildingProps.setSelectionHighlight?.(null);
@@ -2119,6 +2138,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     console.warn('[sceneConfirm] init failed', err);
   }
 
+  try {
+    gamepadCursor = createGamepadCursor(engine, scene);
+  } catch (err) {
+    console.warn('[gamepadCursor] init failed', err);
+  }
+
   function applySceneConfirm(pos) {
     lastSceneConfirm = pos ?? null;
     if (screenshotHudHidden || !lastSceneConfirm) {
@@ -2134,6 +2159,32 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       z: lastSceneConfirm.z,
       valid: lastSceneConfirm.valid !== false,
     });
+  }
+
+  function resolveViewCenterHit() {
+    const { width, height } = canvasCoords(0, 0);
+    if (!(width > 8) || !(height > 8)) return null;
+    const ray = pickingRay(
+      width * 0.5 + padCursorOx,
+      height * 0.5 + padCursorOy,
+      viewProjection(),
+      width,
+      height,
+    );
+    if (!ray) return null;
+    return fieldSnap ? rayHitTerrain(ray, (x, z) => groundYAt(x, z)) : rayHitGround(ray);
+  }
+
+  function syncGamepadCursor() {
+    if (screenshotHudHidden || !padCursorFollow) {
+      if (lastGamepadCursor) lastGamepadCursor = null;
+      gamepadCursor.clear?.();
+      return;
+    }
+    const hit = resolveViewCenterHit();
+    lastGamepadCursor = hit;
+    gamepadCursor.set(hit);
+    gamepadCursor.update?.(camera);
   }
 
   try {
@@ -2172,13 +2223,33 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
 
   function syncSelectionBoxOverlay() {
-    if (screenshotHudHidden || !selectionBoxClient) {
+    if (screenshotHudHidden || (!selectionBoxClient && !selectionPathClient)) {
       selectionBoxOverlay.hide();
       setSelectionBoxCursor(false);
       return;
     }
     if (canvas.clientWidth !== boxClientW || canvas.clientHeight !== boxClientH) {
       refreshBoxCanvasRect();
+    }
+    if (selectionPathClient) {
+      const pts = [];
+      for (let i = 0; i < selectionPathClient.length; i++) {
+        const p = selectionPathClient[i];
+        pts.push({ x: p.x - boxCanvasLeft, y: p.y - boxCanvasTop });
+      }
+      const tip = selectionPathTip
+        ? { x: selectionPathTip.x - boxCanvasLeft, y: selectionPathTip.y - boxCanvasTop }
+        : pts[pts.length - 1];
+      selectionBoxOverlay.showCanvasPath?.(
+        pts,
+        boxCanvasW,
+        boxCanvasH,
+        tip?.x,
+        tip?.y,
+        camera,
+      );
+      setSelectionBoxCursor(selectionPathHideCursor);
+      return;
     }
     const { x0, y0, x1, y1 } = selectionBoxClient;
     selectionBoxOverlay.showCanvasRect(
@@ -2320,7 +2391,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   const shadowCasterDefer = new WeakSet();
 
   function isBackdropMesh(mesh) {
-    return (mesh?.name || '') === 'distant-mountains';
+    const name = mesh?.name || '';
+    return name === 'distant-mountains' || name.startsWith('backdrop-');
   }
 
   function deferShadowCaster(mesh) {
@@ -3336,6 +3408,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       controlGroupHud.update?.(camera);
       sceneConfirm.update?.(camera);
     }
+    syncGamepadCursor();
     syncSelectionBoxOverlay();
     buildingProps.updateHarvestPing?.();
     updateUnitPings();
@@ -4042,6 +4115,30 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     hideActionRadial() {
       actionRadial.hide();
+    },
+
+    /**
+     * Gamepad field cursor. When on, the mark follows the aim (view center + leash).
+     */
+    setGamepadCursorFollow(on) {
+      padCursorFollow = !!on;
+      if (!padCursorFollow) {
+        padCursorOx = 0;
+        padCursorOy = 0;
+        lastGamepadCursor = null;
+        gamepadCursor.clear?.();
+      }
+      return padCursorFollow;
+    },
+
+    /** Canvas-pixel offset from view center (leash). */
+    setGamepadCursorOffset(ox, oy) {
+      padCursorOx = Number.isFinite(ox) ? ox : 0;
+      padCursorOy = Number.isFinite(oy) ? oy : 0;
+    },
+
+    getGamepadCursor() {
+      return lastGamepadCursor;
     },
 
     setScreenshotHudHidden(on) {
@@ -4938,13 +5035,41 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     setSelectionBox(x0, y0, x1, y1) {
       if (x0 == null) {
         selectionBoxClient = null;
+        selectionPathClient = null;
+        selectionPathTip = null;
         selectionBoxOverlay.hide();
         setSelectionBoxCursor(false);
         return;
       }
-      if (!selectionBoxClient) refreshBoxCanvasRect();
+      if (!selectionBoxClient && !selectionPathClient) refreshBoxCanvasRect();
+      selectionPathClient = null;
+      selectionPathTip = null;
       selectionBoxClient = { x0, y0, x1, y1 };
       setSelectionBoxCursor(true);
+    },
+
+    /**
+     * Closed lasso in client pixels. `opts.tip` is the live plus; otherwise last point.
+     * @param {{ x: number, y: number }[] | null} [pts]
+     * @param {{ hideCursor?: boolean, tip?: { x: number, y: number } }} [opts]
+     */
+    setSelectionPath(pts, opts) {
+      if (!pts || pts.length < 3) {
+        selectionPathClient = null;
+        selectionPathTip = null;
+        selectionPathHideCursor = true;
+        if (!selectionBoxClient) {
+          selectionBoxOverlay.hide();
+          setSelectionBoxCursor(false);
+        }
+        return;
+      }
+      if (!selectionBoxClient && !selectionPathClient) refreshBoxCanvasRect();
+      selectionBoxClient = null;
+      selectionPathClient = pts;
+      selectionPathTip = opts?.tip ?? pts[pts.length - 1];
+      selectionPathHideCursor = opts?.hideCursor !== false;
+      if (selectionPathHideCursor) setSelectionBoxCursor(true);
     },
 
     /**

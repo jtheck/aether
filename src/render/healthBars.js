@@ -22,7 +22,7 @@ import {
   removeBillboardSprite,
   updateBillboardSprite,
 } from '../vendor/lite/liteVendor.js';
-import { CAMERA_CLOSE_SPAN, cameraZoomNormalized } from './cameraController.js';
+import { CAMERA_BASE_FOV, CAMERA_CLOSE_SPAN, cameraZoomNormalized } from './cameraController.js';
 import { HEALTH_BAR_CAPACITY } from './overlayLod.js';
 import { ownerTint } from './ownerTints.js';
 import {
@@ -339,7 +339,7 @@ export function roofChipLift(roofY, fallback = DEFAULT_BUILDING_ROOF) {
 export function chipScreenPixels(worldDiameter, distance, viewportHeight, fov) {
   const d = Math.max(1e-3, distance);
   const vh = Math.max(1, viewportHeight);
-  const f = fov > 1e-3 ? fov : 0.8;
+  const f = fov > 1e-3 ? fov : CAMERA_BASE_FOV;
   return (worldDiameter * vh) / (2 * d * Math.tan(f * 0.5));
 }
 
@@ -353,7 +353,7 @@ export function chipScreenPixels(worldDiameter, distance, viewportHeight, fov) {
 export function worldSizeForScreenPx(screenPx, distance, viewportHeight, fov) {
   const d = Math.max(1e-3, distance);
   const vh = Math.max(1, viewportHeight);
-  const f = fov > 1e-3 ? fov : 0.8;
+  const f = fov > 1e-3 ? fov : CAMERA_BASE_FOV;
   return (screenPx * 2 * d * Math.tan(f * 0.5)) / vh;
 }
 
@@ -1030,7 +1030,7 @@ export function createHealthBars(engine, scene, opts = {}) {
   let deviceH = 720;
   /** @type {Float32Array | number[] | null} */
   let viewProjection = null;
-  let fov = 0.8;
+  let fov = CAMERA_BASE_FOV;
   let horizonScale = 1;
   let sizeScale = 1;
   let chipNow = 0;
@@ -1125,7 +1125,7 @@ export function createHealthBars(engine, scene, opts = {}) {
         ? getViewProjectionMatrix(cam, viewW / viewH)
         : null;
       const camFov = cam?.fov;
-      fov = Number.isFinite(camFov) && camFov > 1e-3 ? camFov : 0.8;
+      fov = Number.isFinite(camFov) && camFov > 1e-3 ? camFov : CAMERA_BASE_FOV;
       const minR = cam?.lowerRadiusLimit ?? 50;
       const maxR = cam?.upperRadiusLimit ?? cam?.radius ?? 900;
       const zoomN = cameraZoomNormalized(cam?.radius, minR, maxR);

@@ -180,6 +180,13 @@ export function waveEmitterFocus() {
   return WAVE_PRESET_CENTROIDS[presetIndex];
 }
 
+/** Keep this many chunk-edges around each live emitter (full density, last to page out). */
+export const STREAM_EMITTER_KEEP_CHUNKS = 1.35;
+
+export function waveEmitterKeepR(chunkSize) {
+  return Math.max(8, chunkSize * STREAM_EMITTER_KEEP_CHUNKS);
+}
+
 /** Min distance² from an AABB to any live emitter — 0 if a source sits inside. */
 export function waveChunkEmitDist2(bounds) {
   const { minX, minY, minZ, size } = bounds;
@@ -201,6 +208,12 @@ export function waveChunkEmitDist2(bounds) {
     if (d2 < best) best = d2;
   }
   return best;
+}
+
+/** True when the cube is inside the keep bubble of a live emitter. */
+export function waveChunkNearEmitter(bounds, keepR) {
+  const r = keepR ?? waveEmitterKeepR(bounds?.size ?? 16);
+  return waveChunkEmitDist2(bounds) <= r * r;
 }
 
 /** ~5 ms of collapse — pair/ring are cheap, tube is not. */

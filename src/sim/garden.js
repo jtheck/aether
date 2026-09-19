@@ -1,9 +1,13 @@
-// .garden v4 — table + terrain + optional scenery / placements.
-// v3 files still decode (no scenery / placements).
+// .garden v4 — table + terrain + optional scenery / doodads / backdrops / placements.
+// v3 files still decode (no scenery / doodads / backdrops / placements).
+// Optional `dd` is a doodadType RLE (visual-only stamps).
+// Optional `bd` is a list of off-board backdrop poses.
 
 import { applyTableSilhouette, createFullCellMask, createFullCellRadius, normalizeTableShape } from './tableShape.js';
 import { applySeededHeight, buildField, composeHeightMap, createField, generateHeightMap, refreshTerrainDerived, TILE_SIZE_F, tileCenterX, tileCenterY, worldToTile } from './field.js';
 import { applyAuthoredScenery, SCENERY } from './scenery.js';
+import { ensureDoodadArrays, hasAuthoredDoodads } from './doodads.js';
+import { cloneBackdrops, encodeBackdrops, normalizeBackdrops } from './backdrops.js';
 import { spawn } from './world.js';
 import { createBuilding, snapBuildingWorld, applyWorldStructureOccupancy } from './buildings.js';
 import { createAgoras } from './agora.js';
@@ -249,6 +253,13 @@ export function encodeGarden(field, extras = {}) {
     out.sc = encodeRle(field.sceneryType);
     out.ts = encodeRle(field.treeStock);
   }
+  if (hasAuthoredDoodads(field)) {
+    out.dd = encodeRle(field.doodadType);
+  }
+  const backdrops = normalizeBackdrops(
+    extras.backdrops !== undefined ? extras.backdrops : field.backdrops,
+  );
+  if (backdrops.length) out.bd = encodeBackdrops(backdrops);
   if (units.length) {
     out.u = units.map(encodeUnitTuple);
   }
@@ -321,6 +332,8 @@ export function decodeGarden(data) {
     terrainTypes: data.t != null && data.t !== '' ? decodeRle(data.t, n) : new Uint8Array(0),
     sceneryType: data.sc ? decodeRle(data.sc, n) : null,
     treeStock: data.ts ? decodeRle(data.ts, n) : null,
+    doodadType: data.dd ? decodeRle(data.dd, n) : null,
+    backdrops: normalizeBackdrops(data.bd),
     units: normalizeUnits(data.u),
     buildings: normalizeBuildings(data.b),
     agoras: normalizeAgoras(data.g),
@@ -365,6 +378,11 @@ export function fieldFromGarden(data) {
     if (g.treeStock?.length === field.treeStock.length) field.treeStock.set(g.treeStock);
     applyAuthoredScenery(field);
   }
+  if (g.doodadType?.length === field.width * field.height) {
+    ensureDoodadArrays(field);
+    field.doodadType.set(g.doodadType);
+  }
+  if (g.backdrops?.length) field.backdrops = cloneBackdrops(g.backdrops);
   if (g.cameraHalfF > 0) field.cameraHalfF = g.cameraHalfF;
   return field;
 }

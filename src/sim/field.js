@@ -194,6 +194,8 @@ export function createField(seed = 0, dims = {}) {
     /** Yellow ring inside the table silhouette — survives tree fell clears. */
     tableSlowMask: new Uint8Array(n),
     sceneryType: new Uint8Array(n),
+    /** Visual-only Forge stamps (mushrooms, wagons). No pass / gather. */
+    doodadType: new Uint8Array(n),
     // Per-tile wood remaining / burn timer (0 when no living tree).
     treeStock: new Uint8Array(n),
     treeBurn: new Uint16Array(n),
@@ -271,6 +273,7 @@ export function fieldSnapshot(field) {
       ? field.tableCornerBlocks.map((p) => ({ x: p.x, z: p.z }))
       : [],
     sceneryType: field.sceneryType.slice(),
+    doodadType: field.doodadType?.slice?.() ?? new Uint8Array(field.width * field.height),
     treeStock: field.treeStock?.slice?.() ?? new Uint8Array(field.width * field.height),
     treeBurn: field.treeBurn instanceof Uint16Array
       ? field.treeBurn.slice()
@@ -278,6 +281,9 @@ export function fieldSnapshot(field) {
     rockStock: field.rockStock?.slice?.() ?? new Uint16Array(field.width * field.height),
     rockStockHash: field.rockStockHash | 0,
     foodNode: field.foodNode?.slice?.() ?? new Uint8Array(field.width * field.height),
+    backdrops: Array.isArray(field.backdrops)
+      ? field.backdrops.map((b) => ({ ...b }))
+      : [],
   };
   const tileMask = field.activeMask ?? field.tileMask ?? field.enabledMask;
   if (tileMask?.slice) snapshot.activeMask = tileMask.slice();

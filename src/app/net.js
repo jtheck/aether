@@ -62,8 +62,6 @@ export function createNetMatch(options = {}) {
   let lastConfirmTick = -1;
   let rejoinTimer = null;
 
-  const shortId = (id) => (id ? id.slice(-8) : '?');
-
   const matchPromise = new Promise((resolve, reject) => {
     matchResolve = resolve;
     matchReject = reject;
@@ -105,10 +103,10 @@ export function createNetMatch(options = {}) {
     if (!data?.type) return;
     if (data.type === 'player_join' || data.type === 'player_rejoin') {
       if (data.from === localUserId) {
-        onStatus(`In lobby — id …${shortId(localUserId)} — open 2nd tab`);
+        onStatus('In lobby — open 2nd tab');
         return;
       }
-      onStatus(`Found peer …${shortId(data.from)} — connecting…`);
+      onStatus('Found peer — connecting…');
       setTimeout(() => tryMatchWithPeer(data.from), 300);
     }
   }
@@ -163,7 +161,7 @@ export function createNetMatch(options = {}) {
 
   function onPeerConnected(id) {
     peerId = id;
-    onStatus(`P2P linked …${shortId(id)} — starting…`);
+    onStatus('P2P linked — starting…');
 
     if (!localUserId) localUserId = p2p.getUserId();
     isHost = localUserId < id;

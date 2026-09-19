@@ -7,6 +7,7 @@ import {
   GATHER_ACT,
   campWorkRadiusWorld,
   siloWorkRadiusWorld,
+  workRadiusRingWorld,
 } from '../sim/gather.js';
 import {
   SILO_ATTACH_RANGE_F,
@@ -1399,13 +1400,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (!b || b.built === 0 || !keys.has(`${b.owner}:${b.type}`)) continue;
       const radius = campWorkRadiusWorld(st, b, buildings);
       const rimKey = rimKeyForBuildingType(b.type);
-      rings.push({ x: b.x, z: b.z, radius, owner: b.owner, rimKey });
+      rings.push({ x: b.x, z: b.z, radius: workRadiusRingWorld(radius), owner: b.owner, rimKey });
       const silos = silosAttachedTo(buildings, b, 'world');
       for (let s = 0; s < silos.length; s++) {
         rings.push({
           x: silos[s].x,
           z: silos[s].z,
-          radius: siloWorkRadiusWorld(radius),
+          radius: workRadiusRingWorld(siloWorkRadiusWorld(radius)),
           owner: b.owner,
           rimKey,
         });
@@ -4835,7 +4836,7 @@ function showMatchSplash() {
     el.id = 'boot-splash';
     el.setAttribute('aria-hidden', 'true');
     el.innerHTML =
-      '<img src="./icons/splash.png" alt="" width="512" height="512" decoding="async" />';
+      '<img src="/assets/images/skinnyheader.png" alt="Æther.Garden" width="506" height="56" decoding="async" />';
     document.body.appendChild(el);
   }
   delete el.dataset.leaving;

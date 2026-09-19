@@ -1,7 +1,7 @@
 // Live match browser — glass HUD lists any open game; the side menu is the full copy.
 
 import { formatMatchTime, matchSecondsFromTick } from './simSession.js';
-import { SHARD_ANNOUNCE_MS, shortId } from '../koth/protocol.js';
+import { SHARD_ANNOUNCE_MS } from '../koth/protocol.js';
 import { resolveLobbyName } from '../koth/lobbyName.js';
 import { MODE_IDS, getMode } from '../lobby/modes.js';
 import { formatTypeLobbyRow } from './lobbyUi.js';
@@ -34,7 +34,7 @@ function lobbyMetaLine(source) {
  * @returns {{ title: string, meta: string, label: string }}
  */
 export function formatLobbyRow(lobby) {
-  const title = resolveLobbyName(lobby) || `…${shortId(lobby.matchId)}`;
+  const title = resolveLobbyName(lobby) || 'Open lobby';
   const seats = lobby.seats || 5;
   const players = `${lobby.activeCount}/${seats}`;
   const meta = lobbyMetaLine(lobby);

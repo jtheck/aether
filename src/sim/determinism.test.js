@@ -19,7 +19,7 @@ import {
   SPAWN_CLEAR_RADIUS_TILES,
 } from './scenery.js';
 import * as fx from './fixed.js';
-import { buildWorldFromConfig, UNITS_PER_ARMY, KOTH_BASES } from './worldSetup.js';
+import { buildWorldFromConfig, KOTH_UNITS_PER_ARMY, KOTH_BASES } from './worldSetup.js';
 import { ownsPlayerFrame } from '../koth/protocol.js';
 import { createEmptyRoster, activateSlot, releaseUser } from '../koth/roster.js';
 import { UNIT } from './unitTypes.js';
@@ -100,7 +100,7 @@ function runKoth(seed, ticks, framesByTick) {
 
 function kothWorldSetupOk() {
   const w = buildWorldFromConfig({ seed: 0x3344, mode: 'koth', activeSlots: [0, 1, 2] });
-  const countsOk = [0, 1, 2].every((owner) => livingByOwner(w, owner) === UNITS_PER_ARMY);
+  const countsOk = [0, 1, 2].every((owner) => livingByOwner(w, owner) === KOTH_UNITS_PER_ARMY);
   const centers = [0, 1, 2].map((owner) => {
     let x = 0;
     let z = 0;
@@ -115,7 +115,7 @@ function kothWorldSetupOk() {
   });
   const distinct = centers.every(([x, z], owner) => {
     const [bx, bz] = KOTH_BASES[owner];
-    // Formation half-width grows with army column count (~13 types × COL_SPACING).
+    // Formation centroid sits a rank or two toward the hill from the slot base.
     return Math.hypot(x - bx, z - bz) < 80;
   });
   return countsOk && distinct;
@@ -162,9 +162,9 @@ function joinAndDeathOk() {
   roster = accepted.slots;
   const w = buildWorldFromConfig({ seed: 0x7788, mode: 'koth', activeSlots: [0, 1] });
   step(w, field, [{ type: CMD.SPAWN_SLOT, playerId: 2 }]);
-  const spawnedOnce = livingByOwner(w, 2) === UNITS_PER_ARMY;
+  const spawnedOnce = livingByOwner(w, 2) === KOTH_UNITS_PER_ARMY;
   step(w, field, [{ type: CMD.SPAWN_SLOT, playerId: 2 }]);
-  const idempotent = livingByOwner(w, 2) === UNITS_PER_ARMY;
+  const idempotent = livingByOwner(w, 2) === KOTH_UNITS_PER_ARMY;
   step(w, field, [{ type: CMD.FORCE_ELIMINATE, playerId: 2 }]);
   roster = releaseUser(roster, 'cara', true);
   const eliminated = livingByOwner(w, 2) === 0 && roster[2].state === 'spectator';

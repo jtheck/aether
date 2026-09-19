@@ -41,6 +41,25 @@ const CLOSE_BETA = 1.2;
 /** Normalized zoom where the look-down trough bottoms (0 = closest). */
 export const CAMERA_CLOSE_SPAN = 0.32;
 const CLOSE_SPAN = CAMERA_CLOSE_SPAN;
+/** Lite / Babylon default — play and zoomed-out stay here. */
+export const CAMERA_BASE_FOV = 0.8;
+/** Widest vertical FOV at min radius (~66°). */
+export const CAMERA_CLOSE_FOV = 1.15;
+/** Close-in zoom slice that ramps FOV. Last 8% of zoom, near the ground. */
+export const CAMERA_CLOSE_FOV_SPAN = 0.08;
+const CLOSE_FOV_SPAN = CAMERA_CLOSE_FOV_SPAN;
+/** Closest slice sits on max FOV — no ease-off / bounce at the zoom floor. */
+export const CAMERA_CLOSE_FOV_HOLD = 0.02;
+const CLOSE_FOV_HOLD = CAMERA_CLOSE_FOV_HOLD;
+/** FOV tracks the zoom-derived target — tight enough to ride the close slice. */
+export const FOV_CHASE_RATE = 12;
+/** Catch-up cap (rad/s). Stops a slam from sprinting the last 20°. */
+export const FOV_MAX_SPEED = 1.2;
+/** How fast FOV speed may change (rad/s²). */
+export const FOV_MAX_ACCEL = 8.5;
+const FOV_CHASE_EPS = 1e-4;
+/** Pitch follows zoom, but a hard slam must not whip horizon in one frame. */
+export const BETA_CHASE_RATE = 9;
 /** Quiet ms after the last zoom impulse before a landing may stick on the trough. */
 export const ZOOM_TEND_IDLE_MS = 100;
 /** Normalized: must already be on the dest to hold. Never reach out and pull. */
@@ -56,6 +75,12 @@ const ZOOM_EDGE_SPEED = 1.06;
 function smooth01(t) {
   const x = Math.max(0, Math.min(1, t));
   return x * x * (3 - 2 * x);
+}
+
+/** Perlin smootherstep — first and second derivatives die at 0 and 1. */
+function smoother01(t) {
+  const x = Math.max(0, Math.min(1, t));
+  return x * x * x * (x * (x * 6 - 15) + 10);
 }
 
 /** Zoom 0 = closest, 1 = farthest. */
@@ -102,6 +127,18 @@ function betaForNormalizedZoom(normalized) {
     return CLOSE_BETA + smooth01(n / CLOSE_SPAN) * (MIN_BETA - CLOSE_BETA);
   }
   return MIN_BETA + smooth01((n - CLOSE_SPAN) / (1 - CLOSE_SPAN)) * (MAX_BETA - MIN_BETA);
+}
+
+/**
+ * Wider lens only in the last slice of zoom-in. Play / zoom-out stay at base.
+ * @param {number} normalizedZoom 0 = closest, 1 = farthest
+ */
+export function fovForNormalizedZoom(normalizedZoom) {
+  const n = Math.max(0, Math.min(1, normalizedZoom));
+  if (n >= CLOSE_FOV_SPAN) return CAMERA_BASE_FOV;
+  if (n <= CLOSE_FOV_HOLD) return CAMERA_CLOSE_FOV;
+  const t = 1 - (n - CLOSE_FOV_HOLD) / (CLOSE_FOV_SPAN - CLOSE_FOV_HOLD);
+  return CAMERA_BASE_FOV + smoother01(t) * (CAMERA_CLOSE_FOV - CAMERA_BASE_FOV);
 }
 
 /** Centered cosine: slowest at mid-zoom, barely quicker at either extreme. */
@@ -215,6 +252,10 @@ export function createCameraController(camera, canvas, opts = {}) {
   let zoomInputThisTick = false;
   let lastZoomSign = 0;
   let zoomTend = false;
+  /** Hit min radius — stay there until a zoom-out. Stops the wall bounce. */
+  let zoomFloored = false;
+  let zoomOutThisTick = false;
+  let fovVel = 0;
   /** Ground under the pointer — zoom and rotate share this pivot. */
   /** @type {{ x: number, z: number } | null} */
   let zoomFocus = null;
@@ -252,6 +293,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     if (Number.isFinite(camera.radius)) {
       camera.radius = Math.max(minR, Math.min(maxR, camera.radius));
     }
+    snapFov();
     const t = getTarget();
     const margin = 2 * TILE_SIZE_F;
     const lo = -worldHalfF + margin;
@@ -359,16 +401,22 @@ export function createCameraController(camera, canvas, opts = {}) {
     lastZoomSign = 0;
     zoomIdleMs = 0;
     zoomInputThisTick = false;
+    zoomOutThisTick = false;
     clearZoomFocus();
     if (Number.isFinite(pose.x) && Number.isFinite(pose.z)) setTargetXZ(pose.x, pose.z);
     if (Number.isFinite(pose.alpha)) camera.alpha = pose.alpha;
     if (Number.isFinite(pose.radius)) {
-      if (opts.unclamped) camera.radius = Math.max(8, pose.radius);
-      else {
+      if (opts.unclamped) {
+        camera.radius = Math.max(8, pose.radius);
+        zoomFloored = false;
+      } else {
         const { minR, maxR } = radiusLimits();
         camera.radius = Math.max(minR, Math.min(maxR, pose.radius));
+        zoomFloored = camera.radius <= minR + 1e-3;
       }
     }
+    snapFov();
+    snapBeta();
     markNudged();
   }
 
@@ -453,6 +501,90 @@ export function createCameraController(camera, canvas, opts = {}) {
     return { minR, maxR, span: Math.max(1e-6, maxR - minR) };
   }
 
+  function zoomNormalized() {
+    const { minR, maxR } = radiusLimits();
+    return cameraZoomNormalized(camera.radius, minR, maxR);
+  }
+
+  function writeFov(value) {
+    const v = Number(value);
+    if (!Number.isFinite(v)) return;
+    camera.fov = Math.min(CAMERA_CLOSE_FOV, Math.max(CAMERA_BASE_FOV, v));
+  }
+
+  function fovDest() {
+    if (zoomFloored && !zoomOutThisTick) return CAMERA_CLOSE_FOV;
+    return Math.min(CAMERA_CLOSE_FOV, fovForNormalizedZoom(zoomNormalized()));
+  }
+
+  function snapFov() {
+    writeFov(fovDest());
+    fovVel = 0;
+  }
+
+  function destBeta() {
+    const loB = camera.lowerBetaLimit ?? 0.1;
+    const hiB = camera.upperBetaLimit ?? 1.5;
+    return Math.max(loB, Math.min(hiB, betaForNormalizedZoom(zoomNormalized())));
+  }
+
+  function snapBeta() {
+    camera.beta = destBeta();
+  }
+
+  function chaseBeta(dtSec) {
+    const dest = destBeta();
+    const cur = Number.isFinite(camera.beta) ? camera.beta : dest;
+    const u = 1 - Math.exp(-BETA_CHASE_RATE * Math.max(0, dtSec));
+    const next = cur + (dest - cur) * u;
+    const loB = camera.lowerBetaLimit ?? 0.1;
+    const hiB = camera.upperBetaLimit ?? 1.5;
+    camera.beta = Math.max(loB, Math.min(hiB, Math.abs(next - dest) < 1e-4 ? dest : next));
+  }
+
+  function pinZoomFloor() {
+    if (ease?.unclamped || zoomOutThisTick || !zoomFloored) return;
+    const { minR } = radiusLimits();
+    camera.radius = minR;
+    velocity.radius = 0;
+    camera.inertialRadiusOffset = 0;
+  }
+
+  function fovCatching() {
+    const dest = fovDest();
+    const cur = Number.isFinite(camera.fov) ? camera.fov : dest;
+    return Math.abs(cur - dest) > FOV_CHASE_EPS || Math.abs(fovVel) > FOV_CHASE_EPS;
+  }
+
+  function chaseFov(dtSec) {
+    const dest = fovDest();
+    const cur = Number.isFinite(camera.fov) ? camera.fov : CAMERA_BASE_FOV;
+    const dt = Math.max(0, dtSec);
+    if (dt <= 0) return;
+
+    const err = dest - cur;
+    if (Math.abs(err) < FOV_CHASE_EPS && Math.abs(fovVel) < FOV_CHASE_EPS) {
+      fovVel = 0;
+      writeFov(dest);
+      return;
+    }
+
+    const desired = Math.max(-FOV_MAX_SPEED, Math.min(FOV_MAX_SPEED, err * FOV_CHASE_RATE));
+    const stop = (fovVel * fovVel) / (2 * FOV_MAX_ACCEL);
+    const targetVel =
+      fovVel !== 0 && Math.sign(fovVel) === Math.sign(err) && Math.abs(err) <= stop ? 0 : desired;
+    const maxDv = FOV_MAX_ACCEL * dt;
+    fovVel += Math.max(-maxDv, Math.min(maxDv, targetVel - fovVel));
+    fovVel = Math.max(-FOV_MAX_SPEED, Math.min(FOV_MAX_SPEED, fovVel));
+
+    let next = cur + fovVel * dt;
+    if ((dest - cur) * (dest - next) <= 0) {
+      next = dest;
+      fovVel = 0;
+    }
+    writeFov(next);
+  }
+
   function playRadius() {
     const { minR, maxR } = radiusLimits();
     return cameraPlayRadius(minR, maxR);
@@ -517,7 +649,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     const ux = ly * rz;
     const uy = lz * rx - lx * rz;
     const uz = -ly * rx;
-    const fov = camera.fov ?? 0.8;
+    const fov = camera.fov ?? CAMERA_BASE_FOV;
     const tanY = Math.tan(fov / 2);
     const tanX = tanY * (w / h);
     const dx = lx + rx * ndcX * tanX + ux * ndcY * tanY;
@@ -578,9 +710,15 @@ export function createCameraController(camera, canvas, opts = {}) {
     }
     const { minR, maxR } = radiusLimits();
     const r = camera.radius;
+    if (delta > 0) {
+      zoomFloored = false;
+      zoomOutThisTick = true;
+    }
     // At a zoom stop, drop momentum into the wall instead of banking it.
-    if (delta < 0 && r <= minR + 1e-3) {
-      if (velocity.radius < 0) velocity.radius = 0;
+    if (delta < 0 && (zoomFloored || r <= minR + 1e-3)) {
+      velocity.radius = 0;
+      camera.radius = minR;
+      zoomFloored = true;
       return;
     }
     if (delta > 0 && r >= maxR - 1e-3) {
@@ -624,9 +762,18 @@ export function createCameraController(camera, canvas, opts = {}) {
     lastZoomSign = Math.sign(delta);
     const { minR, maxR } = radiusLimits();
     const r = camera.radius;
-    if (delta < 0 && r <= minR + 1e-3) return;
+    if (delta > 0) {
+      zoomFloored = false;
+      zoomOutThisTick = true;
+    }
+    if (delta < 0 && (zoomFloored || r <= minR + 1e-3)) {
+      camera.radius = minR;
+      zoomFloored = true;
+      return;
+    }
     if (delta > 0 && r >= maxR - 1e-3) return;
     camera.radius = Math.max(minR, Math.min(maxR, r + delta));
+    if (camera.radius <= minR + 1e-3) zoomFloored = true;
   }
 
   function handleWheel(e) {
@@ -667,7 +814,7 @@ export function createCameraController(camera, canvas, opts = {}) {
   function screenDeltaToGroundPan(screenDx, screenDy) {
     const cam = camera;
     const rect = canvas.getBoundingClientRect();
-    const fov = cam.fov ?? 0.8;
+    const fov = cam.fov ?? CAMERA_BASE_FOV;
     const pixelsToWorld =
       (2 * (cam.radius || DEFAULT_RADIUS) * Math.tan(fov / 2)) / Math.max(1, rect.height);
     const { rightX, rightZ, forwardX, forwardZ } = groundAxes();
@@ -838,8 +985,12 @@ export function createCameraController(camera, canvas, opts = {}) {
   }
 
   function tick(dtMs) {
-    if (!nudged && !followActive && !anyKeyHeld() && !ease) return;
+    if (!nudged && !followActive && !anyKeyHeld() && !ease && !fovCatching()) {
+      pinZoomFloor();
+      return;
+    }
 
+    pinZoomFloor();
     applyHeldKeys();
 
     const dt = Math.min(0.05, Math.max(0, (Number(dtMs) || 16) / 1000));
@@ -907,8 +1058,39 @@ export function createCameraController(camera, canvas, opts = {}) {
         lastZoomSign = 0;
       }
     } else {
-      camera.radius += velocity.radius * zoomSpeedForNormalized(normalized);
+      const next = camera.radius + velocity.radius * zoomSpeedForNormalized(normalized);
+      if (ease?.unclamped) camera.radius = Math.max(8, next);
+      else if (next <= minR) {
+        camera.radius = minR;
+        velocity.radius = 0;
+        zoomFloored = true;
+      } else if (next >= maxR) {
+        camera.radius = maxR;
+        if (velocity.radius > 0) velocity.radius = 0;
+      } else {
+        camera.radius = next;
+      }
     }
+
+    if (!ease?.unclamped) {
+      if (zoomFloored && !zoomOutThisTick) {
+        camera.radius = minR;
+        velocity.radius = 0;
+      } else if (camera.radius <= minR + 1e-3) {
+        camera.radius = minR;
+        zoomFloored = true;
+        if (velocity.radius < 0 || !zoomOutThisTick) velocity.radius = 0;
+      } else if (camera.radius >= maxR - 1e-3) {
+        camera.radius = maxR;
+        if (velocity.radius > 0) velocity.radius = 0;
+      } else {
+        zoomFloored = false;
+      }
+    } else if (camera.radius < 8) {
+      camera.radius = 8;
+      zoomFloored = false;
+    }
+
     applyPointerFocusPan(rBefore, camera.radius, dAlpha);
     if (ease) {
       const u = 1 - Math.exp(-ease.rate * dt);
@@ -928,8 +1110,12 @@ export function createCameraController(camera, canvas, opts = {}) {
     }
 
     if (!ease?.unclamped) {
-      if (camera.radius <= minR) {
+      if (zoomFloored && !zoomOutThisTick) {
         camera.radius = minR;
+        velocity.radius = 0;
+      } else if (camera.radius <= minR) {
+        camera.radius = minR;
+        zoomFloored = true;
         if (velocity.radius < 0) velocity.radius = 0;
       } else if (camera.radius >= maxR) {
         camera.radius = maxR;
@@ -939,10 +1125,10 @@ export function createCameraController(camera, canvas, opts = {}) {
       camera.radius = 8;
     }
 
-    const nAfter = Math.max(0, Math.min(1, (camera.radius - minR) / span));
-    const loB = camera.lowerBetaLimit ?? 0.1;
-    const hiB = camera.upperBetaLimit ?? 1.5;
-    camera.beta = Math.max(loB, Math.min(hiB, betaForNormalizedZoom(nAfter)));
+    zoomOutThisTick = false;
+
+    chaseBeta(dt);
+    chaseFov(dt);
 
     // Clear Lite inertial leftovers so they never fight us.
     camera.inertialPanningX = 0;
@@ -967,6 +1153,8 @@ export function createCameraController(camera, canvas, opts = {}) {
     lastZoomSign = 0;
     zoomIdleMs = 0;
     zoomInputThisTick = false;
+    zoomOutThisTick = false;
+    zoomFloored = false;
     clearZoomFocus();
     camera.alpha = DEFAULT_ALPHA;
     camera.radius = RESET_RADIUS;
@@ -974,6 +1162,8 @@ export function createCameraController(camera, canvas, opts = {}) {
       const { minR, span } = radiusLimits();
       const n = Math.max(0, Math.min(1, (RESET_RADIUS - minR) / span));
       camera.beta = betaForNormalizedZoom(n);
+      snapFov();
+      snapBeta();
     }
     setTargetXZ(0, 0);
     camera.inertialPanningX = 0;
@@ -986,6 +1176,7 @@ export function createCameraController(camera, canvas, opts = {}) {
   }
 
   if (camera.radius == null) camera.radius = DEFAULT_RADIUS;
+  snapFov();
 
   return {
     handleWheel,

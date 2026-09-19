@@ -1250,7 +1250,7 @@ export function createKothShard(options = {}) {
         role,
       });
     }
-    onStatus(`Converging to match …${shortId(best.matchId)}`);
+    onStatus('Converging to match…');
     return followLivePresence({ matchId: best.matchId, from: best.from, phase: SHARD_PHASE.LIVE });
   }
 
@@ -1345,7 +1345,7 @@ export function createKothShard(options = {}) {
       });
     }
     if (presence.from) noteMatchAnnouncer(presence.matchId, presence.from);
-    onStatus(`Connecting to live match …${shortId(matchId)}`);
+    onStatus('Connecting to live match…');
     scheduleMatchLobbyConnect(presence.matchId);
     return true;
   }
@@ -1813,7 +1813,7 @@ export function createKothShard(options = {}) {
     const linked = hasLiveSponsorLink();
     if (!linked) {
       const n = matchAnnouncers.get(matchId)?.size ?? 0;
-      onStatus(`Connecting to match …${shortId(matchId)}${n ? ` (${n} players heard)` : ''}`);
+      onStatus(n ? `Connecting to match… (${n} players heard)` : 'Connecting to match…');
       // WebRTC to a sponsor can fail to open entirely (common with several tabs on
       // one machine). This pump runs every few seconds, so fall back to a relayed
       // catch-up rather than sitting on the backdrop forever — otherwise the first
@@ -1937,7 +1937,7 @@ export function createKothShard(options = {}) {
     appState = KOTH_APP_STATE.PRIVATE_SANDBOX;
     pinnedMatchId = null;
     catchUpReady = true;
-    onStatus(`${reason} — new staging …${shortId(matchId)}`);
+    onStatus(`${reason} — new staging`);
     onLiveStart({
       mode: 'staging',
       seed,
@@ -2119,10 +2119,10 @@ export function createKothShard(options = {}) {
           reset: false,
           inputEnabled: false,
         });
-        onStatus(`Found live match …${shortId(matchId)} — catching up`);
+        onStatus('Found live match — catching up');
       } else {
         roster[0] = { userId: localUserId, state: 'active', playerId: 0 };
-        onStatus(`Joined shard …${shortId(matchId)}`);
+        onStatus('Joined match');
       }
       emitShard();
       broadcastPresence();
@@ -2419,7 +2419,7 @@ export function createKothShard(options = {}) {
     role = 'player';
     catchUpReady = true;
     setPhase(SHARD_PHASE.SANDBOX);
-    onStatus(`New staging — …${shortId(matchId)}`);
+    onStatus('New staging');
     onLiveStart({
       mode: 'staging',
       seed: hashSeed(matchId),
@@ -2674,7 +2674,7 @@ export function createKothShard(options = {}) {
     broadcastPresence();
     emitShard();
     notifyPresentationSync({ role: 'player', appState, localPlayerId: 0, inputEnabled: true, reset: true });
-    onStatus(`Match live — …${shortId(matchId)} — waiting for challengers`);
+    onStatus('Match live — waiting for challengers');
   }
 
   // The lone creator does not wait for a second player. It goes live solo as the
@@ -2715,7 +2715,7 @@ export function createKothShard(options = {}) {
     joinShardLobby();
     await notifyLiveStart(true);
     if (DEBUG_KOTH) console.info('[KOTH] solo-live created', { matchId: shortId(matchId) });
-    onStatus(`Match live — …${shortId(matchId)} — waiting for challengers`);
+    onStatus('Match live — waiting for challengers');
     upsertNode(observerTree, localUserId, {
       role: 'player',
       depth: 0,
@@ -2860,7 +2860,7 @@ export function createKothShard(options = {}) {
     });
     emitShard();
     broadcastPresence();
-    onStatus(`Player joined — match reset (2 armies) …${shortId(matchId)}`);
+    onStatus('Player joined — match reset (2 armies)');
   }
 
   function acceptSlotClaim(claimerUserId, claimEpoch) {
@@ -3934,7 +3934,7 @@ export function createKothShard(options = {}) {
     peerUserIds.delete(peerId);
     readyPeerIds.delete(peerId);
     if (phase === SHARD_PHASE.LIVE) {
-      onStatus(`Peer …${shortId(uid ?? peerId)} link lost — waiting for mesh gossip`);
+      onStatus('Peer link lost — waiting for mesh gossip');
     }
   }
 
@@ -4188,8 +4188,8 @@ export function createKothShard(options = {}) {
     setPhase(SHARD_PHASE.SANDBOX);
     onStatus(
       role === 'spectator'
-        ? `Looking for live shard …${shortId(matchId)}`
-        : `Staging — match …${shortId(matchId)} — waiting for challengers`,
+        ? 'Looking for live shard…'
+        : 'Staging — waiting for challengers',
     );
 
     bootResolve?.({

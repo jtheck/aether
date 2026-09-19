@@ -16,14 +16,14 @@ describe('lobby ui copy', () => {
     assert.match(row.label, /Join Blind/);
   });
 
-  it('falls back to a short room id', () => {
+  it('falls back to a generic title without a room id', () => {
     const row = formatTypeLobbyRow({
       roomId: 'lobby-zzzz-abcdef12',
       hostName: '  ',
       playerCount: 1,
       maxPlayers: 2,
     });
-    assert.equal(row.title, '…abcdef12');
+    assert.equal(row.title, 'Open lobby');
     assert.equal(row.meta, '1/2');
   });
 
@@ -54,14 +54,14 @@ describe('lobby ui copy', () => {
     assert.equal(formatStartLabel(true, '', 0, 'playing'), 'In match');
   });
 
-  it('labels seats with name, short id, and you', () => {
+  it('labels seats with name and you, no user id', () => {
     assert.equal(
       formatSeatName({ name: 'Overseer', userId: 'p2p-aaa111' }, 'p2p-aaa111'),
-      'Overseer · aaa111 (you)',
+      'Overseer (you)',
     );
     assert.equal(
       formatSeatName({ name: 'Overseer', userId: 'p2p-bbb222' }, 'p2p-aaa111'),
-      'Overseer · bbb222',
+      'Overseer',
     );
   });
 

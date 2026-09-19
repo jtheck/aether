@@ -17,7 +17,9 @@ import {
   refreshEngineerAssists,
   CAMP_WORK_RADIUS_F,
   SILO_WORK_RADIUS_PENALTY_F,
+  WORK_RADIUS_RING_INSET_F,
   siloWorkRadiusWorld,
+  workRadiusRingWorld,
   CREW_RADIUS_BONUS_F,
   ENGINEER_RADIUS_BONUS_F,
   ENGINEER_BONUS_LINGER_TICKS,
@@ -191,7 +193,7 @@ function engineerExtendsCampRadius() {
   const field = createField(1);
   field.pass.fill(1);
   const w = createWorld(25);
-  // Villager sits just outside the base camp reach (28) — inside 36 with an engineer.
+  // Villager sits just outside the base camp reach — inside with an engineer.
   const vill = spawn(w, { x: fx.fromFloat(34), y: 0, type: UNIT.VILLAGER, owner: 0 });
   plantTreeAt(field, 32, 0, 30);
   w.buildings = [{ owner: 0, type: 'camp', x: 0, z: 0 }];
@@ -718,8 +720,8 @@ function attachedSiloExtendsGatherRadius() {
   const field = createField(1);
   field.pass.fill(1);
   const w = createWorld(57);
-  // Camp reach 28. Silo at 16 (attached, gather 24). Villager + tree at 34
-  // sit outside the camp circle and inside the silo's tighter circle.
+  // Camp reach + silo at 16 (one tile tighter). Villager + tree at 34
+  // sit outside the camp circle and inside the silo's satellite circle.
   const vill = spawn(w, { x: fx.fromFloat(34), y: 0, type: UNIT.VILLAGER, owner: 0 });
   plantTreeAt(field, fx.fromFloat(32), 0, 30);
   w.buildings = [
@@ -734,13 +736,16 @@ function attachedSiloExtendsGatherRadius() {
 
 function siloGatherRadiusIsOneTileTighter() {
   assert.equal(siloWorkRadiusWorld(CAMP_WORK_RADIUS_F), CAMP_WORK_RADIUS_F - SILO_WORK_RADIUS_PENALTY_F);
+  assert.equal(workRadiusRingWorld(CAMP_WORK_RADIUS_F), CAMP_WORK_RADIUS_F - WORK_RADIUS_RING_INSET_F);
   const field = createField(1);
   field.pass.fill(1);
   const w = createWorld(62);
-  // Camp 28, silo gather 24. Villager at 41 is past the camp and past the
-  // silo circle, but would have been inside the old full-size silo ring.
-  const vill = spawn(w, { x: fx.fromFloat(41), y: 0, type: UNIT.VILLAGER, owner: 0 });
-  plantTreeAt(field, fx.fromFloat(40), 0, 30);
+  // Past the camp and the one-tile-tighter silo circle (silo at 16), but
+  // inside a full-size silo ring copied from the camp.
+  const siloX = 16;
+  const pastSilo = siloX + siloWorkRadiusWorld(CAMP_WORK_RADIUS_F) + 1;
+  const vill = spawn(w, { x: fx.fromFloat(pastSilo), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  plantTreeAt(field, fx.fromFloat(pastSilo - 1), 0, 30);
   w.buildings = [
     createBuilding({ owner: 0, type: 'camp', x: 0, z: 0 }),
     createBuilding({ owner: 0, type: 'silo', x: 16, z: 0 }),
@@ -773,8 +778,8 @@ function attachedSiloExtendsFarmRadius() {
   const w = createWorld(59);
   const farmTile = worldToTile(0) * field.width + worldToTile(0);
   field.foodNode[farmTile] = 1;
-  // Farm reach 16 (silo 12). Silo at 12. Villager at 20 is outside the plot
-  // ring and inside the silo's extra circle.
+  // Farm plot + silo at 12 (one tile tighter). Villager at 20 is outside
+  // the plot ring and inside the silo's extra circle.
   w.buildings = [
     createBuilding({ owner: 0, type: 'farm', x: 0, z: 0 }),
     createBuilding({ owner: 0, type: 'silo', x: 12, z: 0 }),

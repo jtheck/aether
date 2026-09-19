@@ -147,5 +147,8 @@ describe('chapter 1 story', () => {
     assert.ok(json.sc);
     assert.ok(g.sceneryType.some((v) => v === 1));
     assert.deepEqual(onDisk.sc, json.sc);
+    assert.deepEqual(onDisk.bd, json.bd);
+    assert.equal(g.backdrops[0].type, 'disc');
+    assert.equal(g.backdrops[0].scale, 80);
   });
 });

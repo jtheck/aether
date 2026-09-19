@@ -1,8 +1,7 @@
 // Side-menu type drawers + center match room + reduced sidebar copy.
 
-import { sameUserId, shortUserId } from '../lobby/ids.js';
+import { sameUserId } from '../lobby/ids.js';
 import { FIELD_SIZES, MODE_IDS, getMode, selectableAdventureChapters } from '../lobby/modes.js';
-import { shortRoomId } from '../lobby/protocol.js';
 import { aetherSteam } from './steam.js';
 import { formatWorkshopRef, isWorkshopRef } from './workshop.js';
 
@@ -11,7 +10,7 @@ import { formatWorkshopRef, isWorkshopRef } from './workshop.js';
  * @returns {{ title: string, meta: string, label: string }}
  */
 export function formatTypeLobbyRow(lobby) {
-  const title = (lobby.hostName ?? '').trim() || `…${shortRoomId(lobby.roomId)}`;
+  const title = (lobby.hostName ?? '').trim() || 'Open lobby';
   const seats = `${lobby.playerCount ?? 0}/${lobby.maxPlayers ?? 0}`;
   const field = lobby.settings?.fieldSize;
   const meta = field ? `${seats}  ·  ${field}` : seats;
@@ -33,9 +32,8 @@ export function formatMatchStatus(state) {
 /** @param {{ name?: string, userId?: string | null }} seat @param {string | null} localId */
 export function formatSeatName(seat, localId) {
   const name = (seat.name || 'Player').trim() || 'Player';
-  const tag = shortUserId(seat.userId);
   const you = sameUserId(seat.userId, localId) ? ' (you)' : '';
-  return `${name} · ${tag}${you}`;
+  return `${name}${you}`;
 }
 
 /** @param {string} modeId */

@@ -4,6 +4,7 @@ import { UNIT_MODEL_URLS } from '../render/unitModels.js';
 import { VAT_UNIT_DEFS } from '../render/vatUnits.js';
 import { BUILDING_MODEL_URLS, UPGRADE_MODEL_URLS } from '../sim/buildings.js';
 import { allDlcMeshUrls, allDlcVatDefs } from '../app/dlcCatalog.js';
+import { backdropModelUrls } from '../sim/backdrops.js';
 
 const EXTRA = [
   '/assets/models/collar.glb',
@@ -26,6 +27,7 @@ export function allMeshBakeUrls() {
     ...Object.values(BUILDING_MODEL_URLS),
     ...Object.values(UPGRADE_MODEL_URLS),
     ...EXTRA,
+    ...backdropModelUrls(),
   ]);
   return [...urls].sort();
 }

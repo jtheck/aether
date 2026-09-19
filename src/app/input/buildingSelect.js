@@ -26,6 +26,80 @@ export function screenPosInRect(p, minX, maxX, minY, maxY) {
   return !!p && p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY;
 }
 
+/** Closed-path length in the same space as the points. */
+export function lassoPathLength(pts) {
+  if (!pts || pts.length < 2) return 0;
+  let len = 0;
+  for (let i = 1; i < pts.length; i++) {
+    len += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  }
+  return len;
+}
+
+/** Signed area of a closed loop (Y-down canvas is fine). */
+export function lassoSignedArea(pts) {
+  if (!pts || pts.length < 3) return 0;
+  let a = 0;
+  const n = pts.length;
+  for (let i = 0; i < n; i++) {
+    const p = pts[i];
+    const q = pts[(i + 1) % n];
+    a += p.x * q.y - q.x * p.y;
+  }
+  return a * 0.5;
+}
+
+/**
+ * Even-odd point-in-polygon. `pts` is an open path; the close edge is implied.
+ * @param {{ x: number, y: number } | null | undefined} p
+ * @param {{ x: number, y: number }[]} pts
+ */
+export function screenPosInPoly(p, pts) {
+  if (!p || !pts || pts.length < 3) return false;
+  let inside = false;
+  const n = pts.length;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const yi = pts[i].y;
+    const yj = pts[j].y;
+    const xi = pts[i].x;
+    const xj = pts[j].x;
+    const denom = yj - yi;
+    const hit =
+      yi > p.y !== yj > p.y &&
+      p.x < ((xj - xi) * (p.y - yi)) / (denom === 0 ? 1e-12 : denom) + xi;
+    if (hit) inside = !inside;
+  }
+  return inside;
+}
+
+/**
+ * Corner-to-corner rubber-band stays a box. A scenic loop (long path +
+ * real area) becomes a lasso. The hatch rides the outer hull.
+ */
+export function lassoPrefersLoop(pts) {
+  if (!pts || pts.length < 6) return false;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    const q = pts[i];
+    if (q.x < minX) minX = q.x;
+    if (q.y < minY) minY = q.y;
+    if (q.x > maxX) maxX = q.x;
+    if (q.y > maxY) maxY = q.y;
+  }
+  const diag = Math.hypot(maxX - minX, maxY - minY);
+  if (!(diag > 8)) return false;
+  if (lassoPathLength(pts) < diag * 1.45) return false;
+  return Math.abs(lassoSignedArea(pts)) > diag * 12;
+}
+
+/** Once a drag breaks out of the rubber-band, it stays a lasso until release. */
+export function lassoStaysLoop(latched, pts) {
+  return !!latched || lassoPrefersLoop(pts);
+}
+
 /** Units win a mixed drag box so boxing an army does not also grab an agora. */
 export function boxSelectWinner(unitHits, buildingHits) {
   if (unitHits > 0) return 'units';

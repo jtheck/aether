@@ -1,5 +1,5 @@
-// Control-group pads — camera-locked hollow rounded squares on the left/right
-// edges, same screen-ray placement as the selection HUD. Four colours by
+// Control-group pads — camera-locked hollow rounded triangles on the
+// left/right edges, nested in/out/in so they interlock. Four colours by
 // default; settings can add black + white as a third pad on each side.
 
 import {
@@ -20,13 +20,24 @@ export const CONTROL_GROUP_DEFS = Object.freeze([
 ]);
 
 export const CONTROL_GROUP_SIZE_PX = 54;
+/** Horizontal span — slimmer than the old square so they don't eat the playfield. */
+export const CONTROL_GROUP_WIDTH_PX = 36;
 /** One X carries sixteen. Two overlapping X's is the display cap. */
 export const TALLY_X_VALUE = 16;
 export const CONTROL_GROUP_TALLY_MAX = 32;
-export const CONTROL_GROUP_GAP_PX = 12;
+/** Half-height nest plus a gap so interlocking pads don't sit on top of each other. */
+export const CONTROL_GROUP_NEST_GAP_PX = 16;
+export const CONTROL_GROUP_PITCH_PX = CONTROL_GROUP_SIZE_PX * 0.5 + CONTROL_GROUP_NEST_GAP_PX;
 export const CONTROL_GROUP_EDGE_PX = 26;
-/** Extra pick slop around the square (CSS px). */
+/** Extra pick slop around the triangle (CSS px). */
 export const CONTROL_GROUP_HIT_PAD_PX = 6;
+
+/** +1 points right, -1 points left. Stack index 0/2 face inward. */
+export function controlGroupFacing(side, stackIndex) {
+  const inward = (stackIndex & 1) === 0;
+  if (side === 'right') return inward ? -1 : 1;
+  return inward ? 1 : -1;
+}
 
 const ICON_DEPTH = 0.8;
 const HUD_RENDER_ORDER = 425;
@@ -38,11 +49,13 @@ export function visibleControlGroupDefs(extra) {
 }
 
 /**
- * Screen-space pad rects (CSS px). Vertically centered, two/three per side.
+ * Screen-space pad rects (CSS px). Vertically centered, two/three per side,
+ * nested so in/out triangles interlock with a gap between them.
+ * `dir` is +1 (point right) or -1 (point left).
  * @param {number} vw
  * @param {number} vh
  * @param {boolean} extra
- * @returns {{ id: number, name: string, rgb: number[], x: number, y: number, w: number, h: number }[]}
+ * @returns {{ id: number, name: string, rgb: number[], x: number, y: number, w: number, h: number, dir: number }[]}
  */
 export function layoutControlGroups(vw, vh, extra) {
   /** @type {typeof CONTROL_GROUP_DEFS[number][]} */
@@ -54,23 +67,77 @@ export function layoutControlGroups(vw, vh, extra) {
     const d = defs[i];
     (d.side === 'right' ? right : left).push(d);
   }
-  /** @type {{ id: number, name: string, rgb: number[], x: number, y: number, w: number, h: number }[]} */
+  /** @type {{ id: number, name: string, rgb: number[], x: number, y: number, w: number, h: number, dir: number }[]} */
   const rects = [];
-  const size = CONTROL_GROUP_SIZE_PX;
-  const gap = CONTROL_GROUP_GAP_PX;
-  function place(list, x) {
+  const height = CONTROL_GROUP_SIZE_PX;
+  const width = CONTROL_GROUP_WIDTH_PX;
+  const pitch = CONTROL_GROUP_PITCH_PX;
+  function place(list, x, side) {
     const n = list.length;
-    const total = n * size + Math.max(0, n - 1) * gap;
+    const total = height + Math.max(0, n - 1) * pitch;
     let y = vh * 0.5 - total * 0.5;
     for (let i = 0; i < n; i++) {
       const d = list[i];
-      rects.push({ id: d.id, name: d.name, rgb: d.rgb, x, y, w: size, h: size });
-      y += size + gap;
+      rects.push({
+        id: d.id,
+        name: d.name,
+        rgb: d.rgb,
+        x,
+        y,
+        w: width,
+        h: height,
+        dir: controlGroupFacing(side, i),
+      });
+      y += pitch;
     }
   }
-  place(left, CONTROL_GROUP_EDGE_PX);
-  place(right, vw - CONTROL_GROUP_EDGE_PX - size);
+  place(left, CONTROL_GROUP_EDGE_PX, 'left');
+  place(right, vw - CONTROL_GROUP_EDGE_PX - width, 'right');
   return rects;
+}
+
+/**
+ * Screen-space triangle for a pad. `dir` >= 0 points right.
+ * @param {{ x: number, y: number, w: number, h: number, dir?: number }} r
+ */
+export function controlGroupTriangle(r) {
+  const x0 = r.x;
+  const y0 = r.y;
+  const x1 = r.x + r.w;
+  const y1 = r.y + r.h;
+  const midY = y0 + r.h * 0.5;
+  if ((r.dir ?? 1) >= 0) {
+    return { a: { x: x0, y: y0 }, b: { x: x0, y: y1 }, c: { x: x1, y: midY } };
+  }
+  return { a: { x: x1, y: y0 }, b: { x: x1, y: y1 }, c: { x: x0, y: midY } };
+}
+
+function distToSeg(px, py, ax, ay, bx, by) {
+  const vx = bx - ax;
+  const vy = by - ay;
+  const den = vx * vx + vy * vy;
+  const t = den > 0 ? Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / den)) : 0;
+  return Math.hypot(px - ax - vx * t, py - ay - vy * t);
+}
+
+function signCross(px, py, ax, ay, bx, by) {
+  return (px - ax) * (by - ay) - (py - ay) * (bx - ax);
+}
+
+/** 0 if inside the triangle, else distance to the nearest edge. */
+export function distToControlGroupTriangle(r, px, py) {
+  const { a, b, c } = controlGroupTriangle(r);
+  const d0 = signCross(px, py, a.x, a.y, b.x, b.y);
+  const d1 = signCross(px, py, b.x, b.y, c.x, c.y);
+  const d2 = signCross(px, py, c.x, c.y, a.x, a.y);
+  const hasNeg = d0 < 0 || d1 < 0 || d2 < 0;
+  const hasPos = d0 > 0 || d1 > 0 || d2 > 0;
+  if (!(hasNeg && hasPos)) return 0;
+  return Math.min(
+    distToSeg(px, py, a.x, a.y, b.x, b.y),
+    distToSeg(px, py, b.x, b.y, c.x, c.y),
+    distToSeg(px, py, c.x, c.y, a.x, a.y),
+  );
 }
 
 /**
@@ -119,13 +186,17 @@ export function tallyMarkLayout(count) {
 
 export function pickControlGroupAt(rects, px, py) {
   const pad = CONTROL_GROUP_HIT_PAD_PX;
+  let best = null;
+  let bestD = Infinity;
   for (let i = 0; i < rects.length; i++) {
     const r = rects[i];
-    if (px >= r.x - pad && px <= r.x + r.w + pad && py >= r.y - pad && py <= r.y + r.h + pad) {
-      return r.id;
+    const d = distToControlGroupTriangle(r, px, py);
+    if (d <= pad && d < bestD) {
+      bestD = d;
+      best = r.id;
     }
   }
-  return null;
+  return best;
 }
 
 function quatFromBasis(xx, xy, xz, yx, yy, yz, zx, zy, zz) {
@@ -211,7 +282,7 @@ function makePadMesh(engine, id) {
 
 function makePadMaterial(rgb) {
   return createShaderMaterial({
-    name: 'ctrl-group-pad-scrawl2',
+    name: 'ctrl-group-pad-tri2',
     attributes: ['position', 'normal', 'uv'],
     uniforms: [
       'world',
@@ -220,6 +291,7 @@ function makePadMaterial(rgb) {
       { name: 'fill', type: 'f32', defaultValue: 0 },
       { name: 'glow', type: 'f32', defaultValue: 0 },
       { name: 'count', type: 'f32', defaultValue: 0 },
+      { name: 'facing', type: 'f32', defaultValue: 1 },
     ],
     needAlphaBlending: true,
     blendMode: 'alpha',
@@ -241,9 +313,22 @@ function makePadMaterial(rgb) {
   @builtin(position) position: vec4<f32>,
   @location(0) uv: vec2<f32>,
 };
-fn sdRoundBox(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
-  let q = abs(p) - b + vec2<f32>(r, r);
-  return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - r;
+fn sdTriangle(p: vec2<f32>, p0: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>) -> f32 {
+  let e0 = p1 - p0;
+  let e1 = p2 - p1;
+  let e2 = p0 - p2;
+  let v0 = p - p0;
+  let v1 = p - p1;
+  let v2 = p - p2;
+  let pq0 = v0 - e0 * clamp(dot(v0, e0) / max(dot(e0, e0), 1e-6), 0.0, 1.0);
+  let pq1 = v1 - e1 * clamp(dot(v1, e1) / max(dot(e1, e1), 1e-6), 0.0, 1.0);
+  let pq2 = v2 - e2 * clamp(dot(v2, e2) / max(dot(e2, e2), 1e-6), 0.0, 1.0);
+  let s = sign(e0.x * e2.y - e0.y * e2.x);
+  let d0 = vec2<f32>(dot(pq0, pq0), s * (v0.x * e0.y - v0.y * e0.x));
+  let d1 = vec2<f32>(dot(pq1, pq1), s * (v1.x * e1.y - v1.y * e1.x));
+  let d2 = vec2<f32>(dot(pq2, pq2), s * (v2.x * e2.y - v2.y * e2.x));
+  let d = min(min(d0, d1), d2);
+  return -sqrt(d.x) * sign(d.y);
 }
 fn sdSeg(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
   let pa = p - a;
@@ -255,14 +340,14 @@ fn hash21(n: f32) -> vec2<f32> {
   return fract(sin(vec2<f32>(n, n + 1.7)) * vec2<f32>(43758.5453, 22578.1459)) * 2.0 - 1.0;
 }
 fn quadCell() -> vec2<f32> {
-  let inset = 0.168;
-  let gap = 0.036;
+  let inset = 0.12;
+  let gap = 0.03;
   let s = (1.0 - inset * 2.0 - gap) * 0.5;
   return vec2<f32>(s, s);
 }
 fn quadOrigin(q: i32) -> vec2<f32> {
-  let inset = 0.168;
-  let gap = 0.036;
+  let inset = 0.12;
+  let gap = 0.03;
   let cell = quadCell();
   let col = q % 2;
   let row = q / 2;
@@ -339,13 +424,20 @@ fn tallyDist(uv: vec2<f32>, count: f32) -> f32 {
 }
 @fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
   let p = input.uv * 2.0 - 1.0;
-  let d = sdRoundBox(p, vec2<f32>(0.78, 0.78), 0.22);
+  let face = shaderUniforms.facing;
+  let d = sdTriangle(
+    p,
+    vec2<f32>(-0.70 * face, -0.78),
+    vec2<f32>(-0.70 * face, 0.78),
+    vec2<f32>(0.80 * face, 0.0),
+  ) - 0.18;
   let stroke = 0.07 + shaderUniforms.fill * 0.02 + shaderUniforms.glow * 0.025;
   let edge = 1.0 - smoothstep(0.0, 0.035, abs(d) - stroke * 0.5);
   let halo = 1.0 - smoothstep(stroke * 0.5, stroke * 0.5 + 0.06, abs(d));
   let frame = edge * (0.42 + shaderUniforms.fill * 0.4 + shaderUniforms.glow * 0.18)
     + halo * 0.16;
-  let tally = 1.0 - smoothstep(0.014, 0.030, tallyDist(input.uv, shaderUniforms.count));
+  let tallyUv = (input.uv - vec2<f32>(0.5 - face * 0.14, 0.5)) / 0.54 + vec2<f32>(0.5, 0.5);
+  let tally = 1.0 - smoothstep(0.018, 0.038, tallyDist(tallyUv, shaderUniforms.count));
   let alpha = max(frame, tally * (0.88 + shaderUniforms.glow * 0.1));
   if (alpha < 0.02) { discard; }
   let lift = 0.12 + shaderUniforms.glow * 0.2;
@@ -386,7 +478,7 @@ export function createControlGroupHud(engine, scene, screen = {}) {
 
   let extra = false;
   let holdId = -1;
-  /** @type {{ id: number, x: number, y: number, w: number, h: number }[]} */
+  /** @type {{ id: number, x: number, y: number, w: number, h: number, dir: number }[]} */
   let hitRects = [];
   let lastHoverMs = 0;
 
@@ -485,6 +577,7 @@ export function createControlGroupHud(engine, scene, screen = {}) {
       setShaderUniform(pad.mat, 'fill', pad.filled);
       setShaderUniform(pad.mat, 'glow', glow);
       setShaderUniform(pad.mat, 'count', pad.count);
+      setShaderUniform(pad.mat, 'facing', r.dir ?? 1);
 
       let fx = eye.x - wx;
       let fy = eye.y - wy;
@@ -511,7 +604,7 @@ export function createControlGroupHud(engine, scene, screen = {}) {
       rgtY = upZ * fx - upX * fz;
       rgtZ = upX * fy - upY * fx;
 
-      const s = r.w * pixel * (1 + pad.hoverT * HOVER_SCALE);
+      const hover = 1 + pad.hoverT * HOVER_SCALE;
       const mesh = pad.mesh;
       if (mesh.position) {
         mesh.position.x = wx;
@@ -519,9 +612,9 @@ export function createControlGroupHud(engine, scene, screen = {}) {
         mesh.position.z = wz;
       }
       if (mesh.scaling) {
-        mesh.scaling.x = s;
-        mesh.scaling.y = s;
-        mesh.scaling.z = s;
+        mesh.scaling.x = r.w * pixel * hover;
+        mesh.scaling.y = r.h * pixel * hover;
+        mesh.scaling.z = r.h * pixel * hover;
       }
       setQuat(mesh, quatFromBasis(rgtX, rgtY, rgtZ, upX, upY, upZ, fx, fy, fz));
       setSubtreeVisible(mesh, true);

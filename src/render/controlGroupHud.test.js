@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import {
   CONTROL_GROUP_DEFS,
   CONTROL_GROUP_EDGE_PX,
+  CONTROL_GROUP_PITCH_PX,
   CONTROL_GROUP_SIZE_PX,
+  CONTROL_GROUP_WIDTH_PX,
+  controlGroupFacing,
   layoutControlGroups,
   pickControlGroupAt,
   tallyGlyphs,
@@ -39,7 +42,9 @@ describe('control group HUD layout', () => {
     assert.equal(right[0].name, 'blue');
     assert.equal(right[1].name, 'yellow');
     assert.equal(left[0].x, CONTROL_GROUP_EDGE_PX);
-    assert.equal(right[0].x, vw - CONTROL_GROUP_EDGE_PX - CONTROL_GROUP_SIZE_PX);
+    assert.equal(left[0].w, CONTROL_GROUP_WIDTH_PX);
+    assert.equal(left[0].h, CONTROL_GROUP_SIZE_PX);
+    assert.equal(right[0].x, vw - CONTROL_GROUP_EDGE_PX - CONTROL_GROUP_WIDTH_PX);
     const stackMid = (left[0].y + left[1].y + left[1].h) * 0.5;
     assert.ok(Math.abs(stackMid - vh * 0.5) < 1);
 
@@ -48,6 +53,24 @@ describe('control group HUD layout', () => {
     assert.equal(six.filter((r) => r.x > vw * 0.5).length, 3);
     assert.equal(six.find((r) => r.name === 'black')?.x, CONTROL_GROUP_EDGE_PX);
     assert.ok(six.find((r) => r.name === 'white')?.x > vw * 0.5);
+  });
+
+  it('nests opposite triangles in/out/in on the left and the other way on the right', () => {
+    assert.equal(controlGroupFacing('left', 0), 1);
+    assert.equal(controlGroupFacing('left', 1), -1);
+    assert.equal(controlGroupFacing('left', 2), 1);
+    assert.equal(controlGroupFacing('right', 0), -1);
+    assert.equal(controlGroupFacing('right', 1), 1);
+    assert.equal(controlGroupFacing('right', 2), -1);
+
+    const six = layoutControlGroups(1280, 720, true);
+    const left = six.filter((r) => r.x < 640);
+    const right = six.filter((r) => r.x > 640);
+    assert.deepEqual(left.map((r) => r.dir), [1, -1, 1]);
+    assert.deepEqual(right.map((r) => r.dir), [-1, 1, -1]);
+    assert.equal(left[1].y - left[0].y, CONTROL_GROUP_PITCH_PX);
+    assert.equal(left[2].y - left[1].y, CONTROL_GROUP_PITCH_PX);
+    assert.ok(left[1].y < left[0].y + left[0].h);
   });
 
   it('carries every sixteen into an X and caps at XX', () => {
@@ -84,7 +107,13 @@ describe('control group HUD layout', () => {
   it('picks the pad under a canvas point (including slop)', () => {
     const rects = layoutControlGroups(800, 600, false);
     const red = rects.find((r) => r.name === 'red');
+    const green = rects.find((r) => r.name === 'green');
     assert.equal(pickControlGroupAt(rects, red.x + 4, red.y + 4), red.id);
+    assert.equal(pickControlGroupAt(rects, red.x + red.w - 4, red.y + 4), null);
+    assert.equal(
+      pickControlGroupAt(rects, green.x + green.w - 4, green.y + green.h * 0.5),
+      green.id,
+    );
     assert.equal(pickControlGroupAt(rects, 400, 300), null);
     assert.equal(CONTROL_GROUP_DEFS[0].id, 0);
   });

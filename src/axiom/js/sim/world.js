@@ -2,8 +2,10 @@ import {
   createStore,
   createPointStore,
   createPointStaging,
+  spawnInBox,
   spawnInBoxSphere,
   spawnClusterInBox,
+  resizeInBox,
   randomClusterCenter,
   resizeInBoxSphere,
   boxSphereOverlapFraction,
@@ -38,6 +40,8 @@ import {
   waveBakeParticleBudget,
   waveBakeLeftCount,
   waveChunkEmitDist2,
+  waveChunkNearEmitter,
+  waveEmitterKeepR,
   behaviorOrbitCluster,
   behaviorSpinSelf,
 } from './behaviors.js';
@@ -180,6 +184,11 @@ export function createWorld(opts = {}) {
   let lastLookQ = '';
   let lastCamera = { x: 0, y: 4, z: 0 };
   let prevCamera = null;
+  const emitterKeepR = waveEmitterKeepR(chunkSize);
+
+  function keepsEmitter(ch) {
+    return waveChunkNearEmitter(ch.bounds, emitterKeepR);
+  }
   /** Bumps when the active chunk set changes (wireframe / debug consumers). */
   let chunksVersion = 0;
 
@@ -247,9 +256,9 @@ export function createWorld(opts = {}) {
 
   function pointWant(ch, f, sphere) {
     if (ch.retiring) return 0;
-    return Math.round(
-      Math.min(f.storeCap, f.chunkCap) * chunkFrac(ch, sphere) * densityScale(ch),
-    );
+    const cap = Math.min(f.storeCap, f.chunkCap);
+    if (keepsEmitter(ch)) return cap;
+    return Math.round(cap * chunkFrac(ch, sphere) * densityScale(ch));
   }
 
   function fillChunk(ch, sphere) {
@@ -261,7 +270,7 @@ export function createWorld(opts = {}) {
       if (!store) continue;
       const cap = Math.min(f.storeCap, f.chunkCap);
       if (f.cluster) {
-        if (inBall) {
+        if (inBall || keepsEmitter(ch)) {
           spawnClusterInBox(store, cap, ch.bounds, {
             spread: CLUSTER_SPREAD,
             center: ch.cluster,
@@ -269,6 +278,8 @@ export function createWorld(opts = {}) {
         } else {
           store.count = 0;
         }
+      } else if (keepsEmitter(ch)) {
+        spawnInBox(store, cap, ch.bounds);
       } else {
         spawnInBoxSphere(store, Math.round(cap * frac * densityScale(ch)), ch.bounds, sphere);
       }
@@ -336,7 +347,10 @@ export function createWorld(opts = {}) {
     const wanted = new Set();
     const focusCell = lastChunk;
     forEachChunkInRadius(cx, cy, cz, chunkRadius, (x, y, z) => {
-      if (chunkWanted(x, y, z, focusCell, camera, chunkSize, chunkRadius)) {
+      if (
+        chunkWanted(x, y, z, focusCell, camera, chunkSize, chunkRadius) ||
+        waveChunkNearEmitter(chunkBounds(x, y, z, chunkSize), emitterKeepR)
+      ) {
         wanted.add(chunkKey(x, y, z));
       }
     });
@@ -349,7 +363,7 @@ export function createWorld(opts = {}) {
       if (!active.has(key)) {
         const [x, y, z] = key.split(',').map(Number);
         const ch = activateChunk(x, y, z);
-        if (booting) fillChunk(ch, sphere);
+        if (booting || keepsEmitter(ch)) fillChunk(ch, sphere);
       } else {
         active.get(key).retiring = false;
       }
@@ -457,19 +471,22 @@ export function createWorld(opts = {}) {
         const receding =
           !!(prevCamera && cam) &&
           dist > chunkCameraDist(job.ch.cx, job.ch.cy, job.ch.cz, chunkSize, prevCamera) + 0.35;
-        if (
-          cam &&
-          job.cur < job.want &&
-          !job.ch.retiring &&
-          chunkHitsView(job.ch.cx, job.ch.cy, job.ch.cz, chunkSize, cam, chunkRadius)
-        ) {
-          const floor = frustumRushTarget(job.want);
+        const emitKeep = keepsEmitter(job.ch);
+        const inView =
+          !!cam &&
+          chunkHitsView(job.ch.cx, job.ch.cy, job.ch.cz, chunkSize, cam, chunkRadius);
+        if (job.cur < job.want && !job.ch.retiring && (inView || emitKeep)) {
+          const floor = emitKeep ? job.want : frustumRushTarget(job.want);
           if (job.cur < floor) {
             rush.push({ ...job, floor });
             continue;
           }
         }
-        if (job.cur > job.want && (job.ch.retiring || receding || dist > farBand)) {
+        if (
+          job.cur > job.want &&
+          !emitKeep &&
+          (job.ch.retiring || receding || dist > farBand)
+        ) {
           shed.push({ ...job, dist });
           continue;
         }
@@ -504,7 +521,8 @@ export function createWorld(opts = {}) {
         if (left <= 0) break;
         const add = Math.min(job.floor - job.cur, left, bakeRoom());
         if (add <= 0) continue;
-        resizeInBoxSphere(job.store, job.cur + add, job.ch.bounds, sphere);
+        if (keepsEmitter(job.ch)) resizeInBox(job.store, job.cur + add, job.ch.bounds);
+        else resizeInBoxSphere(job.store, job.cur + add, job.ch.bounds, sphere);
         const grew = job.store.count - job.cur;
         job.cur = job.store.count;
         left -= Math.max(0, grew);
@@ -539,7 +557,8 @@ export function createWorld(opts = {}) {
             if (job.cur < job.want) {
               share = Math.min(share, bakeRoom());
               if (share <= 0) continue;
-              resizeInBoxSphere(job.store, job.cur + share, job.ch.bounds, sphere);
+              if (keepsEmitter(job.ch)) resizeInBox(job.store, job.cur + share, job.ch.bounds);
+              else resizeInBoxSphere(job.store, job.cur + share, job.ch.bounds, sphere);
             } else {
               job.store.count = job.cur - share;
             }
@@ -557,7 +576,7 @@ export function createWorld(opts = {}) {
           store.count = 0;
           continue;
         }
-        if (store.count === 0 && clusterInSphere(ch, sphere)) {
+        if (store.count === 0 && (clusterInSphere(ch, sphere) || keepsEmitter(ch))) {
           spawnClusterInBox(store, Math.min(f.storeCap, f.chunkCap), ch.bounds, {
             spread: CLUSTER_SPREAD,
             center: ch.cluster,

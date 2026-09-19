@@ -36,6 +36,8 @@ import {
   tableHasCenterBlock,
 } from '../sim/tableShape.js';
 import { createSceneryFromField } from './scenery.js';
+import { createDoodadsFromField } from './doodads.js';
+import { createBackdropsFromField } from './backdrops.js';
 import { softDetachMesh } from './meshLifecycle.js';
 import { classifyGridTile, placementFillKind, placementGridWindow } from './placementGrid.js';
 import * as fx from '../sim/fixed.js';
@@ -155,6 +157,55 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     ...(specGlint.mesh ? [specGlint.mesh] : []),
   ];
   let disposed = false;
+  let liveField = field;
+  /** @type {((x: number, z: number) => number) | null} */
+  let fogFactor = null;
+  const emptyDoodads = () => ({
+    meshes: [],
+    update() {},
+    syncFromField() {},
+    applyTreeUpdates() {},
+    applyFogDim() {},
+    applyFogTiles() {},
+    dispose() {},
+  });
+  let doodads = emptyDoodads();
+  const doodadsReady = opts.skipScenery
+    ? Promise.resolve()
+    : createDoodadsFromField(
+      engine,
+      scene,
+      field,
+      (x, z) => surfaceHeightAt(liveField, x, z),
+    ).then((d) => {
+      if (disposed) {
+        d.dispose();
+        return;
+      }
+      doodads = d;
+      for (const mesh of d.meshes) {
+        if (built.indexOf(mesh) < 0) built.push(mesh);
+      }
+      if (fogFactor) d.applyFogDim(fogFactor);
+    }).catch((err) => {
+      console.warn('[doodads] failed', err);
+    });
+  const emptyBackdrops = () => ({ meshes: [], dispose() {} });
+  let backdrops = emptyBackdrops();
+  const backdropsReady = opts.skipScenery
+    ? Promise.resolve()
+    : createBackdropsFromField(engine, scene, field).then((b) => {
+      if (disposed) {
+        b.dispose();
+        return;
+      }
+      backdrops = b;
+      for (const mesh of b.meshes) {
+        if (built.indexOf(mesh) < 0) built.push(mesh);
+      }
+    }).catch((err) => {
+      console.warn('[backdrops] failed', err);
+    });
   let scenery = opts.skipScenery
     ? { meshes: [], modelsReady: Promise.resolve(), update() {}, applyAuthoredTiles() {}, dispose() {} }
     : await createSceneryFromField(
@@ -182,6 +233,8 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     scenery.dispose?.();
     for (const mesh of built) softDetachMesh(scene, mesh);
     built.length = 0;
+    doodads.dispose();
+    backdrops.dispose();
     return {
       meshes: [],
       modelsReady: Promise.resolve(),
@@ -202,30 +255,45 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
   return {
     meshes: built,
     /** Resolves when 3D tree/rock models have replaced billboards (or failed). */
-    modelsReady: scenery.modelsReady ?? Promise.resolve(),
+    modelsReady: Promise.all([
+      scenery.modelsReady ?? Promise.resolve(),
+      doodadsReady,
+      backdropsReady,
+    ]),
     update(activeCamera, deltaMs) {
       if (disposed) return;
       specGlint.update();
       scenery.update(activeCamera, deltaMs);
+      doodads.update(deltaMs);
     },
     applyTreeUpdates(updates) {
-      if (!disposed) scenery.applyTreeUpdates?.(updates);
+      if (disposed) return;
+      scenery.applyTreeUpdates?.(updates);
+      doodads.applyTreeUpdates(liveField, updates);
     },
     applyRockUpdates(updates) {
       if (!disposed) scenery.applyRockUpdates?.(updates);
     },
     applyAuthoredSceneryTiles(nextField, tiles) {
-      if (!disposed) scenery.applyAuthoredTiles?.(nextField, tiles);
+      if (disposed) return;
+      liveField = nextField ?? liveField;
+      scenery.applyAuthoredTiles?.(nextField, tiles);
+      doodads.syncFromField(liveField, true);
     },
     pingHarvest(tile) {
       if (disposed) return false;
       return scenery.pingHarvest?.(tile) ?? false;
     },
     applyFogDim(isVisible) {
-      if (!disposed) scenery.applyFogDim?.(isVisible);
+      if (disposed) return;
+      fogFactor = typeof isVisible === 'function' ? isVisible : null;
+      scenery.applyFogDim?.(isVisible);
+      doodads.applyFogDim(fogFactor);
     },
     applyFogTiles(forEachTile) {
-      if (!disposed) scenery.applyFogTiles?.(forEachTile);
+      if (disposed) return;
+      scenery.applyFogTiles?.(forEachTile);
+      doodads.applyFogTiles?.(forEachTile);
     },
     rebuildAtlasChunks(nextField, chunkKeys) {
       if (disposed || !chunkSize) return false;
@@ -272,6 +340,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     },
     async rebuildScenery(nextField, nextCamera) {
       if (disposed || opts.skipScenery) return false;
+      liveField = nextField ?? liveField;
       const prev = scenery;
       const prevSet = new Set(prev.meshes ?? []);
       prev.dispose?.();
@@ -300,6 +369,8 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
         if (built.indexOf(mesh) < 0) built.push(mesh);
         addToScene(scene, mesh);
       }
+      doodads.syncFromField(liveField, true);
+      if (fogFactor) doodads.applyFogDim(fogFactor);
       return true;
     },
     dispose() {
@@ -309,9 +380,13 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       specMap.dispose();
       // Scenery owns its meshes (and late model jobs); don't double-detach.
       const scenerySet = new Set(scenery.meshes ?? []);
+      const doodadSet = new Set(doodads.meshes ?? []);
+      const backdropSet = new Set(backdrops.meshes ?? []);
       scenery.dispose?.();
+      doodads.dispose();
+      backdrops.dispose();
       for (const mesh of built) {
-        if (!mesh || scenerySet.has(mesh) || mesh === specGlint.mesh) continue;
+        if (!mesh || scenerySet.has(mesh) || doodadSet.has(mesh) || backdropSet.has(mesh) || mesh === specGlint.mesh) continue;
         softDetachMesh(scene, mesh);
       }
       built.length = 0;

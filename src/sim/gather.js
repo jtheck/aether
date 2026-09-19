@@ -129,11 +129,16 @@ export const DROP_OFF_TYPES = new Set(['camp', 'mine', 'farm']);
 const DEPOSIT_TYPES = new Set(['camp', 'mine']);
 
 // --- Auto-assign (camps/mines recruit idle villagers) -----------------------
-// World-unit bases are exported so the HUD ring can mirror the sim reach exactly.
-/** Base gather reach of a camp/mine in world units (≈7 tiles, matching legacy). */
-export const CAMP_WORK_RADIUS_F = 28;
+// World-unit bases drive sim reach. The HUD ring is drawn a little inside
+// that circle (see workRadiusRingWorld) so nodes just past the rim still work.
+/** Uniform extra gather reach on every resource drop-off (half a tile). */
+export const WORK_RADIUS_PAD_F = TILE_SIZE_F * 0.5;
+/** Base gather reach of a camp/mine in world units (7 tiles + pad). */
+export const CAMP_WORK_RADIUS_F = 28 + WORK_RADIUS_PAD_F;
 /** Farm plots only recruit from the 3×3 and a tile of grass around it. */
-export const FARM_WORK_RADIUS_F = 16;
+export const FARM_WORK_RADIUS_F = 16 + WORK_RADIUS_PAD_F;
+/** Advertised HUD ring sits this far inside the live gather circle. */
+export const WORK_RADIUS_RING_INSET_F = 1.6;
 /** Attached silo satellite circle is one tile tighter than the source. */
 export const SILO_WORK_RADIUS_PENALTY_F = TILE_SIZE_F;
 /** Reach added per engineer loitering near the drop-off (world units). */
@@ -634,8 +639,8 @@ export function refreshEngineerAssists(w) {
 
 /**
  * Effective work radius of a drop-off — farm plots stay tight; camps/mines add
- * engineer assist plus a crew-size bonus (4 / 8 workers). HUD uses the world
- * variant so the ring matches.
+ * engineer assist plus a crew-size bonus (4 / 8 workers). HUD draws a slightly
+ * smaller ring via workRadiusRingWorld.
  * @returns {number} fixed-point radius
  */
 export function campWorkRadius(w, b, field) {
@@ -666,6 +671,12 @@ export function campWorkRadiusWorld(w, b, buildings) {
 /** Satellite gather reach for an attached silo (world units). */
 export function siloWorkRadiusWorld(sourceRadius) {
   const r = sourceRadius - SILO_WORK_RADIUS_PENALTY_F;
+  return r > 0 ? r : 0;
+}
+
+/** HUD / ghost ring radius — slightly inside the live gather circle. */
+export function workRadiusRingWorld(actual) {
+  const r = actual - WORK_RADIUS_RING_INSET_F;
   return r > 0 ? r : 0;
 }
 

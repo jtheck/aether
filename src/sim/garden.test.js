@@ -346,6 +346,7 @@ describe('garden codec', () => {
     });
     field.sceneryType[8 * 32 + 8] = 1;
     field.treeStock[8 * 32 + 8] = 28;
+    field.doodadType[10 * 32 + 10] = 2;
     const json = encodeGarden(field, {
       name: 'placed',
       units: [{ owner: 0, type: 1, tx: 10, tz: 10 }],
@@ -357,6 +358,7 @@ describe('garden codec', () => {
     const g = decodeGarden(json);
     assert.equal(g.authoredScenery, true);
     assert.equal(g.sceneryType[8 * 32 + 8], 1);
+    assert.equal(g.doodadType[10 * 32 + 10], 2);
     assert.equal(g.units.length, 1);
     assert.equal(g.buildings[0].type, 'camp');
     assert.equal(g.agoras.length, 1);
@@ -364,6 +366,7 @@ describe('garden codec', () => {
     assert.deepEqual(g.startingResources, { wood: 400, stone: 50, mineral: 12, food: 80 });
     const again = fieldFromGarden(json);
     assert.equal(again.sceneryType[8 * 32 + 8], 1);
+    assert.equal(again.doodadType[10 * 32 + 10], 2);
 
     const world = createWorld(7);
     applyGardenPlacements(world, again, g);
@@ -372,6 +375,20 @@ describe('garden codec', () => {
     assert.equal(world.agoras.length, 1);
     assert.equal(getResource(world, 0, 'wood'), 400);
     assert.equal(getResource(world, 0, 'mineral'), 12);
+  });
+
+  it('roundtrips authored backdrop poses', () => {
+    const field = buildField(7, { width: 32, height: 32 });
+    const json = encodeGarden(field, {
+      backdrops: [{ type: 'disc', x: 0, z: 0, y: -243, yaw: 0, scale: 80 }],
+    });
+    assert.deepEqual(json.bd, [['disc', 0, 0, -243, 0, 80]]);
+    const g = decodeGarden(json);
+    assert.equal(g.backdrops[0].type, 'disc');
+    assert.equal(g.backdrops[0].scale, 80);
+    const again = fieldFromGarden(json);
+    assert.equal(again.backdrops[0].type, 'disc');
+    assert.deepEqual(encodeGarden(again).bd, json.bd);
   });
 
   it('roundtrips named story units as a 5-tuple', () => {

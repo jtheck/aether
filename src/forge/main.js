@@ -52,6 +52,7 @@ import {
 } from '../app/workshop.js';
 import { RESOURCE_KINDS, STARTING_RESOURCES } from '../sim/resources.js';
 import { applyAuthoredScenery, populateScenery, paintSceneryBrush, SCENERY } from '../sim/scenery.js';
+import { DOODAD, paintDoodadBrush } from '../sim/doodads.js';
 import { UNIT_DEFS } from '../sim/unitTypes.js';
 import { PLACEABLE_BUILDINGS, snapBuildingWorld } from '../sim/buildings.js';
 import { defaultMatchAgoras } from '../sim/worldSetup.js';
@@ -91,6 +92,8 @@ const state = {
   terrain: TERRAIN.GRASS,
   lift: 0,
   scenery: SCENERY.TREE,
+  stamp: 'scenery',
+  doodad: DOODAD.WAGON,
   placeKind: 'unit',
   placeType: 1,
   owner: 0,
@@ -549,6 +552,11 @@ function brushColor() {
     if (state.terrain === TERRAIN.WATER) return [0.28, 0.62, 0.98];
     return [0.35, 0.88, 0.42];
   }
+  if (state.stamp === 'doodad') {
+    if (state.doodad === DOODAD.NONE) return [0.95, 0.32, 0.28];
+    if (state.doodad === DOODAD.WAGON) return [0.72, 0.52, 0.28];
+    return [0.78, 0.58, 0.22];
+  }
   if (state.scenery === SCENERY.NONE) return [0.95, 0.32, 0.28];
   if (state.scenery === SCENERY.ROCK_PLAIN) return [0.78, 0.74, 0.68];
   if (state.scenery === SCENERY.ROCK_MOSS) return [0.48, 0.78, 0.42];
@@ -586,7 +594,7 @@ function updateBrushCursor(pos) {
   const half = worldHalfFFromField(field);
   const tx = Math.floor((pos.x + half) / TILE_SIZE_F);
   const tz = Math.floor((pos.z + half) / TILE_SIZE_F);
-  const key = `${tx},${tz},${state.brush},${state.layer},${state.lift},${state.terrain},${state.scenery}`;
+  const key = `${tx},${tz},${state.brush},${state.layer},${state.lift},${state.terrain},${state.stamp},${state.scenery},${state.doodad}`;
   if (key === brushKey && brushMesh) return;
   brushKey = key;
 
@@ -748,10 +756,13 @@ function applyAt(pos, { add = false } = {}) {
     const half = worldHalfFFromField(field);
     const tx = Math.floor((pos.x + half) / TILE_SIZE_F);
     const tz = Math.floor((pos.z + half) / TILE_SIZE_F);
-    const key = `scenery:${tx}:${tz}:${state.brush}:${state.scenery}`;
+    const stamp = state.stamp === 'doodad' ? state.doodad : state.scenery;
+    const key = `scenery:${tx}:${tz}:${state.brush}:${state.stamp}:${stamp}`;
     if (key === lastPaintKey) return;
     lastPaintKey = key;
-    const dirty = paintSceneryBrush(field, tx, tz, state.scenery, state.brush, { refresh: false });
+    const dirty = state.stamp === 'doodad'
+      ? paintDoodadBrush(field, tx, tz, state.doodad, state.brush)
+      : paintSceneryBrush(field, tx, tz, state.scenery, state.brush, { refresh: false });
     if (dirty.length) {
       if (terrain?.applyAuthoredSceneryTiles) {
         terrain.applyAuthoredSceneryTiles(field, dirty);
@@ -1762,15 +1773,21 @@ function mountUi() {
         <button data-scenery="${SCENERY.ROCK_PLAIN}">Rock</button>
         <button data-scenery="${SCENERY.ROCK_MOSS}">Moss rock</button>
         <button data-scenery="${SCENERY.ROCK_SNOW}">Big rock</button>
-        <button data-scenery="${SCENERY.NONE}">Erase</button>
+        <button data-scenery="${SCENERY.NONE}">Erase trees / rocks</button>
+      </div>
+      <div class="row">
+        <button data-doodad="${DOODAD.MUSHROOM}">Mushroom</button>
+        <button data-doodad="${DOODAD.WAGON}">Wagon</button>
+        <button data-doodad="${DOODAD.NONE}">Erase doodads</button>
       </div>
       <label>Brush <span id="scenery-brush-label">1</span></label>
       <input id="scenery-brush-size" type="range" min="0" max="6" value="1">
       <div class="row">
         <button id="btn-gen-scenery">Generate trees / rocks</button>
         <button id="btn-clear-scenery">Clear scenery</button>
+        <button id="btn-clear-doodads">Clear doodads</button>
       </div>
-      <p class="hint">Uses the File seed. Generate fills around what you painted. Clear wipes the board. Units and buildings stay clear.</p>
+      <p class="hint">Trees and rocks gather / block. Doodads are paint-only — they do not path or harvest. Grove mushrooms still sprout on their own when a stand matures. Generate fills around painted trees. Clear wipes that row only.</p>
     </div>
     <div id="panel-place" class="panel" style="display:none">
       <label>Owner</label>
@@ -1894,10 +1911,23 @@ function mountUi() {
   });
   ui.querySelectorAll('[data-scenery]').forEach((b) => {
     b.addEventListener('click', () => {
+      state.stamp = 'scenery';
       state.scenery = Number(b.dataset.scenery);
       ui.querySelectorAll('[data-scenery]').forEach((x) => {
         x.classList.toggle('active', Number(x.dataset.scenery) === state.scenery);
       });
+      ui.querySelectorAll('[data-doodad]').forEach((x) => x.classList.remove('active'));
+      refreshBrushCursor();
+    });
+  });
+  ui.querySelectorAll('[data-doodad]').forEach((b) => {
+    b.addEventListener('click', () => {
+      state.stamp = 'doodad';
+      state.doodad = Number(b.dataset.doodad);
+      ui.querySelectorAll('[data-doodad]').forEach((x) => {
+        x.classList.toggle('active', Number(x.dataset.doodad) === state.doodad);
+      });
+      ui.querySelectorAll('[data-scenery]').forEach((x) => x.classList.remove('active'));
       refreshBrushCursor();
     });
   });
@@ -1925,6 +1955,14 @@ function mountUi() {
     applyAuthoredScenery(field);
     queueSceneryPaint(null, { full: true });
     grid?.refreshOccupancy(field);
+  });
+  document.getElementById('btn-clear-doodads').addEventListener('click', () => {
+    if (field.doodadType) field.doodadType.fill(0);
+    if (terrain?.applyAuthoredSceneryTiles) {
+      terrain.applyAuthoredSceneryTiles(field, []);
+      if (sceneRegistered) invalidateRenderBundles(engine);
+    }
+    queueSceneryPaint(null, { full: true });
   });
   document.getElementById('map-name').addEventListener('input', (e) => {
     state.mapName = e.target.value;

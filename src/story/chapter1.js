@@ -22,6 +22,7 @@ import { encodeGarden } from '../sim/garden.js';
 import { UNIT } from '../sim/unitTypes.js';
 import { unitsFromCast } from './cast.js';
 import { dressChapter1 } from './chapterLand.js';
+import { BACKDROP, defaultBackdropY } from '../sim/backdrops.js';
 
 /** v1 party: Myco / Warlock / Priest / Shaman around the grove. */
 export const CHAPTER1_CAST = [
@@ -35,6 +36,19 @@ export const CHAPTER1_GARDEN_NAME = 'Chapter 1';
 export const CHAPTER1_GARDEN_URL = '/maps/chapter1.garden';
 export const CHAPTER1_NEXT_URL = '/maps/chapter2.garden';
 export const CHAPTER1_SEED = 22049;
+
+/** Surround disc — native mesh is ~9 units across; scale 80 wraps the tiny table. */
+export const CHAPTER1_DISC_SCALE = 80;
+export function chapter1Backdrops() {
+  return [{
+    type: BACKDROP.DISC,
+    x: 0,
+    z: 0,
+    y: defaultBackdropY(BACKDROP.DISC, CHAPTER1_DISC_SCALE),
+    yaw: 0,
+    scale: CHAPTER1_DISC_SCALE,
+  }];
+}
 
 /** Walk north off the grove to load Chapter 2. */
 export function chapter1Objectives() {
@@ -151,6 +165,7 @@ export function buildChapter1Garden() {
       objectives: chapter1Objectives(),
       units: [...unitsFromCast(CHAPTER1_CAST), ...camps.units],
       buildings: camps.buildings,
+      backdrops: chapter1Backdrops(),
     });
   } finally {
     setActiveMapSize(prevW, prevH);

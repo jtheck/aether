@@ -4,10 +4,14 @@ import * as fx from './fixed.js';
 import { TINY_MAP_W, SKIRMISH_MAP_W, worldHalfFFromMap } from './field.js';
 import { UNIT } from './unitTypes.js';
 import {
+  KOTH_ARMY,
+  KOTH_UNITS_PER_ARMY,
+  PLAYER_ARMY,
   SPAWN_BASE_INSET,
   STRESS_ARMY_COUNT,
   STRESS_MENU_PER_SIDE,
   STRESS_RING_INNER_FRAC,
+  UNITS_PER_ARMY,
   buildWorldFromConfig,
   cornerBases,
   defaultMatchAgoras,
@@ -85,18 +89,13 @@ describe('1vAI home agoras', () => {
     assert.ok(Math.hypot(fx.toFloat(w.agoras[0].x) - expected[0].x, fx.toFloat(w.agoras[0].z) - expected[0].z) < 0.01);
     assert.ok(Math.hypot(fx.toFloat(w.agoras[1].x) - expected[1].x, fx.toFloat(w.agoras[1].z) - expected[1].z) < 0.01);
 
-    const plain = buildWorldFromConfig({ seed: 3, mode: 'koth', activeSlots: [0, 1] });
+    const expectedTypes = new Map(PLAYER_ARMY.map((c) => [c.type, c.count]));
     for (const owner of [0, 1]) {
       const camp = livingOf(w, owner);
-      const stock = livingOf(plain, owner);
-      assert.equal(camp.length, stock.length);
+      assert.equal(camp.length, UNITS_PER_ARMY);
       const types = new Map();
       for (const i of camp) types.set(w.type[i], (types.get(w.type[i]) ?? 0) + 1);
-      for (const i of stock) {
-        const t = plain.type[i];
-        types.set(t, (types.get(t) ?? 0) - 1);
-      }
-      for (const n of types.values()) assert.equal(n, 0);
+      for (const [t, n] of expectedTypes) assert.equal(types.get(t) ?? 0, n);
 
       const ax = fx.toFloat(w.agoras[owner].x);
       const az = fx.toFloat(w.agoras[owner].z);
@@ -123,6 +122,64 @@ describe('1vAI home agoras', () => {
       assert.ok(villR / villN < warR / warN, 'villagers should hug the agora');
       assert.ok(warDot > 0, 'warriors should stand toward map center');
     }
+  });
+});
+
+describe('koth combat spawn', () => {
+  it('drops civilians and parks a dirigible and APC on opposite flanks', () => {
+    const w = buildWorldFromConfig({ seed: 4, mode: 'koth', activeSlots: [0] });
+    const ids = livingOf(w, 0);
+    assert.equal(ids.length, KOTH_UNITS_PER_ARMY);
+
+    const types = new Map();
+    for (const i of ids) types.set(w.type[i], (types.get(w.type[i]) ?? 0) + 1);
+    assert.equal(types.get(UNIT.VILLAGER) ?? 0, 0);
+    assert.equal(types.get(UNIT.ENGINEER) ?? 0, 0);
+    assert.equal(types.get(UNIT.WAGON) ?? 0, 0);
+    for (const col of KOTH_ARMY) assert.equal(types.get(col.type) ?? 0, col.count);
+
+    const bases = kothBases(w.worldHalfF);
+    const [bx, bz] = bases[0];
+    const { fX, fZ, rX, rZ } = (() => {
+      const len = Math.hypot(bx, bz) || 1;
+      return { fX: -bx / len, fZ: -bz / len, rX: bz / len, rZ: -bx / len };
+    })();
+
+    let dirigi = -1;
+    let apc = -1;
+    let maxInfLat = 0;
+    let warR = 0;
+    let warN = 0;
+    let casterR = 0;
+    let casterN = 0;
+    for (const i of ids) {
+      const x = fx.toFloat(w.px[i]) - bx;
+      const z = fx.toFloat(w.py[i]) - bz;
+      const lat = x * rX + z * rZ;
+      const originR = Math.hypot(fx.toFloat(w.px[i]), fx.toFloat(w.py[i]));
+      if (w.type[i] === UNIT.DIRIGIBLE) dirigi = i;
+      else if (w.type[i] === UNIT.APC) apc = i;
+      else maxInfLat = Math.max(maxInfLat, Math.abs(lat));
+      if (w.type[i] === UNIT.WARRIOR) {
+        warR += originR;
+        warN++;
+      } else if (w.type[i] === UNIT.WIZARD || w.type[i] === UNIT.WARLOCK) {
+        casterR += originR;
+        casterN++;
+      }
+    }
+    assert.ok(dirigi >= 0 && apc >= 0);
+    const dLat = (fx.toFloat(w.px[dirigi]) - bx) * rX + (fx.toFloat(w.py[dirigi]) - bz) * rZ;
+    const aLat = (fx.toFloat(w.px[apc]) - bx) * rX + (fx.toFloat(w.py[apc]) - bz) * rZ;
+    assert.ok(dLat < 0 && aLat > 0, 'dirigible left, APC right');
+    assert.ok(Math.abs(dLat) > maxInfLat + 8, 'dirigible should sit outside the infantry');
+    assert.ok(Math.abs(aLat) > maxInfLat + 8, 'APC should sit outside the infantry');
+    assert.ok(warN > 0 && casterN > 0);
+    assert.ok(warR / warN < casterR / casterN, 'melee should stand closer to the hill than casters');
+
+    const dFwd = (fx.toFloat(w.px[dirigi]) - bx) * fX + (fx.toFloat(w.py[dirigi]) - bz) * fZ;
+    const aFwd = (fx.toFloat(w.px[apc]) - bx) * fX + (fx.toFloat(w.py[apc]) - bz) * fZ;
+    assert.ok(dFwd > 8 && aFwd > 8, 'flank vehicles should stand with the battle line');
   });
 });
 

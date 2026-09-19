@@ -5,6 +5,7 @@ import {
   chunkHitsView,
   chunkLookDepth,
   chunkCameraDist,
+  chunkBounds,
   estimateHotChunks,
   frustumRushTarget,
   lookQuant,
@@ -15,6 +16,7 @@ import {
   STREAM_FRUSTUM_MIN_FRAC,
 } from './chunks.js';
 import { KIND_POINT, boxSphereOverlapFraction } from './store.js';
+import { waveChunkNearEmitter, waveEmitterKeepR } from './behaviors.js';
 import { createWorld } from './world.js';
 
 {
@@ -262,6 +264,47 @@ import { createWorld } from './world.js';
   for (let i = 0; i < 3; i++) world.tick(1 / 60, back);
   const farAfter = band(world.getRenderSpecies('points'), 40, 72);
   assert.ok(farAfter < far0 * 0.72, `backing up should shed far dots (was ${far0}, now ${farAfter})`);
+}
+
+{
+  const keepR = waveEmitterKeepR(16);
+  assert.equal(waveChunkNearEmitter(chunkBounds(0, 0, 0, 16), keepR), true);
+  assert.equal(waveChunkNearEmitter(chunkBounds(0, 0, -6, 16), keepR), false);
+}
+
+{
+  const pose = {
+    x: 0,
+    y: 4,
+    z: -48,
+    forward: { x: 0, y: 0, z: -1 },
+    fov: 60,
+    aspect: 16 / 9,
+    billboard: { rx: 1, ry: 0, rz: 0, ux: 0, uy: 1, uz: 0 },
+  };
+  const world = createWorld({
+    capacity: 8000,
+    initialCount: 2400,
+    startCount: 2400,
+    chunkSize: 16,
+    chunkRadius: 4,
+    startRadius: 4,
+    flockDefs: [
+      { id: 'points', meshKind: KIND_POINT, tint: { r: 1, g: 1, b: 1 }, weight: 1, baseScale: 1 },
+    ],
+  });
+  world.tick(1 / 60, pose);
+  const keys = new Set(world.getChunkBounds().map((c) => c.key));
+  assert.ok(keys.has('0,0,0'), 'emitter cube should stay streamed behind the camera');
+  let around = 0;
+  const pts = world.getRenderSpecies('points');
+  for (let i = 0; i < pts.count; i++) {
+    const x = pts.positions[i * 3];
+    const y = pts.positions[i * 3 + 1];
+    const z = pts.positions[i * 3 + 2];
+    if (x * x + y * y + z * z < 18 * 18) around++;
+  }
+  assert.ok(around > 40, `emitter neighborhood should stay dense (got ${around})`);
 }
 
 console.log('stream.test.js ok');

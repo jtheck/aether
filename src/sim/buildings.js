@@ -1013,7 +1013,7 @@ export function createBuilding(opts) {
     rallyHop2X: 0,
     rallyHop2Z: 0,
     rallyHop2Order: ORDER.MOVE,
-    /** 1 = hold production tracks (queue stays, progress freezes). */
+    /** 1 = hold finished items in the queue (current work still cooks). */
     prodPaused: 0,
     /** 0 = under construction (inert); 1 = raised and functional. */
     built,
@@ -1599,7 +1599,7 @@ function buildingHasProduction(b) {
 }
 
 /**
- * Hold or resume production on a building. Queue stays; progress freezes.
+ * Hold or resume release on a building. Current work still finishes; spawn waits.
  * @param {object} w
  * @param {{ playerId?: number, buildingIndex: number, paused?: number }} cmd
  */

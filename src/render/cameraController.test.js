@@ -13,6 +13,7 @@ import {
   CAMERA_CLOSE_FOV,
   CAMERA_CLOSE_FOV_HOLD,
   CAMERA_CLOSE_FOV_SPAN,
+  CAMERA_FOV_LEAD,
   FOV_MAX_ACCEL,
   FOV_MAX_SPEED,
   FOLLOW_ZIP_RATE,
@@ -618,29 +619,43 @@ describe('rotate toward cursor', () => {
 });
 
 describe('fovForNormalizedZoom', () => {
-  it('keeps the play / zoom-out lens at base FOV', () => {
-    assert.equal(fovForNormalizedZoom(CAMERA_CLOSE_FOV_SPAN), CAMERA_BASE_FOV);
-    assert.equal(fovForNormalizedZoom(0.32), CAMERA_BASE_FOV);
+  const fovDelta = CAMERA_CLOSE_FOV - CAMERA_BASE_FOV;
+
+  it('is a monotonic function of zoom for the whole travel', () => {
     assert.equal(fovForNormalizedZoom(1), CAMERA_BASE_FOV);
+    assert.equal(fovForNormalizedZoom(0), CAMERA_CLOSE_FOV);
+    let prev = CAMERA_CLOSE_FOV + 1;
+    for (let i = 0; i <= 40; i++) {
+      const n = i / 40;
+      const fov = fovForNormalizedZoom(n);
+      assert.ok(fov <= prev + 1e-12, `fov rose at n=${n}`);
+      prev = fov;
+    }
   });
 
-  it('opens the lens at min radius and eases across the last zoom slice', () => {
+  it('only creeps through play / zoom-out so the punch is already connected', () => {
+    const play = fovForNormalizedZoom(0.32);
+    const mid = fovForNormalizedZoom(0.5);
+    const far = fovForNormalizedZoom(1);
+    assert.equal(far, CAMERA_BASE_FOV);
+    assert.ok(play > CAMERA_BASE_FOV && play - CAMERA_BASE_FOV < fovDelta * 0.01);
+    assert.ok(mid > CAMERA_BASE_FOV && mid < play);
+  });
+
+  it('opens the lens at min radius and puts most of the delta in the close slice', () => {
     assert.equal(fovForNormalizedZoom(0), CAMERA_CLOSE_FOV);
-    const mid = fovForNormalizedZoom((CAMERA_CLOSE_FOV_HOLD + CAMERA_CLOSE_FOV_SPAN) * 0.5);
-    assert.ok(mid > CAMERA_BASE_FOV && mid < CAMERA_CLOSE_FOV);
+    const atSpan = fovForNormalizedZoom(CAMERA_CLOSE_FOV_SPAN);
+    assert.ok(Math.abs(atSpan - (CAMERA_BASE_FOV + CAMERA_FOV_LEAD * fovDelta)) < 1e-9);
+    const punch = CAMERA_CLOSE_FOV - atSpan;
+    assert.ok(punch > fovDelta * 0.5);
+    const midPunch = fovForNormalizedZoom((CAMERA_CLOSE_FOV_HOLD + CAMERA_CLOSE_FOV_SPAN) * 0.5);
+    assert.ok(midPunch > atSpan && midPunch < CAMERA_CLOSE_FOV);
   });
 
   it('floors the wide FOV near min zoom instead of easing off the peak', () => {
     assert.equal(fovForNormalizedZoom(0), CAMERA_CLOSE_FOV);
     assert.equal(fovForNormalizedZoom(CAMERA_CLOSE_FOV_HOLD), CAMERA_CLOSE_FOV);
     assert.equal(fovForNormalizedZoom(CAMERA_CLOSE_FOV_HOLD * 0.4), CAMERA_CLOSE_FOV);
-  });
-
-  it('lingers at the play-side threshold so the blend does not kick', () => {
-    const d = CAMERA_CLOSE_FOV - CAMERA_BASE_FOV;
-    const blend = CAMERA_CLOSE_FOV_SPAN - CAMERA_CLOSE_FOV_HOLD;
-    const enter = fovForNormalizedZoom(CAMERA_CLOSE_FOV_SPAN - blend * 0.15);
-    assert.ok(enter - CAMERA_BASE_FOV < d * 0.08);
   });
 });
 
@@ -652,27 +667,28 @@ describe('close-in FOV', () => {
     assert.ok(Math.abs(cam.fov - CAMERA_CLOSE_FOV) < 1e-6);
   });
 
-  it('stays at base FOV at play and reset zoom', () => {
+  it('stays near base FOV at play and reset zoom', () => {
     const cam = fakeCamera();
     const ctrl = createCameraController(cam, {}, { worldHalfF: 200 });
     ctrl.setPose({ radius: cameraPlayRadius(cam.lowerRadiusLimit, cam.upperRadiusLimit) });
-    assert.ok(Math.abs(cam.fov - CAMERA_BASE_FOV) < 1e-6);
+    assert.ok(Math.abs(cam.fov - CAMERA_BASE_FOV) < 4e-3);
     cam.radius = cam.lowerRadiusLimit;
     ctrl.reset();
-    assert.ok(Math.abs(cam.fov - CAMERA_BASE_FOV) < 1e-6);
+    assert.ok(Math.abs(cam.fov - CAMERA_BASE_FOV) < 4e-3);
   });
 
   it('chases the close FOV instead of mirroring a zoom slam', () => {
     const cam = fakeCamera();
     const ctrl = createCameraController(cam, fakeCanvas(), { worldHalfF: 200 });
     ctrl.setPose({ radius: cameraPlayRadius(cam.lowerRadiusLimit, cam.upperRadiusLimit) });
-    assert.ok(Math.abs(cam.fov - CAMERA_BASE_FOV) < 1e-6);
+    const startFov = cam.fov;
+    assert.ok(Math.abs(startFov - CAMERA_BASE_FOV) < 4e-3);
     ctrl.zoomBy(-(cam.radius - cam.lowerRadiusLimit));
     assert.equal(cam.radius, cam.lowerRadiusLimit);
-    assert.ok(Math.abs(cam.fov - CAMERA_BASE_FOV) < 1e-6);
+    assert.ok(Math.abs(cam.fov - startFov) < 1e-6);
     ctrl.tick(16);
-    assert.ok(cam.fov > CAMERA_BASE_FOV);
-    const first = cam.fov - CAMERA_BASE_FOV;
+    assert.ok(cam.fov > startFov);
+    const first = cam.fov - startFov;
     assert.ok(first <= FOV_MAX_ACCEL * 0.016 * 0.016 + 1e-6);
     assert.ok(first < FOV_MAX_SPEED * 0.016 * 0.5);
     assert.ok(cam.fov < CAMERA_CLOSE_FOV - 0.08);

@@ -6,8 +6,9 @@ import { snapToPassable } from './field.js';
 import { ORDER, spawn } from './world.js';
 import { queuePath } from './path.js';
 import { clearEngagement } from './engagement.js';
-import { isFlyer, UNIT } from './unitTypes.js';
+import { isFlyer, UNIT, getUnitCost } from './unitTypes.js';
 import { ownerAtPopSoftCap } from './pop.js';
+import { spendResources } from './resources.js';
 import {
   BUILDING_SPAWN_LOCAL,
   TRAIN_TICKS,
@@ -82,7 +83,7 @@ function spawnTrainedUnit(w, field, b, unitType) {
   stampUnitRallyHops(w, i, b);
 }
 
-/** Completed villages trickle a free villager; half speed at/over the soft cap. */
+/** Completed villages trickle a villager at UNIT_COST; half speed at/over the soft cap. */
 function tickVillageVillagers(w, field, b) {
   if (b.type !== 'village') return;
   const acc = (b.villageSpawnAcc | 0) + 1;
@@ -91,7 +92,10 @@ function tickVillageVillagers(w, field, b) {
     : VILLAGE_VILLAGER_TICKS;
   if (acc >= need) {
     b.villageSpawnAcc = 0;
-    spawnTrainedUnit(w, field, b, UNIT.VILLAGER);
+    // Can't pay → miss this interval; the timer does not sit on ready.
+    if (spendResources(w, b.owner | 0, getUnitCost(UNIT.VILLAGER))) {
+      spawnTrainedUnit(w, field, b, UNIT.VILLAGER);
+    }
     return;
   }
   b.villageSpawnAcc = acc;

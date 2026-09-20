@@ -19,6 +19,7 @@ import { TILE_SIZE_F, worldHalfFFromField } from '../sim/field.js';
 import {
   TREE_BURN_DAMAGE,
   TREE_BURN_DAMAGE_INTERVAL,
+  TREE_STAGE_GROVE_MAX,
   TREE_STAGE_MAX,
   treeBurnsToDeath,
   treeScaleForStage,
@@ -102,13 +103,30 @@ const ROCK_ALBEDO_DIM = 0.30;
 const TREE_TINT_SMALL = [0.26, 0.48, 0.16];
 /** Mature canopy — same green, much darker. */
 const TREE_TINT_BIG = [0.07, 0.12, 0.045];
+/** Grove / table-rim giants — deeper pine past the natural cap. */
+const TREE_TINT_GROVE = [0.042, 0.078, 0.052];
 /** Same-stage trees scatter this far along the size→tint axis (0–1). */
 const TREE_TINT_JITTER = 0.55;
+/** Extra yellow ↔ pine wander once a tree outgrows the natural scale. */
+const TREE_GROVE_HUE_JITTER = 0.22;
 const TREE_SCALE_LO = treeScaleForStage(1);
 const TREE_SCALE_HI = treeScaleForStage(TREE_STAGE_MAX);
+const TREE_SCALE_GROVE = treeScaleForStage(TREE_STAGE_GROVE_MAX);
 
 function treeTintHash(tileIndex) {
   return ((Math.imul(tileIndex | 0, 1103515245) + 12345) >>> 16) / 65535;
+}
+
+function clamp01(v) {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+function lerp3(a, b, t) {
+  return [
+    a[0] + (b[0] - a[0]) * t,
+    a[1] + (b[1] - a[1]) * t,
+    a[2] + (b[2] - a[2]) * t,
+  ];
 }
 
 function resetBurnVisual(p) {
@@ -168,14 +186,21 @@ function advanceBurnVisual(p, dt) {
   return false;
 }
 
-function treeTintRgb(scale, tileIndex) {
+export function treeTintRgb(scale, tileIndex) {
   const span = TREE_SCALE_HI - TREE_SCALE_LO || 1;
   const jitter = (treeTintHash(tileIndex) - 0.5) * TREE_TINT_JITTER;
-  const t = Math.min(1, Math.max(0, (scale - TREE_SCALE_LO) / span + jitter));
+  const t = (scale - TREE_SCALE_LO) / span + jitter;
+  if (t <= 1) return lerp3(TREE_TINT_SMALL, TREE_TINT_BIG, clamp01(t));
+
+  const groveSpan = TREE_SCALE_GROVE - TREE_SCALE_HI || 1;
+  const u = clamp01((t - 1) * span / groveSpan);
+  const eased = u * u * (3 - 2 * u);
+  const rgb = lerp3(TREE_TINT_BIG, TREE_TINT_GROVE, eased);
+  const hue = (treeTintHash((tileIndex | 0) ^ 0x9e3779b9) - 0.5) * TREE_GROVE_HUE_JITTER * eased;
   return [
-    TREE_TINT_SMALL[0] + (TREE_TINT_BIG[0] - TREE_TINT_SMALL[0]) * t,
-    TREE_TINT_SMALL[1] + (TREE_TINT_BIG[1] - TREE_TINT_SMALL[1]) * t,
-    TREE_TINT_SMALL[2] + (TREE_TINT_BIG[2] - TREE_TINT_SMALL[2]) * t,
+    clamp01(rgb[0] + hue * 0.55),
+    clamp01(rgb[1] + hue * 0.10),
+    clamp01(rgb[2] - hue * 0.40),
   ];
 }
 const placementScratch = new Float64Array(16);

@@ -7,8 +7,10 @@ import {
   ACH_LINUX_LAUNCH,
   ACH_FORGE_OPEN,
   createAetherSteam,
+  createSteamOverlayGuard,
   isKothAgoraDefeat,
   isLinuxRuntime,
+  isSteamOverlayHotkey,
 } from './steam.js';
 import { DLC_FIRST_RESPONDER, DLC_FIRST_RESPONDER_APP_ID } from './dlcCatalog.js';
 
@@ -40,6 +42,52 @@ function fakeSteam(opts = {}) {
   };
 }
 
+describe('isSteamOverlayHotkey', () => {
+  it('is only Shift+Tab', () => {
+    assert.equal(isSteamOverlayHotkey({ key: 'Tab', shiftKey: true }), true);
+    assert.equal(isSteamOverlayHotkey({ key: 'Tab', shiftKey: false }), false);
+    assert.equal(isSteamOverlayHotkey({ key: 'Tab', shiftKey: true, ctrlKey: true }), false);
+  });
+});
+
+describe('createSteamOverlayGuard', () => {
+  it('opens Friends on Shift+Tab and yields until click or Steam close', () => {
+    const opened = [];
+    const listeners = new Map();
+    const win = {
+      addEventListener(type, fn) {
+        const list = listeners.get(type) ?? [];
+        list.push(fn);
+        listeners.set(type, list);
+      },
+      removeEventListener() {},
+    };
+    const guard = createSteamOverlayGuard({
+      window: win,
+      root: { aetherDesktop: {}, window: win },
+      steam: {
+        isAvailable: () => true,
+        openOverlay: (d) => opened.push(d),
+        overlayActive: () => false,
+      },
+      interval: () => 1,
+      clearInterval() {},
+    });
+    const ev = { key: 'Tab', shiftKey: true, preventDefault() { this.prevented = true; }, stopImmediatePropagation() {} };
+    for (const fn of listeners.get('keydown') ?? []) fn(ev);
+    assert.equal(ev.prevented, true);
+    assert.deepEqual(opened, ['Friends']);
+    assert.equal(guard.isActive(), true);
+    for (const fn of listeners.get('pointerdown') ?? []) fn({});
+    assert.equal(guard.isActive(), false);
+    guard.setRemote(true);
+    assert.equal(guard.isActive(), true);
+    guard.setRemote(false);
+    assert.equal(guard.isActive(), false);
+    guard.dispose();
+  });
+});
+
 describe('createAetherSteam', () => {
   it('no-ops when the desktop bridge is missing', async () => {
     const steam = createAetherSteam({ root: {} });
@@ -59,6 +107,12 @@ describe('createAetherSteam', () => {
     });
     assert.equal(steam.downloadWorkshopItem('1'), false);
     assert.equal(steam.openOverlay('workshop'), false);
+    assert.equal(steam.overlayActive(), false);
+    assert.deepEqual(await steam.showGamepadTextInput({ description: 'Name' }), {
+      ok: false,
+      submitted: false,
+      text: '',
+    });
   });
 
   it('lists and loads workshop gardens from the desktop bridge', async () => {
@@ -72,6 +126,27 @@ describe('createAetherSteam', () => {
     assert.equal(items[0].id, '99');
     assert.deepEqual(await steam.loadWorkshopGarden('99'), garden);
     assert.equal(steam.downloadWorkshopItem('99'), true);
+  });
+
+  it('reads overlay-active from the desktop bridge', () => {
+    const stub = fakeSteam();
+    stub.api.overlayActive = () => true;
+    const steam = createAetherSteam({ steam: () => stub.api });
+    assert.equal(steam.overlayActive(), true);
+  });
+
+  it('asks the desktop bridge for a gamepad keyboard', async () => {
+    const stub = fakeSteam();
+    stub.api.showGamepadTextInput = async (body) => ({
+      ok: true,
+      submitted: true,
+      text: body.existing,
+    });
+    const steam = createAetherSteam({ steam: () => stub.api });
+    const result = await steam.showGamepadTextInput({ existing: 'Warden' });
+    assert.equal(result.ok, true);
+    assert.equal(result.submitted, true);
+    assert.equal(result.text, 'Warden');
   });
 
   it('publishes a garden through the desktop bridge', async () => {

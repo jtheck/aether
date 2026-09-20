@@ -8,6 +8,10 @@ import {
   CURSOR_PAN_EDGE_FRAC,
   gamepadCursorVisible,
   leashLimit,
+  PAD_HIDE_CURSOR_CLASS,
+  setPadOsCursorHidden,
+  shouldRevealOsCursor,
+  shouldYieldPadToPointer,
   settleCursorLeash,
   stepCursorLeash,
 } from './gamepadCursor.js';
@@ -67,7 +71,7 @@ describe('cursor leash', () => {
     assert.ok(corner.camLx > 0 && corner.camLy > 0);
   });
 
-  it('snaps home after the stick recenters', () => {
+  it('eases home after the stick recenters', () => {
     const mid = settleCursorLeash(40, 0, 0.32, 1.5);
     assert.ok(mid.ox > 0 && mid.ox < 40);
     const home = settleCursorLeash(2, 0, 0.32, 1.5);
@@ -81,5 +85,66 @@ describe('gamepadCursorVisible', () => {
     assert.equal(gamepadCursorVisible({ connected: true, playActive: false, menuOpen: false }), false);
     assert.equal(gamepadCursorVisible({ connected: true, playActive: true, menuOpen: true }), false);
     assert.equal(gamepadCursorVisible({ connected: false, playActive: true, menuOpen: false }), false);
+    assert.equal(gamepadCursorVisible({
+      connected: true,
+      playActive: true,
+      menuOpen: false,
+      pointerYielded: true,
+    }), false);
+  });
+});
+
+function fakeCursorDoc() {
+  const classes = new Set();
+  const nodes = new Map();
+  return {
+    head: {
+      appendChild(el) {
+        if (el.id) nodes.set(el.id, el);
+      },
+    },
+    documentElement: {
+      classList: {
+        add(c) { classes.add(c); },
+        remove(c) { classes.delete(c); },
+        contains(c) { return classes.has(c); },
+      },
+    },
+    getElementById(id) { return nodes.get(id) ?? null; },
+    createElement() { return { id: '', textContent: '' }; },
+    _classes: classes,
+    _nodes: nodes,
+  };
+}
+
+describe('setPadOsCursorHidden', () => {
+  it('toggles the hide class and injects the cursor rule once', () => {
+    const doc = fakeCursorDoc();
+    assert.equal(setPadOsCursorHidden(true, doc), true);
+    assert.equal(doc.documentElement.classList.contains(PAD_HIDE_CURSOR_CLASS), true);
+    assert.equal(doc._nodes.size, 1);
+    setPadOsCursorHidden(true, doc);
+    assert.equal(doc._nodes.size, 1);
+    assert.equal(setPadOsCursorHidden(false, doc), false);
+    assert.equal(doc.documentElement.classList.contains(PAD_HIDE_CURSOR_CLASS), false);
+  });
+});
+
+describe('shouldRevealOsCursor', () => {
+  it('reveals on mouse motion only', () => {
+    assert.equal(shouldRevealOsCursor({ pointerType: 'mouse', movementX: 2, movementY: 0 }), true);
+    assert.equal(shouldRevealOsCursor({ pointerType: 'mouse', movementX: 0, movementY: 0 }), false);
+    assert.equal(shouldRevealOsCursor({ pointerType: 'touch', movementX: 4, movementY: 1 }), false);
+    assert.equal(shouldRevealOsCursor({}), true);
+  });
+});
+
+describe('shouldYieldPadToPointer', () => {
+  it('yields on mouse motion, click, or wheel — not touch', () => {
+    assert.equal(shouldYieldPadToPointer({ pointerType: 'mouse', movementX: 2, movementY: 0 }), true);
+    assert.equal(shouldYieldPadToPointer({ pointerType: 'mouse', type: 'pointerdown', movementX: 0, movementY: 0 }), true);
+    assert.equal(shouldYieldPadToPointer({ type: 'wheel' }), true);
+    assert.equal(shouldYieldPadToPointer({ pointerType: 'mouse', movementX: 0, movementY: 0 }), false);
+    assert.equal(shouldYieldPadToPointer({ pointerType: 'touch', type: 'pointerdown', movementX: 4, movementY: 1 }), false);
   });
 });

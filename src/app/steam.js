@@ -9,6 +9,97 @@ export const ACH_KOTH_DEFEAT = 'ACH_KOTH_DEFEAT';
 export const ACH_LINUX_LAUNCH = 'ACH_LINUX_LAUNCH';
 export const ACH_FORGE_OPEN = 'ACH_FORGE_OPEN';
 
+export const OVERLAY_POLL_MS = 50;
+
+/** Chromium eats Shift+Tab — the page must open Friends itself. */
+export function isSteamOverlayHotkey(e) {
+  if (!e) return false;
+  if (!e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return false;
+  return e.key === 'Tab' || e.code === 'Tab';
+}
+
+/**
+ * Open Friends on Shift+Tab and park getGamepads while the overlay is up.
+ * Chromium's pad poll steals XInput and freezes the overlay.
+ */
+export function createSteamOverlayGuard(opts = {}) {
+  const steam = opts.steam ?? aetherSteam;
+  const root = opts.root ?? (typeof globalThis !== 'undefined' ? globalThis : {});
+  const win = opts.window ?? root.window ?? (typeof window !== 'undefined' ? window : null);
+  const startInterval = opts.interval ?? ((fn, ms) => (
+    typeof setInterval === 'function' ? setInterval(fn, ms) : 0
+  ));
+  const stopInterval = opts.clearInterval ?? ((id) => {
+    if (typeof clearInterval === 'function') clearInterval(id);
+  });
+  const pollMs = opts.pollMs ?? OVERLAY_POLL_MS;
+
+  let remote = false;
+  let latched = false;
+  let sawRemoteOn = false;
+  let timer = 0;
+
+  function isActive() {
+    return remote || latched;
+  }
+
+  function setRemote(on) {
+    const next = !!on;
+    if (next) {
+      sawRemoteOn = true;
+      latched = false;
+    } else if (sawRemoteOn) {
+      latched = false;
+    }
+    remote = next;
+    return remote;
+  }
+
+  function pollRemote() {
+    if (!steam || typeof steam.overlayActive !== 'function') return;
+    try {
+      const value = steam.overlayActive();
+      if (value && typeof value.then === 'function') {
+        value.then((on) => { setRemote(!!on); }).catch(() => {});
+        return;
+      }
+      setRemote(!!value);
+    } catch (_err) { /* bridge not up */ }
+  }
+
+  function onPointerDown() {
+    if (remote || !latched) return;
+    latched = false;
+  }
+
+  function onKeyDown(e) {
+    if (!isSteamOverlayHotkey(e)) return;
+    if (!(root.aetherDesktop || steam?.isAvailable?.())) return;
+    e.preventDefault?.();
+    e.stopImmediatePropagation?.();
+    latched = true;
+    steam?.openOverlay?.('Friends');
+  }
+
+  if (root.aetherDesktop) {
+    pollRemote();
+    timer = startInterval(pollRemote, pollMs);
+  }
+  win?.addEventListener?.('keydown', onKeyDown, true);
+  win?.addEventListener?.('pointerdown', onPointerDown, true);
+
+  return {
+    isActive,
+    setRemote,
+    dispose() {
+      if (timer) stopInterval(timer);
+      timer = 0;
+      win?.removeEventListener?.('keydown', onKeyDown, true);
+      win?.removeEventListener?.('pointerdown', onPointerDown, true);
+    },
+  };
+}
+
 /** Native Linux desktop shell (Steam worker) or a browser-like Linux UA. */
 export function isLinuxRuntime(info, root) {
   if (info && info.platform === 'linux') return true;
@@ -140,6 +231,25 @@ export function createAetherSteam(opts = {}) {
     openOverlay(dialog) {
       const s = steam();
       return s && s.openOverlay ? s.openOverlay(dialog) : false;
+    },
+
+    /** Steam overlay is up — Chromium must stop polling the pad. */
+    overlayActive() {
+      const s = steam();
+      return !!(s && s.overlayActive && s.overlayActive());
+    },
+
+    /** Steam Deck / Big Picture overlay keyboard. No-ops in the browser. */
+    showGamepadTextInput(body) {
+      const s = steam();
+      if (!s || !s.showGamepadTextInput) {
+        return Promise.resolve({ ok: false, submitted: false, text: '' });
+      }
+      return Promise.resolve(s.showGamepadTextInput(body || {})).then((result) => (
+        result && typeof result === 'object'
+          ? result
+          : { ok: false, submitted: false, text: '' }
+      )).catch(() => ({ ok: false, submitted: false, text: '' }));
     },
 
     /** First time the garden is playable (splash down / interactive). */

@@ -2,25 +2,66 @@
 // Sim owns the layout because rocks affect passability and trees affect speed.
 
 import * as fx from './fixed.js';
-import { TERRAIN, worldToTile, applyTerrainSlow, isTerrainSlowTile } from './field.js';
+import { TERRAIN, worldToTile, applyTerrainSlow, isTerrainSlowTile, tableRimDistAt } from './field.js';
 import { DEFAULT_SLOW_MUL } from './unitTypes.js';
 import { applyTableEdgeOccupancy, refreshTableTerrain } from './tableShape.js';
 import {
+  TREE_STAGE_GROVE_MAX,
   TREE_STAGE_MAX,
   TREE_STAGE_MIN,
+  TREE_STOCK_GROVE_MAX,
   TREE_WOOD_PER_STAGE,
   ensureTreeArrays,
   fellTreeAt,
   growTreeAt,
 } from './trees.js';
 
-export function defaultTreeStock(tx, tz, seed) {
+/** Grove-sized fade band from the table outline. Same radius as grove feed. */
+export const TREE_EDGE_FADE_TILES = 18;
+/** Wobble the fade contour so it does not read as a ruler-straight ring. */
+export const TREE_EDGE_SCATTER_TILES = 6;
+
+function smoother01(t) {
+  const x = t < 0 ? 0 : t > 1 ? 1 : t;
+  return x * x * x * (x * (x * 6 - 15) + 10);
+}
+
+/**
+ * Extra stages on top of the natural roll. Rim matches grove giants; the
+ * interior keeps the hash sizes. `scatter` (0–1) dithers the contour.
+ */
+export function treeEdgeBonusStages(distTiles, scatter = 0.5) {
+  const wobble = (scatter - 0.5) * (TREE_EDGE_SCATTER_TILES * 2);
+  const d = (distTiles | 0) + wobble;
+  if (d >= TREE_EDGE_FADE_TILES) return 0;
+  if (d <= 0) return TREE_STAGE_GROVE_MAX - TREE_STAGE_MAX;
+  const fade = smoother01(1 - d / TREE_EDGE_FADE_TILES);
+  return (TREE_STAGE_GROVE_MAX - TREE_STAGE_MAX) * fade;
+}
+
+function ditherExtraStages(extra, pick) {
+  if (extra <= 0) return 0;
+  const whole = extra | 0;
+  const frac = extra - whole;
+  return whole + (pick < frac ? 1 : 0);
+}
+
+export function defaultTreeStock(tx, tz, seed, field = null) {
   const h = sceneryTileHash(tx, tz, seed + 4000);
   // Bias toward the high end so big trees are common, saplings less so.
   const biased = 1 - (1 - h) * (1 - h);
   const span = TREE_STAGE_MAX - TREE_STAGE_MIN + 1;
   const stages = TREE_STAGE_MIN + Math.min(span - 1, Math.floor(biased * span));
-  return stages * TREE_WOOD_PER_STAGE;
+  let extra = 0;
+  if (field) {
+    const scatter = sceneryTileHash(tx, tz, seed + 4100);
+    const pick = sceneryTileHash(tx, tz, seed + 4200);
+    extra = ditherExtraStages(
+      treeEdgeBonusStages(tableRimDistAt(field, tx, tz), scatter),
+      pick,
+    );
+  }
+  return Math.min(TREE_STOCK_GROVE_MAX, (stages + extra) * TREE_WOOD_PER_STAGE);
 }
 
 export const SCENERY = {
@@ -432,7 +473,7 @@ export function populateScenery(field, world = null, reservedWorldPoints = [], o
       sceneryType[i] = SCENERY.TREE;
       slowMask[i] = 1;
       occupied[i] = 1;
-      field.treeStock[i] = defaultTreeStock(tx, tz, seed);
+      field.treeStock[i] = defaultTreeStock(tx, tz, seed, field);
     }
   }
 
@@ -806,7 +847,7 @@ export function paintSceneryBrush(field, tx, tz, kind, radius = 0, opts = {}) {
       }
       if (kind === SCENERY.TREE) {
         if (!canPaintTreeAt(field, x, z)) continue;
-        const stock = defaultTreeStock(x, z, field.seed);
+        const stock = defaultTreeStock(x, z, field.seed, field);
         if (growTreeAt(field, i, stock)) dirty.push({ x, z });
         continue;
       }

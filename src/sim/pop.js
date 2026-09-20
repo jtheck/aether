@@ -1,6 +1,6 @@
 // Village housing — villagers, engineers, and monks share one pop pool.
 // Soft cap: completed villages (+ a little from the agora) set the comfort
-// number. Training is never blocked; the free villager trickle just slows.
+// number. Training is never blocked; the villager trickle just slows.
 
 import { UNIT } from './unitTypes.js';
 

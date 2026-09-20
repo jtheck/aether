@@ -893,6 +893,72 @@ export function computeEdgeLock(field) {
   return lock;
 }
 
+function isOffTableTile(field, tx, tz) {
+  const { width, height, activeMask } = field;
+  if (tx < 0 || tz < 0 || tx >= width || tz >= height) return true;
+  return !!(activeMask && activeMask[tz * width + tx] === 0);
+}
+
+/** Silhouette outline — off-table + tiles that touch it. Ignores plinth stamps. */
+function isTableRimTile(field, tx, tz) {
+  if (isOffTableTile(field, tx, tz)) return true;
+  for (let dz = -1; dz <= 1; dz++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (dx === 0 && dz === 0) continue;
+      if (isOffTableTile(field, tx + dx, tz + dz)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Integer tiles inward from the playable table outline (not center / rail plinths).
+ * 0 on the rim; grows toward the interior.
+ */
+export function computeTableRimDist(field) {
+  const { width, height } = field;
+  const n = width * height;
+  const dist = new Uint16Array(n);
+  const q = new Int32Array(n);
+  let qh = 0;
+  let qt = 0;
+  for (let z = 0; z < height; z++) {
+    for (let x = 0; x < width; x++) {
+      const i = z * width + x;
+      if (isTableRimTile(field, x, z)) {
+        dist[i] = 0;
+        q[qt++] = i;
+      } else {
+        dist[i] = 0xffff;
+      }
+    }
+  }
+  while (qh < qt) {
+    const i = q[qh++];
+    const x = i % width;
+    const z = (i / width) | 0;
+    const nd = dist[i] + 1;
+    if (x > 0 && nd < dist[i - 1]) { dist[i - 1] = nd; q[qt++] = i - 1; }
+    if (x + 1 < width && nd < dist[i + 1]) { dist[i + 1] = nd; q[qt++] = i + 1; }
+    if (z > 0 && nd < dist[i - width]) { dist[i - width] = nd; q[qt++] = i - width; }
+    if (z + 1 < height && nd < dist[i + width]) { dist[i + width] = nd; q[qt++] = i + width; }
+  }
+  field.tableRimDist = dist;
+  return dist;
+}
+
+/** Cached rim distance for a tile. Rebuilds after the silhouette changes. */
+export function tableRimDistAt(field, tx, tz) {
+  if (!field) return 0xffff;
+  const { width, height } = field;
+  if (tx < 0 || tz < 0 || tx >= width || tz >= height) return 0;
+  let dist = field.tableRimDist;
+  if (!dist || dist.length !== width * height) {
+    dist = computeTableRimDist(field);
+  }
+  return dist[tz * width + tx];
+}
+
 /**
  * Bake display height: tile ripples everywhere, extra lift only away from the rails.
  * Does not re-normalize, so water/land keep their relative dish.

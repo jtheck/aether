@@ -41,16 +41,20 @@ const CLOSE_BETA = 1.2;
 /** Normalized zoom where the look-down trough bottoms (0 = closest). */
 export const CAMERA_CLOSE_SPAN = 0.32;
 const CLOSE_SPAN = CAMERA_CLOSE_SPAN;
-/** Lite / Babylon default — play and zoomed-out stay here. */
+/** Lite / Babylon default — farthest zoom sits here. */
 export const CAMERA_BASE_FOV = 0.8;
 /** Widest vertical FOV at min radius (~66°). */
 export const CAMERA_CLOSE_FOV = 1.15;
-/** Close-in zoom slice that ramps FOV. Last 8% of zoom, near the ground. */
+/** Close-in slice that still holds most of the FOV punch. */
 export const CAMERA_CLOSE_FOV_SPAN = 0.08;
 const CLOSE_FOV_SPAN = CAMERA_CLOSE_FOV_SPAN;
 /** Closest slice sits on max FOV — no ease-off / bounce at the zoom floor. */
 export const CAMERA_CLOSE_FOV_HOLD = 0.02;
 const CLOSE_FOV_HOLD = CAMERA_CLOSE_FOV_HOLD;
+/** FOV delta already in when that close slice begins. The long zoom only creeps. */
+export const CAMERA_FOV_LEAD = 0.22;
+const FOV_SPAN_T = 1 - (CLOSE_FOV_SPAN - CLOSE_FOV_HOLD) / (1 - CLOSE_FOV_HOLD);
+const FOV_POWER = Math.log(CAMERA_FOV_LEAD) / Math.log(Math.max(1e-6, FOV_SPAN_T));
 /** FOV tracks the zoom-derived target — tight enough to ride the close slice. */
 export const FOV_CHASE_RATE = 12;
 /** Catch-up cap (rad/s). Stops a slam from sprinting the last 20°. */
@@ -75,12 +79,6 @@ const ZOOM_EDGE_SPEED = 1.06;
 function smooth01(t) {
   const x = Math.max(0, Math.min(1, t));
   return x * x * (3 - 2 * x);
-}
-
-/** Perlin smootherstep — first and second derivatives die at 0 and 1. */
-function smoother01(t) {
-  const x = Math.max(0, Math.min(1, t));
-  return x * x * x * (x * (x * 6 - 15) + 10);
 }
 
 /** Zoom 0 = closest, 1 = farthest. */
@@ -130,15 +128,16 @@ function betaForNormalizedZoom(normalized) {
 }
 
 /**
- * Wider lens only in the last slice of zoom-in. Play / zoom-out stay at base.
+ * FOV is a pure function of zoom for the whole travel: 0 = closest / wide,
+ * 1 = farthest / base. Most of the widening waits until near the ground;
+ * the rest of the range only creeps so the punch is already connected.
  * @param {number} normalizedZoom 0 = closest, 1 = farthest
  */
 export function fovForNormalizedZoom(normalizedZoom) {
   const n = Math.max(0, Math.min(1, normalizedZoom));
-  if (n >= CLOSE_FOV_SPAN) return CAMERA_BASE_FOV;
   if (n <= CLOSE_FOV_HOLD) return CAMERA_CLOSE_FOV;
-  const t = 1 - (n - CLOSE_FOV_HOLD) / (CLOSE_FOV_SPAN - CLOSE_FOV_HOLD);
-  return CAMERA_BASE_FOV + smoother01(t) * (CAMERA_CLOSE_FOV - CAMERA_BASE_FOV);
+  const t = 1 - (n - CLOSE_FOV_HOLD) / (1 - CLOSE_FOV_HOLD);
+  return CAMERA_BASE_FOV + Math.pow(t, FOV_POWER) * (CAMERA_CLOSE_FOV - CAMERA_BASE_FOV);
 }
 
 /** Centered cosine: slowest at mid-zoom, barely quicker at either extreme. */

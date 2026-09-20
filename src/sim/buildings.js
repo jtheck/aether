@@ -60,7 +60,7 @@ export const BUILDING_SPAWN_LOCAL = Object.freeze({
 export const TRAIN_TICKS = 50;
 /** Research time per upgrade (~same as one unit; shares multi-track slowdown). */
 export const RESEARCH_TICKS = 50;
-/** Free villager from a completed village (~24s at 20 Hz). */
+/** Villager from a completed village (~24s at 20 Hz). Charges UNIT_COST. */
 export const VILLAGE_VILLAGER_TICKS = 480;
 
 /**
@@ -1027,7 +1027,7 @@ export function createBuilding(opts) {
     buildTime,
     /** @type {{ kind: 'unit' | 'upgrade', id: string, unitType?: number, count: number, progress: number }[]} */
     tracks: [],
-    /** Ticks accrued toward the next free village villager (0 while a site). */
+    /** Ticks accrued toward the next village villager (0 while a site). */
     villageSpawnAcc: 0,
     /** Last engineer stack on this drop-off, held until engBonusUntil. */
     engBonus: 0,

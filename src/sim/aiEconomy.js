@@ -34,6 +34,7 @@ import {
   MAX_RESOURCE_SLOTS,
   SILO_ATTACH_RANGE_F,
   SILO_SOURCE_TYPE,
+  ownerOverflowCap,
   ownerResourceCap,
   ownerSlotCount,
   unpairedSiloSource,
@@ -197,8 +198,9 @@ function collectVillagers(w, owner) {
 }
 
 /**
- * How full each bank is vs the unlocked cap. At 1.0 incoming yields are cut
- * to 25%. Higher difficulty starts spending before they kiss the cap.
+ * How full each bank is vs the overflow-tax line. At 1.0 incoming yields
+ * are cut to 25% (Scribes doubles that line). Higher difficulty starts
+ * spending before they kiss the cap.
  */
 export function bankPressure(w, owner, bank, difficulty) {
   const d = difficulty | 0;
@@ -212,7 +214,7 @@ export function bankPressure(w, owner, bank, difficulty) {
   const buildings = w.buildings;
   for (let i = 0; i < RESOURCE_KINDS.length; i++) {
     const k = RESOURCE_KINDS[i];
-    const cap = ownerResourceCap(buildings, owner, k);
+    const cap = ownerOverflowCap(w, owner, k);
     if (cap <= 0) continue;
     const amt = bank[k] | 0;
     if (amt >= cap) overflowing.push(k);

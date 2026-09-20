@@ -5,6 +5,7 @@
 // pair unlocks a–c. Stone and mineral share mines. Caps are soft: income past
 // the unlocked cap is cut to 25% (see overflowCredit) instead of being hard
 // rejected, so refunds and spends stay on the uncapped addResource path.
+// Scribes doubles that tax line only — icons and silo unlocks stay the same.
 //
 // An attached silo is also a haul drop-off and a satellite gather circle of
 // the source's work radius (see gather.js). Slot pairing stays unique; every
@@ -12,6 +13,7 @@
 
 import * as fx from './fixed.js';
 import { addResource, getResource, RESOURCE_KINDS } from './resources.js';
+import { ownerHasTech, TECH } from './tech.js';
 
 export const RESOURCE_SLOT_LABELS = Object.freeze([
   '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c',
@@ -311,6 +313,23 @@ export function ownerResourceCap(buildings, owner, kind, space = 'fixed') {
   return ownerSlotCount(buildings, owner, kind, space) * (SLOT_AMOUNT[kind] | 0);
 }
 
+/** Scribes stretches the overflow-tax line; slot icons stay put. */
+export const SCRIBES_OVERFLOW_MULT = 2;
+
+/**
+ * Soft cap used by gather income. Slot count / HUD fill still use
+ * `ownerResourceCap`.
+ * @param {object | null | undefined} w
+ * @param {number} owner
+ * @param {string} kind
+ * @param {'fixed' | 'world'} [space]
+ */
+export function ownerOverflowCap(w, owner, kind, space = 'fixed') {
+  const base = ownerResourceCap(w?.buildings, owner, kind, space);
+  if (!w || !ownerHasTech(w, owner, TECH.SCRIBES)) return base;
+  return base * SCRIBES_OVERFLOW_MULT;
+}
+
 /**
  * @param {number} amount
  * @param {number} unlocked
@@ -396,7 +415,7 @@ export function overflowCredit(amount, tick) {
 export function addGatherIncome(w, owner, kind, amount, asReturn = false) {
   const add = amount | 0;
   if (add <= 0) return 0;
-  const cap = ownerResourceCap(w.buildings, owner, kind, 'fixed');
+  const cap = ownerOverflowCap(w, owner, kind, 'fixed');
   const current = getResource(w, owner, kind);
   let credited = 0;
   if (current < cap) {

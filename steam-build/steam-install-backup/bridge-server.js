@@ -114,21 +114,6 @@ async function handle(req, res) {
     return sendJson(res, 200, { ok: !!started });
   }
 
-  if (req.method === 'GET' && req.url === '/steam/overlay-active') {
-    try {
-      var overlay = await steamClient.overlayActive();
-      return sendJson(res, 200, overlay || { ok: false, active: false });
-    } catch (err) {
-      return sendJson(res, 200, { ok: false, active: false, error: err.message });
-    }
-  }
-
-  if (req.method === 'POST' && req.url === '/steam/gamepad-text') {
-    var bodyText = await readBody(req);
-    var typed = await steamClient.showGamepadTextInput(bodyText || {});
-    return sendJson(res, 200, typed || { ok: false, submitted: false, text: '' });
-  }
-
   if (req.method === 'POST' && req.url === '/devtools/toggle') {
     if (onDevToolsToggle) onDevToolsToggle();
     return sendJson(res, 200, { ok: true });

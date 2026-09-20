@@ -1,18 +1,26 @@
 // Standard-mapping gamepad (Xbox 360 indices). Camera sticks + menu tab.
 // DualSense / Switch / Series pads work when the browser sets mapping === 'standard'.
-// Both sticks look/aim; L3 or R3 puts both sticks into rotate/zoom.
+// Both sticks look/aim. Opposite up/down yaws (LS up + RS down = right);
+// out/in (LS← RS→) zooms out, pinch zooms in. Both throws feed the speed.
+// A split hold damps look and homes the field target.
+// L3 or R3 puts both sticks into rotate/zoom.
 // An open agora / action radial steals the sticks as a pie menu (A / LT / RT
 // confirm, B back). Ghost-place keeps the aim: A / LT / RT stamp, B cancels,
-// bumpers yaw. Play reports onAim so a field cursor can roam the view, then
-// camera at the edges. LT / RT issue orders at that aim (A-move / force-move)
-// unless a menu, radial, or place overlay owns them. LB / RB paint-select
-// (brush lasso; both bumpers double the max radius).
+// bumpers yaw. Play reports onAim so a field cursor can roam the view
+// (stick moves, release parks), then camera at the edges. Mouse / pointer
+// use yields that mark until a new button or a fresh stick throw — a held
+// stick or worn rest must not steal the camera back. LT / RT issue orders
+// at that aim (A-move / force-move) unless a menu, radial, or place overlay
+// owns them. LB / RB paint-select (brush lasso; both bumpers double the
+// max radius).
 // D-pad U/R/D and Y/X/A are the left/right control-group stacks (tap / hold /
-// second-tap jump). B and D-pad Left cast at the aim.
+// second-tap jump). B and D-pad Left cast at the aim. Menu A on a text field
+// opens the in-game keyboard. On that keyboard, D-pad and both sticks walk the
+// key grid; LB / RB backspace.
 
-import { isCameraFollowTypingTarget } from './cameraFollow.js';
 import { leashLimit, settleCursorLeash, stepCursorLeash } from './gamepadCursor.js';
 import { radialStickPick } from './radialStick.js';
+import { OS_KBD_ID, closeOsKbd, listOsKbdKeys, osKbdRoot, pressOsKbdAction, stepOsKbdFocus } from '../osKbd.js';
 
 export const PAD = {
   A: 0,
@@ -34,6 +42,20 @@ export const PAD = {
 };
 
 export const STICK_DEADZONE = 0.18;
+/** After a live throw, stay “held” down to this mag so a worn rest does not recenter. */
+export const STICK_DEADZONE_LEAVE = 0.1;
+/** Remapped |axis| — about a half throw after the look deadzone. */
+export const STICK_SPLIT_HALF = 0.28;
+/** Speed at the half gate; late throw opens up (squared). */
+export const STICK_SPLIT_MIN = 0.32;
+/** Yaw rad/frame once both sticks oppose on Y. */
+export const STICK_SPLIT_YAW = 0.09;
+/** Fraction of camera radius per frame once both sticks oppose on X. */
+export const STICK_SPLIT_ZOOM = 0.024;
+/** Look/aim scale while a split yaw or zoom is live. */
+export const STICK_SPLIT_LOOK = 0.18;
+/** Remain per frame while a split homes the field target. */
+export const STICK_SPLIT_HOME = 0.82;
 export const STICK_ROT_DEADZONE = 0.08;
 export const STICK_NAV_DEADZONE = 0.55;
 export const NAV_INITIAL_MS = 320;
@@ -61,6 +83,42 @@ export function deadzone(v, dz = STICK_DEADZONE) {
   const a = Math.abs(v);
   if (a < dz) return 0;
   return Math.sign(v) * (a - dz) / (1 - dz);
+}
+
+/** @param {number} [x] @param {number} [y] */
+export function stickMagnitude(x, y) {
+  const ax = Number.isFinite(x) ? x : 0;
+  const ay = Number.isFinite(y) ? y : 0;
+  return Math.hypot(ax, ay);
+}
+
+/**
+ * Hysteresis around the look deadzone. Enter is the usual hole; leave is lower
+ * so a sloppy spring-back does not count as a release.
+ * @param {number} mag
+ * @param {boolean} wasLive
+ * @param {number} [enter]
+ * @param {number} [leave]
+ */
+export function stickHeld(mag, wasLive, enter = STICK_DEADZONE, leave = STICK_DEADZONE_LEAVE) {
+  return (Number.isFinite(mag) ? mag : 0) > (wasLive ? leave : enter);
+}
+
+/**
+ * Circular look deadzone. Per-axis gating zeros a slow diagonal (each axis
+ * under the hole, hypot still live) and yanks the leash home mid-draw.
+ * @param {number} x
+ * @param {number} y
+ * @param {number} [dz]
+ */
+export function lookStickPair(x, y, dz = STICK_DEADZONE) {
+  const ax = Number.isFinite(x) ? x : 0;
+  const ay = Number.isFinite(y) ? y : 0;
+  const mag = Math.hypot(ax, ay);
+  if (!(mag > dz)) return { x: 0, y: 0, mag, live: false };
+  const t = (mag - dz) / (1 - dz);
+  const scale = t / mag;
+  return { x: ax * scale, y: ay * scale, mag, live: true };
 }
 
 /**
@@ -127,6 +185,45 @@ export function playOrderIntent(edges) {
     attackMove: !!edges?.[PAD.LT],
     forceMove: !!edges?.[PAD.RT],
   };
+}
+
+/** Tabbed / minimized. Do not use hasFocus — a pad cannot steal the document back. */
+export function padShouldYield(doc) {
+  return !!doc?.hidden;
+}
+
+/**
+ * Stick throw, trigger pull, or a fresh button press — not a connected idle pad.
+ * @param {{ lx?: number, ly?: number, rx?: number, ry?: number, lt?: number, rt?: number } | null | undefined} read
+ * @param {boolean[] | null | undefined} edges
+ */
+export function padHasActivity(read, edges) {
+  const n = edges?.length ?? 0;
+  for (let i = 0; i < n; i++) if (edges[i]) return true;
+  if (lookStickPair(read?.lx, read?.ly).live || lookStickPair(read?.rx, read?.ry).live) {
+    return true;
+  }
+  return (read?.lt ?? 0) > 0.5 || (read?.rt ?? 0) > 0.5;
+}
+
+/** After a mouse yield, ignore a sloppy rest; a real throw still reclaims. */
+export const STICK_RECLAIM = 0.4;
+
+/**
+ * Button press always takes the pad back. A stick / trigger only does after
+ * the throw has recentered — the hold that was live when the mouse moved
+ * must not keep driving the camera.
+ * @param {{ lx?: number, ly?: number, rx?: number, ry?: number, lt?: number, rt?: number } | null | undefined} read
+ * @param {boolean[] | null | undefined} edges
+ * @param {boolean} stickArmed
+ */
+export function padCanReclaimFromPointer(read, edges, stickArmed) {
+  const n = edges?.length ?? 0;
+  for (let i = 0; i < n; i++) if (edges[i]) return true;
+  if (!stickArmed) return false;
+  if (lookStickPair(read?.lx, read?.ly, STICK_RECLAIM).live) return true;
+  if (lookStickPair(read?.rx, read?.ry, STICK_RECLAIM).live) return true;
+  return (read?.lt ?? 0) > 0.5 || (read?.rt ?? 0) > 0.5;
 }
 
 /**
@@ -210,29 +307,73 @@ export function playSelectBoth(buttons) {
 }
 
 /**
- * Both sticks look/aim. L3 or R3 puts both sticks into rotate/zoom.
- * Menu tab stays on physical left.
+ * Both sticks live, opposite on one axis, each about half out → −1..1.
+ * Speed uses both throws (mean |axis|), squared from the half gate to full.
+ * `dir` is sign(b − a).
+ * @param {number} a
+ * @param {number} b
+ * @param {boolean} live
+ */
+export function stickSplitOppose(a, b, live) {
+  if (!live) return 0;
+  const ax = Number.isFinite(a) ? a : 0;
+  const bx = Number.isFinite(b) ? b : 0;
+  if (ax * bx >= 0) return 0;
+  const aa = Math.abs(ax);
+  const bb = Math.abs(bx);
+  if (aa < STICK_SPLIT_HALF || bb < STICK_SPLIT_HALF) return 0;
+  const dir = Math.sign(bx - ax);
+  if (!dir) return 0;
+  const t = ((aa + bb) * 0.5 - STICK_SPLIT_HALF) / (1 - STICK_SPLIT_HALF);
+  const u = t > 1 ? 1 : t < 0 ? 0 : t;
+  return dir * (STICK_SPLIT_MIN + (1 - STICK_SPLIT_MIN) * u * u);
+}
+
+/**
+ * Opposite up/down → −1..1 yaw. LS up + RS down is turn right.
+ * @param {{ y?: number, live?: boolean } | null | undefined} left
+ * @param {{ y?: number, live?: boolean } | null | undefined} right
+ */
+export function stickSplitRotate(left, right) {
+  return stickSplitOppose(left?.y, right?.y, !!(left?.live && right?.live));
+}
+
+/**
+ * Opposite out/in → −1..1 zoom. Open (LS← RS→) is zoom out.
+ * @param {{ x?: number, live?: boolean } | null | undefined} left
+ * @param {{ x?: number, live?: boolean } | null | undefined} right
+ */
+export function stickSplitZoom(left, right) {
+  return stickSplitOppose(left?.x, right?.x, !!(left?.live && right?.live));
+}
+
+/**
+ * Both sticks look/aim. Opposite Y yaws; opposite X zooms.
+ * L3 or R3 puts both sticks into rotate/zoom. Menu tab stays on physical left.
  * @param {{ lx?: number, ly?: number, rx?: number, ry?: number, buttons?: boolean[] }} read
  */
 export function stickPlayAxes(read) {
   const buttons = read?.buttons ?? [];
   const look = !(buttons[PAD.L3] || buttons[PAD.R3]);
   if (look) {
-    const lx = deadzone(read?.lx);
-    const ly = deadzone(read?.ly);
-    const rx = deadzone(read?.rx);
-    const ry = deadzone(read?.ry);
+    const left = lookStickPair(read?.lx, read?.ly);
+    const right = lookStickPair(read?.rx, read?.ry);
+    const splitYaw = stickSplitRotate(left, right);
+    const splitZoom = stickSplitZoom(left, right);
+    const lookScale = splitYaw || splitZoom ? STICK_SPLIT_LOOK : 1;
     return {
-      lookX: lx + rx,
-      lookY: ly + ry,
+      lookX: (left.x + right.x) * lookScale,
+      lookY: (left.y + right.y) * lookScale,
       rotX: 0,
       rotY: 0,
-      bothLook: !!( (lx || ly) && (rx || ry) ),
+      splitYaw,
+      splitZoom,
+      bothLook: !!(left.live && right.live),
     };
   }
   const left = rotStickPair(read?.lx, read?.ly);
   const right = rotStickPair(read?.rx, read?.ry);
-  return { lookX: 0, lookY: 0, rotX: left.x + right.x, rotY: left.y + right.y, bothLook: false };
+  return { lookX: 0, lookY: 0, rotX: left.x + right.x, rotY: left.y + right.y, splitYaw: 0, splitZoom: 0, bothLook: false };
 }
 
 export function canAdjustMenuEl(el) {
@@ -276,6 +417,40 @@ export function menuNavIntent(read, focused) {
 }
 
 /**
+ * Keyboard grid: D-pad and either stick. Dominant axis wins so diagonals do not
+ * skip a cell. Bumpers are backspace (see osKbdBackspaceHeld).
+ */
+export function osKbdNavIntent(read) {
+  const b = read?.buttons ?? [];
+  let dx = 0;
+  let dy = 0;
+  if (b[PAD.LEFT]) dx = -1;
+  if (b[PAD.RIGHT]) dx = 1;
+  if (b[PAD.UP]) dy = -1;
+  if (b[PAD.DOWN]) dy = 1;
+  const lx = deadzone(read?.lx ?? 0, STICK_NAV_DEADZONE);
+  const ly = deadzone(read?.ly ?? 0, STICK_NAV_DEADZONE);
+  const rx = deadzone(read?.rx ?? 0, STICK_NAV_DEADZONE);
+  const ry = deadzone(read?.ry ?? 0, STICK_NAV_DEADZONE);
+  const x = lx + rx;
+  const y = ly + ry;
+  if (Math.abs(y) >= Math.abs(x) && y) dy = y > 0 ? 1 : -1;
+  else if (x) dx = x > 0 ? 1 : -1;
+  return { dx, dy };
+}
+
+export function osKbdNavCode(dx, dy) {
+  if (dy) return dy > 0 ? 2 : -2;
+  if (dx) return dx > 0 ? 1 : -1;
+  return 0;
+}
+
+export function osKbdBackspaceHeld(read) {
+  const b = read?.buttons ?? [];
+  return !!(b[PAD.LB] || b[PAD.RB]);
+}
+
+/**
  * @param {number} dir
  * @param {number} prevDir
  * @param {number} t
@@ -313,6 +488,8 @@ export function listMenuFocusables(root) {
 
 export function activeMenuRoot(doc) {
   if (!doc?.getElementById) return null;
+  const kbd = osKbdRoot(doc) ?? doc.getElementById(OS_KBD_ID);
+  if (kbd && !kbd.hidden) return kbd;
   const side = doc.getElementById('side_menu');
   if (side?.classList?.contains('is-open')) return side;
   const lobby = doc.getElementById('match-lobby-overlay');
@@ -337,10 +514,24 @@ function cycleSelect(el, dir, Ev) {
   return true;
 }
 
+/** Text fields that A should edit (Steam / system keyboard), not click. */
+export function isMenuTextField(el) {
+  if (!el) return false;
+  if (el.tagName === 'TEXTAREA') return true;
+  if (el.tagName !== 'INPUT') return false;
+  const t = String(el.type || 'text').toLowerCase();
+  return t === 'text' || t === 'search' || t === 'url' || t === 'email' || t === 'tel' || t === 'number';
+}
+
 export function activateMenuEl(el, Ev = globalThis.Event) {
   if (!el) return false;
   if (el.tagName === 'SELECT') return cycleSelect(el, 1, Ev);
-  if (el.tagName === 'INPUT' && (el.type === 'range' || el.type === 'text')) return false;
+  if (el.tagName === 'INPUT' && el.type === 'range') return false;
+  if (isMenuTextField(el)) {
+    el.focus?.();
+    el.select?.();
+    return true;
+  }
   el.click?.();
   return true;
 }
@@ -377,10 +568,22 @@ export function stepMenuFocus(items, current, dir) {
   return next ?? null;
 }
 
-function applyLookRotateZoom(camera, camLx, camLy, rx, ry) {
+function applyLookRotateZoom(camera, camLx, camLy, rx, ry, splitYaw, splitZoom) {
   if (!camera) return;
   if (camLx || camLy) camera.nudgeLookPan?.(-camLx || 0, -camLy || 0);
   if (rx) camera.nudgeRotate?.(-rx * ROT_SENS);
+  // Immediate — a “little” nudge dies under the camera rotate/zoom floors.
+  if (splitYaw) {
+    const yaw = -splitYaw * STICK_SPLIT_YAW;
+    if (typeof camera.rotateBy === 'function') camera.rotateBy(yaw);
+    else camera.nudgeRotate?.(yaw);
+  }
+  if (splitZoom) {
+    const r = camera.getRadius?.() ?? camera.radius ?? 80;
+    const z = splitZoom * STICK_SPLIT_ZOOM * (Number(r) > 1 ? r : 80);
+    if (typeof camera.zoomBy === 'function') camera.zoomBy(z);
+    else camera.nudgeZoom?.(z);
+  }
   if (ry) camera.nudgeZoom?.(ry * ZOOM_SENS);
 }
 
@@ -421,7 +624,9 @@ function showMenuMain(doc) {
  * @param {boolean} [opts.autoStart]
  * @param {(read: object) => void} [opts.applyPlay] — default RTS nudge* camera
  * @param {() => void} [opts.onIdle]
- * @param {(on: boolean) => void} [opts.onAim] — field cursor: true while a pad can play
+ * @param {(on: boolean) => void} [opts.onAim] — field cursor: true while a pad can play and has not yielded to the mouse
+ * @param {() => void} [opts.onActivity] — stick / trigger / button press (hide OS cursor)
+ * @param {(el: Element) => void} [opts.onTextEdit] — A on a text field (in-game keyboard)
  * @param {(ox: number, oy: number) => void} [opts.onCursor] — leash offset from view center
  * @param {() => { width?: number, height?: number } | null} [opts.getViewport]
  * @param {() => void} [opts.onAttackMove] — LT press
@@ -443,6 +648,7 @@ function showMenuMain(doc) {
  * @param {(pick: object | null) => void} [opts.onRadialHover]
  * @param {(pick: object) => void} [opts.onRadialConfirm]
  * @param {() => void} [opts.onRadialCancel]
+ * @param {() => boolean} [opts.yieldPad] — extra park (page hidden is already covered)
  * @param {boolean | (() => boolean)} [opts.placing] — ghost / rally place overlay
  * @param {() => void} [opts.onPlaceAim] — after sticks, walk the ghost to the aim
  * @param {() => void} [opts.onPlaceConfirm] — A / LT / RT
@@ -455,7 +661,7 @@ export function createGamepadAdapter(opts = {}) {
   const active = opts.active;
   const menuExclusive = opts.menuExclusive !== false;
   const stickMenuNav = opts.stickMenuNav !== false;
-  const isTyping = opts.isTyping ?? isCameraFollowTypingTarget;
+  const isTyping = opts.isTyping ?? isMenuTextField;
   const root = opts.root ?? (typeof document !== 'undefined' ? document : null);
   const resolveMenuRoot = opts.menuRoot ?? (() => activeMenuRoot(root));
   const listFocusables = opts.listFocusables ?? listMenuFocusables;
@@ -469,6 +675,12 @@ export function createGamepadAdapter(opts = {}) {
   const caf = opts.caf ?? ((id) => {
     if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(id);
   });
+  const startInterval = opts.interval ?? ((fn, ms) => (
+    typeof setInterval === 'function' ? setInterval(fn, ms) : 0
+  ));
+  const stopInterval = opts.clearInterval ?? ((id) => {
+    if (typeof clearInterval === 'function') clearInterval(id);
+  });
 
   let prevButtons = [];
   let prevTab = 0;
@@ -478,10 +690,15 @@ export function createGamepadAdapter(opts = {}) {
   let adjHeldAt = 0;
   let adjLastAt = 0;
   let rafId = 0;
+  let resumeWatch = 0;
+  let parked = false;
   let aimOx = 0;
   let aimOy = 0;
   let padSelecting = false;
   let padGroupId = null;
+  let radialHeldRing = null;
+  let pointerYielded = false;
+  let stickReclaimArmed = false;
 
   function resetEdges() {
     prevButtons = [];
@@ -516,8 +733,18 @@ export function createGamepadAdapter(opts = {}) {
     opts.onAim?.(!!on);
   }
 
+  function yieldToPointer() {
+    stickReclaimArmed = false;
+    if (pointerYielded) return;
+    pointerYielded = true;
+    cancelPadSelect();
+    cancelPadGroup();
+    aim(false);
+  }
+
   function applyPlayDefault(read) {
-    const { lookX, lookY, rotX, rotY, bothLook } = stickPlayAxes(read);
+    const { lookX, lookY, rotX, rotY, splitYaw, splitZoom, bothLook } = stickPlayAxes(read);
+    const splitting = !!(splitYaw || splitZoom);
     const vp = opts.getViewport?.();
     const w = vp?.width ?? 0;
     const h = vp?.height ?? 0;
@@ -525,25 +752,56 @@ export function createGamepadAdapter(opts = {}) {
     let camLy = lookY;
     if (w > 8 && h > 8) {
       const leash = leashLimit(w, h);
-      if (lookX || lookY) {
+      if (splitting) {
+        const home = settleCursorLeash(aimOx, aimOy, STICK_SPLIT_HOME);
+        aimOx = home.ox;
+        aimOy = home.oy;
+      } else if (lookX || lookY) {
         const step = stepCursorLeash(aimOx, aimOy, lookX, lookY, leash);
         aimOx = step.ox;
         aimOy = step.oy;
         camLx = bothLook ? lookX : step.camLx;
         camLy = bothLook ? lookY : step.camLy;
-      } else if (aimOx || aimOy) {
-        const settled = settleCursorLeash(aimOx, aimOy);
-        aimOx = settled.ox;
-        aimOy = settled.oy;
+      } else {
+        aimOx = Math.max(-leash.x, Math.min(leash.x, aimOx));
+        aimOy = Math.max(-leash.y, Math.min(leash.y, aimOy));
       }
       opts.onCursor?.(aimOx, aimOy);
     }
-    applyLookRotateZoom(camera, camLx, camLy, rotX, rotY);
+    applyLookRotateZoom(camera, camLx, camLy, rotX, rotY, splitYaw, splitZoom);
   }
 
   const applyPlay = opts.applyPlay ?? applyPlayDefault;
 
   function handleMenu(menuRoot, read, edges, t) {
+    if (menuRoot?.id === OS_KBD_ID) {
+      if (edges[PAD.START] || edges[PAD.BACK] || edges[PAD.B]) {
+        closeOsKbd(root);
+        return;
+      }
+      const nav = osKbdNavIntent(read);
+      const navDir = osKbdNavCode(nav.dx, nav.dy);
+      const tabRep = heldRepeat(navDir, prevTab, t, tabHeldAt, tabLastAt);
+      prevTab = navDir;
+      tabHeldAt = tabRep.heldAt;
+      tabLastAt = tabRep.lastAt;
+      if (tabRep.fire) stepOsKbdFocus(menuRoot, nav.dx, nav.dy);
+
+      const back = osKbdBackspaceHeld(read) ? 1 : 0;
+      const backRep = heldRepeat(back, prevAdj, t, adjHeldAt, adjLastAt);
+      prevAdj = back;
+      adjHeldAt = backRep.heldAt;
+      adjLastAt = backRep.lastAt;
+      if (backRep.fire) pressOsKbdAction(root, 'back');
+
+      if (playConfirmIntent(edges)) {
+        const keys = listOsKbdKeys(menuRoot);
+        const cur = keys.includes(root?.activeElement) ? root.activeElement : null;
+        if (!cur) keys[0]?.focus?.();
+        else activateMenuEl(cur);
+      }
+      return;
+    }
     if (edges[PAD.START] || edges[PAD.BACK]) {
       blurInside(menuRoot, root);
       clickMenuToggle(root, false);
@@ -582,11 +840,64 @@ export function createGamepadAdapter(opts = {}) {
       const after = listFocusables(menuRoot);
       const cur = after.includes(root?.activeElement) ? root.activeElement : null;
       if (!cur) stepMenuFocus(after, null, 1);
-      else activateMenuEl(cur);
+      else {
+        activateMenuEl(cur);
+        if (isMenuTextField(cur)) opts.onTextEdit?.(cur);
+      }
     }
   }
 
+  function bindLost() {
+    win?.addEventListener?.('gamepaddisconnected', onLost);
+    win?.addEventListener?.('blur', onLost);
+    doc?.addEventListener?.('visibilitychange', onLost);
+  }
+
+  function unbindLost() {
+    win?.removeEventListener?.('gamepaddisconnected', onLost);
+    win?.removeEventListener?.('blur', onLost);
+    doc?.removeEventListener?.('visibilitychange', onLost);
+  }
+
+  function shouldPark() {
+    return !!(opts.yieldPad?.() || padShouldYield(root));
+  }
+
+  function parkPad() {
+    parked = true;
+    if (rafId) {
+      caf(rafId);
+      rafId = 0;
+    }
+    unbindLost();
+    resetEdges();
+    cancelPadSelect();
+    cancelPadGroup();
+    aim(false);
+    opts.onIdle?.();
+    if (!resumeWatch) {
+      resumeWatch = startInterval(() => {
+        if (!shouldPark()) unparkPad();
+      }, 100);
+    }
+  }
+
+  function unparkPad() {
+    if (resumeWatch) {
+      stopInterval(resumeWatch);
+      resumeWatch = 0;
+    }
+    if (!parked && rafId) return;
+    parked = false;
+    bindLost();
+    if (opts.autoStart !== false && !rafId) loop();
+  }
+
   function tick() {
+    if (shouldPark()) {
+      parkPad();
+      return;
+    }
     const pad = pickStandardGamepad(getGamepads());
     if (!pad) {
       resetEdges();
@@ -600,6 +911,25 @@ export function createGamepadAdapter(opts = {}) {
     const edges = buttonEdges(read.buttons, prevButtons);
     const released = buttonReleased(read.buttons, prevButtons);
     prevButtons = read.buttons;
+    if (pointerYielded) {
+      if (!padHasActivity(read, [])) stickReclaimArmed = true;
+      if (!padCanReclaimFromPointer(read, edges, stickReclaimArmed)) {
+        const t = now();
+        const menuRoot = resolveMenuRoot(root);
+        if (menuRoot) {
+          handleMenu(menuRoot, read, edges, t);
+          if (menuExclusive) {
+            cancelPadSelect();
+            cancelPadGroup();
+            aim(false);
+          }
+        }
+        return;
+      }
+      pointerYielded = false;
+      stickReclaimArmed = false;
+    }
+    if (padHasActivity(read, edges)) opts.onActivity?.();
     const t = now();
     const menuRoot = resolveMenuRoot(root);
 
@@ -646,12 +976,14 @@ export function createGamepadAdapter(opts = {}) {
       cancelPadSelect();
       cancelPadGroup();
       aim(false);
-      const pick = radialStickPick(read, opts.getRadialTargets?.() ?? null);
+      const pick = radialStickPick(read, opts.getRadialTargets?.() ?? null, radialHeldRing);
+      radialHeldRing = pick?.ring ?? null;
       opts.onRadialHover?.(pick);
       if (edges[PAD.B]) opts.onRadialCancel?.();
       else if (playConfirmIntent(edges) && pick) opts.onRadialConfirm?.(pick);
       return;
     }
+    radialHeldRing = null;
 
     const placing = typeof opts.placing === 'function' ? !!opts.placing() : !!opts.placing;
     if (placing) {
@@ -697,9 +1029,16 @@ export function createGamepadAdapter(opts = {}) {
   }
 
   function loop() {
+    if (parked) {
+      rafId = 0;
+      return;
+    }
     rafId = raf(loop);
     tick();
   }
+
+  const win = opts.window ?? (typeof window !== 'undefined' ? window : null);
+  const doc = root && typeof root.addEventListener === 'function' ? root : null;
 
   function onLost() {
     resetEdges();
@@ -709,21 +1048,22 @@ export function createGamepadAdapter(opts = {}) {
   }
 
   if (opts.autoStart !== false) loop();
-
-  const win = opts.window ?? (typeof window !== 'undefined' ? window : null);
-  const doc = root && typeof root.addEventListener === 'function' ? root : null;
-  win?.addEventListener?.('gamepaddisconnected', onLost);
-  win?.addEventListener?.('blur', onLost);
-  doc?.addEventListener?.('visibilitychange', onLost);
+  if (!parked) bindLost();
 
   return {
     tick,
+    park: parkPad,
+    unpark: unparkPad,
+    yieldToPointer,
     dispose() {
+      parked = true;
       if (rafId) caf(rafId);
       rafId = 0;
-      win?.removeEventListener?.('gamepaddisconnected', onLost);
-      win?.removeEventListener?.('blur', onLost);
-      doc?.removeEventListener?.('visibilitychange', onLost);
+      if (resumeWatch) {
+        stopInterval(resumeWatch);
+        resumeWatch = 0;
+      }
+      unbindLost();
       resetEdges();
       cancelPadSelect();
       cancelPadGroup();

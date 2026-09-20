@@ -263,6 +263,13 @@
       background: #161b24; color: inherit; border: 1px solid #2a3140; border-radius: 3px;
       font: inherit; text-align: left; cursor: pointer;
     }
+    #os_kbd { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 10010; width: min(640px, 96vw); padding: 10px; background: #0c0f14; border: 1px solid #2a3140; border-radius: 6px; }
+    #os_kbd[hidden] { display: none; }
+    #os_kbd .os-kbd-preview { min-height: 1.2em; margin: 0 0 8px; padding: 4px 6px; background: #161b24; border: 1px solid #2a3140; border-radius: 3px; }
+    #os_kbd .os-kbd-row { display: flex; gap: 4px; justify-content: center; margin: 0 0 4px; }
+    #os_kbd button { min-width: 28px; padding: 8px 6px; background: #161b24; color: inherit; border: 1px solid #2a3140; border-radius: 3px; font: inherit; cursor: pointer; }
+    #os_kbd button.is-wide { flex: 1; }
+    #os_kbd button:hover, #os_kbd button:focus, #os_kbd button:focus-visible, #os_kbd button.is-on { border-color: aqua; color: aqua; outline: none; }
     #side_menu .btn:hover, #side_menu .btn:focus-visible { border-color: aqua; color: aqua; outline: none; }
     #side_menu .btn:active { border-color: darkmagenta; color: darkmagenta; }
     #side_menu .btn:disabled { opacity: .45; cursor: default; border-color: #2a3140; color: inherit; }
@@ -601,7 +608,7 @@
       </div>
       <div class="row">
         <label for="name_input">Player name</label>
-        <input type="text" id="name_input" maxlength="24" spellcheck="false" autocomplete="off">
+        <input type="text" id="name_input" maxlength="24" spellcheck="false" autocomplete="off" inputmode="text" enterkeyhint="done">
       </div>
       <div class="row">
         <label for="color_picker">Colour</label>

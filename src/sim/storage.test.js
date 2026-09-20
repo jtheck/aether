@@ -15,8 +15,10 @@ import {
   filledSlotCount,
   overflowCredit,
   overflowHintLabel,
+  ownerOverflowCap,
   ownerResourceCap,
   ownerSlotCount,
+  ownerStorageView,
   siloIsAttached,
   silosAttachedTo,
   liveSiloSources,
@@ -26,6 +28,7 @@ import {
   takeStorageOverflow,
   unpairedSiloSource,
 } from './storage.js';
+import { grantTech } from './tech.js';
 
 function worldWith(buildings) {
   const w = createWorld(1);
@@ -230,5 +233,55 @@ describe('slot fill and blink', () => {
     assert.equal(ev?.length, 1);
     assert.equal(ev[0].kind, 'food');
     assert.equal(ev[0].hint, null);
+  });
+});
+
+describe('scribes overflow line', () => {
+  it('doubles the tax line without unlocking slots', () => {
+    const w = worldWith([]);
+    const cap = ownerResourceCap(w.buildings, 0, 'wood');
+    assert.equal(ownerOverflowCap(w, 0, 'wood'), cap);
+    assert.equal(grantTech(w, 0, 'scribes'), true);
+    assert.equal(ownerOverflowCap(w, 0, 'wood'), cap * 2);
+    assert.equal(ownerSlotCount(w.buildings, 0, 'wood'), BASE_SLOTS);
+    assert.equal(ownerResourceCap(w.buildings, 0, 'wood'), cap);
+    const view = ownerStorageView(w.buildings, 0, { wood: cap + 10 }, 'fixed');
+    assert.equal(view.wood.slots, BASE_SLOTS);
+    assert.equal(view.wood.cap, cap);
+    assert.equal(view.wood.filled, BASE_SLOTS);
+  });
+
+  it('banks a full load once the icons are full', () => {
+    const w = worldWith([]);
+    grantStartingResources(w, 0, { wood: 0, stone: 0, mineral: 0, food: 0 });
+    grantTech(w, 0, 'scribes');
+    const cap = ownerResourceCap(w.buildings, 0, 'wood');
+    addResource(w, 0, 'wood', cap);
+    w.tick = 0;
+    assert.equal(addGatherIncome(w, 0, 'wood', 10, true), 10);
+    assert.equal(getResource(w, 0, 'wood'), cap + 10);
+    assert.equal(takeStorageOverflow(w), null);
+  });
+
+  it('taxes and flashes only past the doubled line', () => {
+    const w = worldWith([]);
+    grantStartingResources(w, 0, { wood: 0, stone: 0, mineral: 0, food: 0 });
+    grantTech(w, 0, 'scribes');
+    const tax = ownerOverflowCap(w, 0, 'wood');
+    addResource(w, 0, 'wood', tax);
+    w.tick = 0;
+    const got = addGatherIncome(w, 0, 'wood', 10, true);
+    assert.equal(got, overflowCredit(10, 0));
+    const ev = takeStorageOverflow(w);
+    assert.equal(ev?.length, 1);
+    assert.equal(ev[0].hint, '7');
+  });
+
+  it('still stacks with a silo pair', () => {
+    const w = worldWith([camp(0, 0), silo(8, 0)]);
+    grantTech(w, 0, 'scribes');
+    const slots = ownerResourceCap(w.buildings, 0, 'wood');
+    assert.equal(slots, 9 * SLOT_AMOUNT.wood);
+    assert.equal(ownerOverflowCap(w, 0, 'wood'), slots * 2);
   });
 });

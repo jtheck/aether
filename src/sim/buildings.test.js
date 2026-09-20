@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorld as _createWorld, spawn, ORDER } from './world.js';
 import { applyCommands, CMD } from './commands.js';
-import { grantStartingResources } from './resources.js';
+import { addResource, getResource, grantStartingResources } from './resources.js';
 import {
   buildField,
   isPassable,
@@ -42,7 +42,7 @@ import { menuGateState } from './menuGate.js';
 import { POP_PER_VILLAGE } from './pop.js';
 import { buildingProductionSystem } from './buildingProduction.js';
 import { createAgoras } from './agora.js';
-import { UNIT } from './unitTypes.js';
+import { UNIT, getUnitCost } from './unitTypes.js';
 import { grantTech } from './tech.js';
 import { planPathBudget } from './path.js';
 import { step } from './step.js';
@@ -892,7 +892,7 @@ describe('village and workshop menus', () => {
     assert.ok(!BUILDING_MENUS.workshop.units.includes('engineer'));
   });
 
-  it('trickles a free villager from a completed village', () => {
+  it('trickles a villager from a completed village and charges the train cost', () => {
     const w = createWorld(25);
     w.buildings = [];
     const field = buildField(25, { width: 64, height: 64 });
@@ -908,12 +908,42 @@ describe('village and workshop menus', () => {
     ]);
     finishAllBuildings(w);
     const before = w.count;
+    const foodBefore = getResource(w, 0, 'food');
+    const cost = getUnitCost(UNIT.VILLAGER);
     for (let i = 0; i < VILLAGE_VILLAGER_TICKS - 1; i++) buildingProductionSystem(w, field);
     assert.equal(w.count, before, 'no villager before the interval');
     buildingProductionSystem(w, field);
-    assert.equal(w.count, before + 1, 'village spawns a free villager');
+    assert.equal(w.count, before + 1, 'village spawns a villager');
     assert.equal(w.type[before], UNIT.VILLAGER);
     assert.equal(w.owner[before], 0);
+    assert.equal(getResource(w, 0, 'food'), foodBefore - (cost.food | 0), 'trickle charges food');
+  });
+
+  it('skips a trickle when the owner cannot afford the villager', () => {
+    const w = createWorld(28);
+    w.buildings = [];
+    const field = buildField(28, { width: 64, height: 64 });
+    clearClaim(field, 'village', 32, 32);
+    applyCommands(w, field, [
+      {
+        type: CMD.PLACE_BUILDING,
+        playerId: 0,
+        buildingType: 'village',
+        tx: fx.fromFloat(32),
+        ty: fx.fromFloat(32),
+      },
+    ]);
+    finishAllBuildings(w);
+    addResource(w, 0, 'food', -getResource(w, 0, 'food'));
+    const before = w.count;
+    for (let i = 0; i < VILLAGE_VILLAGER_TICKS; i++) buildingProductionSystem(w, field);
+    assert.equal(w.count, before, 'unaffordable trickle is skipped');
+    assert.equal(getResource(w, 0, 'food'), 0, 'broke trickle spends nothing');
+    assert.equal(w.buildings[0].villageSpawnAcc, 0, 'timer resets after a miss');
+    addResource(w, 0, 'food', getUnitCost(UNIT.VILLAGER).food | 0);
+    for (let i = 0; i < VILLAGE_VILLAGER_TICKS; i++) buildingProductionSystem(w, field);
+    assert.equal(w.count, before + 1, 'next interval spawns once funded');
+    assert.equal(getResource(w, 0, 'food'), 0, 'funded trickle spends the villager cost');
   });
 
   it('rejects training villagers or workshop engineers', () => {

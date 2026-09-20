@@ -19,22 +19,11 @@ function openWorkshopExternal(dialog) {
 
 let workerReady = false;
 let lastInfo = { available: false, error: null };
-let lastOverlayActive = false;
 let bootstrapStarted = false;
 
 function shouldEnableSteam() {
   if (process.env.AETHER_STEAM === '0') return false;
   return true;
-}
-
-let overlayPollTimer = null;
-function pollOverlayActive() {
-  if (!shouldEnableSteam() || overlayPollTimer) return;
-  overlayPollTimer = setInterval(function () {
-    steamClient.overlayActive().then(function (row) {
-      lastOverlayActive = !!(row && row.active);
-    }).catch(function () {});
-  }, 50);
 }
 
 function bootstrap() {
@@ -59,7 +48,6 @@ function bootstrap() {
       workerReady = !!lastInfo.available;
       if (workerReady) {
         console.log('[steam-build] Steam worker ready');
-        pollOverlayActive();
       } else if (lastInfo.error) {
         console.warn('[steam-build] Steam worker unavailable:', lastInfo.error);
       }
@@ -82,7 +70,6 @@ function bootstrap() {
         workerReady = true;
         clearInterval(pollTimer);
         console.log('[steam-build] Steam worker ready');
-        pollOverlayActive();
       }
     }).catch(function () {});
   }, 500);
@@ -177,19 +164,6 @@ function createBridgeApi() {
       if (!shouldEnableSteam()) return false;
       steamClient.downloadWorkshopItem(id, highPriority).catch(function () {});
       return true;
-    },
-
-    showGamepadTextInput: function (body) {
-      if (!shouldEnableSteam()) {
-        return Promise.resolve({ ok: false, submitted: false, text: '' });
-      }
-      return steamClient.showGamepadTextInput(body || {}).catch(function () {
-        return { ok: false, submitted: false, text: '' };
-      });
-    },
-
-    overlayActive: function () {
-      return !!lastOverlayActive;
     },
   };
 }

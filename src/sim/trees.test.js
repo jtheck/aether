@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import * as fx from './fixed.js';
 import { buildField, createField, TILE_SIZE_F, WORLD_HALF_F } from './field.js';
-import { SCENERY, applyRockSlowBorder, populateScenery } from './scenery.js';
+import { SCENERY, TREE_EDGE_FADE_TILES, TREE_EDGE_SCATTER_TILES, applyRockSlowBorder, populateScenery } from './scenery.js';
 import { createWorld, spawn } from './world.js';
 import { UNIT } from './unitTypes.js';
 import { PROJECTILE } from './projectileTypes.js';
@@ -178,19 +178,27 @@ function populateAssignsVariedStock() {
   let trees = 0;
   let min = 255;
   let max = 0;
+  let interiorMax = 0;
+  const { width, height } = field;
   for (let i = 0; i < field.sceneryType.length; i++) {
     if (field.sceneryType[i] !== SCENERY.TREE) continue;
     trees++;
     const s = field.treeStock[i];
     if (s < min) min = s;
     if (s > max) max = s;
+    const tx = i % width;
+    const tz = (i / width) | 0;
+    const rim = Math.min(tx, tz, width - 1 - tx, height - 1 - tz);
+    if (rim >= TREE_EDGE_FADE_TILES + TREE_EDGE_SCATTER_TILES) interiorMax = Math.max(interiorMax, s);
     assert.ok(s % TREE_WOOD_PER_STAGE === 0);
     assert.ok(s >= TREE_WOOD_PER_STAGE * 2);
-    assert.ok(s <= TREE_WOOD_PER_STAGE * 6);
+    assert.ok(s <= TREE_WOOD_PER_STAGE * TREE_STAGE_GROVE_MAX);
   }
   assert.ok(trees > 100, 'expected a forest of trees');
   assert.ok(min < max, 'stocks should vary across trees');
   assert.ok(max >= TREE_WOOD_PER_STAGE * 5, 'upper sizes should appear');
+  assert.ok(interiorMax <= TREE_WOOD_PER_STAGE * TREE_STAGE_MAX, 'interior stays at the natural cap');
+  assert.ok(max > interiorMax, 'table-edge trees outgrow the interior');
 }
 
 function dirtyUpdatesPublish() {

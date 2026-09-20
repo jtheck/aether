@@ -563,6 +563,7 @@ export function applyTableSilhouette(field, opts = {}) {
 
   stampTableBlocks(field, edge, shape);
   field.tableEdge = edge;
+  field.tableRimDist = null;
   if (field.detailHeight) composeHeightMap(field);
   refreshTableTerrain(field);
   return field;

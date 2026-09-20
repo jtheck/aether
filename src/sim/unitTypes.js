@@ -360,8 +360,10 @@ export function getUnitDef(typeId) {
 
 /**
  * Training cost per unit (wood/stone/mineral/food). Charged on queue, refunded
- * on cancel (see buildings.js). Values follow the v1 template — food-heavy for
- * living units, wood/stone for mechanical, with a mineral touch on the flyer.
+ * on cancel (see buildings.js). Village trickle spends the villager cost the
+ * same way (unaffordable intervals are skipped). Values follow the v1 template
+ * — food-heavy for living units, wood/stone for mechanical, with a mineral
+ * touch on the flyer.
  * @type {Readonly<Record<number, Record<string, number>>>}
  */
 export const UNIT_COST = Object.freeze({

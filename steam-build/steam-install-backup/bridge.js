@@ -93,16 +93,6 @@
         postJson('/steam/workshop/download', { id: String(id || ''), highPriority: !!highPriority });
         return true;
       },
-      showGamepadTextInput: function (body) {
-        return postJson('/steam/gamepad-text', body || {}).then(function (data) {
-          return data && typeof data === 'object'
-            ? data
-            : { ok: false, submitted: false, text: '' };
-        });
-      },
-      overlayActive: function () {
-        return false;
-      },
     };
   }
 
@@ -130,12 +120,6 @@
   }
 
   document.addEventListener('keydown', function (e) {
-    if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'Tab' || e.code === 'Tab')) {
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      steamApi.openOverlay('Friends');
-      return;
-    }
     if (e.key === 'F12') {
       e.preventDefault();
       e.stopImmediatePropagation();

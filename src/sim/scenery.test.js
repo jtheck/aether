@@ -5,9 +5,12 @@ import * as fx from './fixed.js';
 import {
   SCENERY,
   ROCK_STAGE_MAX,
+  TREE_EDGE_FADE_TILES,
+  TREE_EDGE_SCATTER_TILES,
   TREE_PAINT_CLEARANCE,
   applyRockOccupancyFromStock,
   damageRock,
+  defaultTreeStock,
   paintSceneryBrush,
   placeRockAt,
   populateScenery,
@@ -16,7 +19,16 @@ import {
   rockStageFromStock,
   rockYield,
   takeRockUpdates,
+  treeEdgeBonusStages,
 } from './scenery.js';
+import {
+  TREE_STAGE_GROVE_MAX,
+  TREE_STAGE_MAX,
+  TREE_STOCK_GROVE_MAX,
+  TREE_STOCK_NATURAL_MAX,
+  TREE_WOOD_PER_STAGE,
+} from './trees.js';
+import { applyTableSilhouette } from './tableShape.js';
 
 function tileAt(field, tx, tz) {
   return tz * field.width + tx;
@@ -114,7 +126,8 @@ snowFootprintShrinksWithStock();
 damageRockPublishesAndShrinks();
 paintBrushRespectsFootprints();
 archerAndApcKeepMoreTreeSpeed();
-console.log('scenery.test.js: ok (rock yield + stages + collision shrink + paint spacing)');
+edgeTreeFadeMatchesGrove();
+console.log('scenery.test.js: ok (rock yield + stages + collision shrink + paint spacing + edge trees)');
 
 function blankLand() {
   const field = createField(1);
@@ -188,4 +201,53 @@ function dirtyTilesInDisc(radius) {
     }
   }
   return n;
+}
+
+function edgeTreeFadeMatchesGrove() {
+  const extraMax = TREE_STAGE_GROVE_MAX - TREE_STAGE_MAX;
+  assert.equal(treeEdgeBonusStages(0), extraMax);
+  assert.equal(treeEdgeBonusStages(TREE_EDGE_FADE_TILES), 0);
+  assert.equal(treeEdgeBonusStages(TREE_EDGE_FADE_TILES + 4), 0);
+  assert.ok(treeEdgeBonusStages(4) > treeEdgeBonusStages(12), 'bonus fades inward');
+  assert.ok(
+    treeEdgeBonusStages(14, 0) > treeEdgeBonusStages(14, 1),
+    'scatter breaks the contour',
+  );
+
+  const seed = 0x51de;
+  const field = createField(seed, { width: 80, height: 80 });
+  field.pass.fill(1);
+  field.terrainTypes.fill(TERRAIN.GRASS);
+  applyTableSilhouette(field, { suppressCenterBlock: true });
+
+  const midTx = 40;
+  const midTz = 40;
+  const inlandPastScatter = TREE_EDGE_FADE_TILES + TREE_EDGE_SCATTER_TILES;
+  const interior = defaultTreeStock(midTx, midTz, seed);
+  assert.equal(defaultTreeStock(midTx, midTz, seed, field), interior, 'deep interior keeps the hash roll');
+  assert.ok(interior <= TREE_STOCK_NATURAL_MAX);
+
+  const rim = defaultTreeStock(2, midTz, seed, field);
+  const rimHash = defaultTreeStock(2, midTz, seed);
+  assert.ok(rim > rimHash, 'rim adds grove stages on the same roll');
+  assert.ok(rim > TREE_STOCK_NATURAL_MAX, 'rim reaches grove giants');
+  assert.ok(rim <= TREE_STOCK_GROVE_MAX);
+  assert.equal(rim % TREE_WOOD_PER_STAGE, 0);
+
+  populateScenery(field, null, []);
+  let interiorMax = 0;
+  let rimMax = 0;
+  for (let tz = 0; tz < field.height; tz++) {
+    for (let tx = 0; tx < field.width; tx++) {
+      const i = tz * field.width + tx;
+      if (field.sceneryType[i] !== SCENERY.TREE) continue;
+      const stock = field.treeStock[i];
+      const d = Math.min(tx, tz, field.width - 1 - tx, field.height - 1 - tz);
+      if (d >= inlandPastScatter) interiorMax = Math.max(interiorMax, stock);
+      if (d <= 2) rimMax = Math.max(rimMax, stock);
+    }
+  }
+  assert.ok(interiorMax > 0 && rimMax > 0, 'seeded populate plants both bands');
+  assert.ok(interiorMax <= TREE_STOCK_NATURAL_MAX, 'deep interior populate stays natural');
+  assert.ok(rimMax > interiorMax, 'populate rim outgrows the interior');
 }

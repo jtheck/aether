@@ -4,8 +4,6 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const workshopMaps = require('./workshopMaps');
-const gamepadTextInput = require('./gamepadTextInput');
-const overlayActive = require('./overlayActive').createOverlayActive();
 
 const PORT = parseInt(process.env.AETHER_STEAM_PORT || '9786', 10);
 const HOST = '127.0.0.1';
@@ -78,7 +76,6 @@ function initSteam() {
 
     available = true;
     startCallbacks();
-    try { overlayActive.attach(sdk); } catch (_overlay) { /* callback optional */ }
     console.log('[steam-worker] ready appId', appId);
     if (process.platform === 'linux') {
       Promise.resolve(sdk.achievements.unlockAchievement('ACH_LINUX_LAUNCH')).catch(function (err) {
@@ -248,7 +245,6 @@ async function handle(req, res) {
       var panel = map[dialog.toLowerCase()];
       if (!panel) return sendJson(res, 200, { ok: false });
       sdk.overlay.activateGameOverlay(panel);
-      overlayActive.setActive(true);
       return sendJson(res, 200, { ok: true });
     } catch (err) {
       return sendJson(res, 200, { ok: false, error: err.message });
@@ -298,29 +294,6 @@ async function handle(req, res) {
       return sendJson(res, 200, published);
     } catch (err) {
       return sendJson(res, 200, { ok: false, error: err.message });
-    }
-  }
-
-  if (req.method === 'GET' && urlPath === '/overlay-active') {
-    return sendJson(res, 200, { ok: true, active: overlayActive.isActive() });
-  }
-
-  if (req.method === 'POST' && urlPath === '/gamepad-text') {
-    if (!available && !initSteam()) {
-      return sendJson(res, 200, { ok: false, submitted: false, text: '' });
-    }
-    try {
-      var bodyText = await readBody(req);
-      overlayActive.setActive(true);
-      var typed = await gamepadTextInput.showAndWait(sdk.utils, bodyText, {
-        runCallbacks: function () {
-          if (sdk && sdk.isInitialized && sdk.isInitialized()) sdk.runCallbacks();
-        },
-      });
-      overlayActive.setActive(false);
-      return sendJson(res, 200, typed);
-    } catch (err) {
-      return sendJson(res, 200, { ok: false, submitted: false, text: '', error: err.message });
     }
   }
 

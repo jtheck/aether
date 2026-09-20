@@ -2,7 +2,9 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   RADIAL_STICK_INNER,
+  RADIAL_STICK_INNER_LEAVE,
   RADIAL_STICK_OUTER,
+  RADIAL_STICK_OUTER_LEAVE,
   angAbsDelta,
   nearestRadialSlice,
   radialStickPick,
@@ -85,5 +87,27 @@ describe('radialStickPick', () => {
 
   it('clears when both sticks are centered', () => {
     assert.equal(radialStickPick({ lx: 0, ly: 0, rx: 0, ry: 0 }, agora), null);
+  });
+
+  it('keeps the aimed ring when throw slips below the enter gate', () => {
+    const full = RADIAL_STICK_OUTER + 0.05;
+    const outerSlip = RADIAL_STICK_OUTER_LEAVE + 0.02;
+    const aimed = radialStickPick({ lx: 0, ly: -full, rx: 0, ry: 0 }, agora);
+    assert.equal(aimed.ring, 'outer');
+    assert.equal(aimed.id, 'house');
+    const held = radialStickPick({ lx: 0, ly: -outerSlip, rx: 0, ry: 0 }, agora, aimed.ring);
+    assert.equal(held.ring, 'outer');
+    assert.equal(held.id, 'house');
+    const fresh = radialStickPick({ lx: 0, ly: -outerSlip, rx: 0, ry: 0 }, agora);
+    assert.equal(fresh.kind, 'category');
+    assert.equal(fresh.id, 'basic');
+
+    const half = RADIAL_STICK_INNER + 0.02;
+    const innerSlip = RADIAL_STICK_INNER_LEAVE + 0.02;
+    const inner = radialStickPick({ lx: 0, ly: -half, rx: 0, ry: 0 }, agora);
+    assert.equal(inner.ring, 'inner');
+    const innerHeld = radialStickPick({ lx: 0, ly: -innerSlip, rx: 0, ry: 0 }, agora, inner.ring);
+    assert.equal(innerHeld.ring, 'inner');
+    assert.equal(radialStickPick({ lx: 0, ly: -innerSlip, rx: 0, ry: 0 }, agora), null);
   });
 });

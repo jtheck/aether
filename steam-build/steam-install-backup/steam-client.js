@@ -209,22 +209,6 @@ module.exports = {
       }).then(function (r) { return !!(r && r.ok); });
     }).catch(function () { return false; });
   },
-  showGamepadTextInput: function (body) {
-    return ensureWorkerProcess().then(function (ok) {
-      if (!ok) return { ok: false, submitted: false, text: '' };
-      return httpJson('POST', '/gamepad-text', body || {});
-    }).catch(function (err) {
-      return { ok: false, submitted: false, text: '', error: err.message };
-    });
-  },
-  overlayActive: function () {
-    return ensureWorkerProcess().then(function (ok) {
-      if (!ok) return { ok: false, active: false };
-      return httpJson('GET', '/overlay-active');
-    }).catch(function () {
-      return { ok: false, active: false };
-    });
-  },
   shutdown: function () {
     var pid = worker && worker.pid;
     worker = null;

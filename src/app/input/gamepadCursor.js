@@ -1,4 +1,5 @@
-// Gamepad field cursor — roam the view, then ease-pan toward the screen edges.
+// Gamepad field cursor — relative roam (stick moves, release parks), then
+// ease-pan toward the screen edges.
 
 /**
  * Client pixel at the canvas center (same point screenToGround uses).
@@ -16,11 +17,62 @@ export function canvasCenterClient(rect) {
 }
 
 /**
- * Show the field mark while a standard pad can play. Menu / splash hide it.
- * @param {{ connected?: boolean, playActive?: boolean, menuOpen?: boolean } | null | undefined} state
+ * Show the field mark while a standard pad can play. Menu / splash / a
+ * mouse-preferred yield hide it.
+ * @param {{ connected?: boolean, playActive?: boolean, menuOpen?: boolean, pointerYielded?: boolean } | null | undefined} state
  */
 export function gamepadCursorVisible(state) {
-  return !!(state?.connected && state.playActive !== false && !state.menuOpen);
+  return !!(state?.connected && state.playActive !== false && !state.menuOpen && !state.pointerYielded);
+}
+
+export const PAD_HIDE_CURSOR_CLASS = 'pad-hide-cursor';
+const PAD_HIDE_CURSOR_STYLE_ID = 'pad-hide-cursor-style';
+const PAD_HIDE_CURSOR_CSS =
+  `html.${PAD_HIDE_CURSOR_CLASS},html.${PAD_HIDE_CURSOR_CLASS} *{cursor:none!important}`;
+
+/**
+ * Hide the OS pointer while the pad is driving. Mouse move should clear this.
+ * @param {boolean} on
+ * @param {Document | null | undefined} [doc]
+ */
+export function setPadOsCursorHidden(on, doc) {
+  const root = doc?.documentElement;
+  if (!root?.classList) return false;
+  if (on) {
+    const head = doc.head;
+    if (head && typeof doc.getElementById === 'function' && !doc.getElementById(PAD_HIDE_CURSOR_STYLE_ID)) {
+      const style = doc.createElement('style');
+      style.id = PAD_HIDE_CURSOR_STYLE_ID;
+      style.textContent = PAD_HIDE_CURSOR_CSS;
+      head.appendChild(style);
+    }
+    root.classList.add(PAD_HIDE_CURSOR_CLASS);
+    return true;
+  }
+  root.classList.remove(PAD_HIDE_CURSOR_CLASS);
+  return false;
+}
+
+/** Mouse motion reveals the OS pointer; touch / zero-delta moves do not. */
+export function shouldRevealOsCursor(e) {
+  const type = e?.pointerType;
+  if (type && type !== 'mouse') return false;
+  const dx = e?.movementX;
+  const dy = e?.movementY;
+  if (dx == null && dy == null) return true;
+  return !!(dx || dy);
+}
+
+/**
+ * Mouse click, wheel, or motion — hide the field mark. Touch / pen leave it.
+ * @param {{ pointerType?: string, type?: string, movementX?: number, movementY?: number } | null | undefined} e
+ */
+export function shouldYieldPadToPointer(e) {
+  const type = e?.pointerType;
+  if (type && type !== 'mouse') return false;
+  const ev = e?.type;
+  if (ev === 'pointerdown' || ev === 'mousedown' || ev === 'wheel') return true;
+  return shouldRevealOsCursor(e);
 }
 
 /** CSS px from the canvas edge where the cursor stops. */
@@ -34,8 +86,8 @@ export const CURSOR_PAN_EDGE_FRAC = 0.52;
 export const CURSOR_LEASH_MIN = 72;
 /** Canvas px per full-stick frame. */
 export const CURSOR_GAIN = 20;
-/** Remain each settle frame after the stick recenters. */
-export const CURSOR_SETTLE = 0.32;
+/** Remain each settle frame — used only if something explicitly homes the leash. */
+export const CURSOR_SETTLE = 0.72;
 export const CURSOR_SETTLE_EPS = 1.5;
 
 /**
@@ -150,7 +202,7 @@ export function stepCursorLeash(ox, oy, lx, ly, leash, gain = CURSOR_GAIN) {
 }
 
 /**
- * Snap the leash home after the stick recenters.
+ * Ease the leash home. Play parks on recenter; this is for an explicit reset.
  * @param {number} ox
  * @param {number} oy
  * @param {number} [remain]

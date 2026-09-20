@@ -1,7 +1,5 @@
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
 const http = require('http');
 const steam = require('./steam');
 
@@ -9,7 +7,6 @@ module.exports.steamBridge = steam.createBridgeApi();
 
 const DEFAULT_URL = 'https://aether.garden';
 const WINDOW_TITLE = 'Æther.Garden';
-const URL_FILE = 'aether.url';
 const ALLOWED_ORIGINS = new Set([
   'https://aether.garden',
   'https://www.aether.garden',
@@ -19,22 +16,8 @@ function isLocalDevOrigin(origin) {
   return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
 }
 
-function readUrlFile() {
-  const dirs = [];
-  try { dirs.push(path.dirname(process.execPath)); } catch (_err) { /* ignore */ }
-  try { dirs.push(process.cwd()); } catch (_err2) { /* ignore */ }
-  for (let i = 0; i < dirs.length; i++) {
-    const file = path.join(dirs[i], URL_FILE);
-    try {
-      const raw = fs.readFileSync(file, 'utf8').trim();
-      if (raw) return raw;
-    } catch (_read) { /* missing */ }
-  }
-  return '';
-}
-
 function resolveStartUrl() {
-  const override = process.env.AETHER_URL || readUrlFile();
+  const override = process.env.AETHER_URL;
   if (!override) return DEFAULT_URL;
   try {
     const parsed = new URL(override);
@@ -181,39 +164,19 @@ function teardownAndQuit() {
   try { nw.App.quit(); } catch (_e3) { /* ignore */ }
 }
 
-function currentHref(win) {
-  try {
-    return win.window && win.window.location ? String(win.window.location.href || '') : '';
-  } catch (_err) {
-    return '';
-  }
-}
-
-function applyStartUrl(win) {
-  const startUrl = resolveStartUrl();
-  if (!startUrl || currentHref(win) === startUrl) return;
-  try {
-    if (typeof win.navigate === 'function') {
-      win.navigate(startUrl);
-      return;
-    }
-  } catch (_nav) { /* fall through */ }
-  try {
-    if (win.window && win.window.location) win.window.location.href = startUrl;
-  } catch (_loc) { /* first paint */ }
-}
-
 function wireWindow(win) {
   if (!win || win._aetherWired) return;
   win._aetherWired = true;
 
-  applyStartUrl(win);
+  const startUrl = resolveStartUrl();
+  if (win.window && win.window.location && win.window.location.href !== startUrl) {
+    try {
+      win.navigate(startUrl);
+    } catch (_nav) { /* first load may already match package.json main */ }
+  }
 
   lockTitle(win);
-  win.on('loaded', function () {
-    applyStartUrl(win);
-    lockTitle(win);
-  });
+  win.on('loaded', function () { lockTitle(win); });
   if (!win._aetherTitleTimer) {
     win._aetherTitleTimer = setInterval(function () { lockTitle(win); }, 1000);
   }

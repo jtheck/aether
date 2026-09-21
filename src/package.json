@@ -15,6 +15,7 @@
     "test:repair": "node sim/repair.test.js",
     "test:gather": "node sim/gather.test.js",
     "test:economy": "node sim/economy.test.js",
+    "test:foodUpkeep": "node --test sim/foodUpkeep.test.js",
     "test:aiEconomy": "node sim/aiEconomy.test.js",
     "test:ai": "node sim/ai.test.js",
     "test:aiStrategy": "node sim/aiStrategy.test.js",

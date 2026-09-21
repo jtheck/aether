@@ -1,12 +1,14 @@
 // Standard-mapping gamepad (Xbox 360 indices). Camera sticks + menu tab.
 // DualSense / Switch / Series pads work when the browser sets mapping === 'standard'.
 // Both sticks look/aim. Opposite up/down yaws (LS up + RS down = right);
-// out/in (LS← RS→) zooms out, pinch zooms in. Both throws feed the speed.
+// pinch (LS→ RS←) zooms out, open (LS← RS→) zooms in. Both throws feed the speed.
 // A split hold damps look and homes the field target.
-// L3 or R3 puts both sticks into rotate/zoom.
-// An open agora / action radial steals the sticks as a pie menu (A / LT / RT
-// confirm, B back). Ghost-place keeps the aim: A / LT / RT stamp, B cancels,
-// bumpers yaw. Play reports onAim so a field cursor can roam the view
+// L3 or R3 puts both sticks into rotate/zoom. HUD menus keep those gestures:
+// pan only when both sticks are in; a lone stick still tabs. An open agora /
+// action radial aims with a lone stick (A / LT / RT confirm, B back); both
+// sticks still pan. Ghost-place: aim walks the ghost, A / LT / RT stamp, B
+// cancels, LB / RB + stick drag yaws (not bumper taps). Play reports onAim
+// so a field cursor can roam the view
 // (stick moves, release parks), then camera at the edges. Mouse / pointer
 // use yields that mark until a new button or a fresh stick throw — a held
 // stick or worn rest must not steal the camera back. LT / RT issue orders
@@ -283,16 +285,13 @@ export function playConfirmIntent(edges) {
 }
 
 /**
- * Ghost-place: confirm / cancel / yaw. Both bumpers in one frame is a no-op.
+ * Ghost-place: confirm / cancel. Yaw is LB/RB + stick drag, not a bumper tap.
  * @param {boolean[]} edges
  */
 export function placePadIntent(edges) {
-  const lb = !!edges?.[PAD.LB];
-  const rb = !!edges?.[PAD.RB];
   return {
     confirm: playConfirmIntent(edges),
     cancel: !!edges?.[PAD.B],
-    rotate: lb === rb ? 0 : rb ? 1 : -1,
   };
 }
 
@@ -339,17 +338,37 @@ export function stickSplitRotate(left, right) {
 }
 
 /**
- * Opposite out/in → −1..1 zoom. Open (LS← RS→) is zoom out.
+ * Opposite out/in → −1..1 zoom. Pinch (LS→ RS←) is zoom out.
  * @param {{ x?: number, live?: boolean } | null | undefined} left
  * @param {{ x?: number, live?: boolean } | null | undefined} right
  */
 export function stickSplitZoom(left, right) {
-  return stickSplitOppose(left?.x, right?.x, !!(left?.live && right?.live));
+  return 0 - stickSplitOppose(left?.x, right?.x, !!(left?.live && right?.live));
+}
+
+/**
+ * Split yaw/zoom, L3/R3, or both sticks looking the same way. A lone stick
+ * still tabs / aims the pie; both engaged is camera.
+ * @param {{ lx?: number, ly?: number, rx?: number, ry?: number, buttons?: boolean[] } | null | undefined} read
+ */
+export function stickCameraGesture(read) {
+  const buttons = read?.buttons ?? [];
+  if (buttons[PAD.L3] || buttons[PAD.R3]) return true;
+  const left = lookStickPair(read?.lx, read?.ly);
+  const right = lookStickPair(read?.rx, read?.ry);
+  if (stickSplitRotate(left, right) || stickSplitZoom(left, right)) return true;
+  return !!(left.live && right.live && left.x * right.x + left.y * right.y > 0);
+}
+
+/** Both-stick camera leaves the pie; a lone throw still aims with either stick. */
+export function radialMenuRead(read) {
+  if (!stickCameraGesture(read)) return read;
+  return { ...read, lx: 0, ly: 0, rx: 0, ry: 0 };
 }
 
 /**
  * Both sticks look/aim. Opposite Y yaws; opposite X zooms.
- * L3 or R3 puts both sticks into rotate/zoom. Menu tab stays on physical left.
+ * L3 or R3 puts both sticks into rotate/zoom. A lone stick still tabs.
  * @param {{ lx?: number, ly?: number, rx?: number, ry?: number, buttons?: boolean[] }} read
  */
 export function stickPlayAxes(read) {
@@ -383,8 +402,8 @@ export function canAdjustMenuEl(el) {
 }
 
 /**
- * D-pad + left stick → tab / slider step. Horizontal becomes adjust on range/select.
- * @param {{ lx: number, ly: number, buttons: boolean[] }} read
+ * D-pad + either stick → tab / slider step. Horizontal becomes adjust on range/select.
+ * @param {{ lx: number, ly: number, rx?: number, ry?: number, buttons: boolean[] }} read
  * @param {Element | null} focused
  */
 export function menuNavIntent(read, focused) {
@@ -404,10 +423,14 @@ export function menuNavIntent(read, focused) {
   }
   const lx = deadzone(read?.lx ?? 0, STICK_NAV_DEADZONE);
   const ly = deadzone(read?.ly ?? 0, STICK_NAV_DEADZONE);
-  if (Math.abs(ly) >= Math.abs(lx) && ly) tab = ly > 0 ? 1 : -1;
-  else if (lx) {
-    if (horizAdjust) adj = lx > 0 ? 1 : -1;
-    else tab = lx > 0 ? 1 : -1;
+  const rx = deadzone(read?.rx ?? 0, STICK_NAV_DEADZONE);
+  const ry = deadzone(read?.ry ?? 0, STICK_NAV_DEADZONE);
+  const x = lx + rx;
+  const y = ly + ry;
+  if (Math.abs(y) >= Math.abs(x) && y) tab = y > 0 ? 1 : -1;
+  else if (x) {
+    if (horizAdjust) adj = x > 0 ? 1 : -1;
+    else tab = x > 0 ? 1 : -1;
   }
   if (horizAdjust) {
     if (b[PAD.LB]) adj = -1;
@@ -641,8 +664,8 @@ function showMenuMain(doc) {
  * @param {() => void} [opts.onSelectCancel] — menu / idle / disconnect mid-drag
  * @param {(doc: Document) => Element | null} [opts.menuRoot]
  * @param {(root: Element | null) => Element[]} [opts.listFocusables]
- * @param {boolean} [opts.menuExclusive] — when true (default), sticks stop while a menu is open
- * @param {boolean} [opts.stickMenuNav] — left stick tabs (default true)
+ * @param {boolean} [opts.menuExclusive] — when true (default), play orders stop while a menu is open; camera gestures still apply
+ * @param {boolean} [opts.stickMenuNav] — a lone stick tabs (default true)
  * @param {boolean | (() => boolean)} [opts.radialOpen] — world pie menu (agora / action)
  * @param {() => { inner?: object[], outer?: object[] } | null} [opts.getRadialTargets]
  * @param {(pick: object | null) => void} [opts.onRadialHover]
@@ -653,7 +676,7 @@ function showMenuMain(doc) {
  * @param {() => void} [opts.onPlaceAim] — after sticks, walk the ghost to the aim
  * @param {() => void} [opts.onPlaceConfirm] — A / LT / RT
  * @param {() => void} [opts.onPlaceCancel] — B
- * @param {(dir: number) => void} [opts.onPlaceRotate] — bumper edge, ±1 snap
+ * @param {() => void} [opts.onPlaceRotateDrag] — LB/RB held, aim yaws the ghost
  * @param {(el: Element | null) => boolean} [opts.isTyping]
  */
 export function createGamepadAdapter(opts = {}) {
@@ -771,6 +794,28 @@ export function createGamepadAdapter(opts = {}) {
     applyLookRotateZoom(camera, camLx, camLy, rotX, rotY, splitYaw, splitZoom);
   }
 
+  /** HUD / radial: rotate + zoom stay live. Pan only when both sticks are in. */
+  function applyMenuCamera(read) {
+    if (!(active?.() ?? true)) return;
+    const { lookX, lookY, rotX, rotY, splitYaw, splitZoom, bothLook } = stickPlayAxes(read);
+    applyLookRotateZoom(
+      camera,
+      bothLook ? lookX : 0,
+      bothLook ? lookY : 0,
+      rotX,
+      rotY,
+      splitYaw,
+      splitZoom,
+    );
+  }
+
+  function holdMenu(menuRoot, read) {
+    cancelPadSelect();
+    cancelPadGroup();
+    aim(false);
+    if (menuRoot?.id !== OS_KBD_ID) applyMenuCamera(read);
+  }
+
   const applyPlay = opts.applyPlay ?? applyPlayDefault;
 
   function handleMenu(menuRoot, read, edges, t) {
@@ -822,7 +867,9 @@ export function createGamepadAdapter(opts = {}) {
 
     const items = listFocusables(menuRoot);
     const focused = items.includes(root?.activeElement) ? root.activeElement : null;
-    const navRead = stickMenuNav ? read : { ...read, lx: 0, ly: 0 };
+    const navRead = stickMenuNav && !stickCameraGesture(read)
+      ? read
+      : { ...read, lx: 0, ly: 0, rx: 0, ry: 0 };
     const intent = menuNavIntent(navRead, focused);
     const tabRep = heldRepeat(intent.tab, prevTab, t, tabHeldAt, tabLastAt);
     const adjRep = heldRepeat(intent.adj, prevAdj, t, adjHeldAt, adjLastAt);
@@ -911,18 +958,17 @@ export function createGamepadAdapter(opts = {}) {
     const edges = buttonEdges(read.buttons, prevButtons);
     const released = buttonReleased(read.buttons, prevButtons);
     prevButtons = read.buttons;
+    const placingNow = typeof opts.placing === 'function' ? !!opts.placing() : !!opts.placing;
     if (pointerYielded) {
       if (!padHasActivity(read, [])) stickReclaimArmed = true;
-      if (!padCanReclaimFromPointer(read, edges, stickReclaimArmed)) {
+      // Ghost-place keeps the pad — a mouse pick of the building type used
+      // to swallow aim / bumper-yaw / A until a full stick recenter.
+      if (!placingNow && !padCanReclaimFromPointer(read, edges, stickReclaimArmed)) {
         const t = now();
         const menuRoot = resolveMenuRoot(root);
         if (menuRoot) {
           handleMenu(menuRoot, read, edges, t);
-          if (menuExclusive) {
-            cancelPadSelect();
-            cancelPadGroup();
-            aim(false);
-          }
+          if (menuExclusive) holdMenu(menuRoot, read);
         }
         return;
       }
@@ -936,9 +982,7 @@ export function createGamepadAdapter(opts = {}) {
     if (menuRoot) {
       handleMenu(menuRoot, read, edges, t);
       if (menuExclusive) {
-        cancelPadSelect();
-        cancelPadGroup();
-        aim(false);
+        holdMenu(menuRoot, read);
         return;
       }
     }
@@ -976,7 +1020,8 @@ export function createGamepadAdapter(opts = {}) {
       cancelPadSelect();
       cancelPadGroup();
       aim(false);
-      const pick = radialStickPick(read, opts.getRadialTargets?.() ?? null, radialHeldRing);
+      applyMenuCamera(read);
+      const pick = radialStickPick(radialMenuRead(read), opts.getRadialTargets?.() ?? null, radialHeldRing);
       radialHeldRing = pick?.ring ?? null;
       opts.onRadialHover?.(pick);
       if (edges[PAD.B]) opts.onRadialCancel?.();
@@ -991,11 +1036,11 @@ export function createGamepadAdapter(opts = {}) {
       cancelPadGroup();
       aim(true);
       applyPlay(read);
-      opts.onPlaceAim?.();
+      if (playSelectHeld(read.buttons)) opts.onPlaceRotateDrag?.();
+      else opts.onPlaceAim?.();
       const place = placePadIntent(edges);
       if (place.cancel) opts.onPlaceCancel?.();
       else if (place.confirm) opts.onPlaceConfirm?.();
-      else if (place.rotate) opts.onPlaceRotate?.(place.rotate);
       return;
     }
 

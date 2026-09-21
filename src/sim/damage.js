@@ -4,6 +4,7 @@ import { clearPath, queuePath, attackStandPoint } from './path.js';
 import { claimEngagement } from './engagement.js';
 import { getUnitDef, isTransport, UNIT } from './unitTypes.js';
 import { isHostile } from './teams.js';
+import { storyProtectsOwner } from './storyProtect.js';
 import { unloadPassengers } from './transport.js';
 import { onMycoDeath } from './sporeBloom.js';
 
@@ -15,6 +16,7 @@ import { onMycoDeath } from './sporeBloom.js';
  */
 export function applyDamage(w, target, amount, source = -1) {
   if (target < 0 || target >= w.count || !w.alive[target] || amount <= 0) return false;
+  if (storyProtectsOwner(w, w.owner[target])) return false;
   let remain = amount;
   const shield = w.shieldHp?.[target] ?? 0;
   if (shield > 0) {

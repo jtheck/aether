@@ -1,7 +1,10 @@
 // Selection + orders (LMB). Camera pan / force-move on RMB via pointerHub.
 // Touch later synthesizes into the hub; gamepad LT/RT orders, LB/RB paint-select,
-// B / D-pad Left cast, D-pad U/R/D + Y/X/A control groups. While placing, the
-// pad aim walks the ghost; A / LT / RT stamp, B cancels, bumpers yaw.
+// B / D-pad Left cast, D-pad U/R/D + Y/X/A control groups. Placement is the
+// same loop on every device: aim walks the ghost, 1^ stamps, drag yaws
+// (mouse click-drag / touch tap-drag / pad LB-RB + stick). A mouse tap that
+// never yawed also stamps — 1^ rides with the cursor. B / back / agora
+// leaves. After a stamp the type stays so you can plant more.
 
 import * as fx from '../../sim/fixed.js';
 import { CMD } from '../../sim/commands.js';
@@ -42,6 +45,7 @@ import {
   mergeBuildingSels,
   placementDownKind,
   placementHoverFollowsPointer,
+  placementReleaseKind,
   placementTapKind,
   radialClickKind,
   radialHubFramedBuilding,
@@ -273,6 +277,8 @@ export function createGameInput(opts) {
   /** @type {'preview' | 'rotate' | 'confirm' | null} */
   let placeDownKind = null;
   let placeRotating = false;
+  /** @type {{ x: number, y: number } | null} */
+  let placeRotateFrom = null;
   let boxLastL = NaN;
   let boxLastT = NaN;
   let boxLastW = NaN;
@@ -298,7 +304,12 @@ export function createGameInput(opts) {
   }
 
   function canUseInput() {
-    return inputEnabled && localPlayerId >= 0 && (canInteract?.() ?? true);
+    return inputEnabled && (canInteract?.() ?? true);
+  }
+
+  /** Spectator / replay: pick any visible army, not just a seated owner. */
+  function inspectingAnyOwner() {
+    return !canIssueOrders();
   }
 
   /** Order gestures (arrows, menus, place/rally). Submit may still drop the command. */
@@ -346,13 +357,38 @@ export function createGameInput(opts) {
     placeAnchor = null;
     placeRotating = false;
     placeDownKind = null;
+    placeRotateFrom = null;
     onPlacementParked?.(false);
   }
 
-  /** In-flight press only — a parked ghost survives cancelDrag / 2-finger camera. */
+  /** In-flight press only — a sitting ghost survives cancelDrag / 2-finger camera. */
   function resetPlaceGesture() {
     placeRotating = false;
     placeDownKind = null;
+    placeRotateFrom = null;
+  }
+
+  function yawGhostToward(g) {
+    if (!placeAnchor || !g) return false;
+    const yaw = snapBuildingYaw(Math.atan2(g.x - placeAnchor.x, g.z - placeAnchor.z));
+    setPlacementYaw?.(yaw);
+    emitPlacementGhost(placeAnchor.x, placeAnchor.z, yaw);
+    return true;
+  }
+
+  function stepPlaceRotate(clientX, clientY) {
+    const g = renderer.screenToGround?.(clientX, clientY);
+    if (!placeAnchor || !g) return false;
+    const origin = placeRotateFrom;
+    if (origin) {
+      const moved = Math.hypot(clientX - origin.x, clientY - origin.y);
+      if (moved <= PLACE_ROTATE_THRESHOLD_PX) {
+        if (placeRotating) emitPlacementGhost(placeAnchor.x, placeAnchor.z, currentYaw());
+        return true;
+      }
+    }
+    placeRotating = true;
+    return yawGhostToward(g);
   }
 
   function hitSceneConfirm(clientX, clientY) {
@@ -360,7 +396,7 @@ export function createGameInput(opts) {
   }
 
   function hitPlacementGhost(clientX, clientY) {
-    if (!placeParked || !placeAnchor) return false;
+    if (!placeAnchor) return false;
     const type = getPlacingType?.();
     if (!type) return false;
     const ray = renderer.clientPickingRay?.(clientX, clientY) ?? null;
@@ -732,14 +768,16 @@ export function createGameInput(opts) {
     return !isStructureVisible || isStructureVisible(owner | 0, x, z);
   }
 
-  /** Fill buildingPickPool with own structure centers (box-select). */
+  /** Fill buildingPickPool with structure centers (box-select). */
   function fillBuildingPickCenters() {
+    const anyOwner = inspectingAnyOwner();
     let n = 0;
     const gy = (x, z) => renderer.groundYAt?.(x, z) ?? 0;
     const agoras = getAgoras?.() ?? [];
     for (let i = 0; i < agoras.length; i++) {
       const a = agoras[i];
-      if ((a.owner | 0) !== localPlayerId) continue;
+      if (!anyOwner && (a.owner | 0) !== localPlayerId) continue;
+      if (!structurePickable(a.owner, a.x, a.z)) continue;
       let sp = buildingPickPool[n];
       if (!sp) {
         buildingPickPool[n] = sp = { id: { kind: 'agora', index: 0 }, x: 0, y: 0, z: 0 };
@@ -754,7 +792,8 @@ export function createGameInput(opts) {
     const buildings = getBuildings?.() ?? [];
     for (let i = 0; i < buildings.length; i++) {
       const b = buildings[i];
-      if ((b.owner | 0) !== localPlayerId) continue;
+      if (!anyOwner && (b.owner | 0) !== localPlayerId) continue;
+      if (!structurePickable(b.owner, b.x, b.z)) continue;
       let sp = buildingPickPool[n];
       if (!sp) {
         buildingPickPool[n] = sp = { id: { kind: 'building', index: 0 }, x: 0, y: 0, z: 0 };
@@ -1351,13 +1390,16 @@ export function createGameInput(opts) {
     const minY = Math.min(y0, y1) - rect.top;
     const maxY = Math.max(y0, y1) - rect.top;
     const proj = renderer.captureScreenProjection?.(rect.width, rect.height);
+    const ownerFilter = inspectingAnyOwner() ? null : localPlayerId;
     if (!add) clearUnitSelectionBits();
-    else dropUnitsNotOwnedBy(localPlayerId);
+    else if (ownerFilter != null) dropUnitsNotOwnedBy(ownerFilter);
     const world = getWorld();
     let unitHits = 0;
     for (let i = 0; i < world.count; i++) {
-      if (!world.alive[i] || world.owner[i] !== localPlayerId) continue;
+      if (!world.alive[i]) continue;
+      if (ownerFilter != null && world.owner[i] !== ownerFilter) continue;
       if (world.carriedBy && world.carriedBy[i] >= 0) continue;
+      if ((ownerFilter == null || ownerFilter !== localPlayerId) && isUnitVisible && !isUnitVisible(i)) continue;
       getUnitWorldPos(i, posScratch);
       if (proj) {
         if (!projectWorldToCanvas(
@@ -1402,13 +1444,16 @@ export function createGameInput(opts) {
     const hit = (p) =>
       screenPosInRect(p, minX, maxX, minY, maxY) && screenPosInPoly(p, pts);
     const proj = renderer.captureScreenProjection?.(rect.width, rect.height);
+    const ownerFilter = inspectingAnyOwner() ? null : localPlayerId;
     if (!add) clearUnitSelectionBits();
-    else dropUnitsNotOwnedBy(localPlayerId);
+    else if (ownerFilter != null) dropUnitsNotOwnedBy(ownerFilter);
     const world = getWorld();
     let unitHits = 0;
     for (let i = 0; i < world.count; i++) {
-      if (!world.alive[i] || world.owner[i] !== localPlayerId) continue;
+      if (!world.alive[i]) continue;
+      if (ownerFilter != null && world.owner[i] !== ownerFilter) continue;
       if (world.carriedBy && world.carriedBy[i] >= 0) continue;
+      if ((ownerFilter == null || ownerFilter !== localPlayerId) && isUnitVisible && !isUnitVisible(i)) continue;
       getUnitWorldPos(i, posScratch);
       if (proj) {
         if (!projectWorldToCanvas(
@@ -1708,13 +1753,14 @@ export function createGameInput(opts) {
       return true;
     }
 
-    // Placement: drag-around previews; release parks; ghost click rotates; 1^ stamps.
-    // Agora build radial is hidden while placing (clicks pass through).
-    // Rally mode: click-to-set (no rotate / park).
+    // Placement: aim walks the ghost; drag yaws; 1^ stamps. A mouse tap that
+    // never yawed also stamps (1^ rides with the cursor). Agora mesh / hub
+    // tap leaves. Rally is still click-to-set (no rotate / 1^).
     if (isPlacing()) {
       radialGesture = Boolean(isRadialOpen?.() && hitRadial?.(e.clientX, e.clientY));
       placeRotating = false;
       placeDownKind = null;
+      placeRotateFrom = null;
       if (isPlacingRally?.()) {
         if (!radialGesture) {
           const g = renderer.screenToGround?.(e.clientX, e.clientY);
@@ -1723,9 +1769,10 @@ export function createGameInput(opts) {
         return true;
       }
       placeDownKind = placementDownKind({
-        parked: placeParked,
+        hasGhost: !!placeAnchor,
         hitConfirm: hitSceneConfirm(e.clientX, e.clientY),
         hitGhost: hitPlacementGhost(e.clientX, e.clientY),
+        touch: e.pointerType === 'touch',
       });
       if (placeDownKind === 'preview') {
         if (placeParked) {
@@ -1734,6 +1781,8 @@ export function createGameInput(opts) {
         }
         const g = renderer.screenToGround?.(e.clientX, e.clientY);
         if (g) placeAnchor = emitPlacementGhost(g.x, g.z, currentYaw());
+      } else if (placeDownKind === 'rotate') {
+        placeRotateFrom = { x: e.clientX, y: e.clientY };
       }
       return true;
     }
@@ -1765,21 +1814,19 @@ export function createGameInput(opts) {
 
       if (placeDownKind === 'confirm') return true;
 
-      // Parked ghost: drag past threshold yaws in 30° snaps. Release stays parked.
-      if (placeDownKind === 'rotate' && placeAnchor && lmbDownPos) {
-        const moved = Math.hypot(e.clientX - lmbDownPos.x, e.clientY - lmbDownPos.y);
-        if (moved > PLACE_ROTATE_THRESHOLD_PX) {
-          placeRotating = true;
-          const yaw = snapBuildingYaw(Math.atan2(g.x - placeAnchor.x, g.z - placeAnchor.z));
-          setPlacementYaw?.(yaw);
-          emitPlacementGhost(placeAnchor.x, placeAnchor.z, yaw);
-        } else if (placeRotating) {
-          emitPlacementGhost(placeAnchor.x, placeAnchor.z, currentYaw());
-        }
+      if (placeDownKind === 'rotate' && placeAnchor) {
+        stepPlaceRotate(e.clientX, e.clientY);
         return true;
       }
 
-      if (placementHoverFollowsPointer(placeParked, placeDownKind === 'preview')) {
+      // Keep 1^ hittable — walking toward the mark would slide it off the cursor.
+      if (placeAnchor && hitSceneConfirm(e.clientX, e.clientY)) return true;
+
+      if (placementHoverFollowsPointer({
+        previewDragging: placeDownKind === 'preview',
+        pointerType: e.pointerType,
+      })) {
+        placeParked = false;
         placeAnchor = emitPlacementGhost(g.x, g.z, currentYaw());
       }
       return true;
@@ -2063,40 +2110,41 @@ export function createGameInput(opts) {
           const tap =
             d &&
             Math.hypot(e.clientX - d.x, e.clientY - d.y) <= DRAG_THRESHOLD_PX;
-          if (placeDownKind === 'confirm') {
-            lastTap = null;
-            if (tap && hitSceneConfirm(e.clientX, e.clientY) && placeAnchor && canIssueOrders()) {
+          const ray = tap
+            ? renderer.clientPickingRay?.(e.clientX, e.clientY) ?? null
+            : null;
+          if (tap && hitRadialHub?.(e.clientX, e.clientY)) radialKind = 'hub';
+          const release = placementReleaseKind({
+            downKind: placeDownKind,
+            rotated: placeRotating,
+            tap,
+            pointerType: e.pointerType,
+            radialKind,
+            tapKind: placementTapKind(
+              radialKind,
+              tap ? pickBuildingAtRay(ray) : null,
+            ),
+          });
+          lastTap = null;
+          if (release === 'pick') {
+            if (canIssueOrders()) onRadialPick?.(picked);
+          } else if (release === 'exit') {
+            cancelPlacement();
+          } else if (release === 'confirm') {
+            const stillOnMark = placeDownKind !== 'confirm'
+              || hitSceneConfirm(e.clientX, e.clientY);
+            if (stillOnMark && placeAnchor && canIssueOrders()) {
               if (onPlacementConfirm?.(placeAnchor.x, placeAnchor.z, yaw) === true) {
                 placeParked = false;
                 placeAnchor = null;
                 onPlacementParked?.(false);
               }
             }
-          } else if (placeDownKind === 'rotate') {
-            lastTap = null;
+          } else if (placeAnchor) {
+            parkPlacement(placeAnchor.x, placeAnchor.z, yaw);
           } else {
-            const ray = tap
-              ? renderer.clientPickingRay?.(e.clientX, e.clientY) ?? null
-              : null;
-            // Agora hub / mesh tap leaves place mode (same as Esc).
-            const tapKind = placementTapKind(
-              radialKind,
-              tap ? pickBuildingAtRay(ray) : null,
-            );
-            if (tapKind === 'pick') {
-              lastTap = null;
-              if (canIssueOrders()) onRadialPick?.(picked);
-            } else if (tapKind === 'exit') {
-              lastTap = null;
-              cancelPlacement();
-            } else if (tapKind === 'chrome') {
-              lastTap = null;
-            } else {
-              const g =
-                placeAnchor ??
-                renderer.screenToGround?.(e.clientX, e.clientY);
-              if (g) parkPlacement(g.x, g.z, yaw);
-            }
+            const g = renderer.screenToGround?.(e.clientX, e.clientY);
+            if (g) parkPlacement(g.x, g.z, yaw);
           }
         }
         resetPlaceGesture();
@@ -2445,7 +2493,7 @@ export function createGameInput(opts) {
   }
 
   /**
-   * Gamepad aim — ghost / rally flag follows the cursor without parking.
+   * Aim walks the ghost (mouse hover, touch preview, pad leash).
    */
   function previewPlacementAt(clientX, clientY) {
     if (!canUseInput() || !isPlacing()) return false;
@@ -2455,12 +2503,36 @@ export function createGameInput(opts) {
       onRallyMove?.(g.x, g.z);
       return true;
     }
+    placeRotateFrom = null;
+    placeRotating = false;
     if (placeParked) {
       placeParked = false;
       onPlacementParked?.(false);
     }
     placeAnchor = emitPlacementGhost(g.x, g.z, currentYaw());
     return true;
+  }
+
+  /**
+   * Drag-yaw around the sitting ghost. Pad holds LB/RB and aims; pointer
+   * click-drags / tap-drags. No ghost yet — walk it first.
+   */
+  function rotatePlacementAt(clientX, clientY) {
+    if (!canUseInput() || !isPlacing() || isPlacingRally?.()) return false;
+    if (!placeAnchor) return previewPlacementAt(clientX, clientY);
+    const g = renderer.screenToGround?.(clientX, clientY);
+    if (!g) return false;
+    // Pad has no tap-vs-drag — the aim starts on the ghost, so the pointer
+    // rotate gate would swallow the whole bumper hold.
+    if (!placeRotateFrom) {
+      placeRotateFrom = { x: clientX, y: clientY };
+      return true;
+    }
+    if (Math.hypot(clientX - placeRotateFrom.x, clientY - placeRotateFrom.y) < 2) {
+      return true;
+    }
+    placeRotating = true;
+    return yawGhostToward(g);
   }
 
   /**
@@ -2475,7 +2547,7 @@ export function createGameInput(opts) {
       return true;
     }
     const yaw = currentYaw();
-    const at = g ? emitPlacementGhost(g.x, g.z, yaw) : placeAnchor;
+    const at = placeAnchor ?? (g ? emitPlacementGhost(g.x, g.z, yaw) : null);
     if (!at) return false;
     if (onPlacementConfirm?.(at.x, at.z, yaw) === true) {
       placeParked = false;
@@ -2487,7 +2559,7 @@ export function createGameInput(opts) {
   }
 
   /**
-   * Gamepad bumper — one yaw snap. Rally has no facing.
+   * Legacy bumper snap. Rally has no facing. Pad rotate is drag now.
    */
   function nudgePlacementYaw(dir) {
     if (!canUseInput() || !isPlacing() || isPlacingRally?.()) return false;
@@ -2574,6 +2646,7 @@ export function createGameInput(opts) {
     deselectEntity,
     cancelPlacement,
     previewPlacementAt,
+    rotatePlacementAt,
     confirmPlacementAt,
     nudgePlacementYaw,
     dismissMenus,
@@ -2603,7 +2676,8 @@ export function createGameInput(opts) {
       }
     },
     setRole(role) {
-      inputEnabled = role === 'player' || role === 'livePlayer' || role === 'sandboxPlayer' || role === 'stagingPlayer';
+      inputEnabled = role === 'player' || role === 'livePlayer' || role === 'sandboxPlayer'
+        || role === 'stagingPlayer' || role === 'spectator';
       if (!inputEnabled) {
         abilityHoldGen++;
         clearAbilityHold();

@@ -126,15 +126,15 @@ describe('1vAI home agoras', () => {
 });
 
 describe('koth combat spawn', () => {
-  it('drops civilians and parks a dirigible and APC on opposite flanks', () => {
+  it('parks a dirigible and APC on opposite flanks, each loaded with villagers and an engineer', () => {
     const w = buildWorldFromConfig({ seed: 4, mode: 'koth', activeSlots: [0] });
     const ids = livingOf(w, 0);
     assert.equal(ids.length, KOTH_UNITS_PER_ARMY);
 
     const types = new Map();
     for (const i of ids) types.set(w.type[i], (types.get(w.type[i]) ?? 0) + 1);
-    assert.equal(types.get(UNIT.VILLAGER) ?? 0, 0);
-    assert.equal(types.get(UNIT.ENGINEER) ?? 0, 0);
+    assert.equal(types.get(UNIT.VILLAGER) ?? 0, 10);
+    assert.equal(types.get(UNIT.ENGINEER) ?? 0, 2);
     assert.equal(types.get(UNIT.WAGON) ?? 0, 0);
     for (const col of KOTH_ARMY) assert.equal(types.get(col.type) ?? 0, col.count);
 
@@ -159,7 +159,7 @@ describe('koth combat spawn', () => {
       const originR = Math.hypot(fx.toFloat(w.px[i]), fx.toFloat(w.py[i]));
       if (w.type[i] === UNIT.DIRIGIBLE) dirigi = i;
       else if (w.type[i] === UNIT.APC) apc = i;
-      else maxInfLat = Math.max(maxInfLat, Math.abs(lat));
+      else if (w.carriedBy[i] < 0) maxInfLat = Math.max(maxInfLat, Math.abs(lat));
       if (w.type[i] === UNIT.WARRIOR) {
         warR += originR;
         warN++;
@@ -169,6 +169,17 @@ describe('koth combat spawn', () => {
       }
     }
     assert.ok(dirigi >= 0 && apc >= 0);
+    for (const vehicle of [dirigi, apc]) {
+      let vill = 0;
+      let engi = 0;
+      for (const i of ids) {
+        if (w.carriedBy[i] !== vehicle) continue;
+        if (w.type[i] === UNIT.VILLAGER) vill++;
+        else if (w.type[i] === UNIT.ENGINEER) engi++;
+      }
+      assert.equal(vill, 5);
+      assert.equal(engi, 1);
+    }
     const dLat = (fx.toFloat(w.px[dirigi]) - bx) * rX + (fx.toFloat(w.py[dirigi]) - bz) * rZ;
     const aLat = (fx.toFloat(w.px[apc]) - bx) * rX + (fx.toFloat(w.py[apc]) - bz) * rZ;
     assert.ok(dLat < 0 && aLat > 0, 'dirigible left, APC right');

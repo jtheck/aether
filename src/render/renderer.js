@@ -84,6 +84,7 @@ import { createUnitAuras, AURA } from './unitAuras.js';
 import { createMonkLobFx } from './monkLobFx.js';
 import { createSporeBloomFx } from './sporeBloomFx.js';
 import { createLocustFx } from './locustFx.js';
+import { createBuildingFire } from './buildingFire.js';
 import { createFireballFx } from './fireballFx.js';
 import { createMushroomPreviews } from './mushrooms.js';
 import { createCarryLoads } from './carryLoads.js';
@@ -1464,6 +1465,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     getEye: cameraEyePos,
     cullRangeScale: fxQuality.cullRangeScale ?? 1,
   });
+  const buildingFire = createBuildingFire();
 
   function applyFxQuality(mode, quality) {
     fxMode = Math.max(0, mode | 0);
@@ -2577,6 +2579,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     buildingProps.update?.(fxDt);
     const fxStep = Math.min(100, Math.max(0, fxDt));
     particleClockMs += fxStep;
+    if (fxStep > 0) buildingFire.tick(fxStep / 1000);
     if (fxEnabled) {
       // Quality slider scales all socket cadences (default unitFxIntervalMs=80 → 1×).
       const cadenceScale = Math.max(0.5, (unitFxIntervalMs || 80) / 80);
@@ -2586,6 +2589,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         socketFireElapsed = 0;
         emitUnitSocketFire('fire');
         emitBuildingSocketFx('fire');
+        emitBuildingDamageFire();
       }
       if (socketSmokeElapsed >= SOCKET_FX_CADENCE.smoke * cadenceScale) {
         socketSmokeElapsed = 0;
@@ -2835,6 +2839,29 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         const scale = SOCKET_FX_INHERENT * kind.base * sockScale * instScale;
         for (let h = 0; h < hits; h++) emitSocketFlame(wx, wy, wz, scale, kind.style);
       }
+    });
+  }
+
+  function emitDamageFlame(p) {
+    const y = groundYAt(p.x, p.z) + p.yOff;
+    const eye = cameraEyePos();
+    const distSq = fxDistanceSq;
+    if (eye && distSq > 0) {
+      const dx = eye.x - p.x;
+      const dy = eye.y - y;
+      const dz = eye.z - p.z;
+      if (dx * dx + dy * dy + dz * dz > distSq) return;
+    }
+    if (!allowContinuousFx()) return;
+    emitSocketFlame(p.x, y, p.z, p.scale, 'torch');
+  }
+
+  /** Perimeter campfires on wounded buildings (no baked fire_anchor). */
+  function emitBuildingDamageFire() {
+    if (!socketFireEnabled) return;
+    buildingFire.forEachLivePatch((p) => {
+      if (Math.random() > 0.38 + p.intensity * 0.62) return;
+      emitDamageFlame(p);
     });
   }
 
@@ -4586,6 +4613,18 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /**
+     * Hit-driven building fire. Sparks immediately; lingering patches keep
+     * emitting on the socket-fire cadence.
+     * @param {object[]|null|undefined} buildings
+     * @param {{ hidden?: (b: object, index: number) => boolean }} [opts]
+     */
+    syncBuildingFire(buildings, opts = {}) {
+      const sparked = buildingFire.sync(buildings, opts);
+      if (!fxEnabled || !socketFireEnabled || !sparked.length) return;
+      for (let i = 0; i < sparked.length; i++) emitDamageFlame(sparked[i]);
+    },
+
+    /**
      * Keep circling locust packs on units/buildings while stacks are up.
      * New sites steal insects from the incoming shot / nearby packs so the
      * swarm jumps forward instead of cloning a full pack on every victim.
@@ -4969,6 +5008,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       sporeBloomFx.clear();
       locustFx.clear();
       fireballFx.clear();
+      buildingFire.clear();
       mushrooms?.clear?.();
       holyShields.clear();
       carryLoads.clear();
@@ -5135,7 +5175,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /**
-     * Parked in-scene 1^ mark. Pass null to hide.
+     * In-scene 1^ confirm mark. Pass null to hide.
      * @param {{ x: number, z: number, y?: number, valid?: boolean } | null} pos
      */
     setSceneConfirm(pos) {

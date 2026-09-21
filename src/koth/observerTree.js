@@ -171,6 +171,43 @@ export function reassignOrphans(tree, playerUserIds, orphanUserIds) {
 }
 
 /**
+ * Combat-wipe / forfeit: turn a player into a caught-up observer and reassign
+ * their L1 children (and themselves) onto remaining players.
+ * @returns {{ userId: string, sponsorId: string | null, depth: number }[]}
+ */
+export function demotePlayerToObserver(tree, userId, playerUserIds) {
+  if (!userId) return [];
+  const existing = tree.nodes.get(userId);
+  if (existing?.role === 'observer' && existing.caughtUp) return [];
+  const children = [...(tree.childrenOf.get(userId) ?? [])];
+  if (existing?.sponsorId) {
+    const sibs = tree.childrenOf.get(existing.sponsorId);
+    if (sibs) {
+      const next = sibs.filter((id) => id !== userId);
+      if (next.length) tree.childrenOf.set(existing.sponsorId, next);
+      else tree.childrenOf.delete(existing.sponsorId);
+    }
+  }
+  tree.childrenOf.delete(userId);
+  upsertNode(tree, userId, {
+    role: 'observer',
+    sponsorId: null,
+    depth: 1,
+    caughtUp: true,
+  });
+  const players = (playerUserIds ?? []).filter((id) => id && id !== userId);
+  const assignments = reassignOrphans(tree, players, [userId, ...children]);
+  const node = tree.nodes.get(userId);
+  if (node) {
+    // Seat offers start at L1. A just-eliminated player should be able to
+    // claim the open seat immediately, even if the tree parked them deeper.
+    node.depth = 1;
+    node.caughtUp = true;
+  }
+  return assignments;
+}
+
+/**
  * When an observer promotes to player: detach from sponsor, take their children
  * as orphans to reassign, mark self as player with L1 capacity.
  */

@@ -42,6 +42,13 @@ describe('ownerTints', () => {
     setLocalOwnerTint(0, '');
   });
 
+  it('keeps owner 5 off the player-blue wrap', () => {
+    setOwnerTints(null);
+    setLocalOwnerTint(-1, '');
+    assert.deepEqual(ownerTint(5), OWNER_TINTS[5]);
+    assert.notDeepEqual(ownerTint(5), OWNER_TINTS[0]);
+  });
+
   it('maps lobby seats and KOTH roster onto owner hexes', () => {
     assert.deepEqual(ownerColorsFromSeats([
       { kind: 'human', index: 0, color: '#ff0000' },

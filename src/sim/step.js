@@ -67,6 +67,7 @@ import {
 import { constructionSystem, constructionAssignSystem } from './construction.js';
 import { idleWanderSystem, isIdleWander, IDLE_WANDER_SPEED } from './idleWander.js';
 import { tickCombatStatus, FROST_MOVE_MUL } from './combatStatus.js';
+import { tickFoodUpkeep } from './foodUpkeep.js';
 
 /** Extra slow while gawking at frogs (stacks with terrain slow). */
 const DISTRACT_MOVE_MUL = fx.fromFloat(0.55);
@@ -169,6 +170,7 @@ export function step(world, field, commands) {
   phase('autoGather', () => campAutoAssignSystem(world, field));
   phase('gatherDefense', () => gatherDefenseSystem(world, field));
   phase('gather', () => gatherSystem(world, field));
+  phase('foodUpkeep', () => tickFoodUpkeep(world));
   phase('constructAssign', () => constructionAssignSystem(world, field));
   phase('construct', () => constructionSystem(world, field));
   phase('combat', () => combatSystem(world, field));

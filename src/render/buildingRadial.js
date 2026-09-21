@@ -2093,8 +2093,8 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   }
 
   function hitHubHoleAtRay(ray) {
-    // Hidden placing preview is not a click target — agora mesh pick still exits.
-    if (!open || !ray || placingPreviewType || !edgePickable()) return false;
+    // Compact place mode still uses the hub as "back to the agora menu".
+    if (!open || !ray || !edgePickable()) return false;
     const pp = piePlanePoint();
     const hit = rayHitPlane(ray, pp.x, pp.y, pp.z, nx, ny, nz);
     if (!hit) return false;
@@ -2106,7 +2106,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
    * Sync gesture: over an option, category pie, hub hole, or the main ring band.
    * Hub is a gesture so box-select does not start on the building; pointer-up
    * click-through is decided in gameInput. While placing, chrome is gone so
-   * hits fail closed — ground confirms, agora mesh cancels.
+   * hits fail closed. Hub hole still cancels; ground / ghost tap stamps.
    * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null | undefined} ray
    */
   function hitAtRay(ray) {

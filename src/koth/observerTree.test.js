@@ -7,6 +7,7 @@ import {
   assignSponsor,
   offerEligibleUserIds,
   promoteObserverToPlayer,
+  demotePlayerToObserver,
   upsertNode,
   CHILDREN_PER_PLAYER,
   CHILDREN_PER_OBSERVER,
@@ -86,4 +87,26 @@ test('promote reassigns children off the new player', () => {
   assert.ok(underNew.length <= CHILDREN_PER_PLAYER);
   const underP0 = tree.childrenOf.get('p0') ?? [];
   assert.ok(underP0.length <= CHILDREN_PER_OBSERVER);
+});
+
+test('demote returns a wiped player to the caught-up observer pool', () => {
+  const tree = createObserverTree();
+  upsertNode(tree, 'p0', { role: 'player', depth: 0, caughtUp: true });
+  upsertNode(tree, 'p1', { role: 'player', depth: 0, caughtUp: true });
+  upsertNode(tree, 'o0', {
+    role: 'observer', depth: 1, sponsorId: 'p1', caughtUp: true, joinedAt: 1,
+  });
+  tree.childrenOf.set('p1', ['o0']);
+
+  const handoffs = demotePlayerToObserver(tree, 'p1', ['p0', 'p1']);
+  const p1 = tree.nodes.get('p1');
+  assert.equal(p1.role, 'observer');
+  assert.equal(p1.caughtUp, true);
+  assert.equal(p1.depth, 1);
+  assert.ok(p1.sponsorId === 'p0' || p1.sponsorId === 'o0');
+  assert.equal(tree.nodes.get('o0').sponsorId, 'p0');
+  assert.ok(handoffs.some((h) => h.userId === 'p1'));
+  assert.ok(offerEligibleUserIds(tree, 0).includes('p1'));
+  assert.ok(offerEligibleUserIds(tree, 0).includes('o0'));
+  assert.deepEqual(demotePlayerToObserver(tree, 'p1', ['p0']), []);
 });

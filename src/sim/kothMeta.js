@@ -38,6 +38,19 @@ function pickLongestLiving(active, eliminated, joinedAtTick) {
   return best < 0 ? 0 : best;
 }
 
+/** Active seats that have already been combat-wiped. */
+export function kothWipedOwners(koth) {
+  const active = koth?.active;
+  const eliminated = koth?.eliminated;
+  if (!active || !eliminated) return [];
+  const out = [];
+  const n = Math.min(MAX_KOTH_PLAYERS, active.length, eliminated.length);
+  for (let i = 0; i < n; i++) {
+    if (active[i] && eliminated[i]) out.push(i);
+  }
+  return out;
+}
+
 /** Register a player joining mid-match at a specific tick. */
 export function kothRegisterJoin(koth, playerId, tick) {
   if (!koth || playerId < 0 || playerId >= MAX_KOTH_PLAYERS) return;

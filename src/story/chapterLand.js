@@ -195,7 +195,7 @@ export function dressChapter1(field, cast, exit) {
   return camps;
 }
 
-/** Flanking woods, open north road, ridge lift, camp off the east shoulder. */
+/** Flanking woods, open north road, ridge lift, watchtowers on both shoulders. */
 export function dressChapter2(field, cast, exit) {
   beginChapterTable(field, { cornerR: 14 });
   stainDirt(field, 40, 14, 8, 0.5);
@@ -203,16 +203,26 @@ export function dressChapter2(field, cast, exit) {
   markChapterExit(field, cast[0].tx, cast[0].tz, exit);
   plantNaturalWoods(field, { density: 0.4, corridorTx: 40, corridorWidth: 11 });
   scatterRocks(field);
-  const camps = placeCamps(field, [{
-    tx: 58,
-    tz: 28,
-    building: 'tower',
-    units: [
-      [UNIT.ARCHER, -3, 2],
-      [UNIT.ARCHER, 3, 2],
-      [UNIT.WARRIOR, 0, 3],
-    ],
-  }]);
+  const camps = placeCamps(field, [
+    {
+      tx: 31,
+      tz: 32,
+      building: 'tower',
+      units: [
+        [UNIT.ARCHER, 2, 2],
+        [UNIT.WARRIOR, 3, 0],
+      ],
+    },
+    {
+      tx: 49,
+      tz: 24,
+      building: 'tower',
+      units: [
+        [UNIT.ARCHER, -2, 2],
+        [UNIT.ARCHER, -3, 0],
+      ],
+    },
+  ]);
   clearChapterPlay(field, cast, exit, 4);
   return camps;
 }

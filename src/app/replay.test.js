@@ -185,7 +185,7 @@ describe('parseReplayFile', () => {
 });
 
 describe('liveConfigFromReplay', () => {
-  it('loads as a local spectator with no player input', () => {
+  it('loads as a local spectator who can inspect', () => {
     const file = parseReplayFile({
       v: 1,
       kind: REPLAY_KIND,
@@ -197,7 +197,7 @@ describe('liveConfigFromReplay', () => {
     assert.equal(cfg.role, 'spectator');
     assert.equal(cfg.localPlayerId, -1);
     assert.equal(cfg.localSolo, true);
-    assert.equal(cfg.inputEnabled, false);
+    assert.equal(cfg.inputEnabled, true);
     assert.equal(cfg.watchingReplay, true);
     assert.deepEqual(cfg.humanPlayers, [0, 2]);
   });

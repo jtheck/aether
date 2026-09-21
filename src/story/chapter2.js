@@ -32,6 +32,16 @@ export const CHAPTER2_GARDEN_NAME = 'Chapter 2';
 export const CHAPTER2_GARDEN_URL = '/maps/chapter2.garden';
 export const CHAPTER2_NEXT_URL = '/maps/chapter3.garden';
 export const CHAPTER2_SEED = 44117;
+/** Three packs chase the party up the road (era-1 steel and bows). */
+export const CHAPTER2_WAVES = 3;
+/** Staging south of the party, then a mid-road hop toward the ridge. */
+export const CHAPTER2_WAVE_ROUTE = [[0.51, 0.70], [0.51, 0.38]];
+/** Watchtower garrison — purple seat, outside the 4-player ally table. */
+export const CHAPTER2_TOWER_OWNER = 4;
+/** Wave pack — fights the towers, not the party. */
+export const CHAPTER2_WAVE_OWNER = 5;
+/** Player team 0 is neutral to both outsider teams. */
+export const CHAPTER2_NEUTRAL_TEAMS = [[0, CHAPTER2_TOWER_OWNER], [0, CHAPTER2_WAVE_OWNER]];
 
 function styleOf(raw) {
   return LINE_STYLES.includes(raw) ? raw : 'normal';
@@ -83,10 +93,10 @@ export function chapter2IntroReel() {
     { kind: CLIP_HOLD, dur: 1.2 },
     {
       kind: CLIP_LINE,
-      text: 'The old road opens onto another clearing. The blight did not follow — yet.',
+      text: 'The old road opens onto another clearing. Watchtowers hold the shoulders. Something is already marching.',
     },
     { kind: CLIP_CAMERA, tx: 40, tz: 41, radius: 50, alpha: 0.4, dur: 4, char: 'Stumpey' },
-    { kind: CLIP_LINE, speaker: 'Stumpey', text: 'New dirt. Same feet. Keep moving.', style: 'command' },
+    { kind: CLIP_LINE, speaker: 'Stumpey', text: 'Towers left and right. Do not stop.', style: 'command' },
     { kind: CLIP_HOLD, dur: 1.8 },
   ]);
 }
@@ -115,6 +125,12 @@ export function chapter2Objectives() {
     label: 'Take the north ridge (EXIT)',
     message: 'Ridge is clear. Keep north.',
     next: CHAPTER2_NEXT_URL,
+    params: {
+      waves: CHAPTER2_WAVES,
+      era: 1,
+      owner: CHAPTER2_WAVE_OWNER,
+      route: CHAPTER2_WAVE_ROUTE,
+    },
   }];
 }
 
@@ -131,6 +147,7 @@ export function buildChapter2Garden() {
       objectives: chapter2Objectives(),
       units: [...unitsFromCast(CHAPTER2_CAST), ...camps.units],
       buildings: camps.buildings,
+      neutralTeams: CHAPTER2_NEUTRAL_TEAMS,
     });
   } finally {
     setActiveMapSize(prevW, prevH);

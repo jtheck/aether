@@ -74,6 +74,8 @@ export function createWorld(seed) {
     spatial: createSpatialGrid(MAX_ENTITIES),
     /** Adventure reinforcement schedule (see waveSpawner.js); null when unused. */
     waveSpawners: null,
+    /** When 1, units allied to seat 0 ignore incoming damage (story cinematics). */
+    storyProtect: 0,
     projectiles: createProjectileStore(),
     fireZones: createFireZoneStore(),
     frogs: createFrogStore(),
@@ -169,6 +171,8 @@ export function createWorld(seed) {
     techDirty: 0,
     /** Per-owner resource banks — wood/stone/mineral/food (see resources.js). */
     resources: new Int32Array(MAX_RESOURCE_OWNERS * RESOURCE_COUNT),
+    /** Fractional food-upkeep remainder per owner (see foodUpkeep.js). */
+    foodUpkeepAcc: new Int32Array(MAX_RESOURCE_OWNERS),
     /** Set when a bank changes; worker publishes then clears. */
     resourcesDirty: 0,
     lastPx: new Int32Array(MAX_ENTITIES),

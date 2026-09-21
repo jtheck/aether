@@ -13,6 +13,7 @@ import { ORDER } from './world.js';
 import * as fx from './fixed.js';
 import { applySerializedTech, serializeTech } from './tech.js';
 import { applySerializedResources, serializeResources } from './resources.js';
+import { applySerializedFoodUpkeep, serializeFoodUpkeep } from './foodUpkeep.js';
 import { ensureFrogCapacity } from './frogs.js';
 import { ensureFireZoneCapacity } from './fireZones.js';
 import { capacityFor } from './capacity.js';
@@ -59,6 +60,7 @@ export function exportWorldCheckpoint(w, field, checksum) {
     kothMatchOver: w.kothMatchOver | 0,
     matchWinner: w.matchWinner ?? -1,
     agoraOccupyEndsMatch: w.agoraOccupyEndsMatch ?? 1,
+    storyProtect: w.storyProtect | 0,
     arrays: {},
   };
   for (const key of ENTITY_I32) entities.arrays[key] = encodeTA(w[key], n);
@@ -104,6 +106,7 @@ export function exportWorldCheckpoint(w, field, checksum) {
     buildings: exportBuildings(w.buildings),
     tech: serializeTech(w),
     resources: serializeResources(w),
+    foodUpkeepAcc: serializeFoodUpkeep(w),
     field: exportFieldMutable(field),
     pendingLightning: exportPendingLightning(w.pendingLightning),
     waveSpawners: exportWaveSpawners(w.waveSpawners),
@@ -131,6 +134,7 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   w.kothMatchOver = ent.kothMatchOver | 0;
   w.matchWinner = ent.matchWinner ?? -1;
   if (ent.agoraOccupyEndsMatch != null) w.agoraOccupyEndsMatch = ent.agoraOccupyEndsMatch | 0;
+  w.storyProtect = ent.storyProtect | 0;
 
   for (const key of Object.keys(ent.arrays)) {
     if (w[key]) decodeTAInto(w[key], ent.arrays[key]);
@@ -217,6 +221,7 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   importWaveSpawners(w, checkpoint.waveSpawners);
   applySerializedTech(w, checkpoint.tech);
   applySerializedResources(w, checkpoint.resources);
+  applySerializedFoodUpkeep(w, checkpoint.foodUpkeepAcc);
   importFieldMutable(field, checkpoint.field);
   // pass is not checkpointed; shrink rock discs to remaining stock, then OR buildings.
   applyRockOccupancyFromStock(field);

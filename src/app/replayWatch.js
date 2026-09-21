@@ -169,7 +169,6 @@ export function createReplayController(deps) {
     ctx.session.pauseLockstep = true;
     ctx.session.simAcc = 0;
     ctx.inputApi?.setRole?.('spectator');
-    ctx.inputApi?.setInputEnabled?.(false);
     const want = Math.max(0, targetTick | 0);
     if (want > 0) {
       await replayCatchUpInto(

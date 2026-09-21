@@ -20,6 +20,7 @@ import {
 } from './field.js';
 import { setTeamAssignments } from './teams.js';
 import { grantStartingResources } from './resources.js';
+import { loadUnit, passengerCount, transportCapacityOf } from './transport.js';
 import * as fx from './fixed.js';
 
 /** Staging AI cold start. */
@@ -165,6 +166,16 @@ const KOTH_ARMY = [
   { type: UNIT.APC, count: 1 },
 ];
 
+/** Riders stuffed into each flank vehicle — fills the 6-seat hull. */
+const KOTH_VEHICLE_CARGO = [
+  UNIT.VILLAGER,
+  UNIT.VILLAGER,
+  UNIT.VILLAGER,
+  UNIT.VILLAGER,
+  UNIT.VILLAGER,
+  UNIT.ENGINEER,
+];
+
 const COL_SPACING = 22;
 const ROW_SPACING = 16;
 /** Compact KOTH ranks facing the hill. */
@@ -216,10 +227,26 @@ const STRESS_SPACING_MIN = 4;
 
 export { PLAYER_ARMY, ENEMY_ARMY, KOTH_ARMY };
 
+function isKothFlankVehicle(type) {
+  return type === UNIT.DIRIGIBLE || type === UNIT.APC;
+}
+
+function kothVehicleCount(layout) {
+  let n = 0;
+  for (const col of layout) {
+    if (isKothFlankVehicle(col.type)) n += col.count;
+  }
+  return n;
+}
+
 export const UNITS_PER_ARMY = PLAYER_ARMY.reduce((s, c) => s + c.count, 0);
-export const KOTH_UNITS_PER_ARMY = KOTH_ARMY.reduce((s, c) => s + c.count, 0);
+const KOTH_LAYOUT_UNITS = KOTH_ARMY.reduce((s, c) => s + c.count, 0);
+export const KOTH_CARGO_PER_VEHICLE = KOTH_VEHICLE_CARGO.length;
+export const KOTH_UNITS_PER_ARMY =
+  KOTH_LAYOUT_UNITS + KOTH_CARGO_PER_VEHICLE * kothVehicleCount(KOTH_ARMY);
 export const KOTH_MAX_SLOTS = 5;
-export const KOTH_MAX_ENTITIES = UNITS_PER_ARMY * KOTH_MAX_SLOTS;
+export const KOTH_MAX_ENTITIES =
+  (UNITS_PER_ARMY + KOTH_CARGO_PER_VEHICLE * kothVehicleCount(KOTH_ARMY)) * KOTH_MAX_SLOTS;
 
 /** Active per-slot army size (0 = default PLAYER_ARMY layout). */
 let _armyPerSide = 0;
@@ -235,7 +262,8 @@ export function activeArmyPerSide() {
 /** Max entities for current army size across all KOTH slots. */
 export function kothMaxEntities(armyPerSide = _armyPerSide) {
   const per = armyPerSide > 0 ? armyPerSide : UNITS_PER_ARMY;
-  return per * KOTH_MAX_SLOTS;
+  const layout = armyPerSide > 0 ? scaledKothArmyLayout(armyPerSide) : KOTH_ARMY;
+  return (per + KOTH_CARGO_PER_VEHICLE * kothVehicleCount(layout)) * KOTH_MAX_SLOTS;
 }
 
 /** Max thin-instance slots for a unit type across all KOTH slots. */
@@ -272,7 +300,7 @@ export function scaledArmyLayout(n) {
 }
 
 function scaledKothArmyLayout(n) {
-  return scaledLayoutFrom(KOTH_ARMY, KOTH_UNITS_PER_ARMY, n);
+  return scaledLayoutFrom(KOTH_ARMY, KOTH_LAYOUT_UNITS, n);
 }
 
 /** Spawn one army — default layout, or packed scaled mix when armyPerSide > 0. */
@@ -284,14 +312,37 @@ function spawnConfiguredArmy(w, owner, baseX, baseZ) {
   }
 }
 
+function loadKothVehicleCargo(w, owner) {
+  const vehicles = [];
+  for (let i = 0; i < w.count; i++) {
+    if (!w.alive[i] || w.owner[i] !== owner) continue;
+    if (isKothFlankVehicle(w.type[i])) vehicles.push(i);
+  }
+  for (let v = 0; v < vehicles.length; v++) {
+    const transport = vehicles[v];
+    const room = transportCapacityOf(w.type[transport]) - passengerCount(w, transport);
+    const n = Math.min(KOTH_VEHICLE_CARGO.length, room);
+    for (let c = 0; c < n; c++) {
+      const rider = spawn(w, {
+        x: w.px[transport],
+        y: w.py[transport],
+        type: KOTH_VEHICLE_CARGO[c],
+        owner,
+      });
+      loadUnit(w, rider, transport);
+    }
+  }
+}
+
 function spawnConfiguredKothArmy(w, owner, baseX, baseZ) {
   const layout = _armyPerSide > 0 ? scaledKothArmyLayout(_armyPerSide) : KOTH_ARMY;
   const total = layout.reduce((s, c) => s + c.count, 0);
   if (total > AGORA_CAMP_PACKED_ABOVE) {
     spawnArmyPacked(w, layout, owner, baseX, baseZ);
-    return;
+  } else {
+    spawnKothFormation(w, owner, baseX, baseZ, layout);
   }
-  spawnKothFormation(w, owner, baseX, baseZ, layout);
+  loadKothVehicleCargo(w, owner);
 }
 
 function activeArmyLayout() {

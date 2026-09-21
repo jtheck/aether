@@ -74,6 +74,16 @@ import { findNamedUnit, namedUnits } from '../story/cast.js';
 import { OBJ_KINDS, normalizeObjectives } from '../story/objectives.js';
 import { createStorySheet } from './storySheet.js';
 import {
+  WAVE_ROUTE_MAX,
+  appendWaveHop,
+  collectWaveParams,
+  listWaveHops,
+  popWaveHop,
+  tileToWaveFrac,
+  waveFracToTile,
+  waveTargetObjective,
+} from './waveRoute.js';
+import {
   CELESTIAL_PRESETS,
   celestialPresetState,
   createCelestialRig,
@@ -106,6 +116,8 @@ const state = {
   buildings: [],
   agoras: [],
   objectives: [],
+  /** Fractional hops for the next zone (consumed when a wave zone is placed). */
+  waveRoute: [],
   startingResources: { ...STARTING_RESOURCES },
   story: emptyStory(),
   storyClipId: null,
@@ -289,6 +301,61 @@ function reservedFromPlacements() {
   return pts;
 }
 
+function readWaveForm() {
+  return {
+    waves: Number(document.getElementById('place-obj-waves')?.value) || 0,
+    era: Number(document.getElementById('place-obj-era')?.value) || 0,
+  };
+}
+
+function syncWaveRouteHint() {
+  const el = document.getElementById('place-obj-route-hint');
+  if (!el || !field) return;
+  const pending = state.waveRoute.length;
+  const armed = (state.objectives || []).filter((o) => (o.params?.waves | 0) > 0);
+  const hops = listWaveHops(state.objectives, state.waveRoute).length;
+  const bits = [];
+  if (armed.length) bits.push(`${armed.length} wave zone${armed.length === 1 ? '' : 's'}`);
+  if (hops) bits.push(`${hops} hop${hops === 1 ? '' : 's'}`);
+  if (pending) bits.push(`${pending} waiting for a zone`);
+  el.textContent = bits.length
+    ? bits.join(' · ')
+    : `No hops. First Hop click is where they form up (max ${WAVE_ROUTE_MAX}).`;
+}
+
+function applyWaveHop(tx, tz) {
+  const hop = tileToWaveFrac(tx, tz, field.width, field.height);
+  const target = waveTargetObjective(state.objectives);
+  if (target) {
+    if (!appendWaveHop(target, hop, readWaveForm())) return;
+  } else if (state.waveRoute.length < WAVE_ROUTE_MAX) {
+    state.waveRoute.push(hop);
+  } else {
+    return;
+  }
+  syncWaveRouteHint();
+}
+
+function undoWaveHop() {
+  const target = waveTargetObjective(state.objectives);
+  if (target && popWaveHop(target)) {
+    syncWaveRouteHint();
+    return;
+  }
+  if (state.waveRoute.length) {
+    state.waveRoute.pop();
+    syncWaveRouteHint();
+  }
+}
+
+function clearWaveHops() {
+  const target = waveTargetObjective(state.objectives);
+  if (target?.params?.route) delete target.params.route;
+  state.waveRoute = [];
+  syncWaveRouteHint();
+  updatePlaceMarkers();
+}
+
 function applyPlace(pos, { remove = false } = {}) {
   if (remove) {
     removeNearestPlacement(pos);
@@ -303,13 +370,32 @@ function applyPlace(pos, { remove = false } = {}) {
   if (state.placeKind === 'unit') {
     const name = String(document.getElementById('place-name')?.value || '').trim();
     state.units.push({ owner: state.owner, type: state.placeType | 0, tx, tz, name });
+  } else if (state.placeKind === 'wavehop') {
+    applyWaveHop(tx, tz);
   } else if (state.placeKind === 'objective') {
     const kind = String(document.getElementById('place-obj-kind')?.value || 'reach');
     const r = Math.max(0.5, Number(document.getElementById('place-obj-r')?.value) || 4);
     const label = String(document.getElementById('place-obj-label')?.value || '').trim();
     const message = String(document.getElementById('place-obj-message')?.value || '').trim();
     const next = String(document.getElementById('place-obj-next')?.value || '').trim();
-    state.objectives.push({ id: `obj-${state.objectives.length}`, kind, tx, tz, r, label, message, next });
+    const params = collectWaveParams({
+      waves: Number(document.getElementById('place-obj-waves')?.value) || 0,
+      era: Number(document.getElementById('place-obj-era')?.value) || 0,
+      route: state.waveRoute,
+    });
+    state.objectives.push({
+      id: `obj-${state.objectives.length}`,
+      kind,
+      tx,
+      tz,
+      r,
+      label,
+      message,
+      next,
+      ...(params ? { params } : {}),
+    });
+    if (params) state.waveRoute = [];
+    syncWaveRouteHint();
   } else if (state.placeKind === 'agora') {
     state.agoras.push({ owner: state.owner, x: pos.x, z: pos.z });
   } else {
@@ -345,6 +431,8 @@ function removeNearestPlacement(pos) {
       x: (u.tx + 0.5) * TILE_SIZE_F - half,
       z: (u.tz + 0.5) * TILE_SIZE_F - half,
     }));
+  } else if (state.placeKind === 'wavehop') {
+    undoWaveHop();
   } else if (state.placeKind === 'objective') {
     pickNear(state.objectives, (o) => ({
       x: (o.tx + 0.5) * TILE_SIZE_F - half,
@@ -441,6 +529,17 @@ function updatePlaceMarkers() {
     pushBoxMarker(oPos, oIdx, wx, groundY(wx, wz, 0.2), wz, span, 1.2, span);
   }
   addMarker('forge-objectives', oPos, oIdx, [0.35, 0.85, 1]);
+  if (field) {
+    const hopPos = [];
+    const hopIdx = [];
+    for (const wp of listWaveHops(state.objectives, state.waveRoute)) {
+      const tile = waveFracToTile(wp[0], wp[1], field.width, field.height);
+      const wx = (tile.tx + 0.5) * TILE_SIZE_F - half;
+      const wz = (tile.tz + 0.5) * TILE_SIZE_F - half;
+      pushBoxMarker(hopPos, hopIdx, wx, groundY(wx, wz, 1.6), wz, 4.2, 5, 4.2);
+    }
+    addMarker('forge-wave-hops', hopPos, hopIdx, [1, 0.55, 0.18]);
+  }
   if (sceneRegistered) invalidateRenderBundles(engine);
 }
 
@@ -1255,6 +1354,7 @@ function applyGardenJson(json) {
   state.buildings = g.buildings;
   state.agoras = g.agoras;
   state.objectives = normalizeObjectives(g.objectives);
+  state.waveRoute = [];
   state.startingResources = { ...(g.startingResources || STARTING_RESOURCES) };
   state.story = g.story || emptyStory();
   state.storyClipId = null;
@@ -1265,6 +1365,7 @@ function applyGardenJson(json) {
   applyCameraBound();
   syncFormFromField();
   syncStoryEditor();
+  syncWaveRouteHint();
   rebuildTerrain();
 }
 
@@ -1806,6 +1907,7 @@ function mountUi() {
       <label>Objectives</label>
       <div class="row">
         <button data-place="objective" data-type="objective">Zone</button>
+        <button data-place="wavehop" data-type="wavehop">Hop</button>
       </div>
       <label>Kind
         <select id="place-obj-kind">
@@ -1816,7 +1918,13 @@ function mountUi() {
       <label>Label <input id="place-obj-label" type="text" placeholder="Reach the old road"></label>
       <label>Message <input id="place-obj-message" type="text"></label>
       <label>Next garden <input id="place-obj-next" type="text" placeholder="/maps/chapter2.garden"></label>
-      <p class="hint">Click to place. Shift-click to remove the nearest of that kind. Escape / advance loads Next garden when a party unit enters the zone.</p>
+      <label>Waves <input id="place-obj-waves" type="number" min="0" step="1" value="0"></label>
+      <label>Era (1–5) <input id="place-obj-era" type="number" min="0" max="5" step="1" value="1"></label>
+      <div class="row">
+        <button id="btn-clear-wave-hops" type="button">Clear hops</button>
+      </div>
+      <p id="place-obj-route-hint" class="hint">No hops. First Hop click is where they form up (max ${WAVE_ROUTE_MAX}).</p>
+      <p class="hint">Click to place. Shift-click to remove the nearest of that kind. Waves &gt; 0 makes hostiles march at the zone — place the zone, then Hop along the path (first click is the spawn). No hops = they form on a ring around the zone. Escape / advance loads Next garden when a party unit enters the zone.</p>
     </div>
     <div id="panel-story" class="panel" style="display:none">
       <div class="row">
@@ -1944,6 +2052,10 @@ function mountUi() {
   document.getElementById('place-owner').addEventListener('input', (e) => {
     state.owner = Math.max(0, Math.min(4, Number(e.target.value) || 0));
   });
+  document.getElementById('btn-clear-wave-hops')?.addEventListener('click', () => {
+    clearWaveHops();
+  });
+  syncWaveRouteHint();
   document.getElementById('btn-gen-scenery').addEventListener('click', () => {
     populateScenery(field, null, reservedFromPlacements(), { keepExisting: true });
     queueSceneryPaint(null, { full: true });
@@ -2030,11 +2142,13 @@ function mountUi() {
     state.units = [];
     state.buildings = [];
     state.objectives = [];
+    state.waveRoute = [];
     state.cameraHalfF = 0;
     state.agoras = defaultMatchAgoras(worldHalfFFromField(field), field.width);
     celestial?.setWorldHalfF(worldHalfFFromField(field));
     applyCameraBound();
     syncCenterPlinthUi();
+    syncWaveRouteHint();
     rebuildTerrain();
   });
   document.getElementById('btn-export').addEventListener('click', exportMap);

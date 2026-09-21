@@ -20,6 +20,7 @@ import { mixPendingLightningChecksum } from './lightning.js';
 import { mixCombatStatusChecksum } from './combatStatus.js';
 import { mixTechChecksum } from './tech.js';
 import { mixResourceChecksum } from './resources.js';
+import { mixFoodUpkeepChecksum } from './foodUpkeep.js';
 
 export function checksum(w, field = null) {
   let h = 0x811c9dc5 | 0;
@@ -116,11 +117,13 @@ export function checksum(w, field = null) {
   mix(w.kothMatchOver ?? 0);
   mix(w.matchWinner ?? -1);
   mix(w.agoraOccupyEndsMatch ?? 1);
+  mix(w.storyProtect ?? 0);
   h = mixKothChecksum(h, mix, w.koth);
   h = mixAgoraChecksum(h, mix, w.agoras);
   h = mixBuildingChecksum(h, mix, w.buildings);
   mixTechChecksum(h, mix, w);
   mixResourceChecksum(h, mix, w);
+  mixFoodUpkeepChecksum(h, mix, w);
   if (field) mixTreeChecksum(mix, field);
   if (field) mixRockChecksum(mix, field);
   mixFireZoneChecksum(mix, w);

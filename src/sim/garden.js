@@ -15,6 +15,7 @@ import { grantStartingResources, RESOURCE_KINDS, STARTING_RESOURCES } from './re
 import { encodeStory, normalizeStory } from '../story/timeline.js';
 import { encodeObjectives, normalizeObjectives } from '../story/objectives.js';
 import * as fx from './fixed.js';
+import { normalizeNeutralTeams } from './teams.js';
 
 export const GARDEN_VERSION = 4;
 export const GARDEN_VERSION_MIN = 3;
@@ -277,6 +278,8 @@ export function encodeGarden(field, extras = {}) {
     out.ch = Math.round(cameraHalf * 100) / 100;
   }
   if (field.suppressCenterBlock) out.ncb = 1;
+  const neutrals = normalizeNeutralTeams(extras.neutralTeams);
+  if (neutrals) out.nr = neutrals;
   return out;
 }
 
@@ -344,6 +347,7 @@ export function decodeGarden(data) {
     story: data.story ? normalizeStory(data.story) : null,
     objectives: normalizeObjectives(data.obj),
     cameraHalfF: Number(data.ch) > 0 ? Number(data.ch) : 0,
+    neutralTeams: normalizeNeutralTeams(data.nr),
   };
 }
 

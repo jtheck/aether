@@ -1,6 +1,6 @@
 // In-scene confirm mark — a camera-facing "1^" that hovers at a world point.
-// Used first for parked building placement; same widget can confirm other
-// parked actions later. Hit test is screen-space so a finger can still land it.
+// Shown whenever a building ghost is on the board. Hit test is screen-space
+// so a finger or cursor can still land it.
 
 import {
   addToScene,
@@ -19,19 +19,19 @@ import {
 
 export const SCENE_CONFIRM_LABEL = '1^';
 /** Screen offset above the projected world point (CSS px, y-down). */
-export const SCENE_CONFIRM_LIFT_PX = 42;
-export const SCENE_CONFIRM_SIZE_PX = 52;
-export const SCENE_CONFIRM_HIT_PX = 30;
+export const SCENE_CONFIRM_LIFT_PX = 48;
+export const SCENE_CONFIRM_SIZE_PX = 58;
+export const SCENE_CONFIRM_HIT_PX = 36;
 /** Sit this far above ground before projecting. */
 export const SCENE_CONFIRM_WORLD_LIFT = 3.4;
 const ICON_DEPTH = 0.8;
 const HUD_RENDER_ORDER = 430;
 const HOVER_LERP = 14;
 const HOVER_SCALE = 0.1;
-const LABEL_FONT_SIZE = 26;
-const LABEL_SCREEN_SCALE = 0.82;
-const LABEL_COLOR_OK = [0.93, 0.95, 0.98, 1];
-const LABEL_COLOR_BAD = [0.95, 0.62, 0.58, 1];
+const LABEL_FONT_SIZE = 28;
+const LABEL_SCREEN_SCALE = 0.88;
+const LABEL_COLOR_OK = [0.96, 0.98, 1, 1];
+const LABEL_COLOR_BAD = [1, 0.72, 0.68, 1];
 
 /**
  * World point the mark tracks (center of the thing being confirmed).
@@ -182,11 +182,14 @@ function makeDiscMaterial() {
 @fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
   let p = input.uv * 2.0 - 1.0;
   let d = length(p);
-  let fill = 1.0 - smoothstep(0.78, 0.86, d);
-  let rim = smoothstep(0.62, 0.70, d) * (1.0 - smoothstep(0.86, 0.94, d));
-  let alpha = max(fill * 0.42, rim * (0.82 + shaderUniforms.glow * 0.18));
+  let plate = 1.0 - smoothstep(0.70, 0.80, d);
+  let hole = smoothstep(0.20, 0.32, d);
+  let inner = smoothstep(0.48, 0.54, d) * (1.0 - smoothstep(0.62, 0.68, d));
+  let rim = smoothstep(0.82, 0.88, d) * (1.0 - smoothstep(0.95, 1.0, d));
+  let glow = shaderUniforms.glow;
+  let alpha = max(plate * hole * (0.34 + glow * 0.10), max(inner * 0.96, rim * (0.92 + glow * 0.08)));
   if (alpha < 0.02) { discard; }
-  let wash = shaderUniforms.tint * (0.72 + shaderUniforms.glow * 0.28);
+  let wash = shaderUniforms.tint * (0.78 + glow * 0.32);
   return vec4<f32>(wash * alpha, alpha);
 }`,
   });
@@ -403,7 +406,7 @@ export function createSceneConfirm(engine, scene, screen) {
     const sx = (vp.pixelWidth ?? vw) / vw;
     const sy = (vp.pixelHeight ?? vh) / vh;
     const scale = LABEL_SCREEN_SCALE * (1 + hoverT * 0.08);
-    placeCaption(canvas.x, canvas.y, scale, 0.94, sx, sy, target.valid);
+    placeCaption(canvas.x, canvas.y, scale, 1, sx, sy, target.valid);
   }
 
   function registerLabels() {

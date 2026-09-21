@@ -16,7 +16,8 @@
 //     → pinch/rotate/pan. A finger already panning/soloing/edge never joins,
 //     except with build UI up: a second center finger may pull the solo into a
 //     chord so a 2-finger tap can cancel placement / building selection.
-//     While placing, a 1-finger drag previews the ghost; lift parks it for 1^.
+//     While placing, a 1-finger drag walks the ghost; lift leaves it for 1^
+//     / a later tap-drag yaw.
 //   - Stationary 2-finger tap → back out of placement / building selection;
 //     otherwise force-move.
 //   - Parallel orders while camera-chording:

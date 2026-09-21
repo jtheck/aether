@@ -98,4 +98,25 @@ describe('createMatchStory', () => {
     assert.equal(story.playIntro({ reels: [] }), false);
     assert.equal(story.driving(), false);
   });
+
+  it('notifies when a cinematic arms and when it is skipped', () => {
+    const cine = [];
+    const story = createMatchStory({
+      getCamera: () => null,
+      getField: () => ({ worldHalfF: 160, width: 80 }),
+      onCinematic: (on) => cine.push(!!on),
+    });
+    story.playIntro({
+      reels: [{
+        id: 'intro',
+        when: 'start',
+        clips: [
+          { id: 'c', kind: CLIP_CAMERA, t: 0, dur: 2, tx: 10, tz: 20, radius: 80, alpha: 0 },
+        ],
+      }],
+    });
+    assert.deepEqual(cine, [true]);
+    story.skip();
+    assert.deepEqual(cine, [true, false]);
+  });
 });

@@ -290,7 +290,7 @@ export function liveConfigFromReplay(file, extra = {}) {
     localPlayerId: -1,
     role: 'spectator',
     localSolo: true,
-    inputEnabled: false,
+    inputEnabled: true,
     reset: true,
     fog: true,
     sharedVision: true,

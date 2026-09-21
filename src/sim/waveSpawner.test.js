@@ -101,7 +101,7 @@ describe('wave spawner schedule', () => {
     }
   });
 
-  it('only arms survive/defend objectives that request waves', () => {
+  it('arms any objective that requests waves, and skips the rest', () => {
     const w1 = createWorld(1);
     setupWaveSpawners(w1, FIELD, [{ kind: 'reach', tx: 10, tz: 10, r: 5 }]);
     assert.equal(w1.waveSpawners, null);
@@ -113,5 +113,19 @@ describe('wave spawner schedule', () => {
     ]);
     assert.equal(w2.waveSpawners.length, 1);
     assert.equal(w2.waveSpawners[0].waves, 2);
+
+    const w3 = createWorld(1);
+    setupWaveSpawners(w3, FIELD, [
+      { kind: 'escape', tx: 10, tz: 10, r: 5, params: { waves: 3, era: 1 } },
+    ]);
+    assert.equal(w3.waveSpawners.length, 1);
+    assert.equal(w3.waveSpawners[0].waves, 3);
+    assert.equal(w3.waveSpawners[0].owner, WAVE_ENEMY_OWNER);
+
+    const w4 = createWorld(1);
+    setupWaveSpawners(w4, FIELD, [
+      { kind: 'escape', tx: 10, tz: 10, r: 5, params: { waves: 2, owner: 5 } },
+    ]);
+    assert.equal(w4.waveSpawners[0].owner, 5);
   });
 });

@@ -5,6 +5,8 @@ import { applyTableSilhouette } from '../sim/tableShape.js';
 import { populateScenery } from '../sim/scenery.js';
 import { applyGardenPlacements, decodeGarden, fieldFromGarden } from '../sim/garden.js';
 import { setupWaveSpawners } from '../sim/waveSpawner.js';
+import { setTeamNeutralPairs } from '../sim/teams.js';
+import { armStoryProtectFromGarden } from '../sim/storyProtect.js';
 import { buildWorldFromConfig, spawnBases, stressReservedPoints } from '../sim/worldSetup.js';
 import { step } from '../sim/step.js';
 import { excludeHumanAiPlayers, generateAiCommands } from '../sim/ai.js';
@@ -121,6 +123,8 @@ self.onmessage = (e) => {
         || (msg.config.animStressPerSide | 0) > 0;
       if (garden) applyGardenPlacements(world, field, garden);
       if (garden?.objectives?.length) setupWaveSpawners(world, field, garden.objectives);
+      setTeamNeutralPairs(garden?.neutralTeams ?? null);
+      armStoryProtectFromGarden(world, garden);
       if (!garden) {
         field.suppressCenterBlock = !!msg.config.noCenterBlock;
         applyTableSilhouette(field);

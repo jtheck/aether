@@ -10,6 +10,8 @@
 //   king in a public sandbox) attaches at the tip — no ledger replay — because
 //   the first join resets the match. L2+ observers only pull from their sponsor.
 // - Open seats use cascading SLOT_OFFER / opt-in SLOT_CLAIM (no auto-promote).
+// - Combat wipe (0 living units) vacates the seat on that commit and returns
+//   the user to the spectator / offer pool. True wipe still ends the round.
 // - Roster changes after live start flow through JOIN_ACCEPT or SLOT_DEFEAT.
 // - Commands and tick confirms must be owned by the userId for their playerId.
 
@@ -37,6 +39,7 @@ import {
   packLedgerChunks,
 } from './kothCheckpointWire.js';
 import { CMD } from '../sim/commands.js';
+import { kothWipedOwners } from '../sim/kothMeta.js';
 import {
   LOBBY,
   BROADCAST,
@@ -56,6 +59,7 @@ import {
   removeNode,
   assignSponsor,
   promoteObserverToPlayer,
+  demotePlayerToObserver,
   offerEligibleUserIds,
   listObserversByJoin,
   CHECKPOINT_INTERVAL_TICKS,
@@ -556,7 +560,7 @@ export function createKothShard(options = {}) {
     }
   }
 
-  function refreshSlotOffer() {
+  function refreshSlotOffer(extraEligible = []) {
     if (!isKing() || phase !== SHARD_PHASE.LIVE) return;
     const active = countActive(roster);
     if (active >= MAX_ACTIVE_PLAYERS) {
@@ -569,6 +573,10 @@ export function createKothShard(options = {}) {
       offerStartedAt = Date.now();
     }
     offerEligible = offerEligibleUserIds(observerTree, offerExpandSteps);
+    for (const id of extraEligible) {
+      if (!id) continue;
+      if (!offerEligible.some((e) => userIdsMatch(e, id))) offerEligible.push(id);
+    }
     sendAll({
       type: MSG.SLOT_OFFER,
       v: KOTH_PROTOCOL_VERSION,
@@ -2337,13 +2345,12 @@ export function createKothShard(options = {}) {
   function dropSeatedLeaver(userId) {
     const slot = slotForKnownUser(userId);
     if (phase !== SHARD_PHASE.LIVE || slot?.state !== 'active' || slot.playerId < 0) return false;
-    roster = releaseUser(roster, slot.userId, true);
-    removePlayerFromQuorum(slot.playerId);
-    if (isKing()) {
-      const tick = (session?.confirmedTick ?? 0) + 2;
-      sendAll({ type: MSG.SLOT_DEFEAT, matchId, playerId: slot.playerId, userId: slot.userId, tick });
-      applySlotDefeat(slot.playerId, tick);
-    }
+    const tick = (session?.confirmedTick ?? 0) + 2;
+    vacateActiveSeat(slot.playerId, slot.userId, {
+      authorDefeat: isKing(),
+      eliminateTick: tick,
+      killUnits: true,
+    });
     emitShard();
     if (isKing()) refreshSlotOffer();
     checkShardEmpty();
@@ -2352,50 +2359,137 @@ export function createKothShard(options = {}) {
 
   function forceDefeatPlayer(playerId, userId) {
     const tick = (session?.confirmedTick ?? 0) + 2;
-    roster = releaseUser(roster, userId, true);
-    sendAll({ type: MSG.SLOT_DEFEAT, matchId, playerId, userId, tick });
-    applySlotDefeat(playerId, tick);
+    vacateActiveSeat(playerId, userId, {
+      authorDefeat: true,
+      eliminateTick: tick,
+      killUnits: true,
+    });
+    emitShard();
+    if (isKing()) refreshSlotOffer();
     checkShardEmpty();
   }
 
   function handleSlotDefeat(msg) {
     if (msg.matchId !== matchId) return;
     const slot = slotForKnownUser(msg.userId) ?? roster[msg.playerId];
-    roster = releaseUser(roster, slot?.userId ?? msg.userId, true);
-    applySlotDefeat(msg.playerId, msg.tick);
+    vacateActiveSeat(msg.playerId, slot?.userId ?? msg.userId, {
+      authorDefeat: false,
+      eliminateTick: msg.tick,
+      killUnits: true,
+    });
     emitShard();
     if (isKing()) refreshSlotOffer();
     checkShardEmpty();
   }
 
-  function applySlotDefeat(playerId, tick) {
+  function publishSponsorHandoffs(assignments) {
+    if (!isKing() || !assignments?.length) return;
+    sendAll({
+      type: MSG.SPONSOR_HANDOFF,
+      v: KOTH_PROTOCOL_VERSION,
+      matchId,
+      fromUserId: localUserId,
+      assignments,
+    });
+  }
+
+  function parkUserInObserverPool(userId) {
+    if (!userId) return;
+    const assignments = demotePlayerToObserver(observerTree, userId, livePlayerUserIds());
+    if (userIdsMatch(userId, localUserId)) {
+      const self = observerTree.nodes.get(userId);
+      assignedSponsorId = self?.sponsorId ?? null;
+      observerDepth = self?.depth ?? 1;
+    }
+    publishSponsorHandoffs(assignments);
+  }
+
+  /**
+   * Empty a live seat and move that user into the spectator / offer pool.
+   * Combat wipe skips FORCE_ELIMINATE — the army is already gone.
+   */
+  function vacateActiveSeat(playerId, userId, {
+    authorDefeat = false,
+    eliminateTick = 0,
+    killUnits = false,
+  } = {}) {
+    if (playerId == null || playerId < 0) return false;
+    const slot = roster[playerId];
+    const uid = userId ?? slot?.userId;
+    if (slot?.state === 'active' && uid) {
+      roster = releaseUser(roster, uid, false);
+    }
+    applySlotDefeat(playerId, eliminateTick, { killUnits });
+    parkUserInObserverPool(uid);
+    if (authorDefeat && uid) {
+      sendAll({
+        type: MSG.SLOT_DEFEAT,
+        matchId,
+        playerId,
+        userId: uid,
+        tick: eliminateTick,
+      });
+    }
+    return true;
+  }
+
+  function retireCombatWipes() {
+    if (phase !== SHARD_PHASE.LIVE || lobbyMatchHold) return;
+    if (!session?.koth || session.kothMatchOver || session.replayingCatchUp) return;
+
+    const wiped = kothWipedOwners(session.koth);
+    let changed = false;
+    const returned = [];
+    for (const playerId of wiped) {
+      const slot = roster[playerId];
+      if (slot?.state !== 'active' || !slot.userId) continue;
+      if (defeatedPlayers.has(playerId)) continue;
+      const authorDefeat = isKing() || playerId === localPlayerId;
+      returned.push(slot.userId);
+      vacateActiveSeat(playerId, slot.userId, {
+        authorDefeat,
+        eliminateTick: (session.confirmedTick ?? 0) + 2,
+        killUnits: false,
+      });
+      changed = true;
+    }
+    if (!changed) return;
+    emitShard();
+    broadcastPresence();
+    if (isKing()) refreshSlotOffer(returned);
+    checkShardEmpty();
+  }
+
+  function applySlotDefeat(playerId, tick, { killUnits = true } = {}) {
     removePlayerFromQuorum(playerId);
     if (!defeatedPlayers.has(playerId)) {
       defeatedPlayers.add(playerId);
-      const eventId = `defeat:${matchId}:${playerId}:${tick}`;
-      const source = eventSourcePlayerId();
-      const frame = session?.submitAtTick(
-        tick,
-        { type: CMD.FORCE_ELIMINATE, playerId },
-        { playerId: source, commandId: eventId },
-      );
-      if (frame) {
-        frame.userId = userForPlayerId(frame.playerId);
-        sendAll({ type: MSG.COMMAND_FRAME, frame });
+      if (killUnits) {
+        const eventId = `defeat:${matchId}:${playerId}:${tick}`;
+        const source = eventSourcePlayerId();
+        const frame = session?.submitAtTick(
+          tick,
+          { type: CMD.FORCE_ELIMINATE, playerId },
+          { playerId: source, commandId: eventId },
+        );
+        if (frame) {
+          frame.userId = userForPlayerId(frame.playerId);
+          sendAll({ type: MSG.COMMAND_FRAME, frame });
+        }
       }
     }
-    if (playerId === localPlayerId) {
-      setRole('spectator');
+    if (playerId === localPlayerId && role === 'player') {
+      localPlayerId = -1;
+      session?.setLocalPlayerId?.(-1);
       catchUpReady = true;
-      assignedSponsorId = null;
-      observerDepth = 0;
-      noteObserverCaughtUp(localUserId);
+      pendingLocalJoin = null;
+      saveMatch({ matchId, userId: localUserId, slot: null });
+      setRole('spectator');
       onStatus(
         countActive(roster) < MAX_ACTIVE_PLAYERS
           ? 'Eliminated — waiting for seat offer…'
           : 'Eliminated — spectating (match full)',
       );
-      if (isKing()) refreshSlotOffer();
     }
   }
 
@@ -4259,6 +4353,7 @@ export function createKothShard(options = {}) {
         activateAcceptedJoinsAtTick(tick);
         promoteLocalJoinIfReady(tick);
         syncJoinedPresentationIfReady(tick);
+        retireCombatWipes();
         sendTickConfirm(tick + 1);
         processJoinQueue();
         void maybePublishCheckpoint(tick);

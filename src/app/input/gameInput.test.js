@@ -8,6 +8,7 @@ import {
   mergeBuildingSels,
   placementDownKind,
   placementHoverFollowsPointer,
+  placementReleaseKind,
   placementTapKind,
   radialClickKind,
   radialHubFramedBuilding,
@@ -20,7 +21,6 @@ import {
 import { createGameInput } from './gameInput.js';
 import { CONTROL_GROUP_BLACK } from './controlGroups.js';
 import { CMD } from '../../sim/commands.js';
-import { BUILDING_YAW_SNAP } from '../../sim/buildings.js';
 
 describe('building multi / box select helpers', () => {
   it('shift-add merges buildings without duplicating keys', () => {
@@ -92,26 +92,79 @@ describe('building multi / box select helpers', () => {
     assert.equal(radialClickKind({ picked: false, onHub: false, onChrome: false }), 'world');
   });
 
-  it('agora tap while placing exits; world taps park instead of stamping', () => {
+  it('agora tap while placing exits; world taps leave the ghost for 1^', () => {
     assert.equal(placementTapKind('pick', null), 'pick');
     assert.equal(placementTapKind('hub', null), 'exit');
     assert.equal(placementTapKind('chrome', { kind: 'agora' }), 'chrome');
     assert.equal(placementTapKind('world', { kind: 'agora' }), 'exit');
-    assert.equal(placementTapKind('world', { kind: 'building' }), 'park');
-    assert.equal(placementTapKind('world', null), 'park');
+    assert.equal(placementTapKind('world', { kind: 'building' }), 'stay');
+    assert.equal(placementTapKind('world', null), 'stay');
   });
 
-  it('1^ wins over the parked ghost; ghost click rotates; else preview', () => {
-    assert.equal(placementDownKind({ parked: true, hitConfirm: true, hitGhost: true }), 'confirm');
-    assert.equal(placementDownKind({ parked: true, hitGhost: true }), 'rotate');
-    assert.equal(placementDownKind({ parked: true }), 'preview');
-    assert.equal(placementDownKind({ parked: false, hitGhost: true }), 'preview');
+  it('mouse tap stamps; touch tap leaves the ghost; a yaw drag does not stamp', () => {
+    assert.equal(placementReleaseKind({
+      downKind: 'rotate',
+      tap: true,
+      pointerType: 'mouse',
+    }), 'confirm');
+    assert.equal(placementReleaseKind({
+      downKind: 'rotate',
+      tap: true,
+      pointerType: 'touch',
+    }), 'stay');
+    assert.equal(placementReleaseKind({
+      downKind: 'rotate',
+      rotated: true,
+      tap: true,
+      pointerType: 'mouse',
+    }), 'stay');
+    assert.equal(placementReleaseKind({
+      downKind: 'confirm',
+      tap: true,
+    }), 'confirm');
+    assert.equal(placementReleaseKind({
+      downKind: 'rotate',
+      tap: true,
+      pointerType: 'mouse',
+      tapKind: 'exit',
+      radialKind: 'world',
+    }), 'confirm');
+    assert.equal(placementReleaseKind({
+      downKind: 'preview',
+      tap: true,
+      pointerType: 'mouse',
+      tapKind: 'exit',
+      radialKind: 'world',
+    }), 'confirm');
+    assert.equal(placementReleaseKind({
+      downKind: 'rotate',
+      tap: true,
+      pointerType: 'mouse',
+      tapKind: 'exit',
+      radialKind: 'hub',
+    }), 'exit');
+    assert.equal(placementReleaseKind({
+      downKind: 'preview',
+      tap: true,
+      pointerType: 'touch',
+    }), 'stay');
   });
 
-  it('parked ghost ignores hover unless a reposition drag is live', () => {
-    assert.equal(placementHoverFollowsPointer(false, false), true);
-    assert.equal(placementHoverFollowsPointer(true, false), false);
-    assert.equal(placementHoverFollowsPointer(true, true), true);
+  it('1^ wins; mouse click-drags yaw; touch on the ghost yaws, empty ground walks', () => {
+    assert.equal(placementDownKind({ hasGhost: true, hitConfirm: true, hitGhost: true }), 'confirm');
+    assert.equal(placementDownKind({ hasGhost: true, hitGhost: true }), 'rotate');
+    assert.equal(placementDownKind({ hasGhost: true }), 'rotate');
+    assert.equal(placementDownKind({ hasGhost: false }), 'preview');
+    assert.equal(placementDownKind({ hasGhost: true, hitGhost: true, touch: true }), 'rotate');
+    assert.equal(placementDownKind({ hasGhost: true, touch: true }), 'preview');
+  });
+
+  it('mouse hover walks the ghost; touch only walks during a preview drag', () => {
+    assert.equal(placementHoverFollowsPointer({ pointerType: 'mouse' }), true);
+    assert.equal(placementHoverFollowsPointer({ pointerType: 'touch' }), false);
+    assert.equal(placementHoverFollowsPointer({ pointerType: 'touch', previewDragging: true }), true);
+    assert.equal(placementHoverFollowsPointer({ rotating: true, pointerType: 'mouse' }), false);
+    assert.equal(placementHoverFollowsPointer({ confirming: true, pointerType: 'mouse' }), false);
   });
 
   it('hub miss still picks the framed building', () => {
@@ -140,7 +193,7 @@ describe('building multi / box select helpers', () => {
     assert.equal(inspectForeignOnClick(true, false), true);
   });
 
-  it('paused / story still inspect, but do not accept orders', () => {
+  it('paused / story / spectator / replay still inspect, but do not accept orders', () => {
     const live = { role: 'player', localPlayerId: 0 };
     assert.equal(canInspectBoard(live), true);
     assert.equal(canAcceptIssuedCommands(live), true);
@@ -149,9 +202,13 @@ describe('building multi / box select helpers', () => {
     assert.equal(canInspectBoard({ ...live, storyDriving: true }), true);
     assert.equal(canAcceptIssuedCommands({ ...live, storyDriving: true }), false);
     assert.equal(canInspectBoard({ ...live, replayingCatchUp: true }), false);
-    assert.equal(canInspectBoard({ ...live, watchingReplay: true }), false);
     assert.equal(canInspectBoard({ ...live, resetting: true }), false);
-    assert.equal(canInspectBoard({ role: 'spectator', localPlayerId: 0 }), false);
+    assert.equal(canInspectBoard({ ...live, watchingReplay: true }), true);
+    assert.equal(canAcceptIssuedCommands({ ...live, watchingReplay: true }), false);
+    assert.equal(canInspectBoard({ role: 'spectator', localPlayerId: 0 }), true);
+    assert.equal(canAcceptIssuedCommands({ role: 'spectator', localPlayerId: 0 }), false);
+    assert.equal(canInspectBoard({ role: 'spectator', localPlayerId: -1 }), true);
+    assert.equal(canAcceptIssuedCommands({ role: 'spectator', localPlayerId: -1 }), false);
   });
 
   it('2-finger tap consumes placement, building selection, and an open radial', () => {
@@ -162,12 +219,43 @@ describe('building multi / box select helpers', () => {
   });
 });
 
-function makePlaceHarness() {
+describe('spectator inspect input', () => {
+  it('lets an unseated spectator use select/inspect', () => {
+    let interact = true;
+    const input = createGameInput({
+      canvas: {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      },
+      renderer: {
+        pickSelectionHud: () => null,
+        pickControlGroupHud: () => null,
+        screenToGround: () => ({ x: 0, z: 0, y: 0 }),
+        setSelectionBox: () => {},
+      },
+      world: { count: 0, alive: [], owner: [], type: [], carriedBy: [] },
+      selected: new Uint8Array(4),
+      localPlayerId: -1,
+      getUnitWorldPos: () => ({ x: 0, y: 0, z: 0 }),
+      enqueueCommand: () => {},
+      canInteract: () => interact,
+      canIssueCommands: () => false,
+      getAgoras: () => [],
+      getBuildings: () => [],
+    });
+    input.setRole('spectator');
+    assert.equal(input.canUseInput(), true);
+    interact = false;
+    assert.equal(input.canUseInput(), false);
+  });
+});
+
+function makePlaceHarness(opts = {}) {
   let placing = 'camp';
   let yaw = 0;
   let confirmHit = false;
   const confirms = [];
   const parks = [];
+  const agoras = opts.agora ? [{ owner: 0, x: 20, z: 20, yaw: 0 }] : [];
   const renderer = {
     pickSelectionHud: () => null,
     pickControlGroupHud: () => null,
@@ -203,7 +291,7 @@ function makePlaceHarness() {
     setPlacementYaw: (y) => { yaw = y; },
     isPlacingRally: () => false,
     isRadialOpen: () => false,
-    getAgoras: () => [],
+    getAgoras: () => agoras,
     getBuildings: () => [],
   });
   return {
@@ -498,39 +586,90 @@ describe('gamepad control groups', () => {
   });
 });
 
-describe('park then 1^ placement', () => {
-  it('click parks the ghost; 1^ stamps; rotate release does not', async () => {
-    const { input, confirms, parks, setConfirmHit, getYaw } = makePlaceHarness();
+describe('aim then 1^ placement', () => {
+  it('hover walks the ghost; a mouse tap stamps; click-drag yaws instead', async () => {
+    const { input, confirms, getYaw } = makePlaceHarness();
+    input.handlePointerMove(placePtr({ type: 'pointermove', clientX: 200, clientY: 200 }));
+    assert.equal(confirms.length, 0);
+
     input.handlePointerDown(placePtr({ clientX: 200, clientY: 200 }));
     await input.handlePointerUp(placePtr({ type: 'pointerup', clientX: 200, clientY: 200 }));
-    assert.equal(confirms.length, 0);
-    assert.equal(parks.at(-1), true);
+    assert.equal(confirms.length, 1);
 
+    input.handlePointerMove(placePtr({ type: 'pointermove', clientX: 200, clientY: 200 }));
     input.handlePointerDown(placePtr({ clientX: 200, clientY: 200 }));
     input.handlePointerMove(placePtr({ type: 'pointermove', clientX: 260, clientY: 200 }));
     await input.handlePointerUp(placePtr({ type: 'pointerup', clientX: 260, clientY: 200 }));
-    assert.equal(confirms.length, 0);
+    assert.equal(confirms.length, 1);
     assert.ok(Math.abs(getYaw()) > 0);
+  });
 
+  it('mouse tap stamps even when the click ray hits the agora under the ghost', async () => {
+    const { input, confirms } = makePlaceHarness({ agora: true });
+    input.handlePointerMove(placePtr({ type: 'pointermove', clientX: 200, clientY: 200 }));
+    input.handlePointerDown(placePtr({ clientX: 200, clientY: 200 }));
+    await input.handlePointerUp(placePtr({ type: 'pointerup', clientX: 200, clientY: 200 }));
+    assert.equal(confirms.length, 1);
+  });
+
+  it('1^ still stamps a mouse press on the mark', async () => {
+    const { input, confirms, setConfirmHit } = makePlaceHarness();
+    input.handlePointerMove(placePtr({ type: 'pointermove', clientX: 200, clientY: 200 }));
     setConfirmHit(true);
     input.handlePointerDown(placePtr({ clientX: 200, clientY: 200 }));
     await input.handlePointerUp(placePtr({ type: 'pointerup', clientX: 200, clientY: 200 }));
     assert.equal(confirms.length, 1);
-    assert.equal(parks.at(-1), false);
+  });
+
+  it('touch walks on the first contact and yaws on a later ghost drag', async () => {
+    const { input, confirms, getYaw } = makePlaceHarness();
+    input.handlePointerDown(placePtr({ pointerType: 'touch', clientX: 200, clientY: 200 }));
+    input.handlePointerMove(placePtr({
+      pointerType: 'touch',
+      type: 'pointermove',
+      clientX: 240,
+      clientY: 200,
+    }));
+    await input.handlePointerUp(placePtr({
+      pointerType: 'touch',
+      type: 'pointerup',
+      clientX: 240,
+      clientY: 200,
+    }));
+    assert.equal(confirms.length, 0);
+    assert.equal(getYaw(), 0);
+
+    input.handlePointerDown(placePtr({ pointerType: 'touch', clientX: 240, clientY: 200 }));
+    input.handlePointerMove(placePtr({
+      pointerType: 'touch',
+      type: 'pointermove',
+      clientX: 300,
+      clientY: 200,
+    }));
+    await input.handlePointerUp(placePtr({
+      pointerType: 'touch',
+      type: 'pointerup',
+      clientX: 300,
+      clientY: 200,
+    }));
+    assert.equal(confirms.length, 0);
+    assert.ok(Math.abs(getYaw()) > 0);
   });
 });
 
 describe('gamepad placement', () => {
-  it('preview follows the aim, A stamps, bumpers yaw, cancel leaves', () => {
+  it('preview follows the aim, bumper-drag yaws, A stamps, cancel leaves', () => {
     const { input, confirms, getYaw } = makePlaceHarness();
     assert.equal(input.previewPlacementAt(200, 300), true);
-    assert.equal(input.nudgePlacementYaw(1), true);
-    assert.equal(getYaw(), BUILDING_YAW_SNAP);
+    assert.equal(input.rotatePlacementAt(200, 300), true);
+    assert.equal(input.rotatePlacementAt(280, 300), true);
+    assert.ok(Math.abs(getYaw()) > 0);
+    const yaw = getYaw();
     assert.equal(input.confirmPlacementAt(220, 310), true);
     assert.equal(confirms.length, 1);
-    assert.equal(confirms[0].x, 22);
-    assert.equal(confirms[0].z, 31);
-    assert.equal(confirms[0].y, BUILDING_YAW_SNAP);
+    assert.equal(confirms[0].x, 20);
+    assert.equal(confirms[0].z, 30);
+    assert.equal(confirms[0].y, yaw);
     assert.equal(input.cancelPlacement(), true);
     assert.equal(input.isPlacing(), false);
   });

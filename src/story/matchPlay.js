@@ -36,6 +36,7 @@ function skipTarget(el) {
  *   getSpeakerPos?: (name: string) => { x: number, y: number, z: number } | null,
  *   worldToScreen?: (x: number, y: number, z: number) => { x: number, y: number } | null,
  *   host?: HTMLElement | null,
+ *   onCinematic?: (playing: boolean) => void,
  * }} [opts]
  */
 export function createMatchStory(opts = {}) {
@@ -104,6 +105,7 @@ export function createMatchStory(opts = {}) {
     speech.hide();
     // Drop any cinematic vision share when the reel ends or is skipped.
     opts.onReveal?.(null);
+    opts.onCinematic?.(false);
   }
 
   function onKey(e) {
@@ -143,6 +145,7 @@ export function createMatchStory(opts = {}) {
     playing = true;
     // Share vision with the reel's factions so spawns / distant action read on camera.
     opts.onReveal?.(reel.reveal ?? null);
+    opts.onCinematic?.(true);
     transport.attach(player);
     bindSkip();
     player.play();

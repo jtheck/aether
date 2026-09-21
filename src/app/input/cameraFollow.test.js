@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { isCameraFollowTypingTarget, selectionCentroidXZ } from './cameraFollow.js';
+import { isCameraFollowTypingTarget, selectionCentroidXZ, shouldHoldSelectionFollow } from './cameraFollow.js';
 
 describe('selectionCentroidXZ', () => {
   it('averages selected living units', () => {
@@ -72,6 +72,15 @@ describe('selectionCentroidXZ', () => {
       renderZ: [1],
     }), null);
     assert.equal(selectionCentroidXZ({}), null);
+  });
+});
+
+describe('shouldHoldSelectionFollow', () => {
+  it('locks follow for spectators, replay, and unseated watchers', () => {
+    assert.equal(shouldHoldSelectionFollow({ role: 'player', localPlayerId: 0 }), false);
+    assert.equal(shouldHoldSelectionFollow({ role: 'spectator', localPlayerId: 0 }), true);
+    assert.equal(shouldHoldSelectionFollow({ role: 'player', watchingReplay: true }), true);
+    assert.equal(shouldHoldSelectionFollow({ role: 'player', localPlayerId: -1 }), true);
   });
 });
 

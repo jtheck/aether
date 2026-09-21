@@ -1,9 +1,9 @@
 // Deterministic reinforcement waves for the adventure campaign.
 //
 // Two roles, one code path:
-//   • Enemy waves — from `survive`/`defend` objectives (params.waves). Hostile
-//     owner-4 attackers that muster near the point (ring) or march an authored
-//     route, escalating in size, drawn from a per-era roster.
+//   • Enemy waves — from any objective with params.waves. Hostile owner-4
+//     attackers that muster near the point (ring) or march an authored route,
+//     escalating in size, drawn from a per-era roster.
 //   • Allied waves — from any objective's `params.allies`. Friendly team-0
 //     reinforcements that spawn on your side and attack-rally across the map.
 //
@@ -28,7 +28,6 @@ export const WAVE_INTERVAL_TICKS = 240;
 export const WAVE_BASE_COUNT = 3;
 export const WAVE_MAX_COUNT = 8;
 
-const WAVE_KINDS = new Set(['survive', 'defend']);
 const { WARRIOR, ARCHER, WARLOCK, WIZARD, SHAMAN, MONK } = UNIT;
 
 /**
@@ -100,13 +99,13 @@ export function setupWaveSpawners(world, field, objectives) {
   const spawners = [];
   for (const obj of objectives || []) {
     const p = obj?.params || {};
-    // Enemy waves — tied to a survive/defend objective's location.
+    // Enemy waves — tied to the objective's location (escape, defend, …).
     const waves = p.waves | 0;
-    if (WAVE_KINDS.has(obj?.kind) && waves > 0) {
+    if (waves > 0) {
       const { cx, cz } = objectiveCenterF(obj, field);
       const ringTiles = Math.max(6, (obj.r | 0) + 6);
       spawners.push({
-        owner: WAVE_ENEMY_OWNER,
+        owner: Number.isFinite(Number(p.owner)) ? (p.owner | 0) : WAVE_ENEMY_OWNER,
         cx,
         cz,
         ringF: fx.fromFloat(ringTiles * TILE_SIZE_F),

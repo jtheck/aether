@@ -358,8 +358,6 @@ function placeDestroyTargets(field, objectives, existing = []) {
   return { units, buildings };
 }
 
-const WAVE_KINDS = new Set(['survive', 'defend']);
-
 function resolveObjectives(def, w, h, nextUrl) {
   const out = [];
   (def.objectives || []).forEach((o, i) => {
@@ -377,7 +375,7 @@ function resolveObjectives(def, w, h, nextUrl) {
       params,
     };
     // Tag wave objectives with their episode so the spawner picks the era roster.
-    if (WAVE_KINDS.has(objective.kind) && (params?.waves | 0) > 0) {
+    if ((params?.waves | 0) > 0) {
       objective.params = { ...params, era: def.episode | 0 };
     }
     if (isTerminalObjective(objective) && !objective.next && nextUrl) {

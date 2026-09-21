@@ -134,8 +134,9 @@ export function setupInput(opts) {
     onPlaceCancel() {
       game.cancelPlacement?.();
     },
-    onPlaceRotate(dir) {
-      game.nudgePlacementYaw?.(dir);
+    onPlaceRotateDrag() {
+      const c = aimClient();
+      if (c) game.rotatePlacementAt?.(c.clientX, c.clientY);
     },
   });
 

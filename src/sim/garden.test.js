@@ -564,6 +564,15 @@ describe('garden codec', () => {
     assert.equal(decodeGarden(encodeGarden(on)).suppressCenterBlock, false);
   });
 
+  it('roundtrips authored neutral team pairs', () => {
+    const field = buildField(3, { width: 32, height: 32 });
+    const json = encodeGarden(field, { neutralTeams: [[0, 5], [0, 4]] });
+    assert.deepEqual(json.nr, [[0, 5], [0, 4]]);
+    const g = decodeGarden(json);
+    assert.deepEqual(g.neutralTeams, [[0, 5], [0, 4]]);
+    assert.equal(encodeGarden(field).nr, undefined);
+  });
+
   it('roundtrips a custom camera bound and omits a full-table one', () => {
     const field = buildField(3, { width: 32, height: 32 });
     applyTableSilhouette(field, {

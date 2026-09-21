@@ -46,6 +46,7 @@ import {
   clearUnitRallyHops,
 } from './buildings.js';
 import { applyGather } from './gather.js';
+import { setStoryProtect } from './storyProtect.js';
 
 export const CMD = {
   MOVE: 1,
@@ -75,6 +76,8 @@ export const CMD = {
   GATHER: 16,
   /** Cancel an unfinished construction site and refund its placement cost. */
   CANCEL_CONSTRUCTION: 17,
+  /** Arm / drop party invincibility for a story reel (lockstep). */
+  STORY_PROTECT: 18,
 };
 
 /** @typedef {{ type: number, entities: number[], tx?: number[]|number, ty?: number[]|number, target?: number, abilityId?: string, transportAssignments?: { riderId: number, transportId: number }[] }} Command */
@@ -141,6 +144,9 @@ export function applyCommands(world, field, commands) {
         break;
       case CMD.RESEARCH:
         applyQueueResearch(world, cmd);
+        break;
+      case CMD.STORY_PROTECT:
+        setStoryProtect(world, cmd.on);
         break;
       default:
         break;

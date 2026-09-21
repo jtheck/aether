@@ -77,6 +77,13 @@ export function selectionCentroidXZ(src) {
   return { x: sx / n, z: sz / n };
 }
 
+/** Spectator / replay keep Space-style follow on whatever is selected. */
+export function shouldHoldSelectionFollow(s = {}) {
+  if ((s.role ?? 'player') === 'spectator') return true;
+  if (s.watchingReplay) return true;
+  return (s.localPlayerId ?? 0) < 0;
+}
+
 /** Space in a name field / menu control should type or activate, not lock the camera. */
 export function isCameraFollowTypingTarget(el) {
   if (!el) return false;

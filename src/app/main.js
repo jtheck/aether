@@ -108,7 +108,7 @@ import {
   unitChipLift,
 } from '../render/healthBars.js';
 import { setupInput } from './input.js';
-import { isCameraFollowTypingTarget, selectionCentroidXZ } from './input/cameraFollow.js';
+import { isCameraFollowTypingTarget, selectionCentroidXZ, shouldHoldSelectionFollow } from './input/cameraFollow.js';
 import { isControlGroupDoubleTap } from './input/controlGroups.js';
 import {
   aggregateBuildingTracks,
@@ -156,7 +156,7 @@ import {
 import { createExitMarks } from '../story/exits.js';
 import { liveConfigKeepsAdventure, resetAdventureRuntime } from '../story/adventureRuntime.js';
 import { CHAPTER_FLUSH_MS, chapterVotesReady, gardenFromChapterVotes, pickCanonicalChapter } from '../story/chapterSync.js';
-import { getTeamAssignments, setTeamAssignments } from '../sim/teams.js';
+import { getTeamAssignments, getTeamNeutralPairs, setTeamAssignments, setTeamNeutralPairs } from '../sim/teams.js';
 import { aetherSteam } from './steam.js';
 import {
   localOwnedPacks,
@@ -918,6 +918,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   /** Temporary cinematic reveal: null, 'all', or a list of owner ids. */
   let cinematicReveal = null;
   let fogShareVisionWith = baseShareVisionWith;
+  /** After a combat wipe, stamp no sources so the visited veil can finish decaying. */
+  let fogDecayOnly = false;
   function fogActive() {
     if (!fogUserEnabled) return false;
     if (session.role === 'spectator') return true;
@@ -945,6 +947,14 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     baseShareVisionWith = Array.isArray(owners) ? owners.map((id) => id | 0) : [];
     applyEffectiveShareVision();
   }
+  function setFogDecayOnly(on) {
+    const next = !!on;
+    if (fogDecayOnly === next) return;
+    fogDecayOnly = next;
+    if (session.resetting || liveConfigQuietFog) return;
+    stampFog();
+    refreshFoggedProps();
+  }
   /** Cinematic vision share driven by the active story reel. spec: null | 'all' | number[]. */
   function setCinematicReveal(spec) {
     cinematicReveal = spec === 'all'
@@ -960,9 +970,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     const t0 = frameProf ? performance.now() : 0;
     try {
       fog.stamp({
-        world: session.state,
-        buildings: livingBuildingList(session.buildings),
-        agoras: session.agoras,
+        world: fogDecayOnly ? null : session.state,
+        buildings: fogDecayOnly ? [] : livingBuildingList(session.buildings),
+        agoras: fogDecayOnly ? [] : session.agoras,
         field: session.field,
         localPlayerId,
         shareVisionWith: fogShareVisionWith,
@@ -1445,8 +1455,16 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     });
   }
 
+  function isObservingBoard() {
+    return shouldHoldSelectionFollow({
+      role: session.role,
+      localPlayerId,
+      watchingReplay: session.watchingReplay,
+    });
+  }
+
   function pushSelectionFollow() {
-    if (!spaceFollowHeld) return;
+    if (!spaceFollowHeld && !isObservingBoard()) return;
     const c = selectionFollowPoint();
     if (!c) {
       renderer.cameraController?.stopFollow?.();
@@ -1457,6 +1475,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   function releaseSpaceFollow() {
     spaceFollowHeld = false;
+    if (isObservingBoard() && selectionFollowPoint()) {
+      pushSelectionFollow();
+      return;
+    }
     renderer.cameraController?.stopFollow?.();
   }
   /** Ghost A* cache — repath only when the cursor enters a new tile. */
@@ -1866,7 +1888,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   }
 
   function syncSceneConfirm() {
-    if (!placingType || !placementParked || placingGhostX == null || placingGhostZ == null) {
+    if (!placingType || placingGhostX == null || placingGhostZ == null) {
       renderer.setSceneConfirm?.(null);
       return;
     }
@@ -1937,6 +1959,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     });
     renderer.setBuildingRadialPlacingValid?.(valid);
     if (placingType === 'silo') syncSiloPlacePreview();
+    syncSceneConfirm();
     return { snapped, valid };
   }
 
@@ -2008,6 +2031,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     getSpeakerPos: getStorySpeakerPos,
     worldToScreen: (x, y, z) => renderer.worldToScreen?.(x, y, z) ?? null,
     onReveal: (spec) => setCinematicReveal(spec),
+    onCinematic: (on) => {
+      if (session.role !== 'player') return;
+      session.submitCommand({ type: CMD.STORY_PROTECT, on: on ? 1 : 0 });
+    },
   });
   if (garden?.story) matchStory.playIntro(garden.story);
   const objectiveHud = createObjectiveHud(document.body);
@@ -2434,7 +2461,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       return out;
     },
     enqueueCommand: (cmd) => submitIssuedCommand(cmd),
-    onSelectionChanged: updateColors,
+    onSelectionChanged: () => {
+      updateColors();
+      pushSelectionFollow();
+    },
     onControlGroupJump: () => {
       if (matchStory.driving()) return;
       const c = selectionFollowPoint();
@@ -2454,7 +2484,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     onAbilityHold: null,
     canInteract: () => playerCanInspect(),
     // Gestures + arrows + menus stay up while paused / story; submit still drops.
-    canIssueCommands: () => playerCanInspect(),
+    // Spectators / replay inspect only — no order arrows.
+    canIssueCommands: () => !isObservingBoard() && playerCanInspect(),
     getAgoras: () => session.agoras ?? [],
     getBuildings: () => session.buildings ?? [],
     getField: () => session.field ?? null,
@@ -2464,6 +2495,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       syncBuildingHighlight(list);
       syncRallyFlagMarkers();
       syncWorkRadiusRing();
+      pushSelectionFollow();
+      if (isObservingBoard()) {
+        closeRadial();
+        return;
+      }
       if (sel && list && list.length === 1 && sel.kind === 'agora') {
         const a = session.agoras?.[sel.index];
         if (a && (a.owner | 0) === localPlayerId) {
@@ -3145,6 +3181,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
 
     const dt = Math.min(0.05, deltaMs / 1000);
+    const followCam = spaceFollowHeld || isObservingBoard();
 
     let colorsDirty = false;
     let corpses = 0;
@@ -3390,7 +3427,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         });
         let x = posed.x;
         let z = posed.z;
-        const followSmooth = spaceFollowHeld && (!!selected[i] || !!selected[t]) && !!poseValid[i];
+        const followSmooth = followCam && (!!selected[i] || !!selected[t]) && !!poseValid[i];
         if (followSmooth) {
           const s = chasePoseXZ(poseX[i], poseZ[i], x, z, dt);
           x = s.x;
@@ -3430,7 +3467,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       const def = getUnitDef(world.type[i]);
       let x = prev.x[i] + (cur.x[i] - prev.x[i]) * alpha;
       let z = prev.z[i] + (cur.z[i] - prev.z[i]) * alpha;
-      const followSmooth = spaceFollowHeld && !!selected[i] && !!poseValid[i];
+      const followSmooth = followCam && !!selected[i] && !!poseValid[i];
       if (followSmooth) {
         const s = chasePoseXZ(poseX[i], poseZ[i], x, z, dt);
         x = s.x;
@@ -3687,10 +3724,14 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
     }
     const allB = session.buildings;
+    const observing = session.role === 'spectator' || localPlayerId < 0;
     if (allB) {
       for (let i = 0; i < allB.length; i++) {
         if (markedB.has(i)) continue;
         const b = allB[i];
+        // Foreign buildings: chip only while selected. Own / spectate still
+        // auto-show when damaged.
+        if (!observing && (b.owner | 0) !== localPlayerId) continue;
         const maxHp = b.maxHp != null ? b.maxHp | 0 : 0;
         const hp = b.hp != null ? b.hp | 0 : maxHp;
         if (maxHp <= 0 || hp <= 0 || hp >= maxHp) continue;
@@ -3749,6 +3790,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         skip: fogHidden,
         buildings: session.buildings,
         hideBuilding: (b) => fog.hidesHostile(b.owner, b.x, b.z),
+      });
+    }
+    if (!session.resetting && renderer.syncBuildingFire) {
+      renderer.syncBuildingFire(session.buildings, {
+        hidden: (b) => fog.hidesHostile(b.owner, b.x, b.z),
       });
     }
     if (renderer.syncCarryLoads) {
@@ -3981,6 +4027,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     refreshFoggedProps,
     setFogEnabled,
     setShareVisionWith,
+    setFogDecayOnly,
   };
   ctxAdvanceChapter = async (url, handoff = null) => {
     if (!adventureSessionLive() || chapterAdvanceBusy) return;
@@ -4060,12 +4107,14 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
   const prevRole = ctx.session.role;
   const prevLocal = ctx.localPlayerId;
   const prevTeams = getTeamAssignments();
+  const prevNeutral = getTeamNeutralPairs();
   let worldReset = false;
   // Don't stamp/upload fog on the outgoing world (stress 496 → 1v1 208).
   // Stay quiet through session.reset; onWorldRebuilt force-stamps after setField.
   liveConfigQuietFog = true;
   try {
     setTeamAssignments(cfg.teamByOwner ?? null);
+    setTeamNeutralPairs(cfg.garden?.nr ?? cfg.garden?.neutralTeams ?? cfg.neutralTeams ?? null);
     ctx.session.setRole(cfg.role ?? 'player');
     if (cfg.localPlayerId != null) {
       ctx.localPlayerId = cfg.localPlayerId;
@@ -4111,6 +4160,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
   } catch (err) {
     if (!worldReset) {
       setTeamAssignments(prevTeams);
+      setTeamNeutralPairs(prevNeutral);
       ctx.session.setHumanPlayers(prevHumans);
       ctx.session.aiPlayers = prevAi;
       ctx.session.setRole(prevRole);
@@ -4383,6 +4433,7 @@ function syncPresentation(ctx, cfg, options = {}) {
   ctx.session.setRole(cfg.role ?? 'player');
   ctx.inputApi?.setRole?.(cfg.role ?? 'player');
   ctx.setFogEnabled?.(cfg.fog !== false);
+  ctx.setFogDecayOnly?.(Boolean(cfg.fogDecayOnly));
   ctx.setShareVisionWith?.(shareVisionOwnersFromCfg(cfg));
   ctx.stampFog?.();
   ctx.refreshFoggedProps?.();

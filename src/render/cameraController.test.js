@@ -241,6 +241,20 @@ describe('lookAtXZ', () => {
     assert.equal(cam.target.z, 12);
     assert.equal(ctrl.isFollowing(), true);
   });
+
+  it('lets zoom reach the floor while follow is locked', () => {
+    const cam = fakeCamera();
+    const ctrl = createCameraController(cam, fakeCanvas(), { worldHalfF: 200 });
+    ctrl.followXZ(10, 12);
+    cam.radius = cameraPlayRadius(cam.lowerRadiusLimit, cam.upperRadiusLimit);
+    ctrl.zoomBy(-(cam.radius - cam.lowerRadiusLimit));
+    assert.equal(cam.radius, cam.lowerRadiusLimit);
+    assert.equal(ctrl.isFollowing(), true);
+    for (let i = 0; i < 8; i++) ctrl.tick(16);
+    assert.equal(cam.radius, cam.lowerRadiusLimit);
+    assert.ok(Math.abs(cam.target.x - 10) < 2);
+    assert.ok(Math.abs(cam.target.z - 12) < 2);
+  });
 });
 
 function fakeCanvas() {

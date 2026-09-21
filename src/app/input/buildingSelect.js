@@ -123,40 +123,89 @@ export function radialClickKind(h) {
 
 /**
  * While ghost-placing, an agora mesh click exits place mode. Hub / chrome
- * only apply if a radial is still claiming hits (rally). World taps park
- * the ghost — 1^ confirms, not the tap itself.
+ * only apply if a radial is still claiming hits (rally).
  * @param {'pick' | 'hub' | 'chrome' | 'world'} radialKind
  * @param {{ kind?: string } | null | undefined} buildingHit
- * @returns {'pick' | 'chrome' | 'exit' | 'park'}
+ * @returns {'pick' | 'chrome' | 'exit' | 'stay'}
  */
 export function placementTapKind(radialKind, buildingHit) {
   if (radialKind === 'pick') return 'pick';
   if (radialKind === 'hub') return 'exit';
   if (radialKind === 'chrome') return 'chrome';
   if (buildingHit?.kind === 'agora') return 'exit';
-  return 'park';
+  return 'stay';
 }
 
 /**
  * Pointer-down while a building ghost is up. Confirm wins so the 1^ mark
- * is not eaten by the footprint under it.
- * @param {{ parked?: boolean, hitConfirm?: boolean, hitGhost?: boolean }} s
+ * is not eaten by the footprint under it. Mouse click-drag yaws (ghost sits
+ * under the cursor). Touch: down on the ghost yaws; empty ground walks it.
+ * @param {{
+ *   hasGhost?: boolean,
+ *   hitConfirm?: boolean,
+ *   hitGhost?: boolean,
+ *   touch?: boolean,
+ * }} s
  * @returns {'confirm' | 'rotate' | 'preview'}
  */
 export function placementDownKind(s = {}) {
   if (s.hitConfirm) return 'confirm';
-  if (s.parked && s.hitGhost) return 'rotate';
-  return 'preview';
+  if (!s.hasGhost) return 'preview';
+  if (s.touch) return s.hitGhost ? 'rotate' : 'preview';
+  return 'rotate';
 }
 
 /**
- * Hover / drag-around moves the ghost until it is parked, or while a
- * reposition drag is live. A parked ghost stays put (rotate + 1^ own it).
- * @param {boolean} parked
- * @param {boolean} previewDragging
+ * Lift while placing. Mouse hover keeps the ghost under the cursor, so a
+ * tap that never yawed stamps — even when the ray hits the agora under the
+ * plot. The compact hub still leaves. Touch lifts leave the ghost sitting;
+ * 1^ is the stamp there, and an agora tap still exits.
+ * @param {{
+ *   downKind?: 'confirm' | 'rotate' | 'preview' | null,
+ *   rotated?: boolean,
+ *   tap?: boolean,
+ *   pointerType?: string,
+ *   tapKind?: 'pick' | 'chrome' | 'exit' | 'stay',
+ *   radialKind?: 'pick' | 'hub' | 'chrome' | 'world',
+ * }} s
+ * @returns {'confirm' | 'pick' | 'chrome' | 'exit' | 'stay'}
  */
-export function placementHoverFollowsPointer(parked, previewDragging) {
-  return !parked || !!previewDragging;
+export function placementReleaseKind(s = {}) {
+  const tapKind = s.tapKind ?? 'stay';
+  if (s.downKind === 'confirm') return s.tap ? 'confirm' : 'stay';
+  if (s.downKind === 'rotate' && s.rotated) return 'stay';
+  const followStamp = s.tap && s.pointerType !== 'touch'
+    && (s.downKind === 'rotate' || s.downKind === 'preview');
+  if (s.downKind === 'preview' || (s.downKind === 'rotate' && s.tap)) {
+    if (tapKind === 'pick' || tapKind === 'chrome') return tapKind;
+    if (tapKind === 'exit') {
+      if (followStamp && s.radialKind !== 'hub') return 'confirm';
+      return 'exit';
+    }
+    if (followStamp) return 'confirm';
+    return 'stay';
+  }
+  return 'stay';
+}
+
+/**
+ * Ghost follows aim unless a rotate / confirm press owns it. Touch has no
+ * hover — only a live preview drag walks the ghost.
+ * @param {{
+ *   confirming?: boolean,
+ *   rotating?: boolean,
+ *   previewDragging?: boolean,
+ *   pointerType?: string,
+ * } | boolean} [s]
+ * @param {boolean} [previewDragging]
+ */
+export function placementHoverFollowsPointer(s = {}, previewDragging) {
+  if (typeof s === 'boolean') {
+    return !s || !!previewDragging;
+  }
+  if (s.confirming || s.rotating) return false;
+  if (s.previewDragging) return true;
+  return s.pointerType !== 'touch';
 }
 
 /**
@@ -183,8 +232,9 @@ export function inspectForeignOnClick(hasOwnOrderableSelection, canIssueOrders =
 }
 
 /**
- * Select / menus / order markers while the sim is paused or a story reel is up.
- * Catch-up, replay, and reset stay locked so we don't write into a live ledger.
+ * Select / menus / order markers while the sim is paused, a story reel is up,
+ * or while watching (spectator / replay). Catch-up and reset stay locked so we
+ * don't write into a live ledger.
  * @param {{
  *   role?: string,
  *   localPlayerId?: number,
@@ -194,13 +244,16 @@ export function inspectForeignOnClick(hasOwnOrderableSelection, canIssueOrders =
  * }} s
  */
 export function canInspectBoard(s = {}) {
+  if (s.resetting || s.replayingCatchUp) return false;
+  if ((s.role ?? 'player') === 'spectator' || s.watchingReplay) return true;
   if ((s.role ?? 'player') !== 'player') return false;
   if ((s.localPlayerId ?? 0) < 0) return false;
-  return !s.resetting && !s.replayingCatchUp && !s.watchingReplay;
+  return true;
 }
 
 /**
- * Sim actually takes MOVE / train / place. False while paused or story-driving.
+ * Sim actually takes MOVE / train / place. False while paused, story-driving,
+ * spectating, or watching a replay.
  * @param {{
  *   role?: string,
  *   localPlayerId?: number,
@@ -212,6 +265,9 @@ export function canInspectBoard(s = {}) {
  * }} s
  */
 export function canAcceptIssuedCommands(s = {}) {
+  if ((s.role ?? 'player') !== 'player') return false;
+  if ((s.localPlayerId ?? 0) < 0) return false;
+  if (s.watchingReplay) return false;
   return canInspectBoard(s) && !s.pauseLockstep && !s.storyDriving;
 }
 

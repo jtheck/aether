@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import * as fx from './fixed.js';
 import { TINY_MAP_W, SKIRMISH_MAP_W, worldHalfFFromMap } from './field.js';
 import { UNIT } from './unitTypes.js';
+import { createAgoras } from './agora.js';
+import { getResource, STARTING_RESOURCES } from './resources.js';
+import { BASE_PYRAMID_BANK, KOTH_STARTING_RESOURCES } from './storage.js';
 import {
   KOTH_ARMY,
   KOTH_UNITS_PER_ARMY,
@@ -17,7 +20,12 @@ import {
   defaultMatchAgoras,
   kothBases,
   laneBases,
+  sideBases,
   spawnBases,
+  spawnKothSlot,
+  pickKothSpawnPoint,
+  spawnCameraHomeXZ,
+  KOTH_SPAWN_COUNT,
   stressSliceMidAngle,
   usesCornerSpawnBases,
 } from './worldSetup.js';
@@ -39,7 +47,7 @@ describe('spawn bases', () => {
     const tinyHalf = worldHalfFFromMap(TINY_MAP_W);
     const smallHalf = worldHalfFFromMap(SKIRMISH_MAP_W);
     assert.deepEqual(spawnBases(tinyHalf, { mapW: TINY_MAP_W }), cornerBases(tinyHalf));
-    assert.deepEqual(spawnBases(smallHalf, { mapW: SKIRMISH_MAP_W }), kothBases(smallHalf));
+    assert.deepEqual(spawnBases(smallHalf, { mapW: SKIRMISH_MAP_W }), sideBases(smallHalf));
     assert.deepEqual(
       spawnBases(tinyHalf, { laneBases: true, mapW: TINY_MAP_W }),
       laneBases(tinyHalf),
@@ -126,6 +134,22 @@ describe('1vAI home agoras', () => {
 });
 
 describe('koth combat spawn', () => {
+  it('opens each seat on a full pre-silo pyramid and a double food stash', () => {
+    const w = buildWorldFromConfig({ seed: 5, mode: 'koth', activeSlots: [0, 1] });
+    for (const owner of [0, 1]) {
+      assert.equal(getResource(w, owner, 'wood'), BASE_PYRAMID_BANK.wood);
+      assert.equal(getResource(w, owner, 'stone'), BASE_PYRAMID_BANK.stone);
+      assert.equal(getResource(w, owner, 'mineral'), BASE_PYRAMID_BANK.mineral);
+      assert.equal(getResource(w, owner, 'food'), KOTH_STARTING_RESOURCES.food);
+    }
+  });
+
+  it('leaves skirmish on the usual opening bank', () => {
+    const w = buildWorldFromConfig({ seed: 6, mode: 'skirmish', activeSlots: [0, 1] });
+    assert.equal(getResource(w, 0, 'wood'), STARTING_RESOURCES.wood);
+    assert.equal(getResource(w, 0, 'food'), STARTING_RESOURCES.food);
+  });
+
   it('parks a dirigible and APC on opposite flanks, each loaded with villagers and an engineer', () => {
     const w = buildWorldFromConfig({ seed: 4, mode: 'koth', activeSlots: [0] });
     const ids = livingOf(w, 0);
@@ -139,7 +163,8 @@ describe('koth combat spawn', () => {
     for (const col of KOTH_ARMY) assert.equal(types.get(col.type) ?? 0, col.count);
 
     const bases = kothBases(w.worldHalfF);
-    const [bx, bz] = bases[0];
+    const [cx0, cz0] = centroidOf(w, 0);
+    const [bx, bz] = nearestPad(bases, cx0, cz0);
     const { fX, fZ, rX, rZ } = (() => {
       const len = Math.hypot(bx, bz) || 1;
       return { fX: -bx / len, fZ: -bz / len, rX: bz / len, rZ: -bx / len };
@@ -210,6 +235,44 @@ function livingOf(w, owner) {
   return ids;
 }
 
+function centroidOf(w, owner) {
+  let x = 0;
+  let z = 0;
+  let n = 0;
+  for (const i of livingOf(w, owner)) {
+    x += fx.toFloat(w.px[i]);
+    z += fx.toFloat(w.py[i]);
+    n++;
+  }
+  return n ? [x / n, z / n] : [0, 0];
+}
+
+function nearestPad(bases, x, z) {
+  let best = bases[0];
+  let bestD = Infinity;
+  for (const b of bases) {
+    const d = Math.hypot(x - b[0], z - b[1]);
+    if (d < bestD) {
+      bestD = d;
+      best = b;
+    }
+  }
+  return best;
+}
+
+function nearestPadIndex(bases, x, z) {
+  let best = 0;
+  let bestD = Infinity;
+  for (let i = 0; i < bases.length; i++) {
+    const d = Math.hypot(x - bases[i][0], z - bases[i][1]);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
 function radiusOf(w, i) {
   return Math.hypot(fx.toFloat(w.px[i]), fx.toFloat(w.py[i]));
 }
@@ -278,5 +341,85 @@ describe('stress pie ring', () => {
     for (let owner = 0; owner < STRESS_ARMY_COUNT; owner++) {
       assert.equal(livingOf(w, owner).length, STRESS_MENU_PER_SIDE);
     }
+  });
+});
+
+describe('koth spawn pads', () => {
+  it('places five even-spaced pads on a ring', () => {
+    const half = 100;
+    const bases = kothBases(half);
+    assert.equal(bases.length, KOTH_SPAWN_COUNT);
+    const r = half * SPAWN_BASE_INSET;
+    const step = (Math.PI * 2) / KOTH_SPAWN_COUNT;
+    for (const [x, z] of bases) {
+      assert.ok(Math.abs(Math.hypot(x, z) - r) < 1e-6);
+    }
+    for (let i = 0; i < bases.length; i++) {
+      const a = Math.atan2(bases[i][1], bases[i][0]);
+      const b = Math.atan2(bases[(i + 1) % bases.length][1], bases[(i + 1) % bases.length][0]);
+      let d = b - a;
+      while (d <= 0) d += Math.PI * 2;
+      assert.ok(Math.abs(d - step) < 1e-6);
+    }
+  });
+
+  it('opens two seats on different pads', () => {
+    const w = buildWorldFromConfig({ seed: 7, mode: 'koth', activeSlots: [0, 1] });
+    const bases = kothBases(w.worldHalfF);
+    const i0 = nearestPadIndex(bases, ...centroidOf(w, 0));
+    const i1 = nearestPadIndex(bases, ...centroidOf(w, 1));
+    assert.notEqual(i0, i1);
+  });
+
+  it('drops a joiner on an emptier pad than the first army', () => {
+    const w = buildWorldFromConfig({ seed: 8, mode: 'koth', activeSlots: [0] });
+    const bases = kothBases(w.worldHalfF);
+    const first = nearestPadIndex(bases, ...centroidOf(w, 0));
+    spawnKothSlot(w, 1);
+    const second = nearestPadIndex(bases, ...centroidOf(w, 1));
+    assert.notEqual(first, second);
+  });
+
+  it('avoids pads that already have an agora', () => {
+    const w = buildWorldFromConfig({
+      seed: 9,
+      mode: 'koth',
+      skipDefaultSpawns: true,
+      activeSlots: [],
+    });
+    const bases = kothBases(w.worldHalfF);
+    w.agoras = createAgoras(
+      bases.slice(0, 4).map((b, i) => ({ owner: i, x: b[0], z: b[1] })),
+    );
+    spawnKothSlot(w, 0);
+    assert.equal(nearestPadIndex(bases, ...centroidOf(w, 0)), 4);
+
+    w.agoras = createAgoras([{ owner: 0, x: bases[0][0], z: bases[0][1] }]);
+    for (let n = 0; n < 16; n++) {
+      const p = pickKothSpawnPoint(w, bases);
+      assert.notEqual(nearestPadIndex(bases, p[0], p[1]), 0);
+    }
+  });
+
+  it('aims the intro camera at the home agora when one exists', () => {
+    const w = buildWorldFromConfig({
+      seed: 3,
+      mode: 'koth',
+      homeAgoras: true,
+      agoraOccupyEndsMatch: 1,
+      activeSlots: [0, 1],
+    });
+    const home = spawnCameraHomeXZ(w, 0);
+    assert.ok(home);
+    assert.ok(Math.hypot(home.x - fx.toFloat(w.agoras[0].x), home.z - fx.toFloat(w.agoras[0].z)) < 0.01);
+  });
+
+  it('aims the intro camera at the combat-drop pad', () => {
+    const w = buildWorldFromConfig({ seed: 4, mode: 'koth', activeSlots: [0] });
+    const home = spawnCameraHomeXZ(w, 0);
+    assert.ok(home);
+    const [cx, cz] = centroidOf(w, 0);
+    const pad = nearestPad(kothBases(w.worldHalfF), cx, cz);
+    assert.ok(Math.hypot(home.x - pad[0], home.z - pad[1]) < 0.01);
   });
 });

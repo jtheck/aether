@@ -28,6 +28,12 @@ import {
   resolveCameraHalfF,
   rotateFocusShift,
   zoomFocusShift,
+  UNIT_ZOOM_SCALE_CAP,
+  UNIT_ZOOM_SCALE_HOLD,
+  UNIT_ZOOM_SCALE_MAX,
+  VEHICLE_ZOOM_SCALE_MAX,
+  unitZoomScale,
+  unitZoomScaleMaxForDef,
   zoomTendCatch,
 } from './cameraController.js';
 
@@ -44,6 +50,38 @@ function fakeCamera() {
   };
   return { target, alpha: 0, beta: 1, radius: 80 };
 }
+
+describe('unitZoomScale', () => {
+  it('stays at base through the closest pocket, then caps past mid-pull', () => {
+    assert.equal(unitZoomScale(0), 1);
+    assert.equal(unitZoomScale(UNIT_ZOOM_SCALE_HOLD), 1);
+    assert.equal(unitZoomScale(UNIT_ZOOM_SCALE_HOLD * 0.5), 1);
+    assert.equal(unitZoomScale(UNIT_ZOOM_SCALE_CAP), UNIT_ZOOM_SCALE_MAX);
+    assert.equal(unitZoomScale(1), UNIT_ZOOM_SCALE_MAX);
+    assert.ok(unitZoomScale(-1) === 1);
+    assert.ok(unitZoomScale(2) === UNIT_ZOOM_SCALE_MAX);
+  });
+
+  it('ramps a bit slower than ease-out quad, still front-loaded', () => {
+    const midN = UNIT_ZOOM_SCALE_HOLD + (UNIT_ZOOM_SCALE_CAP - UNIT_ZOOM_SCALE_HOLD) * 0.5;
+    const mid = unitZoomScale(midN);
+    const half = 1 + 0.5 * (UNIT_ZOOM_SCALE_MAX - 1);
+    const midAmt = 1 + (1 - 0.5 ** 1.5) * (UNIT_ZOOM_SCALE_MAX - 1);
+    const threeQ = 1 + 0.75 * (UNIT_ZOOM_SCALE_MAX - 1);
+    assert.ok(Math.abs(mid - midAmt) < 1e-9);
+    assert.ok(mid > half);
+    assert.ok(mid < threeQ);
+    assert.ok(unitZoomScale(0.8) === UNIT_ZOOM_SCALE_MAX);
+  });
+
+  it('grows vehicles less than infantry', () => {
+    assert.ok(VEHICLE_ZOOM_SCALE_MAX < UNIT_ZOOM_SCALE_MAX);
+    assert.equal(unitZoomScale(1, VEHICLE_ZOOM_SCALE_MAX), VEHICLE_ZOOM_SCALE_MAX);
+    assert.equal(unitZoomScaleMaxForDef({ mechanical: true }), VEHICLE_ZOOM_SCALE_MAX);
+    assert.equal(unitZoomScaleMaxForDef({ category: 'air' }), VEHICLE_ZOOM_SCALE_MAX);
+    assert.equal(unitZoomScaleMaxForDef({ category: 'military' }), UNIT_ZOOM_SCALE_MAX);
+  });
+});
 
 describe('chaseToward', () => {
   it('moves toward the target without overshooting in one frame', () => {

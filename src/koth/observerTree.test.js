@@ -8,6 +8,8 @@ import {
   offerEligibleUserIds,
   promoteObserverToPlayer,
   demotePlayerToObserver,
+  recomputeDepths,
+  reconcilePlayers,
   upsertNode,
   CHILDREN_PER_PLAYER,
   CHILDREN_PER_OBSERVER,
@@ -109,4 +111,94 @@ test('demote returns a wiped player to the caught-up observer pool', () => {
   assert.ok(offerEligibleUserIds(tree, 0).includes('p1'));
   assert.ok(offerEligibleUserIds(tree, 0).includes('o0'));
   assert.deepEqual(demotePlayerToObserver(tree, 'p1', ['p0']), []);
+});
+
+test('every open seat gets a candidate instead of one per expand step', () => {
+  const tree = createObserverTree();
+  upsertNode(tree, 'p0', { role: 'player', depth: 0, caughtUp: true });
+  upsertNode(tree, 'l1', {
+    role: 'observer', depth: 1, sponsorId: 'p0', caughtUp: true, joinedAt: 1,
+  });
+  tree.childrenOf.set('p0', ['l1']);
+  for (const [id, at] of [['l2a', 2], ['l2b', 3], ['l2c', 4]]) {
+    upsertNode(tree, id, {
+      role: 'observer', depth: 2, sponsorId: 'l1', caughtUp: true, joinedAt: at,
+    });
+  }
+  tree.childrenOf.set('l1', ['l2a', 'l2b', 'l2c']);
+
+  // A lone king has one L1 slot but four empty seats: everyone behind L1 used to
+  // wait out a 30s expand step per seat.
+  assert.deepEqual(
+    offerEligibleUserIds(tree, 0, { minCandidates: 4 }),
+    ['l1', 'l2a', 'l2b', 'l2c'],
+  );
+  assert.deepEqual(offerEligibleUserIds(tree, 0, { minCandidates: 2 }), ['l1', 'l2a']);
+  // Expand steps still widen beyond the open-seat count.
+  assert.deepEqual(offerEligibleUserIds(tree, 2, { minCandidates: 1 }), ['l1', 'l2a', 'l2b']);
+});
+
+test('seat holders and mid-join claimers are never offered a seat', () => {
+  const tree = createObserverTree();
+  upsertNode(tree, 'p0', { role: 'player', depth: 0, caughtUp: true });
+  upsertNode(tree, 'l1a', {
+    role: 'observer', depth: 1, sponsorId: 'p0', caughtUp: true, joinedAt: 1,
+  });
+  tree.childrenOf.set('p0', ['l1a']);
+  upsertNode(tree, 'l2a', {
+    role: 'observer', depth: 2, sponsorId: 'l1a', caughtUp: true, joinedAt: 2,
+  });
+  tree.childrenOf.set('l1a', ['l2a']);
+
+  const exclude = (id) => id === 'l1a';
+  // Excluding the only L1 must not leave an open seat with nobody able to claim.
+  assert.deepEqual(offerEligibleUserIds(tree, 0, { exclude }), ['l2a']);
+  assert.deepEqual(offerEligibleUserIds(tree, 0), ['l1a']);
+});
+
+test('depth is rebuilt from the players so a promoted sponsor does not strand its subtree', () => {
+  const tree = createObserverTree();
+  upsertNode(tree, 'p0', { role: 'player', depth: 0, caughtUp: true });
+  upsertNode(tree, 'l1', {
+    role: 'observer', depth: 1, sponsorId: 'p0', caughtUp: true, joinedAt: 1,
+  });
+  tree.childrenOf.set('p0', ['l1']);
+  upsertNode(tree, 'l2', {
+    role: 'observer', depth: 2, sponsorId: 'l1', caughtUp: true, joinedAt: 2,
+  });
+  tree.childrenOf.set('l1', ['l2']);
+
+  // l1 takes the open seat: l2 is now a child of a player and must read as L1.
+  const moved = reconcilePlayers(tree, ['p0', 'l1']);
+  assert.equal(tree.nodes.get('l1').role, 'player');
+  assert.equal(tree.nodes.get('l1').depth, 0);
+  assert.equal(tree.nodes.get('l2').depth, 1);
+  assert.ok(moved.some((m) => m.userId === 'l2' && m.depth === 1));
+  // The seat holder is gone from the eligible set; the real observer has it.
+  assert.deepEqual(offerEligibleUserIds(tree, 0), ['l2']);
+});
+
+test('reconcile demotes a stale player node and keeps it claimable', () => {
+  const tree = createObserverTree();
+  upsertNode(tree, 'p0', { role: 'player', depth: 0, caughtUp: true });
+  upsertNode(tree, 'gone', { role: 'player', depth: 0, caughtUp: true });
+
+  reconcilePlayers(tree, ['p0']);
+  const stale = tree.nodes.get('gone');
+  assert.equal(stale.role, 'observer');
+  assert.equal(stale.caughtUp, true);
+  assert.ok(offerEligibleUserIds(tree, 0).includes('gone'));
+});
+
+test('an observer with no path to a player stays claimable at L1', () => {
+  const tree = createObserverTree();
+  upsertNode(tree, 'p0', { role: 'player', depth: 0, caughtUp: true });
+  upsertNode(tree, 'orphan', {
+    role: 'observer', depth: 4, sponsorId: 'vanished', caughtUp: true, joinedAt: 1,
+  });
+
+  recomputeDepths(tree);
+  assert.equal(tree.nodes.get('orphan').depth, 1);
+  assert.equal(tree.nodes.get('orphan').sponsorId, null);
+  assert.deepEqual(offerEligibleUserIds(tree, 0), ['orphan']);
 });

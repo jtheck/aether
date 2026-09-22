@@ -113,12 +113,22 @@ function kothWorldSetupOk() {
     }
     return [x / n, z / n];
   });
-  const distinct = centers.every(([x, z], owner) => {
-    const [bx, bz] = KOTH_BASES[owner];
-    // Formation centroid sits a rank or two toward the hill from the slot base.
-    return Math.hypot(x - bx, z - bz) < 80;
+  const used = new Set();
+  const onPads = centers.every(([x, z]) => {
+    let best = Infinity;
+    let bestI = -1;
+    for (let i = 0; i < KOTH_BASES.length; i++) {
+      const d = Math.hypot(x - KOTH_BASES[i][0], z - KOTH_BASES[i][1]);
+      if (d < best) {
+        best = d;
+        bestI = i;
+      }
+    }
+    if (best >= 80 || used.has(bestI)) return false;
+    used.add(bestI);
+    return true;
   });
-  return countsOk && distinct;
+  return countsOk && onPads;
 }
 
 function ownershipOk() {
@@ -161,14 +171,17 @@ function joinAndDeathOk() {
   const accepted = activateSlot(roster, 2, 'cara');
   roster = accepted.slots;
   const w = buildWorldFromConfig({ seed: 0x7788, mode: 'koth', activeSlots: [0, 1] });
+  w.kothMatchOver = 1;
+  w.matchWinner = 0;
   step(w, field, [{ type: CMD.SPAWN_SLOT, playerId: 2 }]);
   const spawnedOnce = livingByOwner(w, 2) === KOTH_UNITS_PER_ARMY;
+  const reopened = w.kothMatchOver === 0 && w.matchWinner === -1;
   step(w, field, [{ type: CMD.SPAWN_SLOT, playerId: 2 }]);
   const idempotent = livingByOwner(w, 2) === KOTH_UNITS_PER_ARMY;
   step(w, field, [{ type: CMD.FORCE_ELIMINATE, playerId: 2 }]);
   roster = releaseUser(roster, 'cara', true);
   const eliminated = livingByOwner(w, 2) === 0 && roster[2].state === 'spectator';
-  return spawnedOnce && idempotent && eliminated;
+  return spawnedOnce && reopened && idempotent && eliminated;
 }
 
 function committedLedgerExportOk() {

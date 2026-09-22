@@ -74,6 +74,10 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
+  // Extension/content-script requests can surface in the page fetch stream, but
+  // CacheStorage only supports HTTP(S). They are outside the app's ownership.
+  const url = new URL(event.request.url);
+  if (!/^https?:$/.test(url.protocol) || url.origin !== self.location.origin) return;
   // Never intercept the worker script — no respondWith, no cache.put.
   if (isWorkerScript(event.request.url)) return;
   if (!isAppHtmlJsCss(event.request)) return;

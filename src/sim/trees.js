@@ -28,11 +28,11 @@ export const TREE_STOCK_MAX = 255;
 export const TREE_STOCK_NATURAL_MAX = TREE_WOOD_PER_STAGE * TREE_STAGE_MAX;
 export const TREE_STOCK_GROVE_MAX = TREE_WOOD_PER_STAGE * TREE_STAGE_GROVE_MAX;
 
-/** Per-stage visual scale. 0 hidden; 1–6 natural; 7–12 grove mound. */
+/** Per-stage visual scale. 0 hidden; 1–6 natural; 7–12 grove / rim mound. */
 const TREE_STAGE_SCALES = [
   0,
-  0.42, 0.55, 0.68, 0.82, 0.95, 1.12,
-  1.26, 1.42, 1.60, 1.80, 2.02, 2.26,
+  0.42, 0.62, 0.81, 1.02, 1.22, 1.47,
+  1.68, 1.92, 2.19, 2.49, 2.82, 3.18,
 ];
 
 /** Immediate chip on fireball splash — two visual stages, then the tree keeps burning. */

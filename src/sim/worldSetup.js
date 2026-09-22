@@ -20,7 +20,9 @@ import {
 } from './field.js';
 import { setTeamAssignments } from './teams.js';
 import { grantStartingResources } from './resources.js';
+import { KOTH_STARTING_RESOURCES } from './storage.js';
 import { loadUnit, passengerCount, transportCapacityOf } from './transport.js';
+import { rngU32 } from './rng.js';
 import * as fx from './fixed.js';
 
 /** Staging AI cold start. */
@@ -58,18 +60,35 @@ export const STRESS_ARMY_COUNT = 1 + STRESS_AI_OWNERS.length;
  * intersection — not the map corner itself.
  */
 export const SPAWN_BASE_INSET = 0.6;
+/** Even KOTH drop pads around the hill. */
+export const KOTH_SPAWN_COUNT = 5;
 
-/** Pentagonal spawn bases — scale with the active board half-extent. */
-export function kothBases(worldHalfF = activeWorldHalfF()) {
-  const H = worldHalfF;
-  const m = H * SPAWN_BASE_INSET;
+/** Cardinal side-midline pads — 1v1 / match agoras on larger boards. */
+export function sideBases(worldHalfF = activeWorldHalfF()) {
+  const m = worldHalfF * SPAWN_BASE_INSET;
   return [
     [-m, 0],
     [m, 0],
     [0, -m],
     [0, m],
-    [-H * 0.425, H * 0.425],
   ];
+}
+
+/** Five even KOTH drop pads — west first, then CCW. */
+export function kothBases(worldHalfF = activeWorldHalfF()) {
+  const r = worldHalfF * SPAWN_BASE_INSET;
+  const step = (Math.PI * 2) / KOTH_SPAWN_COUNT;
+  const out = [];
+  for (let i = 0; i < KOTH_SPAWN_COUNT; i++) {
+    const a = Math.PI + i * step;
+    const x = Math.cos(a) * r;
+    const z = Math.sin(a) * r;
+    out.push([
+      Math.abs(x) < 1e-10 ? 0 : x,
+      Math.abs(z) < 1e-10 ? 0 : z,
+    ]);
+  }
+  return out;
 }
 
 /** Team lanes — south pair (A), north pair (B). */
@@ -103,7 +122,7 @@ export function usesCornerSpawnBases(mapW) {
 export function spawnBases(worldHalfF = activeWorldHalfF(), opts = {}) {
   if (opts.laneBases) return laneBases(worldHalfF);
   if (usesCornerSpawnBases(opts.mapW ?? activeMapW())) return cornerBases(worldHalfF);
-  return kothBases(worldHalfF);
+  return sideBases(worldHalfF);
 }
 
 /** Default 1v1 agoras for a generated field (Forge + procedural matches). */
@@ -244,7 +263,7 @@ const KOTH_LAYOUT_UNITS = KOTH_ARMY.reduce((s, c) => s + c.count, 0);
 export const KOTH_CARGO_PER_VEHICLE = KOTH_VEHICLE_CARGO.length;
 export const KOTH_UNITS_PER_ARMY =
   KOTH_LAYOUT_UNITS + KOTH_CARGO_PER_VEHICLE * kothVehicleCount(KOTH_ARMY);
-export const KOTH_MAX_SLOTS = 5;
+export const KOTH_MAX_SLOTS = KOTH_SPAWN_COUNT;
 export const KOTH_MAX_ENTITIES =
   (UNITS_PER_ARMY + KOTH_CARGO_PER_VEHICLE * kothVehicleCount(KOTH_ARMY)) * KOTH_MAX_SLOTS;
 
@@ -363,9 +382,9 @@ function spawnConfiguredArmyAtAgora(w, owner, baseX, baseZ) {
 /** Spawn one KOTH army at a slot base (mid-game join). */
 export function spawnKothSlot(w, slot) {
   const half = w.worldHalfF ?? activeWorldHalfF();
-  const bases = spawnBases(half, { mapW: w.mapW });
-  const base = bestKothSpawnPoint(w, slot, bases);
+  const base = pickKothSpawnPoint(w, kothBases(half));
   spawnConfiguredKothArmy(w, slot, base[0], base[1]);
+  grantStartingResources(w, slot, KOTH_STARTING_RESOURCES);
 }
 
 export function stressPerSideFromSearch(search = '') {
@@ -681,45 +700,156 @@ function spawnArmyPacked(w, layout, owner, baseX, baseZ) {
   spawnStressSide(w, owner, baseX, baseZ, total, (k) => types[k]);
 }
 
-function bestKothSpawnPoint(w, slot, bases) {
-  const fallback = bases[slot] ?? bases[0];
-  const candidates = [];
-  for (const base of bases) candidates.push(base);
-  const half = activeWorldHalfF();
-  const radius = half * 0.875;
-  for (let i = 0; i < 16; i++) {
-    const a = (i / 16) * Math.PI * 2;
-    candidates.push([Math.cos(a) * radius, Math.sin(a) * radius]);
-  }
-
-  let best = fallback;
-  let bestScore = -1;
-  for (const c of candidates) {
-    const score = spawnClearanceScore(w, c[0], c[1], slot, bases);
-    if (score > bestScore) {
-      bestScore = score;
-      best = c;
+function nearestKothPad(bases, x, z) {
+  let best = 0;
+  let bestD2 = Infinity;
+  for (let i = 0; i < bases.length; i++) {
+    const dx = x - bases[i][0];
+    const dz = z - bases[i][1];
+    const d2 = dx * dx + dz * dz;
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      best = i;
     }
   }
   return best;
 }
 
-function spawnClearanceScore(w, x, z, owner, bases) {
-  let nearest = 0x7fffffff;
-  for (const base of bases) {
-    const dx = x - base[0];
-    const dz = z - base[1];
-    nearest = Math.min(nearest, dx * dx + dz * dz);
+/** Pad radius for "agora in this spawn" — just under half the neighbor spacing. */
+function kothPadClearanceR2(bases) {
+  let minD2 = Infinity;
+  for (let i = 0; i < bases.length; i++) {
+    for (let j = i + 1; j < bases.length; j++) {
+      const dx = bases[i][0] - bases[j][0];
+      const dz = bases[i][1] - bases[j][1];
+      const d2 = dx * dx + dz * dz;
+      if (d2 > 0 && d2 < minD2) minD2 = d2;
+    }
   }
+  if (!Number.isFinite(minD2) || minD2 === Infinity) return 80 * 80;
+  const r = Math.sqrt(minD2) * 0.45;
+  return r * r;
+}
+
+function markAgoraOnPads(bases, x, z, r2, hits) {
+  for (let i = 0; i < bases.length; i++) {
+    const dx = x - bases[i][0];
+    const dz = z - bases[i][1];
+    if (dx * dx + dz * dz <= r2) hits[i] = 1;
+  }
+}
+
+/**
+ * Pick among the even KOTH pads: agora-free first, then the least populated,
+ * randomized when several pads tie.
+ */
+export function pickKothSpawnPoint(w, bases) {
+  if (!bases?.length) return [0, 0];
+  if (bases.length === 1) return bases[0];
+
+  const pops = new Int32Array(bases.length);
   for (let i = 0; i < w.count; i++) {
-    if (!w.alive[i] || w.owner[i] === owner) continue;
-    const ux = fx.toFloat(w.px[i]);
-    const uz = fx.toFloat(w.py[i]);
-    const dx = x - ux;
-    const dz = z - uz;
-    nearest = Math.min(nearest, dx * dx + dz * dz);
+    if (!w.alive[i]) continue;
+    pops[nearestKothPad(bases, fx.toFloat(w.px[i]), fx.toFloat(w.py[i]))]++;
   }
-  return nearest;
+
+  const agoraHits = new Uint8Array(bases.length);
+  const padR2 = kothPadClearanceR2(bases);
+  const pads = w.agoras;
+  if (pads) {
+    for (let i = 0; i < pads.length; i++) {
+      const a = pads[i];
+      markAgoraOnPads(bases, fx.toFloat(a.x), fx.toFloat(a.z), padR2, agoraHits);
+    }
+  }
+  const buildings = w.buildings;
+  if (buildings) {
+    for (let i = 0; i < buildings.length; i++) {
+      const b = buildings[i];
+      if (b.type !== 'agora') continue;
+      markAgoraOnPads(bases, b.x, b.z, padR2, agoraHits);
+    }
+  }
+
+  let preferOpen = false;
+  for (let i = 0; i < bases.length; i++) {
+    if (!agoraHits[i]) {
+      preferOpen = true;
+      break;
+    }
+  }
+
+  let minPop = 0x7fffffff;
+  for (let i = 0; i < bases.length; i++) {
+    if (preferOpen && agoraHits[i]) continue;
+    if (pops[i] < minPop) minPop = pops[i];
+  }
+
+  const picks = [];
+  for (let i = 0; i < bases.length; i++) {
+    if (preferOpen && agoraHits[i]) continue;
+    if (pops[i] === minPop) picks.push(bases[i]);
+  }
+  if (picks.length <= 1) return picks[0] ?? bases[0];
+  return picks[rngU32(w.rng) % picks.length];
+}
+
+function agoraWorldXZ(a) {
+  if (!a || !Number.isFinite(a.x) || !Number.isFinite(a.z)) return null;
+  // Serialized pads are world floats; sim pads are Q16.16 (well outside the board).
+  if (Math.abs(a.x) > 4000 || Math.abs(a.z) > 4000) {
+    return { x: fx.toFloat(a.x), z: fx.toFloat(a.z) };
+  }
+  return { x: a.x, z: a.z };
+}
+
+/** Living-army centroid in world XZ, or null. */
+export function ownerArmyCentroidXZ(w, owner) {
+  if (!w || owner < 0) return null;
+  const o = owner | 0;
+  let x = 0;
+  let z = 0;
+  let n = 0;
+  for (let i = 0; i < w.count; i++) {
+    if (!w.alive[i] || w.owner[i] !== o) continue;
+    x += fx.toFloat(w.px[i]);
+    z += fx.toFloat(w.py[i]);
+    n++;
+  }
+  return n ? { x: x / n, z: z / n } : null;
+}
+
+/**
+ * Match-intro look-at: home agora if we have one, else the even KOTH pad under
+ * the army (falls back to the centroid if the army has marched off).
+ */
+export function spawnCameraHomeXZ(w, owner, agoras = w?.agoras, worldHalfF = w?.worldHalfF) {
+  const o = owner | 0;
+  if (agoras) {
+    for (let i = 0; i < agoras.length; i++) {
+      const a = agoras[i];
+      if ((a?.owner | 0) !== o) continue;
+      const p = agoraWorldXZ(a);
+      if (p) return p;
+    }
+  }
+  const army = ownerArmyCentroidXZ(w, o);
+  if (!army) return null;
+  const half = worldHalfF;
+  if (Number.isFinite(half) && half > 0) {
+    const pads = kothBases(half);
+    let best = null;
+    let bestD = Infinity;
+    for (let i = 0; i < pads.length; i++) {
+      const d = Math.hypot(army.x - pads[i][0], army.z - pads[i][1]);
+      if (d < bestD) {
+        bestD = d;
+        best = pads[i];
+      }
+    }
+    if (best && bestD < 160) return { x: best[0], z: best[1] };
+  }
+  return army;
 }
 
 /** Mid-angle of pie slice `i` — player 0 faces west, then CCW. */
@@ -961,16 +1091,18 @@ export function buildWorldFromConfig({
 
   if (mode === 'koth') {
     const slots = activeSlots?.length ? activeSlots : [PLAYER, AI_OWNER];
+    const kothPads = kothBases(half);
     const agoraSpecs = [];
     for (const slot of slots) {
-      const base = bases[slot] ?? bases[0];
       if (homeAgoras) {
+        const base = bases[slot] ?? bases[0];
         agoraSpecs.push({ owner: slot, x: base[0], z: base[1] });
         spawnConfiguredArmyAtAgora(w, slot, base[0], base[1]);
       } else {
+        const base = pickKothSpawnPoint(w, kothPads);
         spawnConfiguredKothArmy(w, slot, base[0], base[1]);
       }
-      grantStartingResources(w, slot);
+      grantStartingResources(w, slot, KOTH_STARTING_RESOURCES);
     }
     if (homeAgoras) w.agoras = createAgoras(agoraSpecs);
     w.koth = createKothMeta(slots);

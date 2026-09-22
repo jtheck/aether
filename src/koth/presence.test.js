@@ -1,7 +1,13 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { KOTH_APP_STATE, SHARD_PHASE } from './protocol.js';
-import { isBrowsePresence, isLiveMatchMember, isMatchLeavePresence, isSpectatorMember } from './presence.js';
+import {
+  isBrowsePresence,
+  isLiveMatchMember,
+  isMatchLeavePresence,
+  isSpectatorMember,
+  relinquishesActiveSeat,
+} from './presence.js';
 
 const matchId = 'koth-abc-12345678';
 
@@ -42,6 +48,19 @@ describe('koth presence membership', () => {
     assert.equal(isBrowsePresence(data), false);
     assert.equal(isLiveMatchMember(data, matchId), true);
     assert.equal(isSpectatorMember(data, matchId), true);
+    assert.equal(relinquishesActiveSeat(data, matchId), true);
+  });
+
+  it('does not relinquish a seat during the pre-spawn JOINING state', () => {
+    const data = {
+      from: 'peer-joining',
+      matchId,
+      phase: SHARD_PHASE.LIVE,
+      appState: KOTH_APP_STATE.JOINING,
+      role: 'spectator',
+    };
+    assert.equal(isSpectatorMember(data, matchId), true);
+    assert.equal(relinquishesActiveSeat(data, matchId), false);
   });
 
   it('accepts a live player on this match, but not as a spectator', () => {

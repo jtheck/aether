@@ -5,13 +5,20 @@
 //
 // Hard KOTH invariants:
 // - Page load creates a private staging and never claims a public live slot.
-// - Public live state is entered by applying one complete MATCH_SNAPSHOT.
-// - Mid-match sync uses a world checkpoint + ledger delta. Solo live (one
-//   king in a public sandbox) attaches at the tip — no ledger replay — because
-//   the first join resets the match. L2+ observers only pull from their sponsor.
+// - Public live state is entered by catching up to the live tip, never by
+//   rebuilding the board.
+// - EVERY join is the same join: claim → JOIN_ACCEPT → deterministic SPAWN_SLOT
+//   at an agreed tick. The first challenger used to trigger a full match reset
+//   to a fresh two-army tick 0, which rebuilt the world under every spectator,
+//   killed their catch-up and their queued claim. spawnKothSlot works for any
+//   slot at any tick, so the king simply keeps playing and the joiner drops in.
+// - Mid-match sync uses a world checkpoint + ledger delta. Solo live (one king)
+//   attaches at a tip checkpoint — no ledger replay needed. L2+ observers only
+//   pull from their sponsor.
 // - Open seats use cascading SLOT_OFFER / opt-in SLOT_CLAIM (no auto-promote).
-// - Combat wipe (0 living units) vacates the seat on that commit and returns
-//   the user to the spectator / offer pool. True wipe still ends the round.
+// - Combat wipe (0 living units, or every agora gone after one was founded)
+//   vacates the seat on that commit and returns the user to the spectator /
+//   offer pool. True wipe still ends the round.
 // - Roster changes after live start flow through JOIN_ACCEPT or SLOT_DEFEAT.
 // - Commands and tick confirms must be owned by the userId for their playerId.
 
@@ -33,6 +40,10 @@ import {
 } from './catchup.js';
 import { LOCKSTEP_STALL_UI_MS } from './simSession.js';
 import {
+  BROADCAST_CHUNK_CHARS,
+  BROADCAST_LEDGER_CHUNK_FRAMES,
+  CHECKPOINT_CHUNK_CHARS,
+  LEDGER_CHUNK_FRAMES,
   createChunkAssembler,
   createLedgerAssembler,
   packCheckpointChunks,
@@ -62,6 +73,8 @@ import {
   demotePlayerToObserver,
   offerEligibleUserIds,
   listObserversByJoin,
+  recomputeDepths,
+  reconcilePlayers,
   CHECKPOINT_INTERVAL_TICKS,
   OFFER_EXPAND_MS,
 } from '../koth/observerTree.js';
@@ -82,11 +95,47 @@ import {
   makeChatMessage,
   unwrapChatMessage,
 } from '../lobby/chat.js';
-import { isLiveMatchMember, isMatchLeavePresence, isSpectatorMember } from '../koth/presence.js';
+import {
+  isLiveMatchMember,
+  isMatchLeavePresence,
+  isSpectatorMember,
+  relinquishesActiveSeat,
+} from '../koth/presence.js';
+import {
+  canSkipCatchupRequest,
+  canUseCatchupCheckpoint,
+  catchupOfferChecksum,
+  catchupRequestTick,
+  expectCatchupLedgerChunks,
+  isSoloLiveSpectatorOffer,
+  needsCatchupCheckpoint,
+  resolveCatchupOfferWorld,
+  shouldKeepSpectatorJoin,
+  shouldRestartSpectatorCatchup,
+  soloLiveOfferHasWorld,
+} from './spectatorAttach.js';
+import {
+  JOIN_CONFIRM_GRACE_MS,
+  CLAIM_SETTLE_MS,
+  MAX_SLOT_CLAIM_ATTEMPTS,
+  SLOT_CLAIM_TIMEOUT_MS,
+  canAdmitJoinerToQuorum,
+  canClaimSeatNow,
+  catchupOfferLedger,
+  framesAfterTick,
+  joinConfirmExpired,
+  joinQuorumTick,
+  joinSpawnTick,
+  mergeHeldConfirms,
+  shouldApplyOfferState,
+  shouldBroadcastLockstepFallback,
+  shouldHoldLockstepDuringCatchup,
+} from './joinLockstep.js';
 import {
   createEmptyRoster,
   rosterFromPeers,
   countActive,
+  lowestActiveUserId,
   claimOpenSlot,
   reserveOpenSlot,
   activateSlot,
@@ -104,15 +153,40 @@ async function waitForP2pConsumer(p2p, timeoutMs = 8000) {
   return false;
 }
 
-const JOIN_DELAY_TICKS = 24;
-const JOIN_ASSIGN_LEAD_TICKS = 12;
-const KOTH_PROTOCOL_VERSION = 3;
+// Spawn runway for a join. This has to cover the joiner's distance plus a
+// relayed round trip before their first confirm admits them to quorum.
+const JOIN_DELAY_TICKS = 40;
+/** Ticks a fresh joiner holds its input for while peers take its first confirm. */
+const JOIN_INPUT_SETTLE_TICKS = 20;
+// 4: every join is a drop-in SPAWN_SLOT; the first challenger no longer rebuilds
+// the board (which used to reset every spectator's catch-up and queued claim).
+const KOTH_PROTOCOL_VERSION = 4;
 const MIN_LIVE_PLAYERS = 2;
 const MAX_ACTIVE_PLAYERS = 5;
 // How long to listen in the matchmaking lobby for an existing match before
 // creating a new one, so two players pressing start near-simultaneously join the
 // same match instead of each spawning their own.
 const CATCHUP_OFFER_TIMEOUT_MS = 8000;
+// The seat offer is re-announced slowly so a peer that missed it (or joined
+// after it was minted) still hears about it, without putting a message on the
+// wire every commit.
+const OFFER_REANNOUNCE_MS = 3000;
+// Eligibility is recomputed off the observer tree; throttle it so the king is
+// not sorting the observer crowd 20 times a second.
+const OFFER_RECOMPUTE_MS = 250;
+// Relay chunk pacing. Every millisecond spent here becomes lag the joiner has to
+// burn down after attaching, so keep it brisk — just not a single burst that the
+// relay drops on the floor.
+const RELAY_CHUNK_INTERVAL_MS = 8;
+const RELAY_CHUNK_BATCH = 4;
+/** Repaint the catch-up progress line at most this often. */
+const CATCHUP_PROGRESS_MS = 250;
+/** How often a live client publishes its tick in presence (liveness + discovery). */
+const TICK_PRESENCE_MS = 250;
+/** Announced tick dropping by more than this means the match restarted at 0. */
+const MATCH_TICK_RESET_SLACK = 200;
+/** Only trust the announced live tick while it is still advancing. */
+const LIVE_TICK_FRESH_MS = 2000;
 const MATCH_DISCOVERY_MS = 1200;
 // How long a heard-about live match stays in the registry without a refresh.
 const LIVE_MATCH_TTL_MS = 12000;
@@ -158,6 +232,7 @@ export function createKothShard(options = {}) {
   const onShardChange = options.onShardChange ?? (() => {});
   const onLiveStart = options.onLiveStart ?? (() => {});
   const onPresentationSync = options.onPresentationSync ?? (() => {});
+  const onLeaveSolo = options.onLeaveSolo ?? (() => {});
   let armyPerSide = (options.armyPerSide | 0) || 0;
 
   if (typeof globalThis.GETFIREP2P !== 'function') {
@@ -188,6 +263,8 @@ export function createKothShard(options = {}) {
   let appState = KOTH_APP_STATE.PRIVATE_SANDBOX;
   let role = 'player';
   let catchUpReady = true;
+  /** True only after the local sim is the host match — not the 3-villager stub. */
+  let liveSimAttached = false;
   let matchStartSlots = [0];
   let matchHumanPlayers = [0];
   /** Player ids already eliminated this match — don't submit FORCE_ELIMINATE twice. */
@@ -202,8 +279,6 @@ export function createKothShard(options = {}) {
   const seenMessageIds = new Set();
   /** @type {string[]} */
   const seenMessageOrder = [];
-  /** @type {Map<string, object>} userId -> join intent */
-  const joinIntents = new Map();
   /** @type {Map<number, object[]>} tick -> accepted joins that become active after spawn */
   const pendingAcceptedJoins = new Map();
   let pendingLocalJoin = null;
@@ -269,18 +344,46 @@ export function createKothShard(options = {}) {
   let observerDepth = 0;
   let offerEpoch = 0;
   let offerExpandSteps = 0;
-  let offerStartedAt = 0;
   /** @type {string[]} */
   let offerEligible = [];
   let localOfferEligible = false;
   /** Last offer HUD string — presence heartbeats must not retrigger it. */
   let lastOfferStatus = '';
   let offerExpandTimer = null;
+  /** Last offer put on the wire. onCommit refreshes at tick rate; only changes ship. */
+  let lastOfferSignature = '';
+  let lastOfferSentAt = 0;
+  let lastOfferComputedAt = 0;
+  /** Highest closed epoch — blocks a stale heartbeat from re-arming a dead offer. */
+  let endedOfferEpoch = 0;
+  /** King whose offer epochs we mirror. Changes reset the epoch window. */
+  let offerAuthorityId = null;
+  let claimTimer = null;
+  let claimSettleTimer = null;
+  let claimAttempts = 0;
+  /** Claim requested while still catching up — fires once we are level. */
+  let claimWhenLevel = false;
+  /** When catch-up last completed — seeded peer confirms need a moment to settle. */
+  let catchUpReadyAt = 0;
+  /** playerId -> reserved joiner we are still waiting on (king only). */
+  const joinConfirmWatch = new Map();
+  /** playerId -> earliest tick a joiner may enter our lockstep quorum. */
+  const pendingQuorum = new Map();
+  /** Tick at which our own freshly joined seat gets its controls (0 = now). */
+  let inputEnableTick = 0;
   let lastCheckpointTickPublished = 0;
   const checkpointAssembler = createChunkAssembler();
   const ledgerAssembler = createLedgerAssembler();
   /** Incoming catch-up pieces keyed by requestId. */
   const pendingCatchupParts = new Map();
+  /** Outbound relay chunks, paced so the broadcast channel does not drop them. */
+  let relayChunkQueue = [];
+  let relayChunkTimer = null;
+  let lastCatchupProgressAt = 0;
+  let lastTickPresenceAt = 0;
+  /** Live frames / confirms that arrived while reset() wiped the session ledger. */
+  const heldCatchupFrames = [];
+  const heldCatchupConfirms = [];
 
   let bootResolve = null;
   const bootPromise = new Promise((r) => {
@@ -481,8 +584,13 @@ export function createKothShard(options = {}) {
         peers: connectedPeerIds(),
         sponsorId: assignedSponsorId,
         observerDepth,
-        offerEpoch: offerEpoch || undefined,
-        offerEligible: offerEligible.length ? offerEligible : undefined,
+        // Seat eligibility depends on this. Repeating it here means a dropped
+        // CATCHUP_READY costs one heartbeat, not the rest of the match.
+        caughtUp: phase === SHARD_PHASE.LIVE ? !!catchUpReady : undefined,
+        // Only the king mints offers. A spectator echoing its mirrored copy lets
+        // a closed epoch come back to life on peers that already ended it.
+        offerEpoch: offerEpoch && isKing() ? offerEpoch : undefined,
+        offerEligible: offerEpoch && isKing() && offerEligible.length ? offerEligible : undefined,
         checkpointTick: session?.getCachedCheckpoint?.()?.tick || lastCheckpointTickPublished || undefined,
         ...extra,
       },
@@ -532,92 +640,169 @@ export function createKothShard(options = {}) {
     for (const pid of livePlayerUserIds()) {
       upsertNode(observerTree, pid, { role: 'player', depth: 0, sponsorId: null, caughtUp: true });
     }
-    const node = assignSponsor(observerTree, livePlayerUserIds(), observerUserId);
+    assignSponsor(observerTree, livePlayerUserIds(), observerUserId);
+    recomputeDepths(observerTree);
+    const node = observerTree.nodes.get(observerUserId);
     if (!node?.sponsorId) return node;
-    const msg = {
+    sendAll({
       type: MSG.SPONSOR_ASSIGN,
       v: KOTH_PROTOCOL_VERSION,
       matchId,
       userId: observerUserId,
       sponsorId: node.sponsorId,
       depth: node.depth,
-    };
-    sendAll(msg);
+    });
     return node;
   }
 
   function noteObserverCaughtUp(userId) {
+    noteObserverCaughtUpState(userId, true);
+  }
+
+  /**
+   * Seat eligibility hinges on this flag, and CATCHUP_READY is a single
+   * fire-and-forget message — one drop used to leave that joiner waiting for an
+   * offer for the rest of the match. Presence repeats the same state every
+   * heartbeat, so this must be cheap and idempotent.
+   */
+  function noteObserverCaughtUpState(userId, ready) {
     if (!userId) return;
+    const existing = observerTree.nodes.get(userId);
+    const changed = !!existing?.caughtUp !== !!ready;
     upsertNode(observerTree, userId, {
       role: userIdsMatch(userId, localUserId) && role === 'player' ? 'player' : 'observer',
-      caughtUp: true,
-      joinedAt: observerTree.nodes.get(userId)?.joinedAt ?? Date.now(),
+      caughtUp: !!ready,
+      joinedAt: existing?.joinedAt ?? Date.now(),
     });
-    if (isKing() && !userIdsMatch(userId, localUserId)) {
-      const existing = observerTree.nodes.get(userId);
-      if (!existing?.sponsorId) kingAssignObserver(userId);
-      refreshSlotOffer();
+    if (!isKing() || userIdsMatch(userId, localUserId)) return;
+    if (ready && !observerTree.nodes.get(userId)?.sponsorId) kingAssignObserver(userId);
+    if (changed) refreshSlotOffer([], { force: true });
+  }
+
+  /** A seat holder (or mid-join claimer) must never appear in an offer. */
+  function offerExcluded(userId) {
+    if (!userId) return true;
+    for (const slot of roster) {
+      if (!slot.userId || (slot.state !== 'active' && slot.state !== 'reserved')) continue;
+      if (userIdsMatch(slot.userId, userId)) return true;
+    }
+    for (const list of pendingAcceptedJoins.values()) {
+      for (const join of list) {
+        if (join.userId && userIdsMatch(join.userId, userId)) return true;
+      }
+    }
+    return false;
+  }
+
+  /** Bring tree roles in line with the roster; king publishes the resulting moves. */
+  function reconcileObserverRoles() {
+    const assignments = reconcilePlayers(observerTree, livePlayerUserIds());
+    if (assignments.length) publishSponsorHandoffs(assignments);
+    return assignments;
+  }
+
+  /** Epochs must outrank anything already closed, even if our clock lags. */
+  function nextOfferEpoch() {
+    return Math.max(Date.now(), endedOfferEpoch + 1, offerEpoch + 1);
+  }
+
+  function clearOfferExpandTimer() {
+    if (offerExpandTimer) {
+      clearTimeout(offerExpandTimer);
+      offerExpandTimer = null;
     }
   }
 
-  function refreshSlotOffer(extraEligible = []) {
+  /**
+   * Publish the open-seat offer. Called from onCommit, so it must be cheap and
+   * idempotent: recompute on a short throttle, and only put a SLOT_OFFER on the
+   * wire when the eligible set actually changed (plus a slow re-announce).
+   */
+  function refreshSlotOffer(extraEligible = [], { force = false } = {}) {
     if (!isKing() || phase !== SHARD_PHASE.LIVE) return;
     const active = countActive(roster);
     if (active >= MAX_ACTIVE_PLAYERS) {
       endSlotOffer('full');
       return;
     }
+    const now = Date.now();
+    const hot = force || !offerEpoch || extraEligible.length > 0;
+    if (!hot && now - lastOfferComputedAt < OFFER_RECOMPUTE_MS) return;
+    lastOfferComputedAt = now;
+
+    reconcileObserverRoles();
     if (!offerEpoch) {
-      offerEpoch = Date.now();
+      offerEpoch = nextOfferEpoch();
       offerExpandSteps = 0;
-      offerStartedAt = Date.now();
+      clearOfferExpandTimer();
     }
-    offerEligible = offerEligibleUserIds(observerTree, offerExpandSteps);
-    for (const id of extraEligible) {
-      if (!id) continue;
-      if (!offerEligible.some((e) => userIdsMatch(e, id))) offerEligible.push(id);
-    }
-    sendAll({
-      type: MSG.SLOT_OFFER,
-      v: KOTH_PROTOCOL_VERSION,
-      matchId,
-      offerEpoch,
-      eligible: offerEligible,
-      expandSteps: offerExpandSteps,
-      activeCount: active,
+    const eligible = offerEligibleUserIds(observerTree, offerExpandSteps, {
+      exclude: offerExcluded,
+      minCandidates: MAX_ACTIVE_PLAYERS - active,
     });
-    applyLocalOfferState(offerEpoch, offerEligible);
+    for (const id of extraEligible) {
+      if (!id || offerExcluded(id)) continue;
+      if (!eligible.some((e) => userIdsMatch(e, id))) eligible.push(id);
+    }
+    const signature = `${offerEpoch}|${active}|${eligible.join(',')}`;
+    if (force || signature !== lastOfferSignature || now - lastOfferSentAt >= OFFER_REANNOUNCE_MS) {
+      if (DEBUG_KOTH && signature !== lastOfferSignature) {
+        console.info('[KOTH] offer', {
+          epoch: offerEpoch,
+          expandSteps: offerExpandSteps,
+          eligible: eligible.map(shortId),
+          observers: [...observerTree.nodes.values()]
+            .filter((n) => n.role === 'observer')
+            .map((n) => `${shortId(n.userId)}:L${n.depth}${n.caughtUp ? ':ready' : ''}${offerExcluded(n.userId) ? ':seated' : ''}`),
+        });
+      }
+      lastOfferSignature = signature;
+      lastOfferSentAt = now;
+      sendAll({
+        type: MSG.SLOT_OFFER,
+        v: KOTH_PROTOCOL_VERSION,
+        matchId,
+        offerEpoch,
+        eligible,
+        expandSteps: offerExpandSteps,
+        activeCount: active,
+      });
+    }
+    applyLocalOfferState(offerEpoch, eligible, { from: localUserId });
     scheduleOfferExpand();
   }
 
+  // One expand step every OFFER_EXPAND_MS. The timer must survive a refresh —
+  // re-arming it on every refresh (which onCommit does at tick rate) meant it
+  // could never fire, so eligibility never cascaded past L1.
   function scheduleOfferExpand() {
-    if (offerExpandTimer) clearTimeout(offerExpandTimer);
-    if (!isKing() || countActive(roster) >= MAX_ACTIVE_PLAYERS) return;
+    if (offerExpandTimer) return;
+    if (!isKing() || !offerEpoch || countActive(roster) >= MAX_ACTIVE_PLAYERS) return;
     offerExpandTimer = setTimeout(() => {
       offerExpandTimer = null;
-      if (!isKing() || countActive(roster) >= MAX_ACTIVE_PLAYERS) return;
+      if (!isKing() || !offerEpoch || countActive(roster) >= MAX_ACTIVE_PLAYERS) return;
       offerExpandSteps += 1;
-      refreshSlotOffer();
+      refreshSlotOffer([], { force: true });
     }, OFFER_EXPAND_MS);
   }
 
-  function endSlotOffer(reason = 'filled') {
-    if (offerExpandTimer) {
-      clearTimeout(offerExpandTimer);
-      offerExpandTimer = null;
-    }
+  function endSlotOffer(reason = 'filled', winnerUserId = null) {
+    clearOfferExpandTimer();
     const endedEpoch = offerEpoch;
     offerEpoch = 0;
     offerExpandSteps = 0;
     offerEligible = [];
     localOfferEligible = false;
+    lastOfferSignature = '';
     if (endedEpoch) {
+      endedOfferEpoch = Math.max(endedOfferEpoch, endedEpoch);
       sendAll({
         type: MSG.SLOT_OFFER_END,
         v: KOTH_PROTOCOL_VERSION,
         matchId,
         offerEpoch: endedEpoch,
         reason,
+        winnerUserId: winnerUserId ?? undefined,
       });
     }
     if (
@@ -632,34 +817,97 @@ export function createKothShard(options = {}) {
     }
   }
 
-  function applyLocalOfferState(epoch, eligible) {
-    offerEpoch = epoch | 0;
-    offerEligible = Array.isArray(eligible) ? [...eligible] : [];
-    localOfferEligible = offerEligible.some((id) => userIdsMatch(id, localUserId));
-    if (role === 'spectator' && catchUpReady && !pendingLocalJoin) {
-      let nextStatus = '';
-      if (countActive(roster) >= MAX_ACTIVE_PLAYERS) {
-        appState = KOTH_APP_STATE.QUEUED;
-        nextStatus = 'Match full — waiting for a seat…';
-      } else if (localOfferEligible) {
-        appState = KOTH_APP_STATE.SPECTATOR;
-        nextStatus =
-          observerDepth > 1
-            ? `Seat offered (L${observerDepth}) — J to claim`
-            : 'Seat offered — J to claim';
-      } else {
-        appState = KOTH_APP_STATE.QUEUED;
-        nextStatus =
-          observerDepth > 0
-            ? `Waiting for offer (L${observerDepth})…`
-            : 'Waiting for seat offer…';
-      }
-      if (nextStatus !== lastOfferStatus) {
-        lastOfferStatus = nextStatus;
-        onStatus(nextStatus);
-      }
-      emitShard();
+  /** A claim is in flight — offer gossip must not steal the HUD back. */
+  function claimPending() {
+    return !!pendingLocalJoin || appState === KOTH_APP_STATE.JOINING;
+  }
+
+  function applyLocalOfferState(epoch, eligible, { from = null } = {}) {
+    // Epochs are Date.now() — `| 0` would wrap them to 32 bits and break every
+    // monotonic comparison the moment the clock crosses a 2^32 ms boundary.
+    const next = Number.isFinite(epoch) ? Math.trunc(epoch) : 0;
+    const mine = !from || userIdsMatch(from, localUserId);
+    if (!mine && !shouldApplyOfferState({
+      incomingEpoch: next,
+      currentEpoch: offerEpoch,
+      endedEpoch: endedOfferEpoch,
+    })) {
+      return;
     }
+    if (next !== offerEpoch) claimAttempts = 0;
+    offerEpoch = next;
+    offerEligible = Array.isArray(eligible) ? [...eligible] : [];
+    if (from) offerAuthorityId = from;
+    localOfferEligible = offerEligible.some((id) => userIdsMatch(id, localUserId));
+    if (role !== 'spectator' || !catchUpReady || claimPending()) return;
+
+    let nextStatus = '';
+    if (countActive(roster) >= MAX_ACTIVE_PLAYERS) {
+      appState = KOTH_APP_STATE.QUEUED;
+      nextStatus = 'Match full — waiting for a seat…';
+    } else if (localOfferEligible) {
+      appState = KOTH_APP_STATE.SPECTATOR;
+      nextStatus =
+        observerDepth > 1
+          ? `Seat offered (L${observerDepth}) — J to claim`
+          : 'Seat offered — J to claim';
+    } else {
+      appState = KOTH_APP_STATE.QUEUED;
+      nextStatus =
+        observerDepth > 0
+          ? `Waiting for offer (L${observerDepth})…`
+          : 'Waiting for seat offer…';
+    }
+    if (nextStatus !== lastOfferStatus) {
+      lastOfferStatus = nextStatus;
+      onStatus(nextStatus);
+    }
+    emitShard();
+  }
+
+  /**
+   * Only the king mints offers. A spectator heartbeat that still carries the
+   * previous epoch is stale by construction, so it must not be applied.
+   */
+  function isOfferAuthority(userId) {
+    if (!userId) return false;
+    if (userIdsMatch(userId, localUserId)) return isKing();
+    const hostId = rosterHostUserId();
+    if (hostId && userIdsMatch(userId, hostId)) return true;
+    // Until the host world lands our roster is a guess, so we cannot tell who
+    // the king is — don't reject the real one over a mis-seeded roster.
+    return !liveSimAttached;
+  }
+
+  /**
+   * The king is whoever holds the lowest live seat, so it changes when a host
+   * leaves. Drop the previous king's epoch window — their wall clock may have
+   * been ahead of the new one, which would reject every new offer as stale.
+   */
+  function syncOfferAuthority() {
+    const hostId = rosterHostUserId();
+    if (!hostId) return;
+    if (!offerAuthorityId) {
+      offerAuthorityId = hostId;
+      return;
+    }
+    if (userIdsMatch(offerAuthorityId, hostId)) return;
+    if (DEBUG_KOTH) {
+      console.info('[KOTH] offer authority changed', {
+        from: shortId(offerAuthorityId),
+        to: shortId(hostId),
+      });
+    }
+    offerAuthorityId = hostId;
+    offerEpoch = 0;
+    offerEligible = [];
+    localOfferEligible = false;
+    endedOfferEpoch = 0;
+    lastOfferSignature = '';
+    lastOfferSentAt = 0;
+    lastOfferComputedAt = 0;
+    claimAttempts = 0;
+    clearOfferExpandTimer();
   }
 
   function childObserverIds() {
@@ -670,16 +918,26 @@ export function createKothShard(options = {}) {
     return childObserverIds().some((id) => userIdsMatch(id, userId));
   }
 
-  function canServeCatchUpFor(userId) {
+  /**
+   * @param {string} userId requester
+   * @param {string | null | undefined} claimedSponsorId the requester's own view
+   *   of its sponsor. The requester is the authority on what it actually knows:
+   *   if its SPONSOR_ASSIGN never landed, our tree names a sponsor it has never
+   *   heard of, and refusing on that basis stranded it on the loading screen.
+   */
+  function canServeCatchUpFor(userId, claimedSponsorId = undefined) {
     if (!userId || userIdsMatch(userId, localUserId)) return false;
+    const claimsUs = claimedSponsorId != null && userIdsMatch(claimedSponsorId, localUserId);
+    const unassigned = claimedSponsorId === null;
     if (role === 'player' && localPlayerId >= 0) {
-      // Players only serve their L1 child (or anyone still dialing us pre-assign).
-      if (isAssignedChild(userId)) return true;
+      // Players serve their L1 child, plus any observer that has no sponsor yet.
+      if (claimsUs || isAssignedChild(userId)) return true;
+      if (unassigned) return true;
       const node = observerTree.nodes.get(userId);
       return !node?.sponsorId || userIdsMatch(node.sponsorId, localUserId);
     }
     if (role === 'spectator' && catchUpReady) {
-      return isAssignedChild(userId);
+      return claimsUs || isAssignedChild(userId);
     }
     return false;
   }
@@ -715,10 +973,53 @@ export function createKothShard(options = {}) {
   }
 
   function sendCheckpointToPeer(peerId, checkpoint, checksum, tick) {
+    sendCheckpointChunks({ peerId, checkpoint, checksum, tick });
+  }
+
+  /**
+   * A data channel takes a burst of chunks; the server relay does not. Pace them
+   * out — the receiver re-arms its catch-up timeout on every chunk, so a paced
+   * world still lands well inside the retry window.
+   */
+  function queueRelayChunk(msg) {
+    relayChunkQueue.push({ msg, matchId });
+    if (relayChunkTimer) return;
+    const pump = () => {
+      relayChunkTimer = null;
+      for (let i = 0; i < RELAY_CHUNK_BATCH; i++) {
+        const next = relayChunkQueue.shift();
+        if (!next) return;
+        if (next.matchId === matchId) sendBroadcastMsg(next.msg);
+      }
+      if (relayChunkQueue.length) relayChunkTimer = setTimeout(pump, RELAY_CHUNK_INTERVAL_MS);
+    };
+    relayChunkTimer = setTimeout(pump, 0);
+  }
+
+  function clearRelayChunkQueue() {
+    relayChunkQueue = [];
+    if (relayChunkTimer) {
+      clearTimeout(relayChunkTimer);
+      relayChunkTimer = null;
+    }
+  }
+
+  /**
+   * Ship a world checkpoint as chunks. With no data channel the chunks go over
+   * the broadcast relay (smaller pieces, addressed with `to`) — a whole world
+   * inline on one relay message is silently dropped, which left the joiner
+   * waiting on "Receiving host world…" forever.
+   */
+  function sendCheckpointChunks({ peerId = null, toUserId = null, checkpoint, checksum, tick }) {
     const transferId = `cp:${matchId}:${tick}:${localUserId}`;
-    const packed = packCheckpointChunks(checkpoint, transferId);
+    const relay = !peerId;
+    const packed = packCheckpointChunks(
+      checkpoint,
+      transferId,
+      relay ? BROADCAST_CHUNK_CHARS : CHECKPOINT_CHUNK_CHARS,
+    );
     for (let i = 0; i < packed.chunks.length; i++) {
-      sendPeer(peerId, {
+      const msg = {
         type: MSG.CHECKPOINT_CHUNK,
         v: KOTH_PROTOCOL_VERSION,
         matchId,
@@ -728,7 +1029,34 @@ export function createKothShard(options = {}) {
         text: packed.chunks[i],
         tick,
         checksum,
-      });
+        to: toUserId ?? undefined,
+      };
+      if (relay) queueRelayChunk(msg);
+      else sendPeer(peerId, msg);
+    }
+  }
+
+  function sendLedgerChunks({ peerId = null, toUserId = null, ledger, transferId, meta }) {
+    const relay = !peerId;
+    const packed = packLedgerChunks(
+      ledger,
+      transferId,
+      relay ? BROADCAST_LEDGER_CHUNK_FRAMES : LEDGER_CHUNK_FRAMES,
+    );
+    for (let i = 0; i < packed.chunks.length; i++) {
+      const msg = {
+        type: MSG.LEDGER_CHUNK,
+        v: KOTH_PROTOCOL_VERSION,
+        matchId,
+        transferId,
+        index: i,
+        total: packed.total,
+        frames: packed.chunks[i],
+        to: toUserId ?? undefined,
+        ...meta,
+      };
+      if (relay) queueRelayChunk(msg);
+      else sendPeer(peerId, msg);
     }
   }
 
@@ -1005,9 +1333,11 @@ export function createKothShard(options = {}) {
     }
     if (treeId) {
       const orphans = removeNode(observerTree, treeId);
+      recomputeDepths(observerTree);
+      syncLocalObserverPlacement();
       if (isKing() && phase === SHARD_PHASE.LIVE) {
         for (const oid of orphans) kingAssignObserver(oid);
-        refreshSlotOffer();
+        refreshSlotOffer([], { force: true });
       }
     }
   }
@@ -1119,7 +1449,16 @@ export function createKothShard(options = {}) {
     if (!prev.spectatorIds) prev.spectatorIds = new Set();
     if (data.from && isSpectatorAnnounce(data)) prev.spectatorIds.add(data.from);
     if (data.from && isPlayerAnnounce(data)) prev.spectatorIds.delete(data.from);
-    if (tick > prev.tick) {
+    // A big step backwards from the host we are following means the match was
+    // rebuilt at tick 0 (solo→2 keeps the same matchId). Monotonic-only would
+    // leave a stale high-water mark that makes every client look hopelessly
+    // behind. Only the host may walk it back — a lagging spectator announcing
+    // its own low tick must not drag the live clock down with it.
+    // Live players are in lockstep with each other, so any of them reporting a
+    // tick this far back means the board restarted — `prev.from` flips between
+    // co-hosts and must not be the gate.
+    const hostRestarted = isPlayerAnnounce(data) && tick + MATCH_TICK_RESET_SLACK < prev.tick;
+    if (tick > prev.tick || hostRestarted) {
       prev.tick = tick;
       prev.lastTickAt = now;
     }
@@ -1225,12 +1564,17 @@ export function createKothShard(options = {}) {
   // peer stranded on a host that has since yielded re-converges to the real one.
   function convergeToBestMatch() {
     if (phase !== SHARD_PHASE.LIVE) return false;
-    if (pinnedMatchId && matchId === pinnedMatchId) return false;
     const myActive = role === 'spectator' ? 0 : countActive(roster);
+    // Pinning protects a selected/created established match, but a solo host
+    // must still participate in deterministic simultaneous-start convergence.
+    if (
+      pinnedMatchId
+      && matchId === pinnedMatchId
+      && !(role === 'player' && myActive <= 1)
+    ) {
+      return false;
+    }
     if (role === 'player' && myActive >= MIN_LIVE_PLAYERS) return false;
-    // Never tear down a live match that already has a P2P link or running sim.
-    if (role === 'player' && connectedPeerIds().length > 0) return false;
-    if (role === 'player' && (session?.confirmedTick ?? 0) > 0) return false;
     if (role === 'player') noteSelfLiveMatch();
     const best = bestLiveMatch();
     if (!best || !best.from || best.matchId === matchId) return false;
@@ -1294,18 +1638,22 @@ export function createKothShard(options = {}) {
 
   function followLivePresence(presence) {
     if (!presence?.matchId) return false;
-    if (presence.matchId === matchId && phase === SHARD_PHASE.LIVE && role === 'spectator') {
+    // Presence for the match we already occupy is gossip, never a transition.
+    // During tick 0 a host may have no peer link yet; treating an echo as a new
+    // match demoted the host and restarted discovery in a tight loop.
+    if (presence.matchId === matchId && phase === SHARD_PHASE.LIVE) {
       if (presence.from) noteMatchAnnouncer(presence.matchId, presence.from);
       switchToMatchLobby(matchId);
-      scheduleMatchLobbyConnect(presence.matchId);
+      if (role === 'spectator') scheduleMatchLobbyConnect(presence.matchId);
       return true;
     }
-    // Live players with an active link or sim never abandon via follow/converge.
+    // Established multi-army matches never abandon via follow/converge. A solo
+    // host is allowed to yield even after its clock or peer link has started.
     if (role === 'player' && phase === SHARD_PHASE.LIVE) {
-      if (connectedPeerIds().length > 0) return false;
-      if ((session?.confirmedTick ?? 0) > 0) return false;
+      if (countActive(roster) >= MIN_LIVE_PLAYERS) return false;
     }
     cancelDiscoverStart();
+    onLeaveSolo();
     const abandoningSolo = phase === SHARD_PHASE.LIVE && role === 'player';
     const prevMatchId = matchId;
     matchId = presence.matchId;
@@ -1318,6 +1666,7 @@ export function createKothShard(options = {}) {
     appState = KOTH_APP_STATE.SPECTATOR;
     role = 'spectator';
     catchUpReady = false;
+    detachLiveSim();
     liveStartKey = '';
     roster = createEmptyRoster();
     if (presence.from) {
@@ -1330,12 +1679,10 @@ export function createKothShard(options = {}) {
     broadcastPresence();
     session?.setLocalPlayerId?.(-1);
     session?.setRole?.('spectator');
-    if (abandoningSolo) {
-      if (session) session.pauseLockstep = true;
-      if (bootstrapTimer) {
-        clearInterval(bootstrapTimer);
-        bootstrapTimer = null;
-      }
+    pauseStubSim();
+    if (abandoningSolo && bootstrapTimer) {
+      clearInterval(bootstrapTimer);
+      bootstrapTimer = null;
     }
     notifyPresentationSync({
       mode: 'koth',
@@ -1380,17 +1727,11 @@ export function createKothShard(options = {}) {
     rememberMessageId(stamped._mid);
     if (connectedPeerIds().length > 0) p2p?.sendData?.(stamped);
     // Server-relay fallback for peers that could not complete WebRTC (common on
-    // 3+ tabs same machine). Rare control messages only — not tick spam.
+    // 3+ tabs same machine). Seat / catch-up-ready must be here or the third
+    // client never sees an offer and freezes after a claim that only the host got.
     if (
-      msg.type === MSG.JOIN_ACCEPT ||
-      msg.type === MSG.JOIN_READY ||
-      msg.type === MSG.MATCH_SNAPSHOT ||
-      msg.type === MSG.MATCH_RESET ||
-      msg.type === MSG.TICK_CONFIRM ||
-      msg.type === MSG.COMMAND_FRAME ||
-      msg.type === MSG.SLOT_DEFEAT ||
-      msg.type === MSG.SHARD_GONE ||
-      (msg.type === MSG.JOIN_INTENT && connectedPeerIds().length === 0)
+      shouldBroadcastLockstepFallback(msg.type)
+      || (msg.type === MSG.JOIN_INTENT && connectedPeerIds().length === 0)
     ) {
       sendBroadcastMsg(stamped);
     }
@@ -1434,7 +1775,13 @@ export function createKothShard(options = {}) {
       type === MSG.ROSTER_UPDATE ||
       type === MSG.SLOT_DEFEAT ||
       type === MSG.SHARD_GONE ||
-      type === MSG.CATCHUP_READY
+      type === MSG.CATCHUP_READY ||
+      type === MSG.SLOT_OFFER ||
+      type === MSG.SLOT_CLAIM ||
+      type === MSG.SLOT_OFFER_END ||
+      type === MSG.SPONSOR_ASSIGN ||
+      type === MSG.SPONSOR_HANDOFF ||
+      type === MSG.REQUEST_TICK_CONFIRM
     );
   }
 
@@ -1866,6 +2213,13 @@ export function createKothShard(options = {}) {
     if (phase === SHARD_PHASE.LIVE && role === 'spectator' && !catchUpReady) {
       tryClaimOrphanMatch();
     }
+    // Runs off a timer, not off commits — a stalled quorum is exactly when the
+    // commit-driven checks stop firing.
+    if (phase === SHARD_PHASE.LIVE) {
+      checkJoinerConfirmTimeouts();
+      checkPendingLocalJoinTimeout();
+      pumpQueuedClaim();
+    }
     pumpSpectatorConnect();
     if (phase === SHARD_PHASE.LIVE && role === 'player') {
       for (const uid of matchAnnouncers.get(matchId) ?? []) {
@@ -1932,6 +2286,18 @@ export function createKothShard(options = {}) {
     notifyPresentationSync({ role: next, appState, inputEnabled: next === 'player' });
   }
 
+  function detachLiveSim() {
+    liveSimAttached = false;
+  }
+
+  function attachLiveSim() {
+    liveSimAttached = true;
+  }
+
+  function pauseStubSim() {
+    if (session) session.pauseLockstep = true;
+  }
+
   function startFreshSandbox(reason = 'No live shard found') {
     if (phase !== SHARD_PHASE.SANDBOX) return;
     clearSavedMatch();
@@ -1945,6 +2311,7 @@ export function createKothShard(options = {}) {
     appState = KOTH_APP_STATE.PRIVATE_SANDBOX;
     pinnedMatchId = null;
     catchUpReady = true;
+    detachLiveSim();
     onStatus(`${reason} — new staging`);
     onLiveStart({
       mode: 'staging',
@@ -1965,10 +2332,9 @@ export function createKothShard(options = {}) {
   function returnToPrivateSandbox() {
     cancelDiscoverStart();
     clearCatchupOfferTimer();
-    if (offerExpandTimer) {
-      clearTimeout(offerExpandTimer);
-      offerExpandTimer = null;
-    }
+    clearOfferExpandTimer();
+    clearClaimTimer();
+    clearRelayChunkQueue();
     if (catchupRetryTimer) {
       clearTimeout(catchupRetryTimer);
       catchupRetryTimer = null;
@@ -1990,9 +2356,19 @@ export function createKothShard(options = {}) {
     pendingLocalJoin = null;
     pendingAcceptedJoins.clear();
     pendingPresentationJoinTicks.clear();
+    joinConfirmWatch.clear();
+    pendingQuorum.clear();
+    inputEnableTick = 0;
+    claimWhenLevel = false;
     offerEpoch = 0;
     offerEligible = [];
     localOfferEligible = false;
+    endedOfferEpoch = 0;
+    offerAuthorityId = null;
+    lastOfferSignature = '';
+    lastOfferSentAt = 0;
+    lastOfferComputedAt = 0;
+    claimAttempts = 0;
     assignedSponsorId = null;
     observerDepth = 0;
     observerTree.nodes.clear();
@@ -2014,6 +2390,7 @@ export function createKothShard(options = {}) {
     appState = KOTH_APP_STATE.PRIVATE_SANDBOX;
     phase = SHARD_PHASE.SANDBOX;
     catchUpReady = true;
+    detachLiveSim();
     session?.setLocalPlayerId?.(0);
     session?.setRole?.('player');
     if (session) session.pauseLockstep = false;
@@ -2050,6 +2427,14 @@ export function createKothShard(options = {}) {
     return true;
   }
 
+  function joinActionLabel() {
+    if (claimWhenLevel) return 'Catching Up…';
+    if (claimPending()) return 'Claiming…';
+    if (countActive(roster) >= MAX_ACTIVE_PLAYERS) return 'Match Full';
+    if (localOfferEligible) return 'Claim Seat';
+    return 'Waiting for Offer';
+  }
+
   function getLobbyPresence() {
     const browsing = appState === KOTH_APP_STATE.PRIVATE_SANDBOX && phase !== SHARD_PHASE.LIVE;
     const live = liveMatches.get(matchId);
@@ -2083,9 +2468,7 @@ export function createKothShard(options = {}) {
         role === 'spectator' &&
         appState !== KOTH_APP_STATE.JOINING
       ),
-      joinLabel: countActive(roster) >= MAX_ACTIVE_PLAYERS
-        ? 'Match Full'
-        : localOfferEligible ? 'Claim Seat' : 'Waiting for Offer',
+      joinLabel: joinActionLabel(),
       players: lobbyPlayers(),
       spectators,
       spectatorCount: spectators.length,
@@ -2115,8 +2498,10 @@ export function createKothShard(options = {}) {
         appState = KOTH_APP_STATE.SPECTATOR;
         localPlayerId = -1;
         catchUpReady = false;
+        detachLiveSim();
         session?.setLocalPlayerId?.(-1);
         session?.setRole?.('spectator');
+        pauseStubSim();
         saveMatch({ matchId, userId: localUserId, slot: null });
         joinShardLobby();
         notifyPresentationSync({
@@ -2192,12 +2577,171 @@ export function createKothShard(options = {}) {
         return;
       }
       if (DEBUG_KOTH) console.info('[KOTH] broadcast catch-up', { sponsor: shortId(sponsor) });
-      beginCatchup(sponsor, session?.confirmedTick ?? 0);
+      beginCatchup(sponsor);
     }, delayMs);
   }
 
   function notePlayerConfirm(playerId) {
     playerLastConfirm.set(playerId, performance.now());
+  }
+
+  function holdingCatchupLockstep() {
+    return shouldHoldLockstepDuringCatchup({
+      catchupInFlight,
+      catchupRequested: !!activeCatchupRequestId,
+      replayingCatchUp: !!session?.replayingCatchUp,
+    });
+  }
+
+  function ingestCommandFrame(frame) {
+    if (!validateCommandFrame(frame)) return;
+    if (holdingCatchupLockstep()) {
+      heldCatchupFrames.push(frame);
+      return;
+    }
+    session?.bufferRemoteFrame(frame);
+  }
+
+  function ingestTickConfirm(msg) {
+    if (msg.matchId !== matchId) return;
+    if (msg.playerId === undefined || msg.tick === undefined) return;
+    const slot = roster[msg.playerId];
+    // Empty/defeated seats may keep emitting briefly while SLOT_DEFEAT crosses
+    // the mesh. A reserved rejoiner is also not live until its spawn commits;
+    // accepting either would admit stale confirms into the new reservation.
+    if (slot?.state !== 'active') return;
+    const owner = resolvePlayerOwner(msg.playerId, msg.userId);
+    if (!msg.userId || !owner || !userIdsMatch(owner, msg.userId)) {
+      if (DEBUG_KOTH) {
+        console.warn('[KOTH] rejected TICK_CONFIRM — roster ownership mismatch', {
+          fromPlayerId: msg.playerId,
+          claimedUser: shortId(msg.userId),
+          rosterOwner: shortId(owner),
+          rosterStates: roster.map((s) => `${s.playerId}:${s.state}:${shortId(s.userId)}`),
+        });
+      }
+      return;
+    }
+    if (holdingCatchupLockstep()) {
+      heldCatchupConfirms.push({ playerId: msg.playerId, tick: msg.tick });
+      return;
+    }
+    admitPendingQuorum(msg.playerId, msg.tick);
+    session?.setPeerConfirmedTick(msg.playerId, msg.tick);
+    notePlayerConfirm(msg.playerId);
+  }
+
+  /**
+   * Presence is the low-rate relay fallback for live clock progress. Tick
+   * confirms can be throttled on the server relay, while presence continues to
+   * reach spectators; only trust it for an active seat owned by its sender.
+   */
+  function ingestPresenceTick(data) {
+    if (data.matchId !== matchId || data.phase !== SHARD_PHASE.LIVE) return;
+    if (!isPlayerAnnounce(data) || !Number.isFinite(data.tick)) return;
+    const slot = slotForKnownUser(data.from);
+    if (slot?.state !== 'active' || !userIdsMatch(slot.userId, data.from)) return;
+    ingestTickConfirm({
+      matchId,
+      userId: data.from,
+      playerId: slot.playerId,
+      tick: (data.tick | 0) + 1,
+    });
+  }
+
+  function seedPeerConfirms(playerIds, tick) {
+    for (const id of playerIds ?? []) {
+      session?.setPeerConfirmedTick?.(id, tick);
+      notePlayerConfirm(id);
+    }
+  }
+
+  function flushHeldCatchupLockstep(tipTick) {
+    const frames = heldCatchupFrames.splice(0);
+    const confirms = heldCatchupConfirms.splice(0);
+    for (const frame of framesAfterTick(frames, tipTick)) {
+      session?.bufferRemoteFrame(frame);
+    }
+    const seeded = mergeHeldConfirms(confirms, matchHumanPlayers, tipTick);
+    for (const [playerId, tick] of seeded) {
+      admitPendingQuorum(playerId, tick);
+      session?.setPeerConfirmedTick?.(playerId, tick);
+      notePlayerConfirm(playerId);
+    }
+  }
+
+  /** Release a reservation when a joiner never reaches its first live confirm. */
+  function watchJoinerConfirm(playerId, userId, joinTick) {
+    if (playerId == null || playerId < 0 || !userId) return;
+    if (userIdsMatch(userId, localUserId)) return;
+    joinConfirmWatch.set(playerId, {
+      userId,
+      joinTick: joinTick | 0,
+      deadline: Date.now() + JOIN_CONFIRM_GRACE_MS,
+    });
+  }
+
+  function checkJoinerConfirmTimeouts() {
+    if (!joinConfirmWatch.size) return;
+    const now = Date.now();
+    for (const [playerId, watch] of [...joinConfirmWatch]) {
+      const slot = roster[playerId];
+      const stillOurs = slot?.userId && userIdsMatch(slot.userId, watch.userId);
+      const confirmed = (session?.peerConfirmedTick?.get(playerId) ?? 0) > watch.joinTick;
+      if (!stillOurs || confirmed) {
+        joinConfirmWatch.delete(playerId);
+        continue;
+      }
+      if (!joinConfirmExpired({ now, deadline: watch.deadline, confirmed })) continue;
+      joinConfirmWatch.delete(playerId);
+      if (!isKing()) continue;
+      console.warn('[KOTH] joiner never entered lockstep — dropping', {
+        playerId,
+        user: shortId(watch.userId),
+        joinTick: watch.joinTick,
+      });
+      onStatus('A joiner failed to sync — dropped');
+      forceDefeatPlayer(playerId, watch.userId);
+    }
+  }
+
+  /**
+   * A remote joiner does NOT enter our lockstep quorum at a pre-agreed tick.
+   *
+   * It used to, and that is what froze the table: every peer parked at
+   * `joinTick + 1` waiting on a client that might still be seconds away (or
+   * might never arrive at all), and nothing but a watchdog could break it.
+   * Instead we record the earliest tick they may enter and admit them the moment
+   * their first confirm actually arrives — so nobody ever waits on a ghost.
+   *
+   * Admitting at slightly different local ticks across peers is safe: the joiner
+   * authors no commands before its first confirm tick, so the frames collected
+   * for the differing window are identical (empty) everywhere.
+   */
+  function scheduleJoinerQuorum(playerId, joinTick, userId = null) {
+    if (playerId == null || playerId < 0 || !session) return;
+    if (userId) watchJoinerConfirm(playerId, userId, joinTick);
+    pendingQuorum.set(playerId, joinQuorumTick(joinTick));
+    session.setPeerConfirmedTick?.(playerId, joinTick | 0);
+  }
+
+  /** Their first confirm at or past the agreed tick puts them in the quorum. */
+  function admitPendingQuorum(playerId, tick, { force = false } = {}) {
+    const earliest = pendingQuorum.get(playerId);
+    if (earliest == null) {
+      if (!force) return;
+    } else if (!canAdmitJoinerToQuorum({ confirmTick: tick, earliestTick: earliest })) {
+      return;
+    }
+    pendingQuorum.delete(playerId);
+    joinConfirmWatch.delete(playerId);
+    if (!matchHumanPlayers.includes(playerId)) {
+      matchHumanPlayers = [...matchHumanPlayers, playerId].sort((a, b) => a - b);
+    }
+    session?.setHumanPlayers?.(matchHumanPlayers);
+    if (DEBUG_KOTH) {
+      console.info('[KOTH] joiner entered lockstep', { playerId, tick, ourTick: session?.confirmedTick });
+    }
   }
 
   function eventSourcePlayerId() {
@@ -2231,11 +2775,10 @@ export function createKothShard(options = {}) {
   }
 
   function rosterHostUserId() {
-    const king = roster[0];
-    if (king?.userId && (king.state === 'active' || king.state === 'reserved')) return king.userId;
-    if (role === 'player' && localPlayerId === 0 && localUserId) return localUserId;
-    const host = rosterUserIds(roster)[0];
+    const host = lowestActiveUserId(roster);
     if (host) return host;
+    // Boot/reconciliation fallback before the authoritative roster arrives.
+    if (role === 'player' && localPlayerId >= 0 && localUserId) return localUserId;
     return null;
   }
 
@@ -2297,18 +2840,8 @@ export function createKothShard(options = {}) {
     session?.setLocalPlayerId?.(localPlayerId);
     session?.setRole?.(role);
     if (wasSpectator && activeLocalSlot) {
-      const handoffs = promoteObserverToPlayer(observerTree, localUserId, livePlayerUserIds());
-      assignedSponsorId = null;
-      observerDepth = 0;
-      if (handoffs.length) {
-        sendAll({
-          type: MSG.SPONSOR_HANDOFF,
-          v: KOTH_PROTOCOL_VERSION,
-          matchId,
-          fromUserId: localUserId,
-          assignments: handoffs,
-        });
-      }
+      clearClaimTimer();
+      notePlayerInTree(localUserId);
       for (const uid of livePlayerUserIds()) {
         if (!userIdsMatch(uid, localUserId)) nudgePeerConnect(uid);
       }
@@ -2320,7 +2853,61 @@ export function createKothShard(options = {}) {
     // Lag/disconnect defeats need quorum evidence in a peer-consensus model.
     // Keep confirm timestamps for UI/debugging, but do not let one peer decide.
     if (phase !== SHARD_PHASE.LIVE || !session) return;
+    // Revolving KOTH spectators must keep simulating so they can claim the next
+    // seat. No generic post-game or presentation path may leave an attached,
+    // caught-up spectator paused.
+    if (
+      role === 'spectator'
+      && catchUpReady
+      && session.pauseLockstep
+      && !session.replayingCatchUp
+      && !catchupInFlight
+    ) {
+      session.pauseLockstep = false;
+      session.simAcc = 0;
+      if (DEBUG_KOTH) console.warn('[KOTH] resumed paused live spectator');
+    }
     sendTickConfirm(session.confirmedTick + 1);
+    checkJoinerConfirmTimeouts();
+    checkPendingLocalJoinTimeout();
+    logQueuedClaimProgress();
+    logLockstepStall();
+  }
+
+  function logQueuedClaimProgress() {
+    if (!DEBUG_KOTH || !claimWhenLevel || !session) return;
+    console.warn('[KOTH] queued claim progress', {
+      ...claimReadiness(),
+      ourTick: session.confirmedTick,
+      pauseLockstep: session.pauseLockstep,
+      waitingForWorker: session.waitingForWorker,
+      inFlightTick: session.inFlightTick,
+      humanPlayers: [...(session.humanPlayers ?? [])],
+      peerConfirms: Object.fromEntries(session.peerConfirmedTick ?? []),
+      liveCeiling: session.liveTickCeiling?.(),
+      announcedTick: liveMatches.get(matchId)?.tick ?? 0,
+    });
+  }
+
+  /** Name whoever lockstep is parked on — a freeze is always someone's confirm. */
+  function logLockstepStall() {
+    if (!DEBUG_KOTH || !session) return;
+    const blockedMs = session.lockstepBlockedMs?.() ?? 0;
+    if (blockedMs < 1000) return;
+    const waiters = session.lockstepWaiters?.() ?? [];
+    console.warn('[KOTH] lockstep stalled', {
+      blockedMs: Math.round(blockedMs),
+      ourTick: session.confirmedTick,
+      waitingOn: waiters.map((pid) => ({
+        playerId: pid,
+        user: shortId(roster[pid]?.userId),
+        state: roster[pid]?.state,
+        confirmed: session.peerConfirmedTick?.get(pid) ?? 0,
+      })),
+      humanPlayers: [...(session.humanPlayers ?? [])],
+      localPlayerId: session.localPlayerId,
+      pendingJoin: pendingLocalJoin,
+    });
   }
 
   function slotForKnownUser(userId) {
@@ -2335,6 +2922,7 @@ export function createKothShard(options = {}) {
     matchHumanPlayers = matchHumanPlayers.filter((id) => id !== playerId);
     session?.removeHumanPlayer?.(playerId);
     playerLastConfirm.delete(playerId);
+    pendingQuorum.delete(playerId);
   }
 
   /**
@@ -2352,7 +2940,8 @@ export function createKothShard(options = {}) {
       killUnits: true,
     });
     emitShard();
-    if (isKing()) refreshSlotOffer();
+    syncOfferAuthority();
+    if (isKing()) refreshSlotOffer([], { force: true });
     checkShardEmpty();
     return true;
   }
@@ -2365,20 +2954,27 @@ export function createKothShard(options = {}) {
       killUnits: true,
     });
     emitShard();
-    if (isKing()) refreshSlotOffer();
+    syncOfferAuthority();
+    if (isKing()) refreshSlotOffer([], { force: true });
     checkShardEmpty();
   }
 
   function handleSlotDefeat(msg) {
     if (msg.matchId !== matchId) return;
     const slot = slotForKnownUser(msg.userId) ?? roster[msg.playerId];
+    // No tick means the seat's own owner withdrew, and their clock may be behind
+    // everyone else's. Free the quorum slot immediately on every peer, but let
+    // only the king turn it into a sim command — at the king's tick, so the
+    // elimination lands on the same tick everywhere.
+    const selfReported = msg.tick == null;
     vacateActiveSeat(msg.playerId, slot?.userId ?? msg.userId, {
-      authorDefeat: false,
-      eliminateTick: msg.tick,
-      killUnits: true,
+      authorDefeat: selfReported && isKing(),
+      eliminateTick: selfReported ? (session?.confirmedTick ?? 0) + 2 : msg.tick,
+      killUnits: !selfReported || isKing(),
     });
     emitShard();
-    if (isKing()) refreshSlotOffer();
+    syncOfferAuthority();
+    if (isKing()) refreshSlotOffer([], { force: true });
     checkShardEmpty();
   }
 
@@ -2393,15 +2989,86 @@ export function createKothShard(options = {}) {
     });
   }
 
+  /**
+   * Every peer runs the same deterministic promote/demote + depth rebuild, so a
+   * client whose sponsor just changed roles can re-place itself without waiting
+   * on a SPONSOR_HANDOFF that may never arrive. The king's assignment still wins
+   * whenever one does land.
+   */
+  function syncLocalObserverPlacement() {
+    if (!localUserId) return;
+    const self = observerTree.nodes.get(localUserId);
+    if (self?.role !== 'observer') return;
+    observerDepth = self.depth | 0;
+    if (self.sponsorId) {
+      assignedSponsorId = self.sponsorId;
+      return;
+    }
+    // No sponsor in the tree. Keep the king's assignment unless that peer is
+    // gone entirely — an unreachable subtree must not wipe our only dial target,
+    // but a departed sponsor must not keep being dialled either.
+    if (assignedSponsorId && !treeHasUser(assignedSponsorId)) assignedSponsorId = null;
+  }
+
+  function treeHasUser(userId) {
+    if (!userId) return false;
+    if (observerTree.nodes.has(userId)) return true;
+    for (const id of observerTree.nodes.keys()) {
+      if (userIdsMatch(id, userId)) return true;
+    }
+    return false;
+  }
+
   function parkUserInObserverPool(userId) {
     if (!userId) return;
     const assignments = demotePlayerToObserver(observerTree, userId, livePlayerUserIds());
-    if (userIdsMatch(userId, localUserId)) {
-      const self = observerTree.nodes.get(userId);
-      assignedSponsorId = self?.sponsorId ?? null;
-      observerDepth = self?.depth ?? 1;
+    recomputeDepths(observerTree);
+    syncLocalObserverPlacement();
+    publishSponsorHandoffs(treeAssignments(assignments));
+  }
+
+  /**
+   * A user took a seat. Every client must stop treating them as an observer —
+   * otherwise the king keeps offering the open seat to someone already playing
+   * while the real observers stay parked below them and never become eligible.
+   */
+  function notePlayerInTree(userId) {
+    if (!userId) return;
+    const players = livePlayerUserIds();
+    if (!players.some((id) => userIdsMatch(id, userId))) players.push(userId);
+    const moved = promoteObserverToPlayer(observerTree, userId, players);
+    recomputeDepths(observerTree);
+    const mine = userIdsMatch(userId, localUserId);
+    if (mine) {
+      assignedSponsorId = null;
+      observerDepth = 0;
+      localOfferEligible = false;
+    } else {
+      syncLocalObserverPlacement();
     }
-    publishSponsorHandoffs(assignments);
+    const assignments = treeAssignments(moved);
+    // The promoted node owns the handoff for its own former children; the king
+    // owns it for everybody else.
+    if (assignments.length && (mine || isKing())) {
+      sendAll({
+        type: MSG.SPONSOR_HANDOFF,
+        v: KOTH_PROTOCOL_VERSION,
+        matchId,
+        fromUserId: userId,
+        assignments,
+      });
+    }
+  }
+
+  /** Read sponsor/depth back off the tree — depths shift during a reassign. */
+  function treeAssignments(moved) {
+    const out = [];
+    for (const move of moved ?? []) {
+      const node = observerTree.nodes.get(move?.userId);
+      if (!node || node.role === 'player') continue;
+      out.push({ userId: node.userId, sponsorId: node.sponsorId ?? null, depth: node.depth | 0 });
+    }
+    return out;
   }
 
   /**
@@ -2435,7 +3102,10 @@ export function createKothShard(options = {}) {
 
   function retireCombatWipes() {
     if (phase !== SHARD_PHASE.LIVE || lobbyMatchHold) return;
-    if (!session?.koth || session.kothMatchOver || session.replayingCatchUp) return;
+    // Revolving KOTH does not enter generic post-game observation. Even when the
+    // sim reports zero survivors, retire every wiped seat so the shard can wind
+    // down or offer clean seats instead of leaving spectators paused.
+    if (!session?.koth || session.replayingCatchUp) return;
 
     const wiped = kothWipedOwners(session.koth);
     let changed = false;
@@ -2456,7 +3126,8 @@ export function createKothShard(options = {}) {
     if (!changed) return;
     emitShard();
     broadcastPresence();
-    if (isKing()) refreshSlotOffer(returned);
+    syncOfferAuthority();
+    if (isKing()) refreshSlotOffer(returned, { force: true });
     checkShardEmpty();
   }
 
@@ -2474,7 +3145,7 @@ export function createKothShard(options = {}) {
         );
         if (frame) {
           frame.userId = userForPlayerId(frame.playerId);
-          sendAll({ type: MSG.COMMAND_FRAME, frame });
+          sendAll({ type: MSG.COMMAND_FRAME, matchId, frame });
         }
       }
     }
@@ -2483,6 +3154,9 @@ export function createKothShard(options = {}) {
       session?.setLocalPlayerId?.(-1);
       catchUpReady = true;
       pendingLocalJoin = null;
+      clearClaimTimer();
+      claimAttempts = 0;
+      localOfferEligible = false;
       saveMatch({ matchId, userId: localUserId, slot: null });
       setRole('spectator');
       onStatus(
@@ -2490,12 +3164,90 @@ export function createKothShard(options = {}) {
           ? 'Eliminated — waiting for seat offer…'
           : 'Eliminated — spectating (match full)',
       );
+      return;
     }
+    // Our seat was revoked before we ever reached the spawn tick. Without this
+    // the client stays in JOINING for ever: the HUD says "Claiming…", every
+    // reconnect / re-catch-up / re-claim path bails out on that state, and the
+    // pending join would later promote us into a seat that no longer exists.
+    if (pendingLocalJoin && pendingLocalJoin.playerId === playerId) {
+      cancelPendingLocalJoin('Seat withdrawn — waiting for next offer…');
+    }
+  }
+
+  /**
+   * Abandon a reserved-but-not-yet-live seat and go back to spectating.
+   * @param {string} message status line for the player
+   */
+  function cancelPendingLocalJoin(message) {
+    const pending = pendingLocalJoin;
+    if (!pending) return;
+    pendingLocalJoin = null;
+    clearClaimTimer();
+    claimAttempts = 0;
+    claimWhenLevel = false;
+    joinConfirmWatch.delete(pending.playerId);
+    pendingQuorum.delete(pending.playerId);
+    inputEnableTick = 0;
+    removePlayerFromQuorum(pending.playerId);
+    if (roster[pending.playerId]?.userId && userIdsMatch(roster[pending.playerId].userId, localUserId)) {
+      roster = releaseUser(roster, localUserId, false);
+    }
+    localPlayerId = -1;
+    role = 'spectator';
+    appState = countActive(roster) >= MAX_ACTIVE_PLAYERS
+      ? KOTH_APP_STATE.QUEUED
+      : KOTH_APP_STATE.SPECTATOR;
+    localOfferEligible = false;
+    lastOfferStatus = message;
+    session?.setLocalPlayerId?.(-1);
+    session?.setRole?.('spectator');
+    saveMatch({ matchId, userId: localUserId, slot: null });
+    notifyPresentationSync({
+      role: 'spectator',
+      appState,
+      localPlayerId: -1,
+      inputEnabled: false,
+      updateHumanPlayers: true,
+    });
+    console.warn('[KOTH] pending join cancelled', { playerId: pending.playerId, joinTick: pending.joinTick });
+    // Tickless: release the reservation immediately. The king turns it into the
+    // deterministic elimination on its own clock.
+    sendAll({
+      type: MSG.SLOT_DEFEAT,
+      matchId,
+      playerId: pending.playerId,
+      userId: localUserId,
+    });
+    onStatus(message);
+    emitShard();
+    broadcastPresence();
+  }
+
+  /**
+   * Nothing on the wire is guaranteed to tell us our reservation died, so a
+   * pending join that never promotes has to time itself out. Runs off a timer
+   * because a stalled quorum is exactly when commit-driven checks stop firing.
+   */
+  function checkPendingLocalJoinTimeout() {
+    if (!pendingLocalJoin) return;
+    if (!pendingLocalJoin.deadline) return;
+    if (Date.now() < pendingLocalJoin.deadline) return;
+    cancelPendingLocalJoin('Join timed out — waiting for next offer…');
   }
 
   function checkShardEmpty() {
     if (phase !== SHARD_PHASE.LIVE) return;
     if (countActive(roster) > 0) return;
+    // A provisional spectator roster can be empty before catch-up lands. Only
+    // the current offer authority may declare the shared shard gone.
+    if (!offerAuthorityId || !userIdsMatch(offerAuthorityId, localUserId)) return;
+    windDownShard();
+  }
+
+  function handleShardGone(msg) {
+    if (msg.matchId !== matchId || phase !== SHARD_PHASE.LIVE) return;
+    if (!msg.from || !offerAuthorityId || !userIdsMatch(msg.from, offerAuthorityId)) return;
     windDownShard();
   }
 
@@ -2503,6 +3255,23 @@ export function createKothShard(options = {}) {
     sendAll({ type: MSG.SHARD_GONE, matchId });
     broadcastPresence({ gone: true });
     clearSavedMatch();
+    clearOfferExpandTimer();
+    clearClaimTimer();
+    joinConfirmWatch.clear();
+    pendingQuorum.clear();
+    inputEnableTick = 0;
+    claimWhenLevel = false;
+    offerEpoch = 0;
+    offerEligible = [];
+    localOfferEligible = false;
+    endedOfferEpoch = 0;
+    offerAuthorityId = null;
+    lastOfferSignature = '';
+    claimAttempts = 0;
+    observerTree.nodes.clear();
+    observerTree.childrenOf.clear();
+    assignedSponsorId = null;
+    observerDepth = 0;
     matchId = generateMatchId();
     matchStartSlots = [0];
     matchHumanPlayers = [0];
@@ -2512,6 +3281,7 @@ export function createKothShard(options = {}) {
     localPlayerId = 0;
     role = 'player';
     catchUpReady = true;
+    detachLiveSim();
     setPhase(SHARD_PHASE.SANDBOX);
     onStatus('New staging');
     onLiveStart({
@@ -2531,11 +3301,12 @@ export function createKothShard(options = {}) {
   /** Deterministic spawn frame for a live join — buffered locally from JOIN_ACCEPT. */
   function bufferJoinSpawnFrame(msg, eventId) {
     if (!session) return;
-    const kingId = roster[0]?.userId ?? rosterHostUserId();
+    const sourcePlayerId = eventSourcePlayerId();
+    const kingId = userForPlayerId(sourcePlayerId) ?? rosterHostUserId();
     if (!kingId) return;
     const frame = {
       tick: msg.joinTick,
-      playerId: 0,
+      playerId: sourcePlayerId,
       commands: [{ type: CMD.SPAWN_SLOT, playerId: msg.playerId }],
       commandId: eventId,
       userId: kingId,
@@ -2562,7 +3333,7 @@ export function createKothShard(options = {}) {
       );
       if (frame) {
         frame.userId = userForPlayerId(frame.playerId);
-        sendAll({ type: MSG.COMMAND_FRAME, frame });
+        sendAll({ type: MSG.COMMAND_FRAME, matchId, frame });
       } else {
         bufferJoinSpawnFrame(msg, eventId);
       }
@@ -2590,54 +3361,63 @@ export function createKothShard(options = {}) {
       roster = activateSlot(roster, join.playerId, join.userId).slots;
     }
     pendingAcceptedJoins.delete(tick);
+    for (const join of joins) notePlayerInTree(join.userId);
     emitShard();
     broadcastPresence();
   }
 
   function promoteLocalJoinIfReady(tick) {
     if (!pendingLocalJoin || tick < pendingLocalJoin.joinTick) return;
+    // Never promote into a seat that was taken back while we were catching up —
+    // that produced a ghost player whose confirms every peer rejected.
+    const reserved = roster[pendingLocalJoin.playerId];
+    const stillOurs = reserved?.userId
+      && userIdsMatch(reserved.userId, localUserId)
+      && (reserved.state === 'active' || reserved.state === 'reserved');
+    if (!stillOurs) {
+      cancelPendingLocalJoin('Seat withdrawn — waiting for next offer…');
+      return;
+    }
     localPlayerId = pendingLocalJoin.playerId;
+    const joinTick = pendingLocalJoin.joinTick;
     role = 'player';
     appState = KOTH_APP_STATE.LIVE_PLAYER;
     catchUpReady = true;
+    attachLiveSim();
     session?.setLocalPlayerId?.(localPlayerId);
     session?.setRole?.('player');
+    seedPeerConfirms(
+      matchHumanPlayers.filter((id) => id !== localPlayerId),
+      (tick | 0) + 1,
+    );
+    // Our own seat enters immediately: lockstep skips self, so this only makes
+    // our own frames get collected locally — it can never stall us.
     if (!matchHumanPlayers.includes(localPlayerId)) {
       matchHumanPlayers = [...matchHumanPlayers, localPlayerId].sort((a, b) => a - b);
-      session?.setHumanPlayers?.(matchHumanPlayers);
     }
+    pendingQuorum.delete(localPlayerId);
+    session?.setHumanPlayers?.(matchHumanPlayers);
     saveMatch({ matchId, slot: localPlayerId, userId: localUserId });
 
     // Handoff: reassign our former observer children, join player mesh.
-    const handoffs = promoteObserverToPlayer(observerTree, localUserId, livePlayerUserIds());
-    assignedSponsorId = null;
-    observerDepth = 0;
-    if (handoffs.length) {
-      sendAll({
-        type: MSG.SPONSOR_HANDOFF,
-        v: KOTH_PROTOCOL_VERSION,
-        matchId,
-        fromUserId: localUserId,
-        assignments: handoffs,
-      });
-    }
-    upsertNode(observerTree, localUserId, {
-      role: 'player',
-      depth: 0,
-      sponsorId: null,
-      caughtUp: true,
-    });
+    clearClaimTimer();
+    notePlayerInTree(localUserId);
     // Dial other live players now that we are in the mesh.
     for (const uid of livePlayerUserIds()) {
       if (!userIdsMatch(uid, localUserId)) nudgePeerConnect(uid);
     }
 
+    // Input stays off until every peer has admitted us to their quorum. A command
+    // authored before then would be collected by some peers and dropped by
+    // others — the joiner's confirm has to land first.
+    inputEnableTick = tick + JOIN_INPUT_SETTLE_TICKS;
     notifyPresentationSync({
       role: 'player',
       appState,
       localPlayerId,
-      inputEnabled: true,
+      inputEnabled: false,
       updateHumanPlayers: true,
+      sweepToSpawn: true,
     });
     sendAll({
       type: MSG.JOIN_READY,
@@ -2661,15 +3441,16 @@ export function createKothShard(options = {}) {
         simTick: session?.confirmedTick ?? 0,
         unitCount,
         armySize,
-        handoffs: handoffs.length,
       });
     }
     onStatus(`Joined match — player ${localPlayerId}`);
     pendingLocalJoin = null;
+    kickstartLockstep();
     localOfferEligible = false;
     emitShard();
     broadcastPresence();
-    if (isKing()) refreshSlotOffer();
+    syncOfferAuthority();
+    if (isKing()) refreshSlotOffer([], { force: true });
   }
 
   function handleJoinReady(msg) {
@@ -2680,18 +3461,34 @@ export function createKothShard(options = {}) {
     if (slot.state === 'reserved') {
       roster = activateSlot(roster, msg.playerId, msg.userId).slots;
     } else if (slot.state !== 'active') return;
-    if (!matchHumanPlayers.includes(msg.playerId)) {
-      matchHumanPlayers = [...matchHumanPlayers, msg.playerId].sort((a, b) => a - b);
-      session?.setHumanPlayers?.(matchHumanPlayers);
-    }
-    session?.setPeerConfirmedTick?.(msg.playerId, Math.max(msg.tick ?? 0, session.confirmedTick));
+    // They reported the tick they reached, so they are real — admit them. Never
+    // claim they confirmed OUR tick: that would let us commit ticks they have
+    // not acknowledged.
+    admitPendingQuorum(msg.playerId, msg.tick ?? 0, { force: true });
+    session?.setPeerConfirmedTick?.(msg.playerId, msg.tick ?? 0);
+    notePlayerInTree(msg.userId);
     emitShard();
+    if (isKing()) refreshSlotOffer([], { force: true });
   }
 
   function syncJoinedPresentationIfReady(tick) {
     if (!pendingPresentationJoinTicks.has(tick)) return;
     pendingPresentationJoinTicks.delete(tick);
-    notifyPresentationSync({ role, appState, localPlayerId, inputEnabled: role === 'player' });
+    notifyPresentationSync({
+      role,
+      appState,
+      localPlayerId,
+      inputEnabled: role === 'player' && !inputEnableTick,
+    });
+  }
+
+  /** Hand the joiner its controls once the table has taken its confirms. */
+  function releaseJoinerInputIfReady(tick) {
+    if (!inputEnableTick || tick < inputEnableTick) return;
+    inputEnableTick = 0;
+    if (role !== 'player' || localPlayerId < 0) return;
+    notifyPresentationSync({ role: 'player', appState, localPlayerId, inputEnabled: true });
+    onStatus(`In the match — player ${localPlayerId + 1}`);
   }
 
   // RETIRED. The old symmetric "two players present → both reset" election crowned
@@ -2753,6 +3550,7 @@ export function createKothShard(options = {}) {
     role = 'player';
     appState = KOTH_APP_STATE.LIVE_PLAYER;
     catchUpReady = true;
+    attachLiveSim();
     seed = hashSeed(matchId);
     matchStartSlots = [0];
     matchHumanPlayers = [0];
@@ -2773,11 +3571,11 @@ export function createKothShard(options = {}) {
 
   // The lone creator does not wait for a second player. It goes live solo as the
   // host (single active slot, player 0 — the king). Everyone else, including the
-  // very next player, discovers this match, spectates, and joins through the
-  // normal pipeline; the first join flips solo→2 and resets to a fresh two-army
-  // game (see resetForJoin). This is the ONLY path that creates a public match.
-  async function startSoloLive(opts = {}) {
-    const existing = opts.forceNew ? null : bestLiveMatch();
+  // very next player, discovers this match, spectates, and drops in through the
+  // one join pipeline — the board is never rebuilt for them. This is the ONLY
+  // path that creates a public match.
+  async function startSoloLive() {
+    const existing = bestLiveMatch();
     if (existing?.matchId && existing.from && existing.matchId !== matchId) {
       if (DEBUG_KOTH) {
         console.info('[KOTH] solo-live aborted — joining existing match', {
@@ -2800,6 +3598,7 @@ export function createKothShard(options = {}) {
     defeatedPlayers.clear();
     liveStartKey = matchStartKey(matchId, roster, seed);
     catchUpReady = true;
+    attachLiveSim();
     notePlayerConfirm(0);
     session?.setLocalPlayerId?.(0);
     session?.setRole?.('player');
@@ -2816,7 +3615,7 @@ export function createKothShard(options = {}) {
       sponsorId: null,
       caughtUp: true,
     });
-    refreshSlotOffer();
+    refreshSlotOffer([], { force: true });
   }
 
   function handleMatchSnapshot(msg, fromPeerId = null) {
@@ -2839,7 +3638,31 @@ export function createKothShard(options = {}) {
     if (localSnapshotSlot?.state !== 'active') {
       // Late spectators must not apply the tick-0 start snapshot to the visible sim.
       // They need to replay from a live sponsor to the current tick first.
-      invalidateInFlightCatchup();
+      // 3rd+ joiners also receive this snapshot again (broadcast / relay). Do
+      // not pause or wipe a reserved seat, and do not restart a good attach.
+      const sameStart = !!nextKey && liveStartKey === nextKey;
+      if (sameStart && shouldKeepSpectatorJoin({
+        pendingLocalJoin: !!pendingLocalJoin,
+        joining: appState === KOTH_APP_STATE.JOINING,
+      })) {
+        return;
+      }
+      // A new start key means the board really was rebuilt (the solo→2 reset).
+      // A claim against the old board is dead, and holding it here left the
+      // client attached to a world nobody else is playing. Keep the player's
+      // intent so they are queued for the rebuilt match instead of dropped.
+      if (!sameStart && (pendingLocalJoin || appState === KOTH_APP_STATE.JOINING)) {
+        cancelPendingLocalJoin('Match restarted — still queued for a seat…');
+        claimWhenLevel = true;
+      }
+      const restart = shouldRestartSpectatorCatchup({
+        liveStartKey,
+        nextKey,
+        liveSimAttached,
+        catchupInFlight,
+        catchupRequested: !!activeCatchupRequestId,
+      });
+      if (!restart) return;
       roster = nextRoster;
       seed = nextSeed;
       if (msg.armyPerSide != null) armyPerSide = msg.armyPerSide | 0;
@@ -2847,13 +3670,17 @@ export function createKothShard(options = {}) {
       matchStartSlots = msg.activeSlots ?? activePlayerIds(roster);
       matchHumanPlayers = (msg.humanPlayers ?? [...matchStartSlots])
         .filter((id) => nextRoster[id]?.state === 'active');
+      invalidateInFlightCatchup();
       phase = SHARD_PHASE.LIVE;
       role = 'spectator';
       appState = KOTH_APP_STATE.SPECTATOR;
       localPlayerId = -1;
       catchUpReady = false;
+      detachLiveSim();
+      onLeaveSolo();
       session?.setLocalPlayerId?.(-1);
       session?.setRole?.('spectator');
+      pauseStubSim();
       saveMatch({ matchId, userId: localUserId, slot: null });
       emitShard();
       notifyPresentationSync({
@@ -2879,10 +3706,9 @@ export function createKothShard(options = {}) {
       return;
     }
     // Local user is active in the incoming roster and the sender already passed
-    // canonical-host validation, so this is a legitimate (re)start — e.g. the
-    // solo→2 reset that promotes this spectator into player 1 with a brand-new
-    // start key. Adopt it; the old anti-split-brain key bail is now subsumed by
-    // isCanonicalResetSender (only the recognized host can author a re-key).
+    // canonical-host validation, so this is a legitimate (re)start. No current
+    // path authors one — joins are drop-in — but the handler stays so a host
+    // that does re-key the board can still bring everyone with it.
     invalidateInFlightCatchup();
     roster = cloneSlots(msg.roster ?? roster);
     seed = msg.seed ?? seed;
@@ -2895,6 +3721,7 @@ export function createKothShard(options = {}) {
     appState = role === 'player' ? KOTH_APP_STATE.LIVE_PLAYER : KOTH_APP_STATE.SPECTATOR;
     setPhase(SHARD_PHASE.LIVE);
     catchUpReady = true;
+    attachLiveSim();
     for (const pid of matchHumanPlayers) notePlayerConfirm(pid);
     saveMatch({ matchId, slot: localPlayerId, userId: localUserId });
     if (DEBUG_KOTH) console.info('[KOTH] match snapshot adopted — promoted', { localPlayerId, role });
@@ -2909,89 +3736,47 @@ export function createKothShard(options = {}) {
     }
   }
 
-  // Host-authored reset that turns the solo match into a fresh two-army game.
-  // The creator/king keeps player 0 (kingOwner stays the longest-living slot);
-  // the joiner takes player 1. A single MATCH_SNAPSHOT carries the new roster to
-  // every peer, who all rebuild at tick 0. Only the current host runs this.
-  async function resetForJoin(joinerUserId) {
-    if (!joinerUserId || joinerUserId === localUserId) return;
-    const next = createEmptyRoster();
-    next[0] = { userId: localUserId, state: 'active', playerId: 0 };
-    next[1] = { userId: joinerUserId, state: 'active', playerId: 1 };
-    roster = next;
-    seed = hashSeed(matchId);
-    matchStartSlots = [0, 1];
-    matchHumanPlayers = [0, 1];
-    defeatedPlayers.clear();
-    liveStartKey = matchStartKey(matchId, roster, seed);
-    localPlayerId = 0;
-    role = 'player';
-    appState = KOTH_APP_STATE.LIVE_PLAYER;
-    catchUpReady = true;
-    joinIntents.clear();
-    pendingAcceptedJoins.clear();
-    pendingPresentationJoinTicks.clear();
-    pendingLocalJoin = null;
-    endSlotOffer('filled');
-    for (const pid of matchHumanPlayers) notePlayerConfirm(pid);
-    session?.setLocalPlayerId?.(0);
-    session?.setRole?.('player');
-    saveMatch({ matchId, userId: localUserId, slot: 0 });
-    // Reset local sim + renderer to two armies before broadcasting the snapshot.
-    await notifyLiveStart(true);
-    sendAll({
-      type: MSG.MATCH_SNAPSHOT,
-      v: KOTH_PROTOCOL_VERSION,
-      matchId,
-      seed,
-      roster: cloneSlots(roster),
-      phase: SHARD_PHASE.LIVE,
-      tick: 0,
-      activeSlots: [0, 1],
-      humanPlayers: [0, 1],
-      armyPerSide,
-      startKey: liveStartKey,
-    });
-    emitShard();
-    broadcastPresence();
-    onStatus('Player joined — match reset (2 armies)');
-  }
-
-  function acceptSlotClaim(claimerUserId, claimEpoch) {
+  function acceptSlotClaim(claimerUserId, claimEpoch, claimerLagTicks = 0) {
     if (!isKing() || phase !== SHARD_PHASE.LIVE || !session) return false;
     if (!claimerUserId) return false;
-    if (claimEpoch && offerEpoch && claimEpoch !== offerEpoch) return false;
     if (countActive(roster) >= MAX_ACTIVE_PLAYERS) return false;
+    // Already seated or already mid-join — a retried claim must not book a second seat.
+    if (offerExcluded(claimerUserId)) return false;
+    // A claim against an epoch we have already closed (or never opened) is stale.
+    // Re-open instead of dropping it, so the claimer's retry lands on a live
+    // epoch rather than timing out into the spectator pool.
+    const epoch = Number(claimEpoch) || 0;
+    if (!offerEpoch || (epoch && epoch !== offerEpoch)) {
+      refreshSlotOffer([claimerUserId], { force: true });
+      return false;
+    }
     if (offerEligible.length && !offerEligible.some((id) => userIdsMatch(id, claimerUserId))) {
       return false;
     }
 
-    const soloKing =
-      countActive(roster) === 1 ||
-      (countActive(roster) === 0 && role === 'player' && localPlayerId >= 0);
-    if (soloKing) {
-      endSlotOffer('filled');
-      void resetForJoin(claimerUserId);
-      return true;
-    }
-
-    const joinTick = (session.confirmedTick ?? 0) + JOIN_DELAY_TICKS;
-    if (session.confirmedTick < joinTick - JOIN_ASSIGN_LEAD_TICKS) {
-      // Buffer claim until we are within lead window.
-      joinIntents.set(claimerUserId, {
-        userId: claimerUserId,
+    const joinTick = joinSpawnTick({
+      hostTick: session.confirmedTick ?? 0,
+      delayTicks: JOIN_DELAY_TICKS,
+      claimerLagTicks,
+    });
+    if (DEBUG_KOTH) {
+      console.info('[KOTH] accepting claim', {
+        user: shortId(claimerUserId),
+        hostTick: session.confirmedTick,
+        claimerLagTicks,
         joinTick,
-        intentId: `claim:${matchId}:${claimerUserId}:${offerEpoch}`,
-        caughtUp: true,
       });
-      endSlotOffer('filled');
-      return true;
     }
-
     const { slots, playerId } = reserveOpenSlot(roster, claimerUserId);
-    if (playerId < 0) return false;
+    if (playerId < 0) {
+      // Lost a race for the last seat; the claimer's retry lands on the next offer.
+      refreshSlotOffer([], { force: true });
+      return false;
+    }
     roster = slots;
-    endSlotOffer('filled');
+    // Accept immediately. Holding the accept until `joinTick - LEAD` spent half
+    // the joiner's spawn window before it even heard about the seat, and every
+    // peer parks at that tick waiting for them.
     const accept = {
       type: MSG.JOIN_ACCEPT,
       v: KOTH_PROTOCOL_VERSION,
@@ -3003,7 +3788,9 @@ export function createKothShard(options = {}) {
       spawnSeed: hashSeed(`${matchId}:${claimerUserId}:${playerId}:${joinTick}`),
     };
     sendAll(accept);
+    endSlotOffer('filled', claimerUserId);
     commitJoinAtTick(accept);
+    scheduleJoinerQuorum(playerId, joinTick, claimerUserId);
     if (userIdsMatch(claimerUserId, localUserId)) {
       applyLocalJoinPending(playerId, joinTick);
     }
@@ -3012,49 +3799,17 @@ export function createKothShard(options = {}) {
     return true;
   }
 
-  function processJoinQueue() {
-    // Completes claims that were accepted slightly early (joinTick lead).
-    if (phase !== SHARD_PHASE.LIVE || !session) return;
-    if (!isKing()) return;
-    const intents = [...joinIntents.values()].sort(
-      (a, b) => a.joinTick - b.joinTick || String(a.userId).localeCompare(String(b.userId)),
-    );
-    for (const intent of intents) {
-      if (intent.joinTick <= session.confirmedTick) {
-        joinIntents.delete(intent.userId);
-        continue;
-      }
-      if (session.confirmedTick < intent.joinTick - JOIN_ASSIGN_LEAD_TICKS) continue;
-      const { slots, playerId } = reserveOpenSlot(roster, intent.userId);
-      if (playerId < 0) break;
-      roster = slots;
-      const accept = {
-        type: MSG.JOIN_ACCEPT,
-        v: KOTH_PROTOCOL_VERSION,
-        matchId,
-        userId: intent.userId,
-        playerId,
-        joinTick: intent.joinTick,
-        eventId: `join:${matchId}:${intent.userId}:${playerId}:${intent.joinTick}`,
-        spawnSeed: hashSeed(`${matchId}:${intent.userId}:${playerId}:${intent.joinTick}`),
-      };
-      sendAll(accept);
-      commitJoinAtTick(accept);
-      joinIntents.delete(intent.userId);
-      if (userIdsMatch(intent.userId, localUserId)) {
-        applyLocalJoinPending(playerId, intent.joinTick);
-      }
-      emitShard();
-      broadcastPresence();
-    }
-    // Keep offer alive while seats remain.
-    if (countActive(roster) < MAX_ACTIVE_PLAYERS) refreshSlotOffer();
-  }
-
   function handleSlotClaim(msg) {
     if (msg.matchId !== matchId) return;
     if (!msg.userId) return;
+    // Claims are addressed to the peer that authored the offer. During a death
+    // handoff, stale roster views can briefly elect different kings; without an
+    // address both of them can reserve different seats for the same claim.
+    if (msg.to && !userIdsMatch(msg.to, localUserId)) return;
     if (!isKing()) {
+      // An addressed claim must never be forwarded to a second authority. The
+      // claimer will retry against the next offer if authority changed in flight.
+      if (msg.to) return;
       if (role === 'player') {
         const hostId = rosterHostUserId();
         if (hostId) {
@@ -3070,33 +3825,202 @@ export function createKothShard(options = {}) {
       return;
     }
     if (DEBUG_KOTH) {
-      console.info('[KOTH] slot claim', { from: shortId(msg.userId), epoch: msg.offerEpoch });
+      console.info('[KOTH] slot claim', {
+        from: shortId(msg.userId),
+        epoch: msg.offerEpoch,
+        claimerTick: msg.tick,
+        claimerLag: msg.lagTicks,
+        hostTick: session?.confirmedTick,
+      });
     }
-    acceptSlotClaim(msg.userId, msg.offerEpoch);
+    // The claimer's own lag estimate is measured against confirms that were
+    // already stale in flight, so on a relayed mesh it reads far too low. The gap
+    // between our tick and the tick they stamped on this message is the real
+    // distance they have to cover, latency included.
+    const wireLag = Math.max(0, (session?.confirmedTick ?? 0) - (msg.tick | 0));
+    acceptSlotClaim(msg.userId, msg.offerEpoch, Math.max(msg.lagTicks | 0, wireLag));
   }
 
   function handleSlotOffer(msg) {
     if (msg.matchId !== matchId) return;
-    applyLocalOfferState(msg.offerEpoch, msg.eligible ?? []);
+    if (!isOfferAuthority(msg.from)) return;
+    applyLocalOfferState(msg.offerEpoch, msg.eligible ?? [], { from: msg.from });
   }
 
   function handleSlotOfferEnd(msg) {
     if (msg.matchId !== matchId) return;
-    if (offerEpoch && msg.offerEpoch && msg.offerEpoch !== offerEpoch) return;
+    if (!isOfferAuthority(msg.from)) return;
+    const ended = Number.isFinite(msg.offerEpoch) ? Math.trunc(msg.offerEpoch) : 0;
+    if (ended && offerEpoch && ended !== offerEpoch) return;
+    if (ended) endedOfferEpoch = Math.max(endedOfferEpoch, ended);
     offerEpoch = 0;
     offerEligible = [];
     localOfferEligible = false;
-    if (role === 'spectator' && catchUpReady && !pendingLocalJoin) {
-      appState = countActive(roster) >= MAX_ACTIVE_PLAYERS
-        ? KOTH_APP_STATE.QUEUED
-        : KOTH_APP_STATE.SPECTATOR;
-      lastOfferStatus =
-        countActive(roster) >= MAX_ACTIVE_PLAYERS
-          ? 'Match full — waiting for a seat…'
-          : 'Seat taken — waiting for next offer…';
+    lastOfferSignature = '';
+    claimAttempts = 0;
+    // We won the seat: JOIN_ACCEPT drives the HUD from here. Without this the
+    // winner briefly reads "Seat taken" because the end goes out first.
+    if (msg.winnerUserId && userIdsMatch(msg.winnerUserId, localUserId)) return;
+    const full = countActive(roster) >= MAX_ACTIVE_PLAYERS;
+    if (appState === KOTH_APP_STATE.JOINING && msg.winnerUserId && !pendingLocalJoin) {
+      // Lost the race for this seat, but they asked to play — stay in the queue.
+      failLocalClaim(
+        full ? 'Match full — waiting for a seat…' : 'Seat taken — still queued…',
+        { requeue: !full },
+      );
+      return;
+    }
+    if (role === 'spectator' && catchUpReady && !claimPending()) {
+      appState = full ? KOTH_APP_STATE.QUEUED : KOTH_APP_STATE.SPECTATOR;
+      lastOfferStatus = full
+        ? 'Match full — waiting for a seat…'
+        : 'Seat taken — waiting for next offer…';
       onStatus(lastOfferStatus);
       emitShard();
     }
+  }
+
+  function clearClaimTimer() {
+    if (claimTimer) {
+      clearTimeout(claimTimer);
+      claimTimer = null;
+    }
+    clearClaimSettleTimer();
+  }
+
+  function clearClaimSettleTimer() {
+    if (!claimSettleTimer) return;
+    clearTimeout(claimSettleTimer);
+    claimSettleTimer = null;
+  }
+
+  function scheduleQueuedClaimRetry() {
+    if (claimSettleTimer || !claimWhenLevel) return;
+    const readiness = claimReadiness();
+    const settleRemaining = Math.max(0, CLAIM_SETTLE_MS - readiness.msSinceAttach);
+    claimSettleTimer = setTimeout(() => {
+      claimSettleTimer = null;
+      pumpQueuedClaim();
+      if (claimWhenLevel) scheduleQueuedClaimRetry();
+    }, Math.max(50, Math.min(250, settleRemaining || 250)));
+  }
+
+  /**
+   * A claim that never becomes a JOIN_ACCEPT (dropped relay message, lost race,
+   * king handover mid-claim) must not leave the client stuck in JOINING with no
+   * way to claim again.
+   */
+  function armClaimTimeout() {
+    clearClaimTimer();
+    claimTimer = setTimeout(() => {
+      claimTimer = null;
+      if (pendingLocalJoin || role === 'player') return;
+      if (appState !== KOTH_APP_STATE.JOINING) return;
+      if (
+        claimAttempts < MAX_SLOT_CLAIM_ATTEMPTS &&
+        offerEpoch &&
+        localOfferEligible &&
+        countActive(roster) < MAX_ACTIVE_PLAYERS
+      ) {
+        sendSlotClaim();
+        return;
+      }
+      failLocalClaim('Claim lost — waiting for next offer…');
+    }, SLOT_CLAIM_TIMEOUT_MS);
+  }
+
+  /**
+   * @param {{ requeue?: boolean }} [options] requeue — the player still wants in
+   *   (someone else won this seat), so claim the next offer automatically rather
+   *   than making them press the key again every rotation.
+   */
+  function failLocalClaim(message, { requeue = false } = {}) {
+    clearClaimTimer();
+    claimAttempts = 0;
+    claimWhenLevel = requeue && countActive(roster) < MAX_ACTIVE_PLAYERS;
+    if (role === 'player' || pendingLocalJoin) return;
+    appState = countActive(roster) >= MAX_ACTIVE_PLAYERS
+      ? KOTH_APP_STATE.QUEUED
+      : KOTH_APP_STATE.SPECTATOR;
+    lastOfferStatus = message;
+    onStatus(message);
+    session?.setRole?.('spectator');
+    emitShard();
+  }
+
+  /**
+   * Ticks we are behind the live match.
+   *
+   * Peer tick confirms are the primary measure, but they only bound us by the
+   * *slowest* confirm we have received — if one player's confirms are not
+   * reaching us, that number understates the real gap. The host's announced tick
+   * covers that, and is only trusted while it is still advancing: a latched
+   * stale value would leave the client "catching up" for ever.
+   */
+  function localLagTicks() {
+    const sessionLag = session?.lagBehindLiveTicks?.() ?? 0;
+    const live = liveMatches.get(matchId);
+    const advancing = live && Date.now() - (live.lastTickAt ?? 0) < LIVE_TICK_FRESH_MS;
+    if (!advancing) return sessionLag;
+    const announced = Math.max(0, (live.tick | 0) - (session?.confirmedTick ?? 0));
+    return Math.max(sessionLag, announced);
+  }
+
+  function claimReadiness() {
+    return {
+      catchUpReady,
+      lagTicks: localLagTicks(),
+      msSinceAttach: catchUpReadyAt ? performance.now() - catchUpReadyAt : Infinity,
+    };
+  }
+
+  /** A queued claim fires as soon as we are level with the live tick. */
+  function pumpQueuedClaim() {
+    if (!claimWhenLevel) return;
+    if (role === 'player' || claimPending()) {
+      claimWhenLevel = false;
+      clearClaimSettleTimer();
+      return;
+    }
+    if (!localOfferEligible || !offerEpoch || countActive(roster) >= MAX_ACTIVE_PLAYERS) return;
+    if (!canClaimSeatNow(claimReadiness())) {
+      scheduleQueuedClaimRetry();
+      return;
+    }
+    claimWhenLevel = false;
+    clearClaimSettleTimer();
+    claimAttempts = 0;
+    sendSlotClaim();
+  }
+
+  function sendSlotClaim() {
+    claimAttempts++;
+    if (DEBUG_KOTH) {
+      console.info('[KOTH] slot claim → sending', {
+        matchId: shortId(matchId),
+        offerEpoch,
+        attempt: claimAttempts,
+        depth: observerDepth,
+        host: shortId(rosterHostUserId()),
+      });
+    }
+    sendAll({
+      type: MSG.SLOT_CLAIM,
+      v: KOTH_PROTOCOL_VERSION,
+      matchId,
+      to: offerAuthorityId || rosterHostUserId(),
+      userId: localUserId,
+      offerEpoch,
+      // Lets the king pick a spawn tick we can actually reach.
+      tick: session?.confirmedTick ?? 0,
+      lagTicks: localLagTicks(),
+    });
+    appState = KOTH_APP_STATE.JOINING;
+    session?.setRole?.('spectator');
+    notifyPresentationSync({ role: 'spectator', appState, inputEnabled: false });
+    onStatus(claimAttempts > 1 ? `Claiming seat (retry ${claimAttempts - 1})…` : 'Claiming seat…');
+    emitShard();
+    armClaimTimeout();
   }
 
   function handleSponsorAssign(msg) {
@@ -3111,6 +4035,15 @@ export function createKothShard(options = {}) {
 
   function handleSponsorHandoff(msg) {
     if (msg.matchId !== matchId) return;
+    if (msg.fromUserId) {
+      upsertNode(observerTree, msg.fromUserId, {
+        role: 'player',
+        depth: 0,
+        sponsorId: null,
+        caughtUp: true,
+      });
+      observerTree.childrenOf.delete(msg.fromUserId);
+    }
     for (const a of msg.assignments ?? []) {
       applySponsorAssignment(a.userId, a.sponsorId, a.depth);
       if (userIdsMatch(a.userId, localUserId) && a.sponsorId) {
@@ -3119,14 +4052,8 @@ export function createKothShard(options = {}) {
         if (!isConnectedTo(a.sponsorId)) nudgePeerConnect(a.sponsorId);
       }
     }
-    if (msg.fromUserId) {
-      upsertNode(observerTree, msg.fromUserId, {
-        role: 'player',
-        depth: 0,
-        sponsorId: null,
-        caughtUp: true,
-      });
-    }
+    recomputeDepths(observerTree);
+    syncLocalObserverPlacement();
   }
 
   function handleJoinPrepare(msg) {
@@ -3156,16 +4083,46 @@ export function createKothShard(options = {}) {
   }
 
   function applyLocalJoinPending(playerId, joinTick) {
-    pendingLocalJoin = { playerId, joinTick };
+    // The joiner's own deadline sits behind the king's, so an authoritative
+    // revoke wins and this only fires when nothing told us at all.
+    pendingLocalJoin = {
+      playerId,
+      joinTick,
+      deadline: Date.now() + JOIN_CONFIRM_GRACE_MS * 2,
+    };
+    clearClaimTimer();
+    claimAttempts = 0;
+    claimWhenLevel = false;
     // Enter quorum the tick AFTER spawn so tick joinTick still commits with [0,1]
     // confirms only — otherwise we stall waiting for our own player-2 confirm.
-    session?.scheduleJoin?.(joinTick + 1, playerId);
+    scheduleJoinerQuorum(playerId, joinTick);
+    seedPeerConfirms(
+      matchHumanPlayers.filter((id) => id !== playerId),
+      (session?.confirmedTick ?? 0) + 1,
+    );
     role = 'spectator';
     appState = KOTH_APP_STATE.JOINING;
     catchUpReady = true;
+    // A spectator can inherit the loading/solo world's post-game flag. Joining
+    // a revolving KOTH seat reopens the round; do not let main's post-game
+    // observer path pause us before we can reach the deterministic spawn tick.
+    if (session) {
+      session.kothMatchOver = 0;
+      session.matchWinner = -1;
+      session.pauseLockstep = false;
+      session.simAcc = 0;
+    }
     session?.setRole?.('spectator');
     notifyPresentationSync({ role: 'spectator', appState, localPlayerId, inputEnabled: false });
     onStatus(`Joining at tick ${joinTick}…`);
+    if (DEBUG_KOTH) {
+      console.info('[KOTH] join pending', {
+        playerId,
+        joinTick,
+        ourTick: session?.confirmedTick ?? 0,
+        lag: localLagTicks(),
+      });
+    }
     if (session && session.confirmedTick >= joinTick) {
       promoteLocalJoinIfReady(session.confirmedTick);
     }
@@ -3185,7 +4142,7 @@ export function createKothShard(options = {}) {
     roster = reserveSlot(roster, msg.playerId, msg.userId);
     defeatedPlayers.delete(msg.playerId);
     commitJoinAtTick(msg);
-    joinIntents.delete(msg.userId);
+    scheduleJoinerQuorum(msg.playerId, msg.joinTick, msg.userId);
     if (userIdsMatch(msg.userId, localUserId)) {
       applyLocalJoinPending(msg.playerId, msg.joinTick);
     }
@@ -3200,14 +4157,24 @@ export function createKothShard(options = {}) {
       if (!msg.viaBroadcast && (!fromPeerId || !connectedPeerIds().includes(fromPeerId))) return;
       if (msg.viaBroadcast) return;
     }
-    // L2+ must not pull from players — only assigned sponsor answers.
-    if (!canServeCatchUpFor(msg.from)) {
-      // Only L1 parents / players with capacity answer; never relay player-ward for L2+.
-      if (role === 'spectator' && assignedSponsorId && !userIdsMatch(msg.to, assignedSponsorId)) {
-        return;
+    // An observer that never received its SPONSOR_ASSIGN says so (sponsorId null).
+    // Re-publish it so the fan-out tree converges even on a partial mesh.
+    if (isKing() && msg.from && msg.sponsorId == null) {
+      const node = observerTree.nodes.get(msg.from);
+      if (!node?.sponsorId) kingAssignObserver(msg.from);
+      else {
+        sendAll({
+          type: MSG.SPONSOR_ASSIGN,
+          v: KOTH_PROTOCOL_VERSION,
+          matchId,
+          userId: msg.from,
+          sponsorId: node.sponsorId,
+          depth: node.depth,
+        });
       }
-      return;
     }
+    // L2+ must not pull from players — only the assigned sponsor answers.
+    if (!canServeCatchUpFor(msg.from, msg.sponsorId)) return;
 
     const tipTick = session.confirmedTick;
     let cached = session.getCachedCheckpoint?.();
@@ -3238,42 +4205,53 @@ export function createKothShard(options = {}) {
 
     const tick = session.confirmedTick;
     const checkpointTick = cached?.tick ?? 0;
-    // Solo sandbox: attach at the tip. The first join resets the match anyway,
-    // so shipping a full command ledger is wasted work (and times out).
-    const useCheckpoint = checkpointTick > 0 && checkpointTick <= tick;
+    // Solo king: the fresh checkpoint above IS the tip, so ship that and skip the
+    // ledger entirely. Full replay from tick 0 is what times out on long matches.
+    const useCheckpoint = canUseCatchupCheckpoint({ cached, tipTick: tick });
     const ledger = useCheckpoint
       ? (soloLive ? [] : session.exportLedger(checkpointTick, tick))
       : session.exportLedger(0, tick);
     const offerTick = soloLive && useCheckpoint ? checkpointTick : tick;
-    const offerChecksum = soloLive && useCheckpoint
-      ? (cached.checksum ?? session._lastChecksum)
-      : session._lastChecksum;
+    const offerChecksum = catchupOfferChecksum({
+      offerTick,
+      checkpointTick,
+      useCheckpoint,
+      cachedChecksum: cached?.checksum,
+      tipChecksum: session._lastChecksum,
+    });
 
     const responsePeerId = fromPeerId && connectedPeerIds().includes(fromPeerId)
       ? fromPeerId
       : connectedPeerIds().find((pid) => userIdsMatch(peerUserIds.get(pid) ?? pid, msg.from));
 
+    // Both the world and the ledger always travel as chunks — over the data
+    // channel when there is one, otherwise addressed over the broadcast relay.
+    // A whole world (or a long ledger) inline on one relay message is dropped
+    // silently, and the joiner has no way to tell that from "still arriving".
     const transferId = `cu:${msg.requestId || `${matchId}:${tick}`}`;
-    if (useCheckpoint && responsePeerId && cached?.checkpoint) {
-      sendCheckpointToPeer(responsePeerId, cached.checkpoint, cached.checksum, checkpointTick);
-      const packed = packLedgerChunks(ledger, transferId);
-      for (let i = 0; i < packed.chunks.length; i++) {
-        sendPeer(responsePeerId, {
-          type: MSG.LEDGER_CHUNK,
-          v: KOTH_PROTOCOL_VERSION,
-          matchId,
-          transferId,
-          index: i,
-          total: packed.total,
-          frames: packed.chunks[i],
+    const chunkTarget = responsePeerId ? { peerId: responsePeerId } : { toUserId: msg.from };
+    const wire = catchupOfferLedger({ ledger, transferId });
+    if (useCheckpoint && cached?.checkpoint) {
+      sendCheckpointChunks({
+        ...chunkTarget,
+        checkpoint: cached.checkpoint,
+        checksum: cached.checksum,
+        tick: checkpointTick,
+      });
+    }
+    if (wire.chunked) {
+      sendLedgerChunks({
+        ...chunkTarget,
+        ledger,
+        transferId,
+        meta: {
           requestId: msg.requestId,
-          to: msg.from,
           tipTick: tick,
           tipChecksum: session._lastChecksum,
           checkpointTick,
-          checkpointChecksum: cached.checksum,
-        });
-      }
+          checkpointChecksum: useCheckpoint ? cached.checksum : undefined,
+        },
+      });
     }
 
     const offer = {
@@ -3284,10 +4262,10 @@ export function createKothShard(options = {}) {
       requestId: msg.requestId,
       tick: offerTick,
       checksum: offerChecksum,
-      ledger: useCheckpoint ? [] : ledger,
-      ledgerFrameCount: ledger.length,
-      ledgerTransferId: useCheckpoint ? transferId : undefined,
-      checkpointTick: useCheckpoint ? checkpointTick : 0,
+      ledger: wire.ledger,
+      ledgerFrameCount: wire.ledgerFrameCount,
+      ledgerTransferId: wire.ledgerTransferId,
+      checkpointTick: useCheckpoint ? checkpointTick : undefined,
       checkpointChecksum: useCheckpoint ? cached.checksum : undefined,
       matchConfig: matchConfig(),
       roster: authoritativeRoster(),
@@ -3295,9 +4273,6 @@ export function createKothShard(options = {}) {
       soloLive,
     };
     if (msg.viaBroadcast || !responsePeerId) {
-      // Broadcast path: include ledger inline (no chunk assembly over broadcast).
-      offer.ledger = ledger;
-      offer.checkpoint = useCheckpoint ? cached.checkpoint : undefined;
       sendBroadcastMsg(offer);
     } else {
       sendPeer(responsePeerId, offer);
@@ -3311,25 +4286,34 @@ export function createKothShard(options = {}) {
     if (!session || !msg.matchConfig) return;
     if (catchupInFlight) return;
 
-    let checkpoint = msg.checkpoint ?? null;
-    let ledger = msg.ledger ?? [];
+    const parts = pendingCatchupParts.get(msg.requestId) ?? {};
+    let { checkpoint, ledger } = resolveCatchupOfferWorld(
+      msg,
+      parts,
+      session.getCachedCheckpoint?.(),
+    );
 
-    // Wait briefly for chunked checkpoint/ledger if advertised.
-    if (msg.ledgerTransferId || (msg.checkpointTick > 0 && !checkpoint)) {
-      const parts = pendingCatchupParts.get(msg.requestId) ?? {};
-      checkpoint = checkpoint ?? parts.checkpoint ?? null;
-      if (parts.ledger?.length) ledger = parts.ledger;
-      if (msg.ledgerTransferId && !parts.ledger) {
-        // Keep request open; ledger chunks will re-enter via handleLedgerChunk.
-        pendingCatchupParts.set(msg.requestId, {
-          ...parts,
-          offer: msg,
-          waitingLedger: true,
-        });
-        onStatus('Receiving catch-up ledger…');
-        return;
-      }
+    // Wait for advertised chunked parts. An empty tip ledger (frameCount 0)
+    // is complete — 3rd+ joiners used to stall here after a fresh checkpoint.
+    if (expectCatchupLedgerChunks(msg) && !parts.ledger) {
+      pendingCatchupParts.set(msg.requestId, {
+        ...parts,
+        offer: msg,
+        waitingLedger: true,
+      });
+      onStatus('Receiving catch-up ledger…');
+      return;
     }
+    if (needsCatchupCheckpoint(msg, checkpoint)) {
+      pendingCatchupParts.set(msg.requestId, {
+        ...parts,
+        offer: msg,
+        waitingCheckpoint: true,
+      });
+      onStatus('Receiving host world…');
+      return;
+    }
+    ledger = ledger ?? [];
 
     catchupInFlight = true;
     clearCatchupOfferTimer();
@@ -3338,35 +4322,26 @@ export function createKothShard(options = {}) {
     activeCatchupRequestId = '';
     catchUpReady = false;
 
-    // Solo sandbox: the first challenger's claim resets the whole match to a fresh
-    // two-army tick 0 (resetForJoin), so replaying the king's lone-army sandbox is
-    // throwaway work plus a visible rebuild. Mark ready without touching the sim and
-    // let the seat claim drive the single tick-0 rebuild. If another player beats us
-    // in, the host's MATCH_SNAPSHOT re-enters us as a spectator and a real catch-up
-    // runs for the now-multi-army match.
-    if (msg.soloLive && countActive(msg.roster ?? roster) <= 1) {
-      catchUpReady = true;
-      phase = SHARD_PHASE.LIVE;
-      appState = KOTH_APP_STATE.SPECTATOR;
-      localPlayerId = -1;
-      if (msg.roster && countActive(msg.roster) > 0) roster = cloneSlots(msg.roster);
-      if (msg.matchConfig?.armyPerSide != null) armyPerSide = msg.matchConfig.armyPerSide | 0;
-      matchStartSlots = msg.matchConfig?.activeSlots ?? matchStartSlots;
-      session?.setLocalPlayerId?.(-1);
-      setRole('spectator');
-      saveMatch({ matchId, userId: localUserId, slot: null });
-      noteObserverCaughtUp(localUserId);
-      pendingCatchupParts.delete(acceptedRequestId);
-      catchupInFlight = false;
-      catchupRetryAttempt = 0;
-      onStatus(localOfferEligible ? 'Seat offered — J to claim' : 'Live match found — waiting for a seat…');
-      notifyPresentationSync({ mode: 'koth', role: 'spectator', reset: false, inputEnabled: false });
-      sendAll({ type: MSG.CATCHUP_READY, matchId, userId: localUserId, tick: msg.tick ?? 0 });
-      if (isKing()) refreshSlotOffer();
-      return;
+    // Solo king: still apply the host checkpoint. Skipping used to leave the
+    // spectator on the loading-screen 3-villager stub while the lobby HUD
+    // already said they were watching. Ledger replay stays empty (attach at tip).
+    if (isSoloLiveSpectatorOffer(msg, countActive(msg.roster ?? roster))) {
+      if (!soloLiveOfferHasWorld({
+        checkpoint,
+        checkpointTick: msg.checkpointTick ?? checkpoint?.tick ?? 0,
+      })) {
+        catchupInFlight = false;
+        catchUpReady = false;
+        detachLiveSim();
+        pendingCatchupParts.delete(acceptedRequestId);
+        pauseStubSim();
+        onStatus('Waiting for host world…');
+        scheduleCatchupRetry(msg.tick ?? 0);
+        return;
+      }
     }
 
-    const attachLive = !!(msg.checkpointTick > 0 && !(ledger?.length));
+    const attachLive = !!(checkpoint && !(ledger?.length));
     onStatus(attachLive ? 'Attaching to live match…' : 'Replaying catch-up…');
     try {
       await replayCatchUp(
@@ -3378,6 +4353,7 @@ export function createKothShard(options = {}) {
         {
           checkpoint,
           checkpointTick: msg.checkpointTick ?? checkpoint?.tick ?? 0,
+          stayPaused: true,
           onProgress: ({ tick, targetTick }) => {
             const elapsed = formatMatchTime(matchSecondsFromTick(tick));
             const total = formatMatchTime(matchSecondsFromTick(targetTick));
@@ -3390,20 +4366,40 @@ export function createKothShard(options = {}) {
         },
       );
       if (epoch !== catchupEpoch) return;
+      // Replay is complete. Stop diverting newly arriving live traffic before
+      // flushing what accumulated during replay, otherwise a confirm replying
+      // to REQUEST_TICK_CONFIRM can be held after the only flush.
+      catchupInFlight = false;
+      const keepJoin = shouldKeepSpectatorJoin({
+        pendingLocalJoin: !!pendingLocalJoin,
+        joining: appState === KOTH_APP_STATE.JOINING,
+      });
       catchUpReady = true;
+      catchUpReadyAt = performance.now();
+      attachLiveSim();
       phase = SHARD_PHASE.LIVE;
-      appState = KOTH_APP_STATE.SPECTATOR;
-      localPlayerId = -1;
-      session.pauseLockstep = false;
+      // Public KOTH is revolving: a caught-up spectator must remain live even if
+      // its previous/loading world had already entered post-game observation.
+      session.kothMatchOver = 0;
+      session.matchWinner = -1;
       matchStartSlots = msg.matchConfig.activeSlots ?? matchStartSlots;
       if (msg.roster && countActive(msg.roster) > 0) roster = cloneSlots(msg.roster);
       matchHumanPlayers = (msg.matchConfig.humanPlayers ?? matchHumanPlayers)
         .filter((id) => roster[id]?.state === 'active' && !defeatedPlayers.has(id));
       if (msg.matchConfig.armyPerSide != null) armyPerSide = msg.matchConfig.armyPerSide | 0;
       session.setHumanPlayers?.(matchHumanPlayers);
-      session.setLocalPlayerId?.(-1);
-      setRole('spectator');
-      saveMatch({ matchId, userId: localUserId, slot: null });
+      flushHeldCatchupLockstep(msg.tick ?? session.confirmedTick ?? 0);
+      // Install the live roster and held traffic before the render pump can
+      // commit against the just-replayed spectator state.
+      session.pauseLockstep = false;
+      sendAll({ type: MSG.REQUEST_TICK_CONFIRM, matchId });
+      if (!keepJoin) {
+        appState = KOTH_APP_STATE.SPECTATOR;
+        localPlayerId = -1;
+        session.setLocalPlayerId?.(-1);
+        setRole('spectator');
+        saveMatch({ matchId, userId: localUserId, slot: null });
+      }
       noteObserverCaughtUp(localUserId);
       pendingCatchupParts.delete(acceptedRequestId);
       if (DEBUG_KOTH) {
@@ -3414,29 +4410,38 @@ export function createKothShard(options = {}) {
           depth: observerDepth,
         });
       }
-      onStatus(
-        localOfferEligible
-          ? 'Seat offered — J to claim'
-          : countActive(roster) >= MAX_ACTIVE_PLAYERS
-            ? 'Caught up — match full'
-            : 'Caught up — waiting for seat offer…',
-      );
-      notifyPresentationSync({
-        mode: 'koth',
-        role: 'spectator',
-        reset: false,
-        inputEnabled: false,
-        updateHumanPlayers: true,
-      });
+      if (keepJoin) {
+        onStatus(`Joining at tick ${pendingLocalJoin.joinTick}…`);
+        if (session.confirmedTick >= pendingLocalJoin.joinTick) {
+          promoteLocalJoinIfReady(session.confirmedTick);
+        }
+      } else {
+        onStatus(
+          localOfferEligible
+            ? 'Seat offered — J to claim'
+            : countActive(roster) >= MAX_ACTIVE_PLAYERS
+              ? 'Caught up — match full'
+              : 'Caught up — waiting for seat offer…',
+        );
+        notifyPresentationSync({
+          mode: 'koth',
+          role: 'spectator',
+          reset: false,
+          inputEnabled: false,
+          updateHumanPlayers: true,
+        });
+      }
       sendAll({ type: MSG.CATCHUP_READY, matchId, userId: localUserId, tick: msg.tick });
       catchupRetryAttempt = 0;
-      if (isKing()) refreshSlotOffer();
+      if (isKing()) refreshSlotOffer([], { force: true });
     } catch (err) {
       if (epoch !== catchupEpoch) return;
       console.warn('[KOTH] catch-up failed', err);
       clearCatchupOfferTimer();
       activeCatchupRequestId = '';
       catchUpReady = false;
+      session?.clearCachedCheckpoint?.();
+      detachLiveSim();
       pendingLocalJoin = null;
       localPlayerId = -1;
       role = 'spectator';
@@ -3455,12 +4460,35 @@ export function createKothShard(options = {}) {
     }
     if (epoch !== catchupEpoch && !catchUpReady && role === 'spectator' && phase === SHARD_PHASE.LIVE) {
       const sponsor = pickSponsorUserId();
-      if (sponsor) beginCatchup(sponsor, session?.confirmedTick ?? 0);
+      if (sponsor) beginCatchup(sponsor);
     }
+  }
+
+  /**
+   * Chunks are still landing, so the request is alive. Relayed worlds arrive in
+   * many small pieces; letting the 8s retry fire mid-transfer makes the sponsor
+   * re-export and start over instead of finishing.
+   */
+  function noteCatchupProgress(index, total, label) {
+    if (!activeCatchupRequestId || catchUpReady) return;
+    // Chunks land in bursts; re-arming a timer and repainting the HUD on each one
+    // would cost more than the transfer.
+    const now = performance.now();
+    if (now - lastCatchupProgressAt < CATCHUP_PROGRESS_MS) return;
+    lastCatchupProgressAt = now;
+    // Tick 0: a retry must re-derive the live clock, never reuse the local stub's.
+    scheduleCatchupOfferTimeout(0);
+    const got = (index | 0) + 1;
+    const want = total | 0;
+    if (want > 1) onStatus(`${label} ${Math.min(got, want)}/${want}…`);
   }
 
   function handleCheckpointChunk(msg) {
     if (msg.matchId !== matchId) return;
+    // Relayed chunks are addressed; every other observer on the firehose must
+    // not cache a world that was cut for somebody else's tick.
+    if (msg.to && !userIdsMatch(msg.to, localUserId)) return;
+    noteCatchupProgress(msg.index, msg.total, 'Receiving host world');
     const assembled = checkpointAssembler.push(
       msg.transferId,
       msg.index,
@@ -3485,15 +4513,29 @@ export function createKothShard(options = {}) {
         );
       }
     }
-    if (activeCatchupRequestId) {
-      const parts = pendingCatchupParts.get(activeCatchupRequestId) ?? {};
+    const storeCheckpoint = (requestId) => {
+      if (!requestId) return null;
+      const parts = pendingCatchupParts.get(requestId) ?? {};
       parts.checkpoint = assembled.checkpoint;
-      pendingCatchupParts.set(activeCatchupRequestId, parts);
+      pendingCatchupParts.set(requestId, parts);
+      return parts;
+    };
+    const parts = storeCheckpoint(activeCatchupRequestId);
+    if (parts?.offer && parts.waitingCheckpoint) {
+      const offer = {
+        ...parts.offer,
+        checkpoint: assembled.checkpoint,
+        ledger: parts.ledger ?? parts.offer.ledger,
+      };
+      parts.waitingCheckpoint = false;
+      void handleSnapshotOffer(offer);
     }
   }
 
   function handleLedgerChunk(msg) {
     if (msg.matchId !== matchId) return;
+    if (msg.to && !userIdsMatch(msg.to, localUserId)) return;
+    noteCatchupProgress(msg.index, msg.total, 'Receiving catch-up ledger');
     const assembled = ledgerAssembler.push(
       msg.transferId,
       msg.index,
@@ -3661,8 +4703,11 @@ export function createKothShard(options = {}) {
             role = 'spectator';
             localPlayerId = -1;
             catchUpReady = false;
+            detachLiveSim();
+            onLeaveSolo();
             session?.setLocalPlayerId?.(-1);
             session?.setRole?.('spectator');
+            pauseStubSim();
             emitShard();
             notifyPresentationSync({
               mode: 'koth',
@@ -3698,29 +4743,16 @@ export function createKothShard(options = {}) {
         break;
 
       case MSG.COMMAND_FRAME:
-        if (validateCommandFrame(msg.frame)) session?.bufferRemoteFrame(msg.frame);
+        if (msg.matchId !== matchId) break;
+        ingestCommandFrame(msg.frame);
         break;
 
       case MSG.TICK_CONFIRM:
-        if (msg.playerId !== undefined && msg.tick !== undefined) {
-          const owner = resolvePlayerOwner(msg.playerId, msg.userId);
-          if (!msg.userId || !owner || !userIdsMatch(owner, msg.userId)) {
-            if (DEBUG_KOTH) {
-              console.warn('[KOTH] rejected TICK_CONFIRM — roster ownership mismatch', {
-                fromPlayerId: msg.playerId,
-                claimedUser: shortId(msg.userId),
-                rosterOwner: shortId(owner),
-                rosterStates: roster.map((s) => `${s.playerId}:${s.state}:${shortId(s.userId)}`),
-              });
-            }
-            return;
-          }
-          session?.setPeerConfirmedTick(msg.playerId, msg.tick);
-          notePlayerConfirm(msg.playerId);
-        }
+        ingestTickConfirm(msg);
         break;
 
       case MSG.REQUEST_TICK_CONFIRM:
+        if (msg.matchId !== matchId) break;
         if (session) sendTickConfirm(session.confirmedTick + 1);
         break;
 
@@ -3790,8 +4822,7 @@ export function createKothShard(options = {}) {
         break;
 
       case MSG.SHARD_GONE:
-        if (msg.matchId !== matchId) return;
-        if (phase === SHARD_PHASE.LIVE) windDownShard();
+        handleShardGone(msg);
         break;
 
       case MSG.CATCHUP_READY:
@@ -3819,7 +4850,13 @@ export function createKothShard(options = {}) {
   function invalidateInFlightCatchup() {
     catchupEpoch += 1;
     activeCatchupRequestId = '';
+    detachLiveSim();
     clearCatchupOfferTimer();
+    // Partial worlds from the replaced match must not be spliced into the next one.
+    pendingCatchupParts.clear();
+    checkpointAssembler.clear();
+    ledgerAssembler.clear();
+    clearRelayChunkQueue();
   }
 
   function clearCatchupOfferTimer() {
@@ -3860,15 +4897,14 @@ export function createKothShard(options = {}) {
           clearCatchupOfferTimer();
           activeCatchupRequestId = '';
         }
-        beginCatchup(peerId, session?.confirmedTick ?? 0);
+        beginCatchup(peerId);
       }, delayMs);
     }
   }
 
   function beginCatchup(peerOrUserId, tick = 0) {
     if (pendingLocalJoin || appState === KOTH_APP_STATE.JOINING) return;
-    if (catchupInFlight) return;
-    if (catchUpReady && (session?.confirmedTick ?? 0) > 0) return;
+    if (canSkipCatchupRequest({ catchUpReady, liveSimAttached, catchupInFlight })) return;
     if (!session || !peerOrUserId) {
       if (DEBUG_KOTH) {
         console.info('[KOTH] catch-up deferred — no sponsor yet', {
@@ -3881,13 +4917,19 @@ export function createKothShard(options = {}) {
     if (activeCatchupRequestId) {
       if (performance.now() - catchupRequestStartedAt < CATCHUP_OFFER_TIMEOUT_MS) return;
       clearCatchupOfferTimer();
+      pendingCatchupParts.delete(activeCatchupRequestId);
       activeCatchupRequestId = '';
     }
     if (catchupRetryTimer) {
       clearTimeout(catchupRetryTimer);
       catchupRetryTimer = null;
     }
-    const target = tick || session.confirmedTick || 0;
+    const target = catchupRequestTick({
+      requestedTick: tick,
+      sessionTick: session.confirmedTick ?? 0,
+      hostTick: liveMatches.get(matchId)?.tick ?? 0,
+      liveSimAttached,
+    });
     let sponsorUserId = assignedSponsorId
       || peerUserIds.get(peerOrUserId)
       || peerOrUserId;
@@ -3908,6 +4950,8 @@ export function createKothShard(options = {}) {
       sponsorUserId = fallback;
     }
     catchUpReady = false;
+    heldCatchupFrames.length = 0;
+    heldCatchupConfirms.length = 0;
     activeCatchupRequestId = `catchup:${matchId}:${localUserId}:${Date.now().toString(36)}:${++messageSeq}`;
     catchupRequestStartedAt = performance.now();
     const linkedPeer = connectedPeerIds().find(
@@ -3926,6 +4970,8 @@ export function createKothShard(options = {}) {
       fromTick: cachedTick,
       fullReplay: cachedTick <= 0,
       viaBroadcast,
+      // Explicit null means "no assignment reached me" — lets any player serve us.
+      sponsorId: assignedSponsorId ?? null,
     };
     if (linkedPeer) sendPeer(linkedPeer, payload);
     else sendBroadcastMsg(payload);
@@ -3960,7 +5006,13 @@ export function createKothShard(options = {}) {
     // rejected), drowning out real signal and risking stale cross-match confirms.
     if (phase !== SHARD_PHASE.LIVE) return;
     if (userForPlayerId(session.localPlayerId) !== localUserId) return;
-    sendAll({ type: MSG.TICK_CONFIRM, tick, playerId: session.localPlayerId, userId: localUserId });
+    sendAll({
+      type: MSG.TICK_CONFIRM,
+      matchId,
+      tick,
+      playerId: session.localPlayerId,
+      userId: localUserId,
+    });
   }
 
   // Tick 0 is the init snapshot and is never committed, so the commit-driven
@@ -4070,6 +5122,18 @@ export function createKothShard(options = {}) {
         if (data.role) peerPresenceRole.set(data.from, data.role);
         else if (data.appState === KOTH_APP_STATE.SPECTATOR) peerPresenceRole.set(data.from, 'spectator');
         if (isSpectatorMember(data, matchId)) {
+          // The defeated client may observe its wipe before another peer does.
+          // Its spectator heartbeat is authoritative for releasing its own seat
+          // from quorum, preventing one stale roster from freezing the table.
+          // JOINING also uses role=spectator until the spawn tick, so only the
+          // stable spectator state relinquishes an already-active seat.
+          if (
+            liveSimAttached
+            && catchUpReady
+            && relinquishesActiveSeat(data, matchId)
+          ) {
+            dropSeatedLeaver(data.from);
+          }
           matchLobbySpectators.add(data.from);
           if (data.sponsorId != null || (data.observerDepth | 0) > 0) {
             applySponsorAssignment(data.from, data.sponsorId ?? null, data.observerDepth ?? 0);
@@ -4078,15 +5142,23 @@ export function createKothShard(options = {}) {
             role: 'observer',
             joinedAt: observerTree.nodes.get(data.from)?.joinedAt ?? Date.now(),
           });
+          if (typeof data.caughtUp === 'boolean') {
+            noteObserverCaughtUpState(data.from, data.caughtUp);
+          }
           if (isKing() && phase === SHARD_PHASE.LIVE) {
             if (!observerTree.nodes.get(data.from)?.sponsorId) kingAssignObserver(data.from);
             if (countActive(roster) < MAX_ACTIVE_PLAYERS) refreshSlotOffer();
           }
         } else {
           matchLobbySpectators.delete(data.from);
+          ingestPresenceTick(data);
         }
-        if (data.offerEpoch && Array.isArray(data.offerEligible)) {
-          applyLocalOfferState(data.offerEpoch, data.offerEligible);
+        if (
+          data.offerEpoch &&
+          Array.isArray(data.offerEligible) &&
+          isOfferAuthority(data.from)
+        ) {
+          applyLocalOfferState(data.offerEpoch, data.offerEligible, { from: data.from });
         }
       } else {
         dropSeatedLeaver(data.from);
@@ -4135,6 +5207,13 @@ export function createKothShard(options = {}) {
       case MSG.CHECKPOINT_META:
         handleCheckpointMeta(msg);
         break;
+      // Relay fallback for a joiner with no working data channel.
+      case MSG.CHECKPOINT_CHUNK:
+        handleCheckpointChunk(msg);
+        break;
+      case MSG.LEDGER_CHUNK:
+        handleLedgerChunk(msg);
+        break;
       case MSG.SPONSOR_ASSIGN:
         handleSponsorAssign(msg);
         break;
@@ -4166,21 +5245,21 @@ export function createKothShard(options = {}) {
         handleMatchSnapshot(msg);
         break;
       case MSG.TICK_CONFIRM:
-        if (msg.playerId !== undefined && msg.tick !== undefined) {
-          const owner = resolvePlayerOwner(msg.playerId, msg.userId);
-          if (!msg.userId || !owner || !userIdsMatch(owner, msg.userId)) break;
-          session?.setPeerConfirmedTick(msg.playerId, msg.tick);
-          notePlayerConfirm(msg.playerId);
-        }
+        ingestTickConfirm(msg);
+        break;
+      case MSG.REQUEST_TICK_CONFIRM:
+        if (msg.matchId !== matchId) break;
+        if (session) sendTickConfirm(session.confirmedTick + 1);
         break;
       case MSG.COMMAND_FRAME:
-        if (validateCommandFrame(msg.frame)) session?.bufferRemoteFrame(msg.frame);
+        if (msg.matchId !== matchId) break;
+        ingestCommandFrame(msg.frame);
         break;
       case MSG.SLOT_DEFEAT:
         handleSlotDefeat(msg);
         break;
       case MSG.SHARD_GONE:
-        if (msg.matchId === matchId && phase === SHARD_PHASE.LIVE) windDownShard();
+        handleShardGone(msg);
         break;
       default:
         break;
@@ -4339,7 +5418,7 @@ export function createKothShard(options = {}) {
         const frame = prevSubmit(command);
         if (frame) {
           frame.userId = localUserId;
-          sendAll({ type: MSG.COMMAND_FRAME, frame });
+          sendAll({ type: MSG.COMMAND_FRAME, matchId, frame });
         }
         return frame;
       };
@@ -4353,16 +5432,26 @@ export function createKothShard(options = {}) {
         activateAcceptedJoinsAtTick(tick);
         promoteLocalJoinIfReady(tick);
         syncJoinedPresentationIfReady(tick);
+        releaseJoinerInputIfReady(tick);
         retireCombatWipes();
         sendTickConfirm(tick + 1);
-        processJoinQueue();
         void maybePublishCheckpoint(tick);
-        if (isKing() && countActive(roster) < MAX_ACTIVE_PLAYERS) {
-          // Ensure an offer exists whenever a seat is open.
-          if (!offerEpoch) refreshSlotOffer();
-        }
+        syncOfferAuthority();
+        pumpQueuedClaim();
+        // There is always an open-seat offer while a seat is free. This is
+        // throttled and de-duplicated inside refreshSlotOffer.
+        if (isKing() && countActive(roster) < MAX_ACTIVE_PLAYERS) refreshSlotOffer();
         prevCommit?.(tick, checksum);
-        if (phase === SHARD_PHASE.LIVE) broadcastPresence({ tick });
+        // Time-based, not per-tick: commits come in bursts while a joiner burns
+        // down its catch-up backlog, and peers only need the live tick a few
+        // times a second for liveness / discovery.
+        if (phase === SHARD_PHASE.LIVE) {
+          const now = performance.now();
+          if (now - lastTickPresenceAt >= TICK_PRESENCE_MS) {
+            lastTickPresenceAt = now;
+            broadcastPresence({ tick });
+          }
+        }
       };
 
       sendTickConfirm(1);
@@ -4413,12 +5502,20 @@ export function createKothShard(options = {}) {
     startLiveLobby() {
       if (phase === SHARD_PHASE.LIVE) return;
       cancelDiscoverStart();
+      // "Start" is also the safe entry point from the lobby UI. If a healthy
+      // public match is already visible, join it instead of splitting the same
+      // players across a second solo-live shard.
+      const existing = bestLiveMatch();
+      if (existing?.matchId && existing.from) {
+        pinnedMatchId = existing.matchId;
+        return followLivePresence(existing);
+      }
       clearSavedMatch();
       matchId = generateMatchId();
       seed = hashSeed(matchId);
       pinnedMatchId = matchId;
       aetherSteam.notifyKothLobbyCreated();
-      return startSoloLive({ forceNew: true });
+      return startSoloLive();
     },
 
     leaveLiveLobby,
@@ -4500,30 +5597,47 @@ export function createKothShard(options = {}) {
         emitShard();
         return;
       }
-      if (DEBUG_KOTH) {
-        console.info('[KOTH] slot claim → sending', {
-          matchId: shortId(matchId),
-          offerEpoch,
-          depth: observerDepth,
-          host: shortId(rosterHostUserId()),
-        });
+      // Everyone parks at our quorum tick until we reach it, so claiming while
+      // still draining a backlog would freeze the match for the whole table.
+      if (!canClaimSeatNow(claimReadiness())) {
+        claimWhenLevel = true;
+        scheduleQueuedClaimRetry();
+        if (DEBUG_KOTH) {
+          const live = liveMatches.get(matchId);
+          console.info('[KOTH] claim queued — not level yet', {
+            ...claimReadiness(),
+            ourTick: session?.confirmedTick ?? 0,
+            ceiling: session?.liveTickCeiling?.() ?? 0,
+            announcedTick: live?.tick ?? 0,
+            announcedAgeMs: live?.lastTickAt ? Date.now() - live.lastTickAt : null,
+          });
+        }
+        onStatus('Catching up to live — seat claim queued…');
+        emitShard();
+        return;
       }
-      sendAll({
-        type: MSG.SLOT_CLAIM,
-        v: KOTH_PROTOCOL_VERSION,
-        matchId,
-        userId: localUserId,
-        offerEpoch,
-      });
-      appState = KOTH_APP_STATE.JOINING;
-      session?.setRole?.('spectator');
-      notifyPresentationSync({ role: 'spectator', appState, inputEnabled: false });
-      onStatus('Claiming seat…');
-      emitShard();
+      claimAttempts = 0;
+      sendSlotClaim();
     },
 
     isSpectator() {
       return role === 'spectator';
+    },
+
+    isLiveSpectating() {
+      return phase === SHARD_PHASE.LIVE && role === 'spectator';
+    },
+
+    /** Re-pull the host world after a leftover backdrop rebuild stomped catch-up. */
+    retrySpectatorAttach() {
+      if (phase !== SHARD_PHASE.LIVE || role !== 'spectator') return;
+      if (catchupInFlight) return;
+      catchUpReady = false;
+      detachLiveSim();
+      pauseStubSim();
+      const sponsor = pickSponsorUserId();
+      if (sponsor) beginCatchup(sponsor);
+      else scheduleBroadcastCatchup(0);
     },
 
     canJoin() {
@@ -4535,11 +5649,7 @@ export function createKothShard(options = {}) {
       );
     },
 
-    joinActionLabel() {
-      if (countActive(roster) >= MAX_ACTIVE_PLAYERS) return 'Match Full';
-      if (localOfferEligible) return 'Claim Seat';
-      return 'Waiting for Offer';
-    },
+    joinActionLabel,
 
     /** Observer depth (0 = player / unassigned, 1 = L1, …). */
     getObserverDepth: () => observerDepth,
@@ -4556,7 +5666,9 @@ export function createKothShard(options = {}) {
     disconnect() {
       cancelDiscoverStart();
       clearCatchupOfferTimer();
-      if (offerExpandTimer) clearTimeout(offerExpandTimer);
+      clearOfferExpandTimer();
+      clearClaimTimer();
+      clearRelayChunkQueue();
       if (announceTimer) clearInterval(announceTimer);
       if (pingTimer) clearInterval(pingTimer);
       if (discoveryTimer) clearInterval(discoveryTimer);

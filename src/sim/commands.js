@@ -24,7 +24,7 @@ import { kothRegisterJoin } from './kothMeta.js';
 import { kill } from './combat.js';
 import { livingByOwner } from './world.js';
 import { clearEngagement } from './engagement.js';
-import { applyCasts } from './abilities.js';
+import { applyCastCombo } from './combos.js';
 import { isFlyer, isMechanical, UNIT, unitAttacksBuildings } from './unitTypes.js';
 import { becomeBrigand, revertBrigand } from './brigand.js';
 import {
@@ -47,6 +47,7 @@ import {
 } from './buildings.js';
 import { applyGather } from './gather.js';
 import { setStoryProtect } from './storyProtect.js';
+import { assignBuildersToSite } from './construction.js';
 
 export const CMD = {
   MOVE: 1,
@@ -113,7 +114,7 @@ export function applyCommands(world, field, commands) {
         applyForceEliminate(world, cmd.playerId);
         break;
       case CMD.CAST:
-        applyCasts(world, field, cmd.entities, cmd.abilityId, cmd.tx, cmd.ty);
+        applyCastCombo(world, field, cmd.entities, cmd.abilityId, cmd.tx, cmd.ty);
         break;
       case CMD.SELECT:
         applySelect(world, cmd.playerId, cmd.entities);
@@ -121,9 +122,13 @@ export function applyCommands(world, field, commands) {
       case CMD.UNLOAD:
         applyUnload(world, field, cmd.entities, cmd.tx, cmd.ty);
         break;
-      case CMD.PLACE_BUILDING:
-        applyPlaceBuilding(world, field, cmd);
+      case CMD.PLACE_BUILDING: {
+        const bi = applyPlaceBuilding(world, field, cmd);
+        if (bi >= 0 && cmd.buildingType === 'agora' && cmd.entities?.length) {
+          assignBuildersToSite(world, bi, cmd.entities);
+        }
         break;
+      }
       case CMD.QUEUE_TRAIN:
         applyQueueTrain(world, cmd);
         break;
@@ -380,6 +385,10 @@ function applyUnload(world, field, ids, tx, ty) {
 
 function applySpawnSlot(world, playerId) {
   if (playerId == null || playerId < 0) return;
+  // KOTH seats revolve into the same world. A previous zero-survivor state must
+  // not keep the newly populated round in post-game mode.
+  world.kothMatchOver = 0;
+  world.matchWinner = -1;
   if (livingByOwner(world, playerId) > 0) return;
   if (world.koth) kothRegisterJoin(world.koth, playerId, world.tick);
   spawnKothSlot(world, playerId);

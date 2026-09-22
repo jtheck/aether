@@ -130,10 +130,14 @@ self.onmessage = (e) => {
         applyTableSilhouette(field);
       }
       if (!garden?.authoredScenery) {
-        const reserved = spawnBases(field.worldHalfF, {
-          laneBases: !!msg.config.laneBases,
-          mapW: field.width,
-        });
+        const kothDrop = msg.config.mode === 'koth' && !msg.config.homeAgoras;
+        const reserved = [];
+        if (!kothDrop) {
+          reserved.push(...spawnBases(field.worldHalfF, {
+            laneBases: !!msg.config.laneBases,
+            mapW: field.width,
+          }));
+        }
         if ((msg.config.stressPerSide | 0) > 0) {
           reserved.push(...stressReservedPoints(field.worldHalfF));
         }
@@ -146,7 +150,7 @@ self.onmessage = (e) => {
             ]);
           }
         }
-        populateScenery(field, world, reserved);
+        populateScenery(field, world, reserved, kothDrop ? { reserveTrees: false } : undefined);
       }
       applyWorldStructureOccupancy(field, world);
       beginSharedPublish(views);
@@ -164,6 +168,7 @@ self.onmessage = (e) => {
         buildings: serializeBuildings(world.buildings),
         tech: serializeTech(world),
         resources: serializeResources(world),
+        checksum: checksum(world, field),
         profileSim: !!world.profileSim,
       });
     } else if (msg.type === 'setProfileSim') {

@@ -20,6 +20,7 @@ test('checkpoint round-trips entity + koth state with matching checksum', () => 
   populateScenery(field, createWorld(seed), kothBases(field.worldHalfF));
   const w = createWorld(seed);
   w.koth = createKothMeta([0, 1]);
+  w.koth.established[0] = 1;
   spawn(w, { x: fx.fromInt(10), y: fx.fromInt(12), type: UNIT.VILLAGER, owner: 0 });
   spawn(w, { x: fx.fromInt(-8), y: fx.fromInt(4), type: UNIT.WARRIOR, owner: 1 });
   w.tick = 42;
@@ -38,6 +39,8 @@ test('checkpoint round-trips entity + koth state with matching checksum', () => 
   importWorldCheckpoint(w2, field2, blob);
 
   assert.equal(w2.tick, 42);
+  assert.equal(w2.koth.established[0], 1);
+  assert.equal(w2.koth.established[1], 0);
   assert.equal(w2.count, 2);
   assert.equal(w2.rng.s, 0x12345678);
   assert.equal(checksum(w2, field2), cs);

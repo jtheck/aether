@@ -28,6 +28,7 @@ import {
   AI_OWNER,
   STRESS_AI_OWNERS,
   STRESS_MENU_PER_SIDE,
+  spawnCameraHomeXZ,
 } from '../sim/worldSetup.js';
 import {
   parseAiDifficulty,
@@ -42,6 +43,7 @@ import { loadGardenRef, resolveNextGardenRef } from './workshop.js';
 import { TESTER_GARDEN_URL } from '../sim/testerGarden.js';
 import {
   applySerializedBuildingOccupancy,
+  applySerializedAgoraOccupancy,
   BUILDING_FOOTPRINTS,
   buildingOffersMenuItem,
   canPreviewPlaceBuilding,
@@ -125,6 +127,11 @@ import { init as initAudio, playMatchStart, playThunder, thunderPlaysForStrikes 
 import { SimSession, TICK_HZ, formatHudMatchClock, matchSecondsFromTick } from './simSession.js';
 import { createKothShard, kothModeFromSearch } from './kothShard.js';
 import { setupKothLobby } from './kothLobby.js';
+import {
+  isLiveNetworkConfig,
+  shouldBlockBackdropApply,
+  shouldIgnoreLiveConfig,
+} from './spectatorAttach.js';
 import { createGameLobby } from './gameLobby.js';
 import { createMatchLobby } from './matchLobby.js';
 import { setupChatHud } from './chatHud.js';
@@ -244,10 +251,24 @@ const POSE_XZ_EPS_SQ = POSE_XZ_EPS * POSE_XZ_EPS;
 const POSE_YAW_EPS = 0.03;
 const POSE_SIZE_EPS = 0.002;
 const POSE_LOFT_EPS = 0.02;
+/** Rewrite idle unit matrices when camera-radius scale moves this much. */
+const UNIT_ZOOM_EPS = 0.002;
 const DEBUG_KOTH = new URLSearchParams(location.search).get('debug') === 'koth';
 
 /** Drops stale applyLiveConfig completions (solo reset finishing after join reset). */
 let liveConfigGeneration = 0;
+
+function invalidateLiveConfigApplies() {
+  liveConfigGeneration++;
+}
+
+function leaveLoadingScreenSolo(target) {
+  if (target) target.localSoloHold = false;
+  invalidateLiveConfigApplies();
+  if (target?.session) target.session.pauseLockstep = true;
+  target?.setShareVisionWith?.([]);
+  target?.setFogEnabled?.(true);
+}
 /** Skip fog stamps that would run on the outgoing world during a live config swap. */
 let liveConfigQuietFog = false;
 
@@ -351,19 +372,35 @@ async function main() {
   let ctx = null;
   /** @type {object | null} Live config received before bootGame finished. */
   let pendingLiveCfg = null;
+  /** @type {object | null} Spectator/role sync received before bootGame finished. */
+  let pendingPresentationCfg = null;
+
+  function adoptLiveNetworkConfig(cfg, target = ctx) {
+    if (!isLiveNetworkConfig(cfg)) return;
+    if (target) target.localSoloHold = false;
+  }
 
   async function handleLiveStart(cfg) {
-    if (ctx?.localSoloHold) return;
+    if (shouldIgnoreLiveConfig({ cfg, localSoloHold: !!ctx?.localSoloHold })) return;
     if (!ctx) {
       pendingLiveCfg = cfg;
       return;
     }
+    adoptLiveNetworkConfig(cfg, ctx);
     await applyLiveConfig(ctx, cfg, kothShard);
   }
 
   function handlePresentationSync(cfg) {
-    if (!ctx || ctx.localSoloHold) return;
+    if (!ctx) {
+      pendingPresentationCfg = cfg;
+      return;
+    }
+    if (shouldIgnoreLiveConfig({ cfg, localSoloHold: !!ctx.localSoloHold })) return;
+    adoptLiveNetworkConfig(cfg, ctx);
     syncPresentation(ctx, cfg);
+    if (cfg.sweepToSpawn && !ctx.matchStory?.driving?.()) {
+      sweepCameraToArmy(ctx, cfg);
+    }
   }
 
   let bootCfg = {
@@ -385,6 +422,7 @@ async function main() {
       onStatus: setStatusText,
       onLiveStart: handleLiveStart,
       onPresentationSync: handlePresentationSync,
+      onLeaveSolo: () => leaveLoadingScreenSolo(ctx),
       armyPerSide,
     });
     bootCfg = await kothShard.waitForBoot();
@@ -436,7 +474,13 @@ async function main() {
   if (pendingLiveCfg) {
     const cfg = pendingLiveCfg;
     pendingLiveCfg = null;
+    adoptLiveNetworkConfig(cfg, ctx);
     await applyLiveConfig(ctx, cfg, kothShard);
+  }
+  if (pendingPresentationCfg) {
+    const cfg = pendingPresentationCfg;
+    pendingPresentationCfg = null;
+    handlePresentationSync(cfg);
   }
 }
 
@@ -726,7 +770,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (!world.alive[i]) continue;
       if (world.carriedBy && world.carriedBy[i] >= 0) continue;
       const def = getUnitDef(world.type[i]);
-      spheres.push({ id: i, x: renderX[i], y: renderY[i], z: renderZ[i], r: def.pickRadius ?? 1.8 });
+      spheres.push({
+        id: i,
+        x: renderX[i],
+        y: renderY[i],
+        z: renderZ[i],
+        r: (def.pickRadius ?? 1.8) * (renderer.unitZoomScale?.(def) ?? 1),
+      });
       const p = renderer.worldToScreen(renderX[i], renderY[i], renderZ[i]);
       if (!p || p.x < 0 || p.y < 0 || p.x > rect.width || p.y > rect.height) continue;
       candidates.push({ id: i, clientX: rect.left + p.x, clientY: rect.top + p.y });
@@ -1165,10 +1215,14 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   session.onBuildingsChanged = (list) => {
     if (session.field) {
       applySerializedBuildingOccupancy(session.field, list);
+      applySerializedAgoraOccupancy(session.field, session.agoras);
       renderer.refreshTileGrid?.();
     }
     const shownB = fog.filterBuildings(livingBuildingList(list));
-    fog.commitDisplayLists(shownB, fog.filterAgoras(session.agoras));
+    const shownA = fog.filterAgoras(session.agoras);
+    fog.commitDisplayLists(shownB, shownA);
+    renderer.placeAgoras?.(shownA);
+    agoraOwnerPaintSig = '';
     renderer.placeBuildings?.(shownB);
     syncRallyFlagMarkers(list);
     syncRadialMenuGate();
@@ -1279,9 +1333,16 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         bank: localBank,
         buildings: session.buildings,
         owner: localPlayerId,
+        koth: session.koth,
       });
     } else {
-      resourceBank.paint({ hidden: true, bank: localBank, buildings: session.buildings, owner: localPlayerId });
+      resourceBank.paint({
+        hidden: true,
+        bank: localBank,
+        buildings: session.buildings,
+        owner: localPlayerId,
+        koth: session.koth,
+      });
     }
     observerData.paint({
       hidden: !showSheet,
@@ -1427,6 +1488,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   /** @type {string | null} */
   let placingType = null;
+  /** Snapshot of the agora-found crew, sent on PLACE_BUILDING. */
+  /** @type {number[] | null} */
+  let comboPlaceEntities = null;
   /** Last snapped ghost world pos so bank changes can retint without a mouse move. */
   /** @type {number | null} */
   let placingGhostX = null;
@@ -1901,6 +1965,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   function applyPlacingType(t) {
     if (t) endRallyPlacement();
+    if ((t ?? null) !== 'agora') comboPlaceEntities = null;
     placingType = t ?? null;
     placingGhostX = null;
     placingGhostZ = null;
@@ -2524,6 +2589,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     setPlacingType: (t) => {
       applyPlacingType(t);
     },
+    getOwnerBank: () => ownerResourcesFrom(session.resources, localPlayerId),
+    onComboPlacement: (type, entities) => {
+      comboPlaceEntities = type === 'agora' && entities?.length ? entities.slice() : null;
+    },
     isPlacingRally: () => placingRally,
     onRallyMove: (x, z) => {
       if (!placingRally || actionBuildingIndex < 0) return;
@@ -2592,6 +2661,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         applyPlacementParked(true);
         return false;
       }
+      const comboIds = type === 'agora' ? (comboPlaceEntities ?? []) : null;
       session.submitCommand({
         type: CMD.PLACE_BUILDING,
         playerId: localPlayerId,
@@ -2599,13 +2669,19 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         tx: preview.snapped.x,
         ty: preview.snapped.z,
         yaw: fx.fromFloat(yawRad),
+        ...(comboIds ? { entities: comboIds } : {}),
       });
       // Multi-place: keep type + yaw; ghost follows on next move.
+      // Agora found is a one-shot combo — close placement after the stamp.
       renderer.setBuildingGhost?.(null);
       placingGhostX = null;
       placingGhostZ = null;
       applyPlacementParked(false);
       renderer.setBuildingRadialPlacingValid?.(null);
+      if (type === 'agora') {
+        applyPlacingType(null);
+        return true;
+      }
       if (lastAgoraIndex >= 0) {
         inputApi.setSelectedBuilding?.({ kind: 'agora', index: lastAgoraIndex });
       }
@@ -2934,13 +3010,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   });
   const kothLobbyOpts = {
     kothShard,
-    onLeaveSolo: () => {
-      const ctx = ctxRef?.current;
-      if (!ctx) return;
-      ctx.localSoloHold = false;
-      ctx.setShareVisionWith?.([]);
-      ctx.setFogEnabled?.(true);
-    },
+    onLeaveSolo: () => leaveLoadingScreenSolo(ctxRef?.current),
     onRestoreBackdrop: () => {
       const ctx = ctxRef?.current;
       if (!ctx) return;
@@ -3087,7 +3157,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       renderer.setCount(renderEntityCount);
       syncDrawnEntities();
     }
-    if (session.kothMatchOver && !matchOverShown && !session.watchingReplay && !session.replayingCatchUp) {
+    if (
+      session.kothMatchOver
+      && matchMeta.mode !== 'koth'
+      && !matchOverShown
+      && !session.watchingReplay
+      && !session.replayingCatchUp
+    ) {
       matchOverShown = true;
       showMatchOver(session);
       const shareWith = enterPostGameObserve(session);
@@ -3112,6 +3188,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   const CORPSE_COMPACT_FRACTION = 0.08;
   const CORPSE_COMPACT_MS = 1000;
   let lastCorpseCompact = 0;
+  let lastUnitZoomS = 1;
   /** Reused per-frame: selected living unit ids (health-bar / HUD order). */
   const selUnitIds = [];
 
@@ -3212,6 +3289,14 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
       if (fog.hidesHostile(owner, hx, hz)) fogHidden[i] = 1;
     }
+
+    const zoomS = renderer.unitZoomScale?.() ?? 1;
+    if (Math.abs(zoomS - lastUnitZoomS) >= UNIT_ZOOM_EPS) {
+      lastUnitZoomS = zoomS;
+      poseValid.fill(0);
+      ringX.fill(NaN);
+    }
+    const zoomFor = (d) => renderer.unitZoomScale?.(d) ?? zoomS;
 
     const groundYCached = (i, x, z) => {
       if (
@@ -3424,6 +3509,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           seats,
           slot,
           total,
+          zoom: zoomFor(getUnitDef(world.type[t])),
         });
         let x = posed.x;
         let z = posed.z;
@@ -3440,7 +3526,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         if (fade > 0) size *= fade;
         const gy = groundYCached(t, tx, tz);
         renderX[i] = x;
-        renderY[i] = gy + loft + (def.pickHeight ?? 1.1);
+        renderY[i] = gy + loft + (def.pickHeight ?? 1.1) * zoomFor(def);
         renderZ[i] = z;
         if (fade > 0) {
           colors[i * 4 + 3] = fade;
@@ -3507,7 +3593,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       // Pick sphere center at chest height over terrain (not sim `size`, which is spacing).
       const gy = groundYCached(i, x, z);
       renderX[i] = x;
-      renderY[i] = gy + loft + (def.pickHeight ?? 1.1);
+      renderY[i] = gy + loft + (def.pickHeight ?? 1.1) * zoomFor(def);
       renderZ[i] = z;
       if (fade > 0) {
         colors[i * 4 + 3] = fade;
@@ -3615,7 +3701,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         const o = slot * 4;
         buf[o] = x;
         buf[o + 1] = z;
-        buf[o + 2] = unitChipLift(loft, def.pickHeight);
+        buf[o + 2] = unitChipLift(loft, (def.pickHeight ?? 1.1) * zoomFor(def));
         buf[o + 3] = hp / maxHp;
         owners[slot] = world.owner[i];
         hps[slot] = hp | 0;
@@ -3808,6 +3894,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         act: world.gatherAct,
         alive: world.alive,
         skip: fogHidden,
+        scale: zoomS,
       });
     }
     if (renderer.syncHolyShields) {
@@ -3818,10 +3905,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         const def = getUnitDef(world.type[i]);
         const pick = def.pickRadius ?? 1.8;
         // Pick spheres sit inside the VAT mesh; the shield has to wrap the body.
-        const wrap = Math.max(pick * 2.2, (def.size ?? 5) * 0.5);
+        const zs = zoomFor(def);
+        const wrap = Math.max(pick * 2.2, (def.size ?? 5) * 0.5) * zs;
         shieldSpheres.push({
           x: renderX[i],
-          y: renderY[i] + pick * 0.35,
+          y: renderY[i] + pick * 0.35 * zs,
           z: renderZ[i],
           r: wrap,
         });
@@ -3859,7 +3947,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           x: renderX[i],
           y: renderY[i],
           z: renderZ[i],
-          r: def.pickRadius ?? 1.8,
+          r: (def.pickRadius ?? 1.8) * zoomFor(def),
         });
       }
       // Match gameInput collectBuildingPickSpheres (own structures only).
@@ -4054,6 +4142,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 }
 
 async function applyLiveConfig(ctx, cfg, kothShard) {
+  if (shouldBlockBackdropApply({
+    cfg,
+    liveSpectating: kothShard?.isLiveSpectating?.(),
+  })) {
+    return;
+  }
   const gen = ++liveConfigGeneration;
   const activeSlots = cfg.activeSlots ?? cfg.humanPlayers ?? [];
   const localSolo = !!cfg.localSolo;
@@ -4182,6 +4276,14 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
     if (ctx.session._pendingWorldGen === gen) ctx.session._pendingWorldGen = null;
     if (DEBUG_KOTH) console.info('[KOTH] stale live config ignored after reset', { gen, current: liveConfigGeneration });
     // A newer applyLiveConfig owns the splash / input gate / stinger.
+    // A leftover 3-villager backdrop that finished after spectator attach
+    // already reset the worker — pull the host world again.
+    if (shouldBlockBackdropApply({
+      cfg,
+      liveSpectating: kothShard?.isLiveSpectating?.(),
+    })) {
+      kothShard.retrySpectatorAttach?.();
+    }
     return;
   }
   ctx.session._pendingWorldGen = null;
@@ -4249,25 +4351,23 @@ function wantsMatchIntroSweep(cfg) {
 }
 
 /**
- * Match intro: swing from the neutral overview to behind the local player's agora,
- * looking forward across the middle of the map. No-op if the local seat has no home
- * agora (spectator / story map) — the neutral pose just stays put.
+ * Match intro: swing from the neutral overview to behind the local spawn
+ * (home agora, or the KOTH pad under the army), looking across midfield.
+ * No-op for spectators / empty seats — the neutral pose stays put.
  */
 function sweepCameraToArmy(ctx, cfg) {
   const controller = ctx?.renderer?.cameraController;
   if (!controller?.easePose) return;
   const localId = cfg?.localPlayerId ?? ctx?.localPlayerId;
   if (!(localId >= 0)) return;
-  const agoras = ctx?.session?.agoras ?? [];
-  let home = null;
-  for (const a of agoras) {
-    if (!a || (a.owner | 0) !== localId) continue;
-    if (!Number.isFinite(a.x) || !Number.isFinite(a.z)) continue;
-    home = a;
-    break;
-  }
+  const home = spawnCameraHomeXZ(
+    ctx?.session?.state,
+    localId,
+    ctx?.session?.agoras,
+    ctx?.session?.field?.worldHalfF ?? ctx?.session?.state?.worldHalfF,
+  );
   if (!home) return;
-  // Map center is the world origin. Sit on the far side of the agora from center
+  // Map center is the world origin. Sit on the far side of the spawn from center
   // (alpha aimed outward) so the camera looks back inward across the midfield.
   const dist = Math.hypot(home.x, home.z);
   if (dist < 1e-3) return;
@@ -4309,6 +4409,7 @@ function soloAiStatusLabel(temperament, difficulty) {
 async function startSoloAiMatch(ctx, opts = {}) {
   if (!ctx?.session || !ctx.renderer) return;
   if (ctx._soloStarting) return;
+  if (ctx.kothShard?.isLiveSpectating?.()) return;
   const {
     fog = true,
     sharedVision = false,

@@ -398,12 +398,14 @@ function importWaveSpawners(w, data) {
 
 function exportKoth(k) {
   if (!k) return null;
+  const established = k.established ?? new Uint8Array(5);
   return {
     kingOwner: k.kingOwner | 0,
     active: encodeTA(k.active, k.active.length),
     eliminated: encodeTA(k.eliminated, k.eliminated.length),
     joinedAtTick: encodeTA(k.joinedAtTick, k.joinedAtTick.length),
     scores: encodeTA(k.scores, k.scores.length),
+    established: encodeTA(established, established.length),
   };
 }
 
@@ -419,13 +421,16 @@ function importKoth(w, data) {
       eliminated: new Uint8Array(data.eliminated?.n ?? 5),
       joinedAtTick: new Int32Array(data.joinedAtTick?.n ?? 5),
       scores: new Int32Array(data.scores?.n ?? 5),
+      established: new Uint8Array(data.established?.n ?? 5),
     };
   }
+  if (!w.koth.established) w.koth.established = new Uint8Array(data.established?.n ?? 5);
   w.koth.kingOwner = data.kingOwner | 0;
   decodeTAInto(w.koth.active, data.active);
   decodeTAInto(w.koth.eliminated, data.eliminated);
   decodeTAInto(w.koth.joinedAtTick, data.joinedAtTick);
   decodeTAInto(w.koth.scores, data.scores);
+  decodeTAInto(w.koth.established, data.established);
 }
 
 function exportAgoras(agoras) {
@@ -504,6 +509,14 @@ function exportBuildings(buildings) {
     locustAcc: b.locustAcc | 0,
     locustHops: b.locustHops | 0,
     locustSource: b.locustSource ?? -1,
+    refundCost: b.refundCost
+      ? {
+        wood: b.refundCost.wood | 0,
+        stone: b.refundCost.stone | 0,
+        mineral: b.refundCost.mineral | 0,
+        food: b.refundCost.food | 0,
+      }
+      : null,
   }));
 }
 
@@ -559,6 +572,14 @@ function importBuildings(w, data) {
       locustAcc: b.locustAcc | 0,
       locustHops: b.locustHops | 0,
       locustSource: b.locustSource != null ? b.locustSource | 0 : -1,
+      refundCost: b.refundCost
+        ? {
+          wood: b.refundCost.wood | 0,
+          stone: b.refundCost.stone | 0,
+          mineral: b.refundCost.mineral | 0,
+          food: b.refundCost.food | 0,
+        }
+        : null,
     };
   });
 }

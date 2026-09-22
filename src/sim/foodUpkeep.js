@@ -1,9 +1,9 @@
 // Light food tax on living population (the HUD pop count).
 //
 // Each living unit accrues 1 toward a bite every tick; a bite costs 1 food
-// every FOOD_UPKEEP_PERIOD ticks. Three opening villagers take ~20s to eat
-// one food each — a slow drip, not a second economy. A hundred mouths still
-// only ask for a couple of farmers.
+// every FOOD_UPKEEP_PERIOD ticks (three times that in KOTH). Three opening
+// villagers take ~20s to eat one food each — a slow drip, not a second
+// economy. A hundred mouths still only ask for a couple of farmers.
 //
 // Empty banks do not go into debt: the remainder parks just shy of a bite
 // so the next gathered food is not swallowed in a lump.
@@ -12,6 +12,13 @@ import { addResource, getResource, MAX_RESOURCE_OWNERS } from './resources.js';
 
 /** Ticks (20 Hz) for one living unit to consume 1 food. */
 export const FOOD_UPKEEP_PERIOD = 400;
+/** Same bite, half as often, when world.koth is armed. */
+export const FOOD_UPKEEP_PERIOD_KOTH = 1200;
+
+/** @param {object | null | undefined} w */
+export function foodUpkeepPeriod(w) {
+  return w?.koth ? FOOD_UPKEEP_PERIOD_KOTH : FOOD_UPKEEP_PERIOD;
+}
 
 /** @type {Int32Array} */
 let popScratch = new Int32Array(0);
@@ -51,6 +58,7 @@ export function tickFoodUpkeep(w) {
   if (!w) return;
   const acc = ensureFoodUpkeepAcc(w);
   const pop = countLivingByOwner(w);
+  const period = foodUpkeepPeriod(w);
   for (let o = 0; o < MAX_RESOURCE_OWNERS; o++) {
     const n = pop[o];
     let next = (acc[o] | 0) + n;
@@ -58,13 +66,13 @@ export function tickFoodUpkeep(w) {
       acc[o] = 0;
       continue;
     }
-    while (next >= FOOD_UPKEEP_PERIOD) {
+    while (next >= period) {
       if (getResource(w, o, 'food') <= 0) {
-        next = FOOD_UPKEEP_PERIOD - 1;
+        next = period - 1;
         break;
       }
       addResource(w, o, 'food', -1);
-      next -= FOOD_UPKEEP_PERIOD;
+      next -= period;
     }
     acc[o] = next;
   }

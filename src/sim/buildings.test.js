@@ -228,6 +228,7 @@ describe('buildings place', () => {
 
   it('rejects unknown types', () => {
     assert.equal(isPlaceableBuilding('nope'), false);
+    assert.equal(isPlaceableBuilding('agora'), false);
     const w = createWorld(2);
     w.buildings = [];
     const field = buildField(2, { width: 64, height: 64 });

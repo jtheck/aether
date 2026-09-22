@@ -18,7 +18,7 @@ import {
   screenPosInRect,
   twoFingerConsumesBuildUi,
 } from './buildingSelect.js';
-import { createGameInput } from './gameInput.js';
+import { ABILITY_HOLD_MS, createGameInput } from './gameInput.js';
 import { CONTROL_GROUP_BLACK } from './controlGroups.js';
 import { CMD } from '../../sim/commands.js';
 
@@ -484,6 +484,130 @@ describe('gamepad trigger orders', () => {
     const { input, cmds } = makeOrderHarness();
     input.castAbilityAt(200, 300);
     assert.equal(cmds[0]?.type, CMD.CAST);
+  });
+
+  function makeAgoraComboHarness(opts = {}) {
+    const cmds = [];
+    const ghosts = [];
+    const parks = [];
+    const confirms = [];
+    let placing = null;
+    let combo = null;
+    const selected = new Uint8Array(6);
+    const world = {
+      count: 5,
+      alive: [1, 1, 1, 1, 1],
+      owner: [0, 0, 0, 0, 0],
+      type: [0, 0, 0, 0, 9],
+      carriedBy: [-1, -1, -1, -1, -1],
+      px: [0, 0, 0, 0, 0],
+      py: [0, 0, 0, 0, 0],
+    };
+    const input = createGameInput({
+      canvas: {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      },
+      renderer: {
+        pickSelectionHud: () => null,
+        pickControlGroupHud: () => null,
+        screenToGround: (x, y) => ({ x: x / 10, z: y / 10, y: 0 }),
+        setSelectionBox: () => {},
+      },
+      world,
+      selected,
+      localPlayerId: 0,
+      getUnitWorldPos: () => ({ x: 0, y: 0, z: 0 }),
+      enqueueCommand: (cmd) => cmds.push(cmd),
+      getAgoras: () => [],
+      getBuildings: () => [],
+      getOwnerBank: () => opts.bank ?? { wood: 40, stone: 20, mineral: 30, food: 10 },
+      getPlacingType: () => placing,
+      setPlacingType: (t) => { placing = t; },
+      onComboPlacement: (type, entities) => { combo = { type, entities }; },
+      onPlacementMove: (x, z) => {
+        ghosts.push({ x, z });
+        return { x, z, valid: true };
+      },
+      onPlacementParked: (on) => { parks.push(on); },
+      onPlacementConfirm: (x, z) => {
+        confirms.push({ x, z });
+        return true;
+      },
+    });
+    selected.fill(1, 0, 5);
+    input.setSelectedBuffer(selected);
+    return { input, cmds, ghosts, parks, confirms, getPlacing: () => placing, getCombo: () => combo };
+  }
+
+  it('opens agora placement for 4 villagers + engineer and does not CAST', () => {
+    const { input, cmds, ghosts, getPlacing, getCombo } = makeAgoraComboHarness();
+    input.castAbilityAt(200, 300);
+    assert.equal(cmds.length, 0);
+    assert.equal(getPlacing(), 'agora');
+    assert.equal(getCombo()?.type, 'agora');
+    assert.deepEqual(getCombo()?.entities, [0, 1, 2, 3, 4]);
+    assert.deepEqual(ghosts[0], { x: 20, z: 30 });
+  });
+
+  it('shows the agora ghost when the special hold readies, not on release', (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const { input, cmds, ghosts, parks, confirms, getPlacing } = makeAgoraComboHarness();
+    input.handlePointerDown(placePtr({ clientX: 200, clientY: 300 }));
+    assert.equal(getPlacing(), null);
+    assert.equal(ghosts.length, 0);
+    t.mock.timers.tick(ABILITY_HOLD_MS);
+    assert.equal(cmds.length, 0);
+    assert.equal(getPlacing(), 'agora');
+    assert.deepEqual(ghosts[0], { x: 20, z: 30 });
+    return input.handlePointerUp(placePtr({
+      type: 'pointerup',
+      clientX: 200,
+      clientY: 300,
+    })).then(() => {
+      assert.equal(confirms.length, 0);
+      assert.equal(parks.at(-1), true);
+      assert.equal(getPlacing(), 'agora');
+    });
+  });
+
+  it('does not CAST or place agora when the mineral bank is short', () => {
+    const cmds = [];
+    let placing = null;
+    const selected = new Uint8Array(6);
+    const world = {
+      count: 5,
+      alive: [1, 1, 1, 1, 1],
+      owner: [0, 0, 0, 0, 0],
+      type: [0, 0, 0, 0, 9],
+      carriedBy: [-1, -1, -1, -1, -1],
+      px: [0, 0, 0, 0, 0],
+      py: [0, 0, 0, 0, 0],
+    };
+    const input = createGameInput({
+      canvas: {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      },
+      renderer: {
+        pickSelectionHud: () => null,
+        pickControlGroupHud: () => null,
+        screenToGround: (x, y) => ({ x: x / 10, z: y / 10, y: 0 }),
+        setSelectionBox: () => {},
+      },
+      world,
+      selected,
+      localPlayerId: 0,
+      getUnitWorldPos: () => ({ x: 0, y: 0, z: 0 }),
+      enqueueCommand: (cmd) => cmds.push(cmd),
+      getAgoras: () => [],
+      getBuildings: () => [],
+      getOwnerBank: () => ({ wood: 40, stone: 20, mineral: 29, food: 10 }),
+      setPlacingType: (t) => { placing = t; },
+    });
+    selected.fill(1, 0, 5);
+    input.setSelectedBuffer(selected);
+    input.castAbilityAt(200, 300);
+    assert.equal(cmds.length, 0);
+    assert.equal(placing, null);
   });
 });
 

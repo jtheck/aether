@@ -30,3 +30,10 @@ export function isSpectatorMember(data, matchId) {
   if (!isLiveMatchMember(data, matchId)) return false;
   return data.role === 'spectator' || data.appState === KOTH_APP_STATE.SPECTATOR;
 }
+
+/** A stable spectator heartbeat relinquishes a stale active seat; JOINING does not. */
+export function relinquishesActiveSeat(data, matchId) {
+  return isSpectatorMember(data, matchId)
+    && data.role === 'spectator'
+    && data.appState === KOTH_APP_STATE.SPECTATOR;
+}

@@ -176,24 +176,26 @@ function deckWorldOffset(offX, offZ, yaw) {
  *   tx: number, tz: number, vehicleYaw: number, vehicleLoft: number,
  *   seats: { x: number, y: number, z: number, yaw?: number, pitch?: number, roll?: number }[],
  *   slot: number, total: number,
+ *   zoom?: number,
  * }} opts
  */
 export function posePassengerOnTransport(opts) {
   const { tx, tz, vehicleYaw, vehicleLoft, seats, slot, total } = opts;
+  const zoom = Number.isFinite(opts.zoom) && opts.zoom > 0 ? opts.zoom : 1;
   const seat = seats?.[slot];
   if (seat) {
-    const xz = seatLocalToWorld(tx, tz, vehicleYaw, seat.x, seat.z);
+    const xz = seatLocalToWorld(tx, tz, vehicleYaw, seat.x * zoom, seat.z * zoom);
     return {
       x: xz.x,
       z: xz.z,
-      loft: vehicleLoft + seat.y,
+      loft: vehicleLoft + seat.y * zoom,
       yaw: vehicleYaw + (seat.yaw || 0),
       pitch: seat.pitch || 0,
       roll: seat.roll || 0,
     };
   }
   const local = passengerDeckOffset(slot, total);
-  const off = deckWorldOffset(local.x, local.z, vehicleYaw);
+  const off = deckWorldOffset(local.x * zoom, local.z * zoom, vehicleYaw);
   const airDrop = vehicleLoft > 0 ? AIR_PASSENGER_DROP : 0;
   return {
     x: tx + off.x,

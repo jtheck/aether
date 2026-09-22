@@ -38,7 +38,8 @@ import { GATHER_ACT } from '../sim/gather.js';
 import { MAX_PROJECTILES, PROJECTILE_DESPAWN } from '../sim/projectiles.js';
 import { PROJECTILE, PROJECTILE_MESH } from '../sim/projectileTypes.js';
 import { HEIGHT_AMPLITUDE, TILE_SIZE_F, WORLD_HALF_F, worldHalfFFromField } from '../sim/field.js';
-import { createCameraController, resolveCameraHalfF } from './cameraController.js';
+import { cameraZoomNormalized, createCameraController, resolveCameraHalfF, unitZoomScale, unitZoomScaleMaxForDef } from './cameraController.js';
+import { MODEL_BASE_SCALE } from './modelScale.js';
 import { capacityFor } from '../sim/capacity.js';
 import {
   UNIT_MODEL_URLS,
@@ -1030,6 +1031,15 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     return { x: p?.x ?? 0, y: p?.y ?? 0, z: p?.z ?? 0 };
   }
 
+  /** Authored size at min radius; grows with orbit zoom (visual only). */
+  function currentUnitZoomScale(def) {
+    const r = camera?.radius;
+    if (!Number.isFinite(r)) return 1;
+    const minR = camera.lowerRadiusLimit ?? 50;
+    const maxR = camera.upperRadiusLimit ?? r;
+    return MODEL_BASE_SCALE * unitZoomScale(cameraZoomNormalized(r, minR, maxR), unitZoomScaleMaxForDef(def));
+  }
+
   function rebuildTileGrid(snap) {
     tileGrid?.dispose?.();
     placementGrid?.dispose?.();
@@ -1523,11 +1533,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         yaw = Math.atan2(m[o + 8], m[o + 10]);
         if (Number.isFinite(m[o + 13])) y = m[o + 13];
       }
+      const zoomS = currentUnitZoomScale(def);
       return mushrooms?.spawnHead?.(entity, x, z, killed, {
         y,
         yaw,
-        radius: Math.max(0.7, (def.size ?? 6) * 0.3),
-        height: (def.pickHeight ?? 1.1) * 1.85,
+        radius: Math.max(0.7, (def.size ?? 6) * 0.3) * zoomS,
+        height: (def.pickHeight ?? 1.1) * 1.85 * zoomS,
       }) ?? false;
     },
     clearGrown(tick) {
@@ -3529,10 +3540,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (!batch) return false;
     const tiCount = batch.mesh.thinInstances?.count ?? 0;
     if (slot >= tiCount) return false;
-    writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, batch === fallback, loft, pitch, roll, groundYOverride, carrying, chopping, walkRate, attacking);
+    const def = getUnitDef(typeId);
+    const zoomS = currentUnitZoomScale(def);
+    writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, batch === fallback, loft, pitch, roll, groundYOverride, carrying, chopping, walkRate, attacking, zoomS);
     if (monkLobFx.isFlying(i)) monkLobFx.notePose(i, x, z);
     if (diameter > 0.05) {
-      const def = getUnitDef(typeId);
       const gy = Number.isFinite(groundYOverride) ? groundYOverride : groundYAt(x, z);
       mushrooms?.noteHeadPose?.(
         i,
@@ -3540,8 +3552,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         gy + loft,
         z,
         yaw,
-        Math.max(0.7, diameter * 0.3),
-        (def.pickHeight ?? 1.1) * 1.85,
+        Math.max(0.7, diameter * 0.3) * zoomS,
+        (def.pickHeight ?? 1.1) * 1.85 * zoomS,
       );
     }
     return true;
@@ -3682,7 +3694,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   const screenOut = { x: 0, y: 0 };
 
-  function writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, useSphereY, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false, walkRate = 1, attacking = false) {
+  function writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, useSphereY, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false, walkRate = 1, attacking = false, zoomOverride = NaN) {
     const baseGy = Number.isFinite(groundYOverride) ? groundYOverride : groundYAt(x, z);
     const gy = baseGy + (loft || 0);
     let animateVat = diameter > 0;
@@ -3694,8 +3706,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       animateVat = edx * edx + edy * edy + edz * edz <= VAT_DISTANCE_SQ;
     }
 
+    const zoomS = Number.isFinite(zoomOverride) && zoomOverride > 0 ? zoomOverride : currentUnitZoomScale();
     if (useSphereY) {
-      const scale = diameter / batch.baseSize;
+      const scale = (diameter / batch.baseSize) * zoomS;
       const o = slot * 16;
       if (scale <= 0) {
         for (let k = 0; k < 16; k++) batch.matrices[o + k] = 0;
@@ -3714,7 +3727,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const sp = Math.sin(pitch);
       const cr = Math.cos(roll);
       const sr = Math.sin(roll);
-      const y = gy + FOOT_CLEARANCE + diameter * 0.5;
+      const y = gy + FOOT_CLEARANCE + diameter * 0.5 * zoomS;
       const x0x = cy;
       const x0z = -syw;
       const y0x = syw * sp;
@@ -3742,7 +3755,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     } else if (diameter <= 0) {
       writeUnitMatrix(batch.matrices, slot, x, z, 0, yaw, false, gy, pitch, roll);
     } else {
-      const scale = batch.vatScale ?? 1;
+      const scale = (batch.vatScale ?? 1) * zoomS;
       const lift = batch.vatFootLift ?? 0;
       writeUnitMatrix(batch.matrices, slot, x, z, scale, yaw, false, gy + lift, pitch, roll);
     }
@@ -3975,6 +3988,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       if (poseResyncGeneration === lastConsumedPoseResync) return false;
       lastConsumedPoseResync = poseResyncGeneration;
       return true;
+    },
+
+    /** Visual-only unit size mul from camera radius (1 at closest zoom). */
+    unitZoomScale(def) {
+      return currentUnitZoomScale(def);
     },
 
     /** Place static agora meshes (init / world rebuild). */
@@ -5091,16 +5109,17 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         return;
       }
       const gy = groundYAt(x, z);
+      const zoomS = currentUnitZoomScale(opts.kind === 'vehicle' ? { mechanical: true } : null);
       if (useCollar) {
         let base = SELECTION_COLLAR_SCALE;
         if (opts.kind === 'vehicle') base = SELECTION_COLLAR_VEHICLE_SCALE;
         else if (opts.kind === 'caster') base = SELECTION_COLLAR_CASTER_SCALE;
-        writeSelectionCollar(ringMatrices, i, x, z, base, spinYaw, gy);
+        writeSelectionCollar(ringMatrices, i, x, z, base * zoomS, spinYaw, gy);
       } else {
         let diam = unitSize;
         if (opts.kind === 'vehicle') diam = Math.max(unitSize, 10);
         else if (opts.kind === 'caster') diam = unitSize * 1.5;
-        writeFlatRing(ringMatrices, i, x, z, diam, RING_DIAM, RING_H, gy);
+        writeFlatRing(ringMatrices, i, x, z, diam * zoomS, RING_DIAM, RING_H, gy);
       }
       writeSelRingColorAt(i, tint);
       for (const mesh of selRingParts) markThinInstanceSlotDirty(mesh, i);
@@ -5232,11 +5251,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     buildingChipHeight(typeId) {
-      return buildingProps.chipHeight?.(typeId) ?? roofChipLift(0, DEFAULT_BUILDING_ROOF);
+      return buildingProps.chipHeight?.(typeId) ?? roofChipLift(0, DEFAULT_BUILDING_ROOF) * MODEL_BASE_SCALE;
     },
 
     agoraChipHeight() {
-      return agoraProps.chipHeight?.() ?? roofChipLift(0, DEFAULT_AGORA_ROOF);
+      return agoraProps.chipHeight?.() ?? roofChipLift(0, DEFAULT_AGORA_ROOF) * MODEL_BASE_SCALE;
     },
 
     endHealthBars() {

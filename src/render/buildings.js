@@ -16,6 +16,7 @@ import { meshRoofY, roofChipLift, DEFAULT_BUILDING_ROOF } from './healthBars.js'
 import { BUILDING_FOOTPRINTS, BUILDING_MODEL_URLS, PLACEABLE_BUILDINGS } from '../sim/buildings.js';
 import { TILE_SIZE_F } from '../sim/field.js';
 import { SCALE_RISE_MS, stageRiseScale } from './scaleBounce.js';
+import { MODEL_BASE_SCALE } from './modelScale.js';
 import { constructionVisualStage } from '../sim/construction.js';
 import { capacityFor } from '../sim/capacity.js';
 import { USE_GPU_PICK } from './pickMode.js';
@@ -211,7 +212,7 @@ export function applyGhostValidityTint(mat, valid) {
  */
 function resolveSelScale(size) {
   const key = size === 's' || size === 'm' || size === 'l' ? size : 'm';
-  return BUILDING_SEL_SIZE[key];
+  return BUILDING_SEL_SIZE[key] * MODEL_BASE_SCALE;
 }
 
 /**
@@ -515,8 +516,9 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
   }
 
   function constructScale(b) {
-    if (b.built !== 0) return 1;
-    return CONSTRUCT_STAGE_SCALE[constructionVisualStage(b.buildProgress, b.buildTime)] ?? SITE_SCALE;
+    if (b.built !== 0) return MODEL_BASE_SCALE;
+    const stage = CONSTRUCT_STAGE_SCALE[constructionVisualStage(b.buildProgress, b.buildTime)] ?? SITE_SCALE;
+    return MODEL_BASE_SCALE * stage;
   }
 
   function constructStage(b) {
@@ -787,7 +789,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
     const yaw = pos.yaw ?? 0;
     const valid = pos.valid !== false;
     for (const layer of batch.layers) {
-      writeMatrix(layer.matrices, 0, pos.x, y, pos.z, yaw, 1);
+      writeMatrix(layer.matrices, 0, pos.x, y, pos.z, yaw, MODEL_BASE_SCALE);
       setThinInstanceCount(layer.mesh, 1);
       flushThinInstances(layer.mesh);
       applyGhostValidityTint(layer.mesh.material, valid);
@@ -888,7 +890,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
 
   function chipHeight(typeId) {
     const roof = templates.get(typeId)?.roofY;
-    return roofChipLift(roof, DEFAULT_BUILDING_ROOF);
+    return roofChipLift(roof, DEFAULT_BUILDING_ROOF) * MODEL_BASE_SCALE;
   }
 
   const HARVEST_PING_MS = 280;

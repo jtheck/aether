@@ -87,6 +87,37 @@ export function cameraZoomNormalized(radius, minR, maxR) {
   return Math.max(0, Math.min(1, ((radius ?? 0) - (minR ?? 0)) / span));
 }
 
+/**
+ * Visual-only unit size mul. Stays at base through the closest pocket, then
+ * ease-out growth to the cap; holds that size through the far vista.
+ */
+export const UNIT_ZOOM_SCALE_MAX = 2.28;
+/** Wagons / APC / air — same curve, much less growth. */
+export const VEHICLE_ZOOM_SCALE_MAX = 1.48;
+/** Closest zoom stays at base — first 14% of the radius range. */
+export const UNIT_ZOOM_SCALE_HOLD = 0.14;
+/** Normalized zoom where the mul hits the cap (0 = closest, 1 = farthest). */
+export const UNIT_ZOOM_SCALE_CAP = 0.55;
+export function unitZoomScale(normalizedZoom, max = UNIT_ZOOM_SCALE_MAX) {
+  const n = Math.max(0, Math.min(1, normalizedZoom));
+  if (n <= UNIT_ZOOM_SCALE_HOLD) return 1;
+  const span = Math.max(1e-6, UNIT_ZOOM_SCALE_CAP - UNIT_ZOOM_SCALE_HOLD);
+  const t = Math.max(0, Math.min(1, (n - UNIT_ZOOM_SCALE_HOLD) / span));
+  // Ease-out 1.5: first half of the grow window does ~65% of the size change.
+  const u = 1 - (1 - t) ** 1.5;
+  const hi = Number.isFinite(max) && max > 0 ? max : UNIT_ZOOM_SCALE_MAX;
+  return 1 + u * (hi - 1);
+}
+
+/** Mechanical / transport / air use the milder vehicle cap. */
+export function unitZoomScaleMaxForDef(def) {
+  if (!def) return UNIT_ZOOM_SCALE_MAX;
+  if (def.mechanical || (def.transportCapacity | 0) > 0 || def.category === 'vehicle' || def.category === 'air') {
+    return VEHICLE_ZOOM_SCALE_MAX;
+  }
+  return UNIT_ZOOM_SCALE_MAX;
+}
+
 /** Radius at the look-down trough (play gaze). */
 export function cameraPlayRadius(minR, maxR) {
   const lo = minR ?? 0;

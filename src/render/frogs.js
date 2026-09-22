@@ -17,10 +17,11 @@ import {
 } from '../sim/frogs.js';
 import { capacityFor } from '../sim/capacity.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
+import { MODEL_BASE_SCALE } from './modelScale.js';
 
 const FROG_MODEL_URL = '/assets/models/frog.glb';
-/** Raw glTF scale — no aftermarket resize. */
-const FROG_SCALE = 1;
+/** 1:1 glTF; world size comes from MODEL_BASE_SCALE. */
+const FROG_SCALE = MODEL_BASE_SCALE;
 const HOP_ARC_OUT = 3.2;
 const HOP_ARC_AWAY = 2.4;
 const HOP_ARC_ESCAPE = 2.8;

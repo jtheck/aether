@@ -122,6 +122,14 @@ export function countActive(slots) {
   return n;
 }
 
+/** User holding the lowest active seat. Reservations never own authority. */
+export function lowestActiveUserId(slots) {
+  for (const slot of slots ?? []) {
+    if (slot.state === 'active' && slot.userId) return slot.userId;
+  }
+  return null;
+}
+
 /** @param {SlotEntry[]} slots */
 export function hasLiveShard(slots) {
   return countActive(slots) > 0;

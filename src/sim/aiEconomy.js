@@ -309,9 +309,9 @@ function chooseSiloAnchor(w, owner, bank, order) {
   const kinds = order?.length ? order : ['wood', 'food', 'stone', 'mineral'];
   for (let i = 0; i < kinds.length; i++) {
     const kind = kinds[i];
-    const cap = ownerResourceCap(buildings, owner, kind);
+    const cap = ownerResourceCap(buildings, owner, kind, 'fixed', w);
     if ((bank[kind] | 0) < cap) continue;
-    if (ownerSlotCount(buildings, owner, kind) >= MAX_RESOURCE_SLOTS) continue;
+    if (ownerSlotCount(buildings, owner, kind, 'fixed', w) >= MAX_RESOURCE_SLOTS) continue;
     const sourceType = SILO_SOURCE_TYPE[kind];
     const source = unpairedSiloSource(buildings, owner, sourceType);
     if (!source) continue;
@@ -425,7 +425,7 @@ function chooseBuild(w, owner, bank, inv, villagerCount, order, strategy, captur
 }
 
 function canUnlockKind(w, owner, kind) {
-  return ownerSlotCount(w.buildings, owner, kind) < MAX_RESOURCE_SLOTS;
+  return ownerSlotCount(w.buildings, owner, kind, 'fixed', w) < MAX_RESOURCE_SLOTS;
 }
 
 function chooseCapRelief(w, owner, inv, full, bank) {

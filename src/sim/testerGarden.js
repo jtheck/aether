@@ -1,5 +1,5 @@
 // Unit-tester garden — 2-player mirror with one of every unit and building.
-// Write with: node --input-type=module -e "import { writeFileSync } from 'fs'; import { buildTesterGarden } from './sim/testerGarden.js'; writeFileSync('../maps/tester.garden', JSON.stringify(buildTesterGarden()));"
+// Write with: node --input-type=module -e "import { writeFileSync } from 'fs'; import { buildTesterGarden } from './sim/testerGarden.js'; const j=JSON.stringify(buildTesterGarden()); writeFileSync('../maps/tester.garden', j); writeFileSync('maps/tester.garden', j);"
 
 import { createField, TERRAIN, SKIRMISH_MAP_W, SKIRMISH_MAP_H, activeMapW, activeMapH, setActiveMapSize } from './field.js';
 import {
@@ -26,11 +26,11 @@ const LAST = W - 1;
 /** West-side agora tile (even 4×4 snaps cleanly). East is mirrored. */
 const AGORA_TX = 50;
 const AGORA_TZ = 72;
-/** Building grid: 5 columns × 3 rows, west of the agora. */
-const BUILD_TX0 = 16;
-const BUILD_TZ0 = 36;
-const BUILD_STEP_X = 14;
-const BUILD_STEP_Z = 16;
+/** Building grid: 5 columns × 3 rows, packed just west of the agora. */
+const BUILD_TX0 = 32;
+const BUILD_TZ0 = 60;
+const BUILD_STEP_X = 6;
+const BUILD_STEP_Z = 6;
 /** Unit column just east of the west agora (stay well short of midfield). */
 const UNIT_TX = 56;
 const UNIT_TZ0 = 28;

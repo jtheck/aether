@@ -8,6 +8,7 @@
 
 import * as fx from '../../sim/fixed.js';
 import { CMD } from '../../sim/commands.js';
+import { classifyCastSelection, COMBO, canAffordAgoraFound } from '../../sim/combos.js';
 import {
   BUILDING_YAW_SNAP,
   snapBuildingYaw,
@@ -87,7 +88,7 @@ const PLACE_ROTATE_THRESHOLD_PX = 18;
 const DOUBLE_MS = 350;
 const DOUBLE_PX = 14;
 /** Tap+hold on ground with selection → primary ability cast. */
-const ABILITY_HOLD_MS = 400;
+export const ABILITY_HOLD_MS = 400;
 
 /**
  * @param {object} opts
@@ -108,6 +109,8 @@ const ABILITY_HOLD_MS = 400;
  * @param {(sel: { kind: 'agora' | 'building', index: number } | null, ptr?: { clientX: number, clientY: number }, all?: { kind: 'agora' | 'building', index: number }[]) => void} [opts.onBuildingSelected]
  * @param {() => string | null} [opts.getPlacingType]
  * @param {(buildingType: string | null) => void} [opts.setPlacingType]
+ * @param {() => { wood?: number, stone?: number, mineral?: number, food?: number }} [opts.getOwnerBank]
+ * @param {(type: string, entities: number[]) => void} [opts.onComboPlacement]
  * @param {(x: number, z: number, yaw?: number) => { x: number, z: number, valid?: boolean } | null | void} [opts.onPlacementMove]
  * @param {(x: number, z: number, yaw?: number) => boolean | void} [opts.onPlacementConfirm]
  * @param {(parked: boolean) => void} [opts.onPlacementParked]
@@ -148,6 +151,8 @@ export function createGameInput(opts) {
     onBuildingSelected,
     getPlacingType,
     setPlacingType,
+    getOwnerBank,
+    onComboPlacement,
     onPlacementMove,
     onPlacementConfirm,
     onPlacementParked,
@@ -747,7 +752,7 @@ export function createGameInput(opts) {
       sp.x = posScratch.x;
       sp.y = posScratch.y;
       sp.z = posScratch.z;
-      sp.r = def?.pickRadius ?? 1.8;
+      sp.r = (def?.pickRadius ?? 1.8) * (renderer.unitZoomScale?.(def) ?? 1);
       n++;
     }
     return n;
@@ -1649,6 +1654,19 @@ export function createGameInput(opts) {
     playVillagerMove();
   }
 
+  /**
+   * Combo found is a ghost special: show the plot as soon as the cast
+   * commits (hold ready / pad B / double-tap), not on pointer-up.
+   */
+  function beginAgoraComboPlacement(ids, ground) {
+    onComboPlacement?.('agora', ids.slice());
+    setPlacingType?.('agora');
+    if (!ground) return;
+    placeAnchor = emitPlacementGhost(ground.x, ground.z, currentYaw());
+    placeParked = false;
+    onPlacementParked?.(false);
+  }
+
   /** Tap+hold — unload loaded transports, else cast primary ability. */
   function castAbilityAt(clientX, clientY) {
     if (!canIssueOrders() || isPlacing()) return;
@@ -1683,6 +1701,12 @@ export function createGameInput(opts) {
       // selectedIds skips carried — include spilled even before sim unloads.
       syncSelectionSquad(spilledSet);
       onSelectionChanged?.();
+      return;
+    }
+
+    if (classifyCastSelection(world, ids, localPlayerId) === COMBO.AGORA_FOUND) {
+      if (!canAffordAgoraFound(getOwnerBank?.() ?? {})) return;
+      beginAgoraComboPlacement(ids, g);
       return;
     }
 

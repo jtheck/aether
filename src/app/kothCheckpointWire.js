@@ -3,12 +3,15 @@
 import { chunkJson } from '../sim/worldCheckpoint.js';
 
 export const CHECKPOINT_CHUNK_CHARS = 48_000;
+/** Server-relayed broadcast has a smaller per-message budget than RTC. */
+export const BROADCAST_CHUNK_CHARS = 24_000;
 export const LEDGER_CHUNK_FRAMES = 80;
+export const BROADCAST_LEDGER_CHUNK_FRAMES = 40;
 
 /** @returns {{ transferId: string, total: number, chunks: string[] }} */
-export function packCheckpointChunks(checkpoint, transferId) {
+export function packCheckpointChunks(checkpoint, transferId, chunkChars = CHECKPOINT_CHUNK_CHARS) {
   const json = JSON.stringify(checkpoint);
-  const chunks = chunkJson(json, CHECKPOINT_CHUNK_CHARS);
+  const chunks = chunkJson(json, chunkChars);
   return { transferId, total: chunks.length, chunks };
 }
 
@@ -48,10 +51,11 @@ export function createChunkAssembler() {
 }
 
 /** Split ledger frames into wire chunks. */
-export function packLedgerChunks(frames, transferId) {
+export function packLedgerChunks(frames, transferId, framesPerChunk = LEDGER_CHUNK_FRAMES) {
   const chunks = [];
-  for (let i = 0; i < frames.length; i += LEDGER_CHUNK_FRAMES) {
-    chunks.push(frames.slice(i, i + LEDGER_CHUNK_FRAMES));
+  const size = Math.max(1, framesPerChunk | 0);
+  for (let i = 0; i < frames.length; i += size) {
+    chunks.push(frames.slice(i, i + size));
   }
   if (!chunks.length) chunks.push([]);
   return { transferId, total: chunks.length, chunks };

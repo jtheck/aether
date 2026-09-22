@@ -62,6 +62,54 @@ test('stayPaused leaves lockstep paused after replayCatchUpInto', async () => {
   assert.equal(session.pauseLockstep, true);
 });
 
+test('unsigned leftover hashes compare as the same catch-up checksum', async () => {
+  const session = {
+    pauseLockstep: true,
+    replayingCatchUp: false,
+    setHumanPlayers() {},
+    setRole() {},
+    catchupProgress: null,
+    _lastChecksum: -642305241,
+    confirmedTick: 0,
+    client: { commitTickAsync: async () => ({ checksum: 0xd9b73327, extra: {} }) },
+    _captureSnapshot() {},
+  };
+  const checksum = await replayCatchUpInto(
+    session,
+    { humanPlayers: [0] },
+    [],
+    0,
+    0xd9b73327,
+    { fromTick: 0, ticksPerFrame: 0, stayPaused: true },
+  );
+  assert.equal(checksum >>> 0, 0xd9b73327);
+});
+
+test('rejects a stub leftover hash when the host sent a live checksum', async () => {
+  const session = {
+    pauseLockstep: true,
+    replayingCatchUp: false,
+    setHumanPlayers() {},
+    setRole() {},
+    catchupProgress: null,
+    _lastChecksum: 0x05abf113,
+    confirmedTick: 0,
+    client: { commitTickAsync: async () => ({ checksum: 0x05abf113, extra: {} }) },
+    _captureSnapshot() {},
+  };
+  await assert.rejects(
+    () => replayCatchUpInto(
+      session,
+      { humanPlayers: [0] },
+      [],
+      0,
+      0xd9b73327,
+      { fromTick: 0, ticksPerFrame: 0, stayPaused: true },
+    ),
+    /checksum mismatch/,
+  );
+});
+
 test('live catch-up unpauses lockstep after replayCatchUpInto', async () => {
   const session = {
     pauseLockstep: true,

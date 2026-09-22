@@ -18,6 +18,7 @@ import { USE_GPU_PICK } from './pickMode.js';
 import { ownerTint } from './ownerTints.js';
 import { isTeamColorMaterial, prepareTeamColorMaterial } from './teamColor.js';
 import { forEachRallyDash } from './rallyDash.js';
+import { MODEL_BASE_SCALE } from './modelScale.js';
 
 const AGORA_MODEL_URL = '/assets/models/agora.glb';
 const FLAG_MODEL_URL = '/assets/models/flag.glb';
@@ -26,7 +27,7 @@ const MAX_AGORAS = 8;
 const MAX_RALLY_FLAGS = 32;
 const MAX_RALLY_LINE_SEGS = 512;
 const MAX_GHOST_LINE_SEGS = 256;
-const AGORA_SCALE = 1;
+const AGORA_SCALE = MODEL_BASE_SCALE;
 export const AGORA_FLAG_PLANTED = 'planted';
 export const AGORA_FLAG_GONE = 'gone';
 export const AGORA_FLAG_DISINTEGRATE = 'disintegrate';
@@ -467,7 +468,7 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
     forEachShadowMesh() {},
     pingAt() {},
     chipHeight() {
-      return roofChipLift(0, DEFAULT_AGORA_ROOF);
+      return roofChipLift(0, DEFAULT_AGORA_ROOF) * MODEL_BASE_SCALE;
     },
   };
 
@@ -1099,7 +1100,7 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
     forEachShadowMesh,
     pingAt,
     chipHeight() {
-      return roofChipLift(agoraRoofY, DEFAULT_AGORA_ROOF);
+      return roofChipLift(agoraRoofY, DEFAULT_AGORA_ROOF) * MODEL_BASE_SCALE;
     },
   };
 }

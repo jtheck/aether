@@ -61,6 +61,7 @@ export function createResourceBank(host) {
    *   buildings?: object[],
    *   owner: number,
    *   hidden?: boolean,
+   *   koth?: object | null,
    * }} state
    */
   function paint(state) {
@@ -70,7 +71,7 @@ export function createResourceBank(host) {
       return;
     }
     root.hidden = false;
-    const view = ownerStorageView(state.buildings, state.owner, state.bank, 'world');
+    const view = ownerStorageView(state.buildings, state.owner, state.bank, 'world', state);
     for (let k = 0; k < RESOURCE_KINDS.length; k++) {
       const kind = RESOURCE_KINDS[k];
       const row = view[kind];

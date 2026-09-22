@@ -392,10 +392,13 @@ export function mixRockChecksum(mix, field) {
  * @param {object} field
  * @param {object | null} world
  * @param {Array<[number, number]>} reservedWorldPoints
- * @param {{ keepExisting?: boolean }} [opts] keepExisting leaves painted scenery and fills around it
+ * @param {{ keepExisting?: boolean, reserveTrees?: boolean }} [opts]
+ *   keepExisting leaves painted scenery and fills around it.
+ *   reserveTrees (default true) keeps trees off reserved pads / unit tiles.
  */
 export function populateScenery(field, world = null, reservedWorldPoints = [], opts = {}) {
   const keepExisting = !!opts.keepExisting;
+  const reserveTrees = opts.reserveTrees !== false;
   const { width, height, seed, activeMask, pass, terrainTypes } = field;
   const n = width * height;
   const sceneryType = field.sceneryType?.length === n
@@ -464,7 +467,7 @@ export function populateScenery(field, world = null, reservedWorldPoints = [], o
   for (let tz = 0; tz < height; tz++) {
     for (let tx = 0; tx < width; tx++) {
       const i = tz * width + tx;
-      if (!isEligible(field, i, reserved) || occupied[i]) continue;
+      if (!isEligible(field, i, reserved, reserveTrees) || occupied[i]) continue;
       if (keepExisting && (sceneryType[i] !== SCENERY.NONE || (field.treeStock[i] > 0))) continue;
       const terrain = terrainTypes[i];
       if (terrain !== TERRAIN.GRASS && terrain !== TERRAIN.DIRT) continue;
@@ -503,10 +506,11 @@ function seedOccupiedFromScenery(field, occupied) {
   }
 }
 
-function isEligible(field, i, reserved) {
+function isEligible(field, i, reserved, applyReserved = true) {
   if (field.activeMask && field.activeMask[i] === 0) return false;
   if (field.pass[i] === 0) return false;
-  return reserved[i] === 0;
+  if (applyReserved && reserved[i]) return false;
+  return true;
 }
 
 function buildReservedMask(field, world, reservedWorldPoints) {

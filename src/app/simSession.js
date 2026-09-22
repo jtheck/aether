@@ -17,6 +17,26 @@ const LEDGER_KEEP = 7200;
  *  Brief WebRTC / GC hitches should not count as a player lagging. */
 export const LOCKSTEP_STALL_UI_MS = 4000;
 
+/** Start burning down the backlog once this far behind the live tip (0.6s). */
+export const LOCKSTEP_CATCHUP_LAG_TICKS = 12;
+/** Back to real time once this close, so the clock does not oscillate. */
+export const LOCKSTEP_CATCHUP_DONE_TICKS = 2;
+
+/**
+ * A fresh joiner or spectator resumes at whatever tick the host had when its
+ * world was cut, which is already seconds stale by the time the transfer and
+ * replay finish. `simAcc` is clamped to real time, so that gap is permanent —
+ * and it compounds down the observer fan-out, because an L2 pulls from an L1
+ * that is itself behind. Drain the backlog explicitly instead.
+ *
+ * Hysteresis: once draining, keep going until we are almost level.
+ */
+export function shouldFastForwardLockstep({ lagTicks = 0, draining = false } = {}) {
+  if (lagTicks >= LOCKSTEP_CATCHUP_LAG_TICKS) return true;
+  if (draining && lagTicks > LOCKSTEP_CATCHUP_DONE_TICKS) return true;
+  return false;
+}
+
 export { TICK_HZ, TICK_MS };
 
 export function matchSecondsFromTick(tick) {
@@ -60,6 +80,7 @@ export function clearSessionTableState(session) {
   session._checkpoint = null;
   session._checkpointTick = 0;
   session._checkpointChecksum = 0;
+  session._lastChecksum = 0;
   session.pendingTreeUpdates = null;
   session.pendingRockUpdates = null;
   session.pendingFireZoneUpdates = null;
@@ -108,11 +129,14 @@ export class SimSession {
     this.projectileSnapshotRing = new Array(this.snapshotRing.length);
 
     this.confirmedTick = 0;
+    this._lastChecksum = 0;
     this.simAcc = 0;
     this.waitingForWorker = false;
     this.inFlightTick = 0;
     this.inFlightFrames = [];
     this.lateFramesDropped = 0;
+    /** True while fast-forwarding a catch-up backlog (see _drainPendingCommits). */
+    this._draining = false;
 
     /** peerId -> highest tick they've confirmed ready for (multiplayer). */
     this.peerConfirmedTick = new Map();
@@ -198,12 +222,13 @@ export class SimSession {
     if (config.aiPlayers !== undefined) this.aiPlayers = config.aiPlayers ?? [];
     if (config.humanPlayers) this.setHumanPlayers(config.humanPlayers);
     this.aiPlayers = excludeHumanAiPlayers(this.aiPlayers, this.humanPlayers);
-    const { count, field, agoras, buildings, tech, resources } = await this.client.init({
+    const { count, field, agoras, buildings, tech, resources, checksum } = await this.client.init({
       ...config,
       aiPlayers: this.aiPlayers,
       humanPlayers: this.humanPlayers,
     });
     this._count = count;
+    this._lastChecksum = checksum != null ? checksum >>> 0 : 0;
     this.field = field ?? this.client.field;
     this.agoras = agoras ?? this.client._agoras ?? [];
     this.buildings = buildings ?? this.client._buildings ?? [];
@@ -314,10 +339,41 @@ export class SimSession {
     this.pendingLightningUpdates.push(patch);
   }
 
+  /**
+   * Highest tick every other required player has confirmed — the ceiling we are
+   * allowed to commit to. Also our best local estimate of the live tip.
+   */
+  liveTickCeiling() {
+    let ceiling = Infinity;
+    for (const playerId of this.humanPlayers) {
+      if (playerId === this.localPlayerId) continue;
+      const confirmed = this.peerConfirmedTick.get(playerId) ?? 0;
+      if (confirmed < ceiling) ceiling = confirmed;
+    }
+    return Number.isFinite(ceiling) ? ceiling : this.confirmedTick;
+  }
+
+  /** Committable ticks we are behind the live match by. */
+  lagBehindLiveTicks() {
+    return Math.max(0, this.liveTickCeiling() - this.confirmedTick);
+  }
+
+  /** True while burning down a catch-up backlog faster than real time. */
+  get catchingUpToLive() {
+    return this._draining;
+  }
+
   _drainPendingCommits() {
     if (this.pauseLockstep || this.resetting || this.replayingCatchUp || this.watchingReplay) return;
-    while (this.simAcc >= TICK_MS && !this.waitingForWorker) {
-      this.simAcc -= TICK_MS;
+    // Only one commit can be in flight, so this chains through the commit
+    // callback rather than looping here — worker speed is the real limit.
+    while (!this.waitingForWorker) {
+      this._draining = shouldFastForwardLockstep({
+        lagTicks: this.lagBehindLiveTicks(),
+        draining: this._draining,
+      });
+      if (this.simAcc < TICK_MS && !this._draining) break;
+      if (this.simAcc >= TICK_MS) this.simAcc -= TICK_MS;
       if (!this._tryCommitNextTick()) break;
     }
   }
@@ -522,6 +578,12 @@ export class SimSession {
     };
   }
 
+  clearCachedCheckpoint() {
+    this._checkpoint = null;
+    this._checkpointTick = 0;
+    this._checkpointChecksum = 0;
+  }
+
   async exportCheckpoint() {
     const msg = await this.client.exportCheckpointAsync();
     this.cacheCheckpoint(msg.checkpoint, msg.checksum);
@@ -533,7 +595,7 @@ export class SimSession {
     const msg = await this.client.importCheckpointAsync(checkpoint, expectedChecksum);
     this._count = msg.count ?? this._count;
     this.confirmedTick = msg.tick | 0;
-    this._lastChecksum = msg.checksum;
+    this._lastChecksum = msg.checksum >>> 0;
     if (msg.koth) this.koth = msg.koth;
     if (msg.kothMatchOver != null) this.kothMatchOver = msg.kothMatchOver;
     this.cacheCheckpoint(checkpoint, msg.checksum);
@@ -580,6 +642,7 @@ export class SimSession {
   }
 
   async _resetInner(config) {
+    const { keepPaused = false, ...simConfig } = config ?? {};
     this.resetting = true;
     // Drop the outgoing worker before it can enqueue another FX patch.
     this.client.onStepDone?.(null);
@@ -597,10 +660,11 @@ export class SimSession {
     this.pendingLeaves.clear();
     this._lockstepBlockedAt = 0;
     this._seenFrameIds.clear();
-    this.pauseLockstep = false;
+    this.pauseLockstep = !!keepPaused;
     this.confirmedTick = 0;
     this.simAcc = 0;
     this.waitingForWorker = false;
+    this._draining = false;
     this.inFlightTick = 0;
     this.inFlightFrames = [];
     this._commandSeq = 0;
@@ -609,7 +673,7 @@ export class SimSession {
     this.client = new SimClient();
     this.state = this.client.state;
     try {
-      const result = await this.start(config);
+      const result = await this.start(simConfig);
       const rebuilt = this.onWorldRebuilt?.(this.count);
       if (rebuilt != null && typeof rebuilt.then === 'function') await rebuilt;
       return result;
@@ -652,6 +716,7 @@ export class SimSession {
     this.confirmedTick = other.confirmedTick;
     this.simAcc = 0;
     this.waitingForWorker = false;
+    this._draining = false;
     this.inFlightTick = 0;
     this.inFlightFrames = [];
     this.lateFramesDropped = other.lateFramesDropped;
@@ -722,15 +787,15 @@ export class SimSession {
       // confirm outstanding at sample time, so without this reset the timer
       // accumulates during perfectly healthy play and pops the lag card at ~1-2ms.
       this._lockstepBlockedAt = 0;
-      this._lastChecksum = checksum;
+      this._lastChecksum = checksum >>> 0;
       if (extra?.koth) this.koth = extra.koth;
       if (extra?.kothMatchOver != null) this.kothMatchOver = extra.kothMatchOver;
       if (extra?.matchWinner != null) this.matchWinner = extra.matchWinner;
+      if (extra?.agoras) this.agoras = extra.agoras;
       if (extra?.buildings) {
         this.buildings = extra.buildings;
         if (extra.buildingsChanged) this.onBuildingsChanged?.(this.buildings);
       }
-      if (extra?.agoras) this.agoras = extra.agoras;
       if (extra?.tech) {
         this.tech = extra.tech;
         if (extra.techChanged) this.onTechChanged?.(this.tech);

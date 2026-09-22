@@ -68,7 +68,7 @@ function setPoolDrawCount(mesh, count) {
 }
 
 /** T * Ry(yaw) * Rx * Rz * S, column-major. */
-function writeLoad(matrices, slot, x, y, z, yaw, def) {
+function writeLoad(matrices, slot, x, y, z, yaw, def, zoom = 1) {
   const o = slot * 16;
   const cy = Math.cos(yaw);
   const sy = Math.sin(yaw);
@@ -76,6 +76,7 @@ function writeLoad(matrices, slot, x, y, z, yaw, def) {
   const sx = Math.sin(def.rx);
   const cz = Math.cos(def.rz);
   const sz = Math.sin(def.rz);
+  const zs = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
 
   // Ry * Rx
   const r00 = cy;
@@ -99,17 +100,17 @@ function writeLoad(matrices, slot, x, y, z, yaw, def) {
   const m21 = r21 * cz - r20 * sz;
   const m22 = r22;
 
-  matrices[o] = m00 * def.sx;
-  matrices[o + 1] = m10 * def.sx;
-  matrices[o + 2] = m20 * def.sx;
+  matrices[o] = m00 * def.sx * zs;
+  matrices[o + 1] = m10 * def.sx * zs;
+  matrices[o + 2] = m20 * def.sx * zs;
   matrices[o + 3] = 0;
-  matrices[o + 4] = m01 * def.sy;
-  matrices[o + 5] = m11 * def.sy;
-  matrices[o + 6] = m21 * def.sy;
+  matrices[o + 4] = m01 * def.sy * zs;
+  matrices[o + 5] = m11 * def.sy * zs;
+  matrices[o + 6] = m21 * def.sy * zs;
   matrices[o + 7] = 0;
-  matrices[o + 8] = m02 * def.sz;
-  matrices[o + 9] = m12 * def.sz;
-  matrices[o + 10] = m22 * def.sz;
+  matrices[o + 8] = m02 * def.sz * zs;
+  matrices[o + 9] = m12 * def.sz * zs;
+  matrices[o + 10] = m22 * def.sz * zs;
   matrices[o + 11] = 0;
   matrices[o + 12] = x;
   matrices[o + 13] = y;
@@ -211,6 +212,7 @@ export function createCarryLoads(engine, scene) {
       return;
     }
     const n = count | 0;
+    const zoom = Number.isFinite(opts.scale) && opts.scale > 0 ? opts.scale : 1;
     for (let i = 0; i < n; i++) {
       if ((amt[i] | 0) <= 0) continue;
       if (alive && !alive[i]) continue;
@@ -225,10 +227,11 @@ export function createCarryLoads(engine, scene) {
         batch.matrices,
         slot,
         x[i],
-        y[i] + HEAD_LIFT + (batch.def.yLift || 0),
+        y[i] + (HEAD_LIFT + (batch.def.yLift || 0)) * zoom,
         z[i],
         yaw ? yaw[i] : 0,
         batch.def,
+        zoom,
       );
     }
     commit();

@@ -159,6 +159,7 @@ export class SimClient {
         buildings: this._buildings,
         tech: this._tech,
         resources: this._resources,
+        checksum: msg.checksum,
       });
       this._initResolve = null;
     } else if (msg.type === 'stepDone') {

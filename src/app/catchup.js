@@ -3,6 +3,7 @@
 
 import { collectFramesForTick } from '../sim/commandFrame.js';
 import { formatMatchTime, matchSecondsFromTick } from './simSession.js';
+import { catchupReplayPlayerIds, sameCatchupChecksum } from './spectatorAttach.js';
 
 /** Sim ticks committed per display frame during visible catch-up.
  *  Higher = faster catch-up (less rAF overhead). Large armies still pay per-tick
@@ -76,6 +77,7 @@ export async function replayCatchUp(session, matchConfig, ledgerFrames, targetTi
       // owner-1 economy commands desyncs the spectator checksum from the host.
       aiPlayers: matchConfig.aiPlayers ?? [],
       humanPlayers: matchConfig.humanPlayers ?? [],
+      keepPaused: true,
     });
     session.pauseLockstep = true;
     session.replayingCatchUp = true;
@@ -86,18 +88,20 @@ export async function replayCatchUp(session, matchConfig, ledgerFrames, targetTi
     const checkpoint = options.checkpoint ?? null;
     const checkpointTick = (options.checkpointTick ?? checkpoint?.tick ?? 0) | 0;
 
-    if (checkpoint && checkpointTick > 0) {
+    // Tick 0 is a real host world (a solo king that just went live). Skipping it
+    // left the spectator comparing a leftover stub hash to the host's sandbox.
+    let fromTick = session.confirmedTick | 0;
+    if (checkpoint) {
       const imported = await session.importCheckpoint(checkpoint, checkpoint.checksum);
-      session.confirmedTick = imported.tick;
-      session._lastChecksum = imported.checksum;
+      session.confirmedTick = imported.tick | 0;
+      session._lastChecksum = imported.checksum >>> 0;
       if (imported.koth) session.koth = imported.koth;
       if (imported.kothMatchOver != null) session.kothMatchOver = imported.kothMatchOver;
       session._captureSnapshot?.(imported.tick);
+      fromTick = imported.tick | 0;
+    } else if (checkpointTick > 0) {
+      fromTick = checkpointTick;
     }
-
-    // Prefer the worker's actual tick after import. A stale checkpointTick
-    // argument (or pump ticks that slipped through) must not replay from 0.
-    const fromTick = (session.confirmedTick | 0) || (checkpoint && checkpointTick > 0 ? checkpointTick : 0);
 
     const checksum = await replayCatchUpInto(
       session,
@@ -112,11 +116,11 @@ export async function replayCatchUp(session, matchConfig, ledgerFrames, targetTi
     );
 
     const base = options.baseLedger ?? [];
-    const merged = checkpoint && checkpointTick > 0
+    const merged = checkpoint
       ? [...base, ...ledgerFrames]
       : ledgerFrames;
     session.replaceFullLedger?.(merged);
-    if (checkpoint && checkpointTick > 0) {
+    if (checkpoint) {
       session.cacheCheckpoint?.(checkpoint, checkpoint.checksum >>> 0);
     }
     return checksum;
@@ -143,8 +147,9 @@ export async function replayCatchUpInto(session, matchConfig, ledgerFrames, targ
   const onProgress = options.onProgress;
   const fromTick = (options.fromTick ?? 0) | 0;
   const byTick = groupFramesByTick(ledgerFrames);
+  const replayPlayers = catchupReplayPlayerIds(matchConfig.humanPlayers ?? [], ledgerFrames);
 
-  session.setHumanPlayers(matchConfig.humanPlayers ?? []);
+  session.setHumanPlayers(replayPlayers);
   session.setRole('spectator');
   session.replayingCatchUp = true;
   session.pauseLockstep = true;
@@ -154,14 +159,14 @@ export async function replayCatchUpInto(session, matchConfig, ledgerFrames, targ
     await runReplayTicks(
       session,
       byTick,
-      matchConfig.humanPlayers ?? [],
+      replayPlayers,
       fromTick,
       targetTick,
       ticksPerFrame,
       onProgress,
     );
 
-    if (expectedChecksum != null && session._lastChecksum !== expectedChecksum) {
+    if (!sameCatchupChecksum(session._lastChecksum, expectedChecksum)) {
       throw new Error(
         `Catch-up checksum mismatch: got ${session._lastChecksum?.toString(16)}, expected ${expectedChecksum.toString(16)}`,
       );

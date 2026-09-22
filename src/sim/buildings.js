@@ -23,6 +23,13 @@ import { unitPopCost } from './pop.js';
 import { ORDER } from './world.js';
 import { MAX_WAYPOINTS, PATH_STYLE, queuePath } from './path.js';
 import { spendResources, addResource, canAffordBank } from './resources.js';
+import {
+  agoraFoundCost,
+  canAffordAgoraFound,
+  cloneRefundCost,
+  ownerBank,
+  selectionHasAgoraFound,
+} from './combos.js';
 
 /** Scratch buffers for render-side rally A* (main thread only). */
 const _rallyWx = new Int32Array(64);
@@ -133,6 +140,7 @@ export const BUILDING_MODEL_URLS = /** @type {const} */ ({
   moonwell: '/assets/models/moonwell.glb',
   perch: '/assets/models/perch.glb',
   grove: '/assets/models/grove.glb',
+  agora: '/assets/models/agora.glb',
 });
 
 /** Placeable from the agora radial (grouped by Basic / Advanced / Elemental). */
@@ -289,6 +297,7 @@ export const BUILD_TIME = Object.freeze({
   moonwell: 160,
   perch: 180,
   grove: 160,
+  agora: 180,
 });
 
 const DEFAULT_BUILD_TIME = 100;
@@ -310,6 +319,7 @@ export const BUILDING_HP = Object.freeze({
   moonwell: 280,
   perch: 280,
   grove: 360,
+  agora: 480,
 });
 
 const DEFAULT_BUILDING_HP = 300;
@@ -809,7 +819,31 @@ export function canPlaceBuildingAt(field, typeId, xFixed, zFixed) {
  */
 export function canPreviewPlaceBuilding(field, typeId, xFixed, zFixed, bank) {
   if (field && !canPlaceBuildingAt(field, typeId, xFixed, zFixed)) return false;
+  if (typeId === 'agora') return canAffordAgoraFound(bank);
   return canAffordBank(bank, getBuildingCost(typeId));
+}
+
+/** Combo-only types that PLACE_BUILDING accepts without a radial entry. */
+export function isComboPlaceableBuilding(typeId) {
+  return typeId === 'agora';
+}
+
+export function getBuildingRefundCost(b) {
+  if (b?.refundCost) return b.refundCost;
+  return getBuildingCost(b?.type);
+}
+
+/**
+ * Stamp serialized (float xz) agoras onto a main-thread field clone.
+ * @param {object} field
+ * @param {{ x: number, z: number }[] | null | undefined} agoras
+ */
+export function applySerializedAgoraOccupancy(field, agoras) {
+  if (!field || !agoras?.length) return;
+  for (let i = 0; i < agoras.length; i++) {
+    const a = agoras[i];
+    applyStructureOccupancyAt(field, 'agora', fx.fromFloat(a.x), fx.fromFloat(a.z));
+  }
 }
 
 /**
@@ -1042,6 +1076,7 @@ export function createBuilding(opts) {
     locustAcc: 0,
     locustHops: 0,
     locustSource: -1,
+    refundCost: opts.refundCost ? cloneRefundCost(opts.refundCost) : null,
   };
 }
 
@@ -1317,7 +1352,7 @@ export function ejectUnitsFromFootprint(w, field, typeId, xFixed, zFixed) {
 export function applyPlaceBuilding(w, field, cmd) {
   if (!w.buildings) w.buildings = [];
   const type = cmd.buildingType;
-  if (!isPlaceableBuilding(type)) return -1;
+  if (!isPlaceableBuilding(type) && !isComboPlaceableBuilding(type)) return -1;
   const owner = (cmd.playerId ?? cmd.owner ?? -1) | 0;
   if (owner < 0) return -1;
   const snapped = snapBuildingWorld(type, cmd.tx | 0, cmd.ty | 0);
@@ -1326,7 +1361,16 @@ export function applyPlaceBuilding(w, field, cmd) {
   const yaw = cmd.yaw != null ? cmd.yaw | 0 : 0;
   if (field && !canPlaceBuildingAt(field, type, x, z)) return -1;
   if (!ownerMeetsBuildingRequires(w.buildings, owner, type)) return -1;
-  if (!spendResources(w, owner, getBuildingCost(type))) return -1;
+  let refundCost = null;
+  if (type === 'agora') {
+    if (!selectionHasAgoraFound(w, cmd.entities, owner)) return -1;
+    const bank = ownerBank(w, owner);
+    if (!canAffordAgoraFound(bank)) return -1;
+    refundCost = cloneRefundCost(agoraFoundCost(bank));
+    if (!spendResources(w, owner, refundCost)) return -1;
+  } else if (!spendResources(w, owner, getBuildingCost(type))) {
+    return -1;
+  }
   w.buildings.push({
     owner,
     type,
@@ -1358,6 +1402,7 @@ export function applyPlaceBuilding(w, field, cmd) {
     attackCd: 0,
     maxHp: getBuildingHp(type),
     hp: 1,
+    refundCost,
   });
   if (field) {
     // Block tiles now (the foundation occupies space) but defer the farm food
@@ -1544,7 +1589,7 @@ export function applyCancelConstruction(w, field, cmd) {
   if ((b.owner | 0) !== playerId) return;
   if (b.built !== 0) return;
   if (!isBuildingAlive(b)) return;
-  const cost = getBuildingCost(b.type);
+  const cost = getBuildingRefundCost(b);
   for (const kind in cost) addResource(w, playerId, kind, cost[kind] | 0);
   b.hp = 0;
   if (field) {
@@ -1660,6 +1705,7 @@ export function serializeBuildings(buildings) {
     maxHp: b.maxHp != null ? b.maxHp | 0 : getBuildingHp(b.type),
     hp: b.hp != null ? b.hp | 0 : getBuildingHp(b.type),
     locustStacks: b.locustStacks | 0,
+    refundCost: cloneRefundCost(b.refundCost),
   }));
 }
 
@@ -1706,6 +1752,14 @@ export function mixBuildingChecksum(h, mix, buildings) {
     mix(b.locustAcc | 0);
     mix(b.locustHops | 0);
     mix(b.locustSource | 0);
+    const refund = b.refundCost;
+    mix(refund ? 1 : 0);
+    if (refund) {
+      mix(refund.wood | 0);
+      mix(refund.stone | 0);
+      mix(refund.mineral | 0);
+      mix(refund.food | 0);
+    }
     const tracks = b.tracks ?? [];
     mix(tracks.length);
     for (let ti = 0; ti < tracks.length; ti++) {

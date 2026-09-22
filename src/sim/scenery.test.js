@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createField, TERRAIN } from './field.js';
+import { createField, TERRAIN, worldToTile } from './field.js';
 import { UNIT, unitSlowMul, DEFAULT_SLOW_MUL } from './unitTypes.js';
 import * as fx from './fixed.js';
 import {
@@ -14,6 +14,7 @@ import {
   paintSceneryBrush,
   placeRockAt,
   populateScenery,
+  SPAWN_CLEAR_RADIUS_TILES,
   rockFootprintRadius,
   rockFootprintRadiusForStock,
   rockStageFromStock,
@@ -127,6 +128,7 @@ damageRockPublishesAndShrinks();
 paintBrushRespectsFootprints();
 archerAndApcKeepMoreTreeSpeed();
 edgeTreeFadeMatchesGrove();
+reservedPadsCanKeepTrees();
 console.log('scenery.test.js: ok (rock yield + stages + collision shrink + paint spacing + edge trees)');
 
 function blankLand() {
@@ -250,4 +252,30 @@ function edgeTreeFadeMatchesGrove() {
   assert.ok(interiorMax > 0 && rimMax > 0, 'seeded populate plants both bands');
   assert.ok(interiorMax <= TREE_STOCK_NATURAL_MAX, 'deep interior populate stays natural');
   assert.ok(rimMax > interiorMax, 'populate rim outgrows the interior');
+}
+
+function reservedPadsCanKeepTrees() {
+  const seed = 0x51de;
+  const cleared = createField(seed, { width: 80, height: 80 });
+  cleared.pass.fill(1);
+  cleared.terrainTypes.fill(TERRAIN.GRASS);
+  const kept = createField(seed, { width: 80, height: 80 });
+  kept.pass.fill(1);
+  kept.terrainTypes.fill(TERRAIN.GRASS);
+  populateScenery(cleared, null, [[0, 0]]);
+  populateScenery(kept, null, [[0, 0]], { reserveTrees: false });
+  const cx = worldToTile(0);
+  const cz = worldToTile(0);
+  let clearedTrees = 0;
+  let keptTrees = 0;
+  for (let dz = -SPAWN_CLEAR_RADIUS_TILES; dz <= SPAWN_CLEAR_RADIUS_TILES; dz++) {
+    for (let dx = -SPAWN_CLEAR_RADIUS_TILES; dx <= SPAWN_CLEAR_RADIUS_TILES; dx++) {
+      if (dx * dx + dz * dz > SPAWN_CLEAR_RADIUS_TILES ** 2) continue;
+      const i = (cz + dz) * cleared.width + cx + dx;
+      if (cleared.sceneryType[i] === SCENERY.TREE) clearedTrees++;
+      if (kept.sceneryType[i] === SCENERY.TREE) keptTrees++;
+    }
+  }
+  assert.equal(clearedTrees, 0);
+  assert.ok(keptTrees > 0, 'KOTH drops should keep trees on the pad');
 }

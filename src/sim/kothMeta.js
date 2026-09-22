@@ -1,5 +1,8 @@
 // King of the Hill meta — king crown, elimination scoring, longevity tracking.
 // Lives on world.koth when mode is 'koth'. Deterministic; included in checksum.
+//
+// A seat is wiped on 0 pop, or after it has owned a completed agora and then
+// owns none (multiple pads are fine; the last one cannot fall).
 
 import { livingByOwner } from './world.js';
 
@@ -13,6 +16,7 @@ export function createKothMeta(activePlayerIds) {
   const eliminated = new Uint8Array(MAX_KOTH_PLAYERS);
   const joinedAtTick = new Int32Array(MAX_KOTH_PLAYERS);
   const scores = new Int32Array(MAX_KOTH_PLAYERS);
+  const established = new Uint8Array(MAX_KOTH_PLAYERS);
 
   for (const id of activePlayerIds) {
     if (id < 0 || id >= MAX_KOTH_PLAYERS) continue;
@@ -22,7 +26,7 @@ export function createKothMeta(activePlayerIds) {
 
   let kingOwner = activePlayerIds.length ? pickLongestLiving(active, eliminated, joinedAtTick) : 0;
 
-  return { active, eliminated, joinedAtTick, scores, kingOwner };
+  return { active, eliminated, joinedAtTick, scores, kingOwner, established };
 }
 
 function pickLongestLiving(active, eliminated, joinedAtTick) {
@@ -56,20 +60,41 @@ export function kothRegisterJoin(koth, playerId, tick) {
   if (!koth || playerId < 0 || playerId >= MAX_KOTH_PLAYERS) return;
   koth.active[playerId] = 1;
   koth.eliminated[playerId] = 0;
+  if (koth.established) koth.established[playerId] = 0;
   koth.joinedAtTick[playerId] = tick;
   if (koth.kingOwner < 0 || koth.eliminated[koth.kingOwner]) {
     koth.kingOwner = pickLongestLiving(koth.active, koth.eliminated, koth.joinedAtTick);
   }
 }
 
-/** After combat each tick — eliminate owners with no living units, score, transfer king. */
+function ownerAgoraCount(agoras, owner) {
+  if (!agoras) return 0;
+  let n = 0;
+  for (let i = 0; i < agoras.length; i++) {
+    if ((agoras[i].owner | 0) === owner) n++;
+  }
+  return n;
+}
+
+/** 0 pop, or every completed agora gone after this seat had owned one. */
+function kothSeatWiped(w, owner) {
+  if (livingByOwner(w, owner) <= 0) return true;
+  const n = ownerAgoraCount(w.agoras, owner);
+  if (n > 0) {
+    if (w.koth.established) w.koth.established[owner] = 1;
+    return false;
+  }
+  return !!(w.koth.established && w.koth.established[owner]);
+}
+
+/** After combat / capture each tick — wipe 0-pop or last-agora seats, score, transfer king. */
 export function kothMetaStep(w) {
   const k = w.koth;
   if (!k) return;
 
   for (let owner = 0; owner < MAX_KOTH_PLAYERS; owner++) {
     if (!k.active[owner] || k.eliminated[owner]) continue;
-    if (livingByOwner(w, owner) > 0) continue;
+    if (!kothSeatWiped(w, owner)) continue;
 
     k.eliminated[owner] = 1;
     const survivors = countSurvivors(k);
@@ -108,6 +133,7 @@ export function mixKothChecksum(h, mix, koth) {
     mix(koth.eliminated[i]);
     mix(koth.joinedAtTick[i]);
     mix(koth.scores[i]);
+    mix(koth.established?.[i] ?? 0);
   }
   return h;
 }

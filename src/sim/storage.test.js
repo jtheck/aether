@@ -6,6 +6,7 @@ import { createBuilding } from './buildings.js';
 import { addResource, getResource, grantStartingResources } from './resources.js';
 import {
   BASE_SLOTS,
+  FULL_STACK_BANK,
   MAX_RESOURCE_SLOTS,
   SLOT_AMOUNT,
   SLOT_VIS,
@@ -283,5 +284,30 @@ describe('scribes overflow line', () => {
     const slots = ownerResourceCap(w.buildings, 0, 'wood');
     assert.equal(slots, 9 * SLOT_AMOUNT.wood);
     assert.equal(ownerOverflowCap(w, 0, 'wood'), slots * 2);
+  });
+});
+
+describe('KOTH free silo cap', () => {
+  it('unlocks every icon without a silo pair', () => {
+    const w = worldWith([]);
+    w.koth = { kingOwner: 0 };
+    assert.equal(ownerSlotCount(w.buildings, 0, 'wood', 'fixed', w), MAX_RESOURCE_SLOTS);
+    assert.equal(ownerResourceCap(w.buildings, 0, 'wood', 'fixed', w), FULL_STACK_BANK.wood);
+    assert.equal(ownerOverflowCap(w, 0, 'wood'), FULL_STACK_BANK.wood);
+    const view = ownerStorageView(w.buildings, 0, { food: FULL_STACK_BANK.food }, 'fixed', w);
+    assert.equal(view.food.slots, MAX_RESOURCE_SLOTS);
+    assert.equal(view.food.filled, MAX_RESOURCE_SLOTS);
+    assert.equal(view.food.hint, null);
+  });
+
+  it('banks a haul in full past the old 6-icon line', () => {
+    const w = worldWith([]);
+    w.koth = { kingOwner: 0 };
+    grantStartingResources(w, 0, { wood: 0, stone: 0, mineral: 0, food: 0 });
+    addResource(w, 0, 'wood', BASE_SLOTS * SLOT_AMOUNT.wood);
+    w.tick = 0;
+    assert.equal(addGatherIncome(w, 0, 'wood', 10, true), 10);
+    assert.equal(getResource(w, 0, 'wood'), BASE_SLOTS * SLOT_AMOUNT.wood + 10);
+    assert.equal(takeStorageOverflow(w), null);
   });
 });

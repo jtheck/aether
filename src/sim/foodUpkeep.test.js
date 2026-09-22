@@ -6,8 +6,10 @@ import { UNIT } from './unitTypes.js';
 import { step } from './step.js';
 import { createField } from './field.js';
 import { addResource, getResource } from './resources.js';
+import { createKothMeta } from './kothMeta.js';
 import {
   FOOD_UPKEEP_PERIOD,
+  FOOD_UPKEEP_PERIOD_KOTH,
   applySerializedFoodUpkeep,
   serializeFoodUpkeep,
   tickFoodUpkeep,
@@ -66,6 +68,21 @@ describe('food upkeep', () => {
     spawn(w, { type: UNIT.MONK, owner: 0 });
     for (let t = 0; t < FOOD_UPKEEP_PERIOD; t++) step(w, field, []);
     assert.equal(getResource(w, 0, 'food'), 7, 'step collects the same bite');
+  });
+
+  it('uses the slower KOTH cadence', () => {
+    const w = createWorld(7);
+    w.koth = createKothMeta([0]);
+    spawn(w, { type: UNIT.VILLAGER, owner: 0 });
+    addResource(w, 0, 'food', 10);
+
+    for (let t = 0; t < FOOD_UPKEEP_PERIOD; t++) tickFoodUpkeep(w);
+    assert.equal(getResource(w, 0, 'food'), 10, 'skirmish period is not enough on the hill');
+
+    for (let t = 0; t < FOOD_UPKEEP_PERIOD_KOTH - FOOD_UPKEEP_PERIOD - 1; t++) tickFoodUpkeep(w);
+    assert.equal(getResource(w, 0, 'food'), 10, 'no bite until the KOTH period fills');
+    tickFoodUpkeep(w);
+    assert.equal(getResource(w, 0, 'food'), 9, 'one mouth, one food, twice as slow');
   });
 
   it('round-trips the remainder', () => {

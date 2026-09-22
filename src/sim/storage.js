@@ -2,8 +2,9 @@
 //
 // Each kind has 12 icons (1–9, a–c). The first 6 are always unlocked. A silo
 // paired with a source building (camp / mine / farm) unlocks 7–9; a second
-// pair unlocks a–c. Stone and mineral share mines. Caps are soft: income past
-// the unlocked cap is cut to 25% (see overflowCredit) instead of being hard
+// pair unlocks a–c. KOTH skips the silo gate and treats every bank as the
+// full 12. Stone and mineral share mines. Caps are soft: income past the
+// unlocked cap is cut to 25% (see overflowCredit) instead of being hard
 // rejected, so refunds and spends stay on the uncapped addResource path.
 // Scribes doubles that tax line only — icons and silo unlocks stay the same.
 //
@@ -31,6 +32,33 @@ export const SLOT_AMOUNT = Object.freeze({
   mineral: 5,
   food: 20,
 });
+
+/** A filled 6-icon pyramid — the soft cap before any silo pair. */
+export const BASE_PYRAMID_BANK = Object.freeze({
+  wood: BASE_SLOTS * SLOT_AMOUNT.wood,
+  stone: BASE_SLOTS * SLOT_AMOUNT.stone,
+  mineral: BASE_SLOTS * SLOT_AMOUNT.mineral,
+  food: BASE_SLOTS * SLOT_AMOUNT.food,
+});
+
+/** Both silo rows unlocked — 12 icons. */
+export const FULL_STACK_BANK = Object.freeze({
+  wood: MAX_RESOURCE_SLOTS * SLOT_AMOUNT.wood,
+  stone: MAX_RESOURCE_SLOTS * SLOT_AMOUNT.stone,
+  mineral: MAX_RESOURCE_SLOTS * SLOT_AMOUNT.mineral,
+  food: MAX_RESOURCE_SLOTS * SLOT_AMOUNT.food,
+});
+
+/** KOTH opening bank — full pyramids, with a double food stash. */
+export const KOTH_STARTING_RESOURCES = Object.freeze({
+  ...BASE_PYRAMID_BANK,
+  food: FULL_STACK_BANK.food,
+});
+
+/** KOTH (or an explicit flag) treats every bank as fully unlocked. */
+export function storageUnlocksAllSlots(ctx) {
+  return !!(ctx && (ctx.koth || (ctx.freeSiloSlots | 0)));
+}
 
 /** Building a silo must sit next to, per bank kind. */
 export const SILO_SOURCE_TYPE = Object.freeze({
@@ -296,8 +324,10 @@ export function unpairedSiloSource(buildings, owner, sourceType, space = 'fixed'
  * @param {number} owner
  * @param {string} kind
  * @param {'fixed' | 'world'} [space]
+ * @param {object | null | undefined} [ctx] world or `{ koth }` / `{ freeSiloSlots }`
  */
-export function ownerSlotCount(buildings, owner, kind, space = 'fixed') {
+export function ownerSlotCount(buildings, owner, kind, space = 'fixed', ctx = null) {
+  if (storageUnlocksAllSlots(ctx)) return MAX_RESOURCE_SLOTS;
   const source = SILO_SOURCE_TYPE[kind];
   const pairs = countSiloPairs(buildings, owner, source, space);
   return BASE_SLOTS + Math.min(MAX_SILO_PAIRS, pairs) * SLOTS_PER_SILO;
@@ -308,9 +338,10 @@ export function ownerSlotCount(buildings, owner, kind, space = 'fixed') {
  * @param {number} owner
  * @param {string} kind
  * @param {'fixed' | 'world'} [space]
+ * @param {object | null | undefined} [ctx]
  */
-export function ownerResourceCap(buildings, owner, kind, space = 'fixed') {
-  return ownerSlotCount(buildings, owner, kind, space) * (SLOT_AMOUNT[kind] | 0);
+export function ownerResourceCap(buildings, owner, kind, space = 'fixed', ctx = null) {
+  return ownerSlotCount(buildings, owner, kind, space, ctx) * (SLOT_AMOUNT[kind] | 0);
 }
 
 /** Scribes stretches the overflow-tax line; slot icons stay put. */
@@ -325,7 +356,7 @@ export const SCRIBES_OVERFLOW_MULT = 2;
  * @param {'fixed' | 'world'} [space]
  */
 export function ownerOverflowCap(w, owner, kind, space = 'fixed') {
-  const base = ownerResourceCap(w?.buildings, owner, kind, space);
+  const base = ownerResourceCap(w?.buildings, owner, kind, space, w);
   if (!w || !ownerHasTech(w, owner, TECH.SCRIBES)) return base;
   return base * SCRIBES_OVERFLOW_MULT;
 }
@@ -433,7 +464,7 @@ export function addGatherIncome(w, owner, kind, amount, asReturn = false) {
     if (credited) addResource(w, owner, kind, credited);
   }
   if (asReturn && credited < add) {
-    const slots = ownerSlotCount(w.buildings, owner, kind, 'fixed');
+    const slots = ownerSlotCount(w.buildings, owner, kind, 'fixed', w);
     noteStorageOverflow(w, owner, kind, overflowHintLabel(slots));
   }
   return credited;
@@ -445,14 +476,15 @@ export function addGatherIncome(w, owner, kind, amount, asReturn = false) {
  * @param {number} owner
  * @param {{ wood?: number, stone?: number, mineral?: number, food?: number }} bank
  * @param {'fixed' | 'world'} [space]
+ * @param {object | null | undefined} [ctx]
  */
-export function ownerStorageView(buildings, owner, bank, space = 'world') {
+export function ownerStorageView(buildings, owner, bank, space = 'world', ctx = null) {
   /** @type {Record<string, { amount: number, slots: number, cap: number, filled: number, atCap: boolean, hint: string | null }>} */
   const out = {};
   for (let i = 0; i < RESOURCE_KINDS.length; i++) {
     const kind = RESOURCE_KINDS[i];
     const amount = bank?.[kind] | 0;
-    const slots = ownerSlotCount(buildings, owner, kind, space);
+    const slots = ownerSlotCount(buildings, owner, kind, space, ctx);
     const cap = slots * (SLOT_AMOUNT[kind] | 0);
     const atCap = amount >= cap;
     out[kind] = {

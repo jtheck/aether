@@ -56,6 +56,22 @@ describe('transportSeats', () => {
     assert.ok(Math.abs(p.z - 19) < 1e-9);
   });
 
+  it('scales authored seat offsets with zoom so riders stay on the deck', () => {
+    const posed = posePassengerOnTransport({
+      tx: 0,
+      tz: 0,
+      vehicleYaw: 0,
+      vehicleLoft: 0,
+      seats: [{ x: 2, y: 1.5, z: 0 }],
+      slot: 0,
+      total: 1,
+      zoom: 2,
+    });
+    assert.equal(posed.x, 4);
+    assert.equal(posed.z, 0);
+    assert.equal(posed.loft, 3);
+  });
+
   it('poses a rider on an authored seat (position + suggested rotation)', () => {
     const posed = posePassengerOnTransport({
       tx: 8,

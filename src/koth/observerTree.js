@@ -208,6 +208,94 @@ export function demotePlayerToObserver(tree, userId, playerUserIds) {
 }
 
 /**
+ * Rebuild every observer depth by walking out from the players.
+ *
+ * Depth is only ever written when a link is made, so a sponsor that later
+ * promotes or drops leaves its whole subtree at a stale depth — which silently
+ * excludes those observers from L1 seat offers forever.
+ */
+export function recomputeDepths(tree) {
+  for (const [sponsorId, children] of [...tree.childrenOf]) {
+    const kept = tree.nodes.has(sponsorId)
+      ? children.filter((id) => tree.nodes.has(id))
+      : [];
+    if (kept.length) tree.childrenOf.set(sponsorId, kept);
+    else tree.childrenOf.delete(sponsorId);
+    if (tree.nodes.has(sponsorId)) continue;
+    for (const childId of children) {
+      const child = tree.nodes.get(childId);
+      if (child?.sponsorId === sponsorId) child.sponsorId = null;
+    }
+  }
+
+  const queue = [];
+  for (const node of tree.nodes.values()) {
+    if (node.role !== 'player') continue;
+    node.depth = 0;
+    node.sponsorId = null;
+    queue.push(node.userId);
+  }
+  const reached = new Set(queue);
+  for (let i = 0; i < queue.length; i++) {
+    const id = queue[i];
+    const depth = tree.nodes.get(id)?.depth ?? 0;
+    for (const childId of tree.childrenOf.get(id) ?? []) {
+      if (reached.has(childId)) continue;
+      const child = tree.nodes.get(childId);
+      if (!child || child.role === 'player') continue;
+      child.sponsorId = id;
+      child.depth = depth + 1;
+      reached.add(childId);
+      queue.push(childId);
+    }
+  }
+  // Observers with no path to a player are parked at L1: they still hold a
+  // caught-up world, so they must stay claimable while they wait for a sponsor.
+  for (const node of tree.nodes.values()) {
+    if (node.role === 'player' || reached.has(node.userId)) continue;
+    node.sponsorId = null;
+    node.depth = 1;
+  }
+  return tree;
+}
+
+/**
+ * Make the tree agree with the live roster.
+ *
+ * The king is the only node that computes offer eligibility, and it is not the
+ * node that runs the promote/demote handoff — so without this a seat holder
+ * stays in the tree as a caught-up L1 observer and permanently occupies the
+ * eligible set while the real observers sit below them.
+ * @returns {{ userId: string, sponsorId: string | null, depth: number }[]}
+ */
+export function reconcilePlayers(tree, playerUserIds) {
+  const players = [...new Set((playerUserIds ?? []).filter(Boolean))];
+  const assignments = [];
+  for (const id of players) {
+    const node = tree.nodes.get(id);
+    if (node?.role === 'player' && node.depth === 0 && !node.sponsorId) continue;
+    assignments.push(...promoteObserverToPlayer(tree, id, players));
+  }
+  for (const node of [...tree.nodes.values()]) {
+    if (node.role !== 'player') continue;
+    if (players.includes(node.userId)) continue;
+    assignments.push(...demotePlayerToObserver(tree, node.userId, players));
+  }
+  recomputeDepths(tree);
+
+  const out = [];
+  const seen = new Set();
+  for (const a of assignments) {
+    if (!a?.userId || seen.has(a.userId)) continue;
+    seen.add(a.userId);
+    const node = tree.nodes.get(a.userId);
+    if (!node || node.role === 'player') continue;
+    out.push({ userId: node.userId, sponsorId: node.sponsorId ?? null, depth: node.depth | 0 });
+  }
+  return out;
+}
+
+/**
  * When an observer promotes to player: detach from sponsor, take their children
  * as orphans to reassign, mark self as player with L1 capacity.
  */
@@ -255,24 +343,32 @@ export function listObserversByJoin(tree) {
 /**
  * Eligible userIds for an open-seat offer.
  * Starts with caught-up L1; every expandStep adds the next caught-up observer.
- * @param {number} expandSteps — 0 = L1 only; each step adds one more by join order
+ * @param {number} expandSteps — each step widens eligibility by one more observer
+ * @param {{ exclude?: (userId: string) => boolean, minCandidates?: number }} [options]
+ *   exclude — seat holders and mid-join claimers must not be offered a second seat
+ *   minCandidates — every open seat needs a candidate (see below)
  */
-export function offerEligibleUserIds(tree, expandSteps = 0) {
-  const l1 = listL1Observers(tree).filter((n) => n.caughtUp);
-  const all = listObserversByJoin(tree).filter((n) => n.caughtUp);
+export function offerEligibleUserIds(tree, expandSteps = 0, options = {}) {
+  const skip = options.exclude ?? (() => false);
+  const ready = (n) => n.caughtUp && !skip(n.userId);
+  const l1 = listL1Observers(tree).filter(ready);
+  const all = listObserversByJoin(tree).filter(ready);
   const eligible = [];
   const seen = new Set();
   for (const n of l1) {
     eligible.push(n.userId);
     seen.add(n.userId);
   }
-  let added = 0;
+  // The 1:1 fan-out limit is about catch-up bandwidth, not about who may take an
+  // empty seat. Capping eligibility at L1 meant a lone king could only ever
+  // offer to one observer, so everybody behind them waited out an expand step
+  // per seat while seats sat open.
+  const want = Math.max(Math.max(1, options.minCandidates ?? 1), eligible.length + expandSteps);
   for (const n of all) {
+    if (eligible.length >= want) break;
     if (seen.has(n.userId)) continue;
-    if (added >= expandSteps) break;
     eligible.push(n.userId);
     seen.add(n.userId);
-    added++;
   }
   return eligible;
 }

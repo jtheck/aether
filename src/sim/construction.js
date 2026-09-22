@@ -17,6 +17,7 @@ import { UNIT } from './unitTypes.js';
 import { revertBrigand } from './brigand.js';
 import { isCarried } from './transport.js';
 import { getBuildingFootprint, applyStructureOccupancyAt } from './buildings.js';
+import { createAgora } from './agora.js';
 
 /** Most workers that can claim a single site. */
 export const MAX_BUILDERS = 2;
@@ -66,6 +67,16 @@ function canBuild(type) {
 
 function buildHalvesFor(type) {
   return type === UNIT.ENGINEER ? ENGINEER_BUILD_HALVES : VILLAGER_BUILD_HALVES;
+}
+
+/** Assign combo / selected crew to a site, capped at MAX_BUILDERS. */
+export function assignBuildersToSite(w, bi, ids) {
+  if (bi < 0 || !ids?.length) return 0;
+  let n = 0;
+  for (let k = 0; k < ids.length && n < MAX_BUILDERS; k++) {
+    if (beginBuild(w, ids[k], bi)) n++;
+  }
+  return n;
 }
 
 /** Put a villager or engineer on a BUILD order for a building index. */
@@ -188,6 +199,11 @@ export function constructionSystem(w, field) {
       if ((b.hp | 0) > 0 && (b.maxHp | 0) > 0) b.hp = b.maxHp | 0;
       // Turn on the finished building's live effects (e.g. farm food node).
       if (field) applyStructureOccupancyAt(field, b.type, b.x, b.z, /* built */ true);
+      if (b.type === 'agora') {
+        if (!w.agoras) w.agoras = [];
+        w.agoras.push(createAgora(b.owner, fx.toFloat(b.x), fx.toFloat(b.z)));
+        b.hp = 0;
+      }
       w.buildingsDirty = 1;
     } else if (
       constructionVisualStage(prevProg, time) !==

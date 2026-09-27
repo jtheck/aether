@@ -85,6 +85,7 @@ export function chapterLabelFor(ref = {}) {
  *   allowAi: boolean,
  *   minHumans: number,
  *   hasChapter: boolean,
+ *   spectators: boolean,
  * }>} */
 export const MODES = {
   onevsone: {
@@ -97,6 +98,7 @@ export const MODES = {
     allowAi: true,
     minHumans: 2,
     hasChapter: false,
+    spectators: true,
   },
   teams: {
     id: 'teams',
@@ -108,6 +110,7 @@ export const MODES = {
     allowAi: true,
     minHumans: 2,
     hasChapter: false,
+    spectators: true,
   },
   adventure: {
     id: 'adventure',
@@ -119,6 +122,7 @@ export const MODES = {
     allowAi: false,
     minHumans: 1,
     hasChapter: true,
+    spectators: false,
   },
 };
 

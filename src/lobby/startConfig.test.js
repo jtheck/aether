@@ -24,6 +24,16 @@ describe('lobby start config', () => {
     assert.equal(cfg.mapW, 80);
     assert.equal(cfg.teamByOwner, null);
     assert.equal(cfg.role, 'player');
+    const watching = liveConfigFromLobby({
+      mode: 'onevsone',
+      roomId: 'lobby-1',
+      settings: { fieldSize: 'tiny', seed: 99 },
+      seats: seats.slice(0, 2),
+    }, 'eye');
+    assert.equal(watching.role, 'spectator');
+    assert.equal(watching.localPlayerId, -1);
+    assert.equal(watching.sharedVision, true);
+    assert.deepEqual(watching.humanPlayers, [0, 1]);
     assert.equal(cfg.localSolo, false);
     assert.deepEqual(cfg.shareVisionWith, []);
     assert.deepEqual(cfg.ownerSkins, { 0: { 4: 'first_responder' } });
@@ -33,6 +43,13 @@ describe('lobby start config', () => {
   it('assigns 2v2 lanes for teams', () => {
     const teams = teamByOwnerForMode('teams', 4);
     assert.deepEqual(teams, [0, 0, 1, 1]);
+    const uneven = teamByOwnerForMode('teams', 4, [
+      { index: 0, team: 0 },
+      { index: 1, team: 0 },
+      { index: 2, team: 0 },
+      { index: 3, team: 1 },
+    ]);
+    assert.deepEqual(uneven, [0, 0, 0, 1]);
     const cfg = liveConfigFromLobby({
       mode: 'teams',
       roomId: 'r',

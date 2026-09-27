@@ -39,13 +39,11 @@ export const AGORA_FLAG_SLAM_HEIGHT = 16.5;
 export const AGORA_FLAG_SLAM_TOTAL_MS = AGORA_FLAG_SLAM_DROP_MS + AGORA_FLAG_SLAM_SETTLE_MS;
 export const AGORA_FLAG_SLAM_RING = 20;
 
-/** Rally / ghost flags still scale from eye distance. */
+/** Ownership, rally, and ghost flags scale from eye distance to that flag. */
 const FLAG_BASE_SCALE = 2.15;
 const FLAG_DIST_REF = 110;
 const FLAG_SCALE_MIN = 1.35;
 const FLAG_SCALE_MAX = 3.4;
-/** Fallback if the camera has not published radius limits yet. */
-const FLAG_RADIUS_MIN = 40;
 /** Dashed rally stroke (world units). */
 const RALLY_DASH = 1.55;
 const RALLY_GAP = 1.05;
@@ -389,16 +387,6 @@ function writeOwnerColor(colors, slot, owner, alpha = 1) {
 function flagScaleForDist(dist) {
   const t = dist / FLAG_DIST_REF;
   return Math.max(FLAG_SCALE_MIN, Math.min(FLAG_SCALE_MAX, FLAG_BASE_SCALE * t));
-}
-
-/** Agora ownership flag: min at closest zoom, max at max camera radius. */
-function flagScaleForCamera(camera) {
-  const r = camera?.radius;
-  if (!Number.isFinite(r)) return FLAG_SCALE_MIN;
-  const minR = camera.lowerRadiusLimit ?? FLAG_RADIUS_MIN;
-  const maxR = camera.upperRadiusLimit ?? r;
-  const t = (r - minR) / Math.max(1e-6, maxR - minR);
-  return FLAG_SCALE_MIN + Math.max(0, Math.min(1, t)) * (FLAG_SCALE_MAX - FLAG_SCALE_MIN);
 }
 
 function cameraEye(camera) {
@@ -811,8 +799,7 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
     lastFlagEyeY = eye.y;
     lastFlagEyeZ = eye.z;
     if (cam && Number.isFinite(cam.radius)) lastFlagRadius = cam.radius;
-    const agoraScale = flagScaleForCamera(cam);
-    writeFlagBatch(agoraFlagLayers, agoraCache, eye, () => agoraScale, (a) => {
+    writeFlagBatch(agoraFlagLayers, agoraCache, eye, flagScaleForDist, (a) => {
       return agoraFlagDrawPose(flagActs.get(agoraFlagKey(a.x, a.z)), typeof performance !== 'undefined' ? performance.now() : 0);
     });
     writeFlagBatch(rallyFlagLayers, rallyCache, eye);
@@ -1013,7 +1000,8 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
       rewriteRallyLines();
       rewriteGhostLine();
     }
-    // Agora flags track camera radius; rally flags still track eye distance.
+    // Every flag scales from its own eye distance. Zoom still matters because
+    // it moves the eye; the radius latch catches zooms smaller than the eye step.
     // place/rally calls rewriteFlags(null), which resets the latch.
     const eye = cameraEye(camera);
     const movedSq =

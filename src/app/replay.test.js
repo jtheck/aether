@@ -10,6 +10,7 @@ import {
   replayConfigFromLive,
   replayEndTick,
   replayFileName,
+  replayModeSlug,
   saveReplayToDisk,
   REPLAY_KIND,
 } from './replay.js';
@@ -72,6 +73,28 @@ describe('replayConfigFromLive', () => {
     });
     assert.equal(cfg.homeAgoras, true);
     assert.equal(cfg.agoraOccupyEndsMatch, 1);
+    assert.equal(cfg.localSolo, undefined);
+  });
+
+  it('marks an offline 1vAI tape without renaming the sim mode', () => {
+    const cfg = replayConfigFromLive({
+      seed: 4,
+      mode: '1vai',
+      localSolo: true,
+      activeSlots: [0, 1],
+      humanPlayers: [0],
+      aiPlayers: [{ owner: 1, temperament: 'steady' }],
+      homeAgoras: true,
+    });
+    assert.equal(cfg.mode, '1vai');
+    assert.equal(cfg.localSolo, true);
+    assert.equal(replayModeSlug(cfg), '1vai');
+    assert.equal(replayModeSlug({ mode: 'koth', localSolo: true }), '1vai');
+    assert.equal(replayModeSlug({ mode: 'koth' }), 'koth');
+    assert.equal(
+      replayFileName({ config: cfg }, new Date('2026-09-08T12:00:00Z')),
+      'aether-1vai-2026-09-08.gecho',
+    );
   });
 });
 

@@ -86,10 +86,23 @@ export const STREAM_LOOK_QUANT = (8 * Math.PI) / 180;
 export const STREAM_FRUSTUM_MIN_FRAC = 0.45;
 /** Floor so a thin rim cube still reads as populated (clamped to want). */
 export const STREAM_FRUSTUM_MIN_DOTS = 8;
-/** Extra dots in the near cube (close was losing to the far slab). */
-export const STREAM_DENSITY_NEAR = 1.45;
-/** Far-rim multiplier — 1/r²-ish so the horizon doesn't read thicker than the near field. */
-export const STREAM_DENSITY_FAR = 0.2;
+/**
+ * Field density, as a fraction of the per-cube budget.
+ * Near and far stay close so a shared face does not read as a density line.
+ * Both sit under 1 so the volume runs thinner than a full quota.
+ */
+export const STREAM_DENSITY_NEAR = 0.45;
+export const STREAM_DENSITY_FAR = 0.45;
+/**
+ * Emitter cubes use the same field density as their neighbors.
+ * A step here draws a box around the keep set.
+ */
+export const STREAM_EMITTER_DENSITY_MAX = 1;
+export const STREAM_EMITTER_DENSITY_MIN = 1;
+/** Keep-cube count where any emitter bump would have fully faded. */
+export const STREAM_EMITTER_CROWD = 180;
+/** Emitter surplus reserved from the point budget. Zero keeps the field even. */
+export const STREAM_EMITTER_BUDGET_FRAC = 0;
 
 /**
  * Minimum live count for an in-view chunk. Scales with throttle via `want`.
@@ -271,7 +284,7 @@ export function chunkCameraDist(cx, cy, cz, chunkSize, camera) {
 }
 
 /**
- * Near cubes keep / gain density; far cubes thin out.
+ * Distance weight for a cube. Near and far match so shared faces stay even.
  * @param {number} dist
  * @param {number} chunkSize
  * @param {number} chunkRadius
@@ -282,5 +295,21 @@ export function streamDistanceScale(dist, chunkSize, chunkRadius) {
   const d = Math.max(0, dist);
   if (d <= near) return STREAM_DENSITY_NEAR;
   const t = Math.min(1, (d - near) / (far - near));
-  return STREAM_DENSITY_NEAR + (STREAM_DENSITY_FAR - STREAM_DENSITY_NEAR) * t * t;
+  const s = t * t * (3 - 2 * t);
+  return STREAM_DENSITY_NEAR + (STREAM_DENSITY_FAR - STREAM_DENSITY_NEAR) * s;
+}
+
+/**
+ * Multiplier on the volume want for one emitter-keep cube.
+ * Flat at 1 — a per-cube bump draws a line on the keep boundary.
+ * @param {number} keepChunks
+ */
+export function emitterDensityScale(keepChunks) {
+  const n = Math.max(0, keepChunks | 0);
+  if (n <= 1) return STREAM_EMITTER_DENSITY_MAX;
+  const t = Math.min(1, (n - 1) / (STREAM_EMITTER_CROWD - 1));
+  return (
+    STREAM_EMITTER_DENSITY_MAX +
+    (STREAM_EMITTER_DENSITY_MIN - STREAM_EMITTER_DENSITY_MAX) * t
+  );
 }

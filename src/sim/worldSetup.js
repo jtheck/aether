@@ -1089,6 +1089,21 @@ export function buildWorldFromConfig({
     return w;
   }
 
+  // 1vAI — home agoras and a camped army. Occupy or a wipe ends it.
+  // Not KOTH: no center drop, no hill score, no king elimination.
+  if (mode === '1vai') {
+    const slots = activeSlots?.length ? activeSlots : [PLAYER, AI_OWNER];
+    const agoraSpecs = [];
+    for (const slot of slots) {
+      const base = bases[slot] ?? bases[0];
+      agoraSpecs.push({ owner: slot, x: base[0], z: base[1] });
+      spawnConfiguredArmyAtAgora(w, slot, base[0], base[1]);
+      grantStartingResources(w, slot);
+    }
+    w.agoras = createAgoras(agoraSpecs);
+    return w;
+  }
+
   if (mode === 'koth') {
     const slots = activeSlots?.length ? activeSlots : [PLAYER, AI_OWNER];
     const kothPads = kothBases(half);

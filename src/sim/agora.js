@@ -3,6 +3,7 @@
 // Q16.16 world xz. Deterministic; included in checksum.
 
 import * as fx from './fixed.js';
+import { isAlly, isHostile, teamOf } from './teams.js';
 
 /** 5 tiles × 4 world units (legacy occupation radius). */
 export const AGORA_OCCUPATION_RADIUS = fx.fromFloat(20);
@@ -117,7 +118,8 @@ export function serializeAgoras(agoras) {
 
 /**
  * Per-tick occupation. Full invade unlocks a tug; filling the tug retakes or occupies.
- * Occupy ends the match when `w.agoraOccupyEndsMatch` is set (skirmish / 1v1).
+ * Same-team units hold the pad; they cannot take an ally's agora.
+ * When occupy ends the match, it does so only once no hostile team still holds one.
  * @param {object} w
  */
 export function agoraCaptureSystem(w) {
@@ -140,37 +142,24 @@ export function agoraCaptureSystem(w) {
 }
 
 function stepInvade(a, counts) {
-  const defender = a.owner;
-  const defN = defender >= 0 && defender < counts.length ? counts[defender] : 0;
+  const defender = a.owner | 0;
+  const defN = sideCount(counts, defender);
+  const lead = hostileLead(counts, defender);
 
-  let bestAtk = -1;
-  let bestN = 0;
-  let rivalTeams = 0;
-  for (let o = 0; o < counts.length; o++) {
-    if (o === defender) continue;
-    const n = counts[o];
-    if (n <= 0) continue;
-    rivalTeams++;
-    if (n > bestN) {
-      bestN = n;
-      bestAtk = o;
-    }
-  }
-
-  if (rivalTeams === 0) {
+  if (lead.teams === 0) {
     a.contested = 0;
     if (a.progress > 0) a.progress = Math.max(0, a.progress - 1);
     if (a.progress <= 0) a.capturer = -1;
     return;
   }
 
-  if (rivalTeams > 1 || (defN > 0 && bestN < defN * 2)) {
+  if (lead.teams > 1 || (defN > 0 && lead.bestN < defN * 2)) {
     a.contested = 1;
     return;
   }
 
   a.contested = 0;
-  a.capturer = bestAtk;
+  a.capturer = lead.bestOwner;
   a.progress = Math.min(AGORA_CAPTURE_TICKS, a.progress + 1);
 
   if (a.progress >= AGORA_CAPTURE_TICKS) {
@@ -208,7 +197,7 @@ function resolveAgoraFinale(w, a) {
 }
 
 function stepTug(w, a, counts) {
-  const lead = leadingTeam(counts);
+  const lead = leadingSide(counts);
 
   if (lead.teams === 0) {
     a.contested = 0;
@@ -229,7 +218,8 @@ function stepTug(w, a, counts) {
   }
 
   a.contested = 0;
-  const pusher = lead.best;
+  let pusher = lead.bestOwner;
+  if (pusher >= 0 && isAlly(pusher, a.founder | 0)) pusher = a.founder | 0;
   if (a.capturer === pusher || a.capturer < 0 || a.tug <= 0) {
     a.capturer = pusher;
     a.direction = 1;
@@ -269,33 +259,119 @@ function occupyAgora(w, a, winner) {
   a.direction = 0;
   a.hold = 0;
   a.rite = AGORA_RITE_NONE;
-  if ((w.agoraOccupyEndsMatch ?? 1) !== 0) {
-    a.captured = 1;
-    w.matchWinner = next;
-    w.kothMatchOver = 1;
-    return;
-  }
   a.captured = 0;
+  if ((w.agoraOccupyEndsMatch ?? 1) === 0) return;
+  if (hostileAgoraRemains(w, next)) return;
+  a.captured = 1;
+  w.matchWinner = next;
+  w.kothMatchOver = 1;
 }
 
-function leadingTeam(counts) {
-  let best = -1;
-  let bestN = 0;
-  let secondN = 0;
+/** True while some agora is still held by a team hostile to `winner`. */
+function hostileAgoraRemains(w, winner) {
+  const agoras = w.agoras;
+  if (!agoras) return false;
+  for (let i = 0; i < agoras.length; i++) {
+    const owner = agoras[i].owner | 0;
+    if (owner < 0) continue;
+    if (isHostile(owner, winner)) return true;
+  }
+  return false;
+}
+
+/** Living units on `owner`'s team standing on the pad. */
+function sideCount(counts, owner) {
+  if (owner < 0) return 0;
+  const team = teamOf(owner);
+  let n = 0;
+  for (let o = 0; o < counts.length; o++) {
+    if (counts[o] > 0 && teamOf(o) === team) n += counts[o];
+  }
+  return n;
+}
+
+/**
+ * Hostile teams on the pad. Capturer is the owner with the most units
+ * on the leading team (lower owner id wins a tie).
+ */
+function hostileLead(counts, defender) {
+  const teamId = new Int32Array(8);
+  const teamN = new Int32Array(8);
+  const teamOwner = new Int32Array(8);
+  const teamOwnerN = new Int32Array(8);
+  let teams = 0;
+  for (let o = 0; o < counts.length; o++) {
+    const n = counts[o];
+    if (n <= 0 || !isHostile(o, defender)) continue;
+    const t = teamOf(o);
+    let slot = -1;
+    for (let i = 0; i < teams; i++) {
+      if (teamId[i] === t) {
+        slot = i;
+        break;
+      }
+    }
+    if (slot < 0) {
+      slot = teams++;
+      teamId[slot] = t;
+      teamOwner[slot] = o;
+      teamOwnerN[slot] = n;
+    } else if (n > teamOwnerN[slot]) {
+      teamOwnerN[slot] = n;
+      teamOwner[slot] = o;
+    }
+    teamN[slot] += n;
+  }
+  return rankSides(teams, teamN, teamOwner);
+}
+
+/** Every team on the pad, pooled. Same tie-break as the invade. */
+function leadingSide(counts) {
+  const teamId = new Int32Array(8);
+  const teamN = new Int32Array(8);
+  const teamOwner = new Int32Array(8);
+  const teamOwnerN = new Int32Array(8);
   let teams = 0;
   for (let o = 0; o < counts.length; o++) {
     const n = counts[o];
     if (n <= 0) continue;
-    teams++;
+    const t = teamOf(o);
+    let slot = -1;
+    for (let i = 0; i < teams; i++) {
+      if (teamId[i] === t) {
+        slot = i;
+        break;
+      }
+    }
+    if (slot < 0) {
+      slot = teams++;
+      teamId[slot] = t;
+      teamOwner[slot] = o;
+      teamOwnerN[slot] = n;
+    } else if (n > teamOwnerN[slot]) {
+      teamOwnerN[slot] = n;
+      teamOwner[slot] = o;
+    }
+    teamN[slot] += n;
+  }
+  return rankSides(teams, teamN, teamOwner);
+}
+
+function rankSides(teams, teamN, teamOwner) {
+  let bestN = 0;
+  let secondN = 0;
+  let bestOwner = -1;
+  for (let i = 0; i < teams; i++) {
+    const n = teamN[i];
     if (n > bestN) {
       secondN = bestN;
       bestN = n;
-      best = o;
+      bestOwner = teamOwner[i];
     } else if (n > secondN) {
       secondN = n;
     }
   }
-  return { best, bestN, secondN, teams };
+  return { bestOwner, bestN, secondN, teams };
 }
 
 function countOwnersNear(w, ax, az) {

@@ -6,6 +6,8 @@ import {
   WAVE_EMITTER_BALLS,
   WAVE_PRESET_TUBE,
   WAVE_PRESET_TUBE_CORNERS,
+  WAVE_PRESET_LINE,
+  WAVE_LINE_COUNT,
   COMPRESSION_K,
   COMPRESSION_SPEED,
   COMPRESSION_WAVELENGTH,
@@ -129,8 +131,18 @@ function expectedAt(hx, hy, hz, time) {
 }
 
 {
-  assert.equal(WAVE_PRESET_CAP, 3);
-  assert.equal(WAVE_COEFF_STRIDE, 18);
+  assert.equal(WAVE_PRESET_CAP, 4);
+  assert.equal(WAVE_COEFF_STRIDE, 24);
+  assert.equal(WAVE_PRESET_LINE.length, WAVE_LINE_COUNT);
+  for (let i = 1; i < WAVE_PRESET_LINE.length; i++) {
+    const a = WAVE_PRESET_LINE[i - 1];
+    const b = WAVE_PRESET_LINE[i];
+    assert.equal(a.x, 0);
+    assert.equal(a.z, 0);
+    assert.equal(b.x, 0);
+    assert.equal(b.z, 0);
+    assert.ok(b.y > a.y, 'line runs up the tube axis');
+  }
   assert.equal(WAVE_PRESET_TUBE.length, WAVE_PRESET_TUBE_CORNERS.length);
   assert.equal(WAVE_PRESET_TUBE.length, getNanotubeLattice().vertices.length);
   const store = createPointStore(1);
@@ -150,6 +162,15 @@ function expectedAt(hx, hy, hz, time) {
   assert.ok(Math.abs(dest[0] - ring.x) < 1e-5);
   assert.ok(Math.abs(dest[1] - ring.y) < 1e-5);
   assert.ok(Math.abs(dest[2] - ring.z) < 1e-5);
+
+  assert.equal(toggleWavePreset(), 'line');
+  assert.equal(WAVE_SOURCES.length, WAVE_LINE_COUNT);
+  assert.equal(WAVE_EMITTER_BALLS.length, WAVE_LINE_COUNT);
+  writeCompressionWavePositions(store, dest, 0, t);
+  const line = expectedAt(10, 7, 0, t);
+  assert.ok(Math.abs(dest[0] - line.x) < 1e-5);
+  assert.ok(Math.abs(dest[1] - line.y) < 1e-5);
+  assert.ok(Math.abs(dest[2] - line.z) < 1e-5);
 
   assert.equal(toggleWavePreset(), 'tube');
   assert.equal(WAVE_SOURCES.length, WAVE_PRESET_TUBE_CORNERS.length);

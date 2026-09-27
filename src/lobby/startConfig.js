@@ -8,14 +8,17 @@ import { ownerColorsFromSeats } from '../render/ownerTints.js';
  * @param {string} modeId
  * @param {number} ownerCount
  */
-export function teamByOwnerForMode(modeId, ownerCount) {
+export function teamByOwnerForMode(modeId, ownerCount, seats) {
   const n = Math.max(1, ownerCount | 0);
   const mode = getMode(modeId);
   if (!mode) return null;
   if (mode.id === 'onevsone') return null;
   const out = new Array(n);
   if (mode.teams) {
-    for (let i = 0; i < n; i++) out[i] = i < 2 ? 0 : 1;
+    for (let i = 0; i < n; i++) {
+      const seat = Array.isArray(seats) ? seats.find((s) => s.index === i) : null;
+      out[i] = Number.isInteger(seat?.team) ? seat.team : (i < 2 ? 0 : 1);
+    }
     return out;
   }
   // Adventure — everyone allied.
@@ -31,6 +34,8 @@ export function teamByOwnerForMode(modeId, ownerCount) {
  */
 export function shareVisionForLobby(modeId, localPlayerId, teamByOwner, activeSlots) {
   if (modeId === 'adventure') return { sharedVision: true, shareVisionWith: undefined };
+  // A lobby watcher starts with the match, so they see every army. No catch-up mesh.
+  if (localPlayerId < 0) return { sharedVision: true };
   if (modeId === 'teams' && teamByOwner && localPlayerId >= 0) {
     const myTeam = teamByOwner[localPlayerId];
     return {
@@ -53,7 +58,11 @@ export function liveConfigFromLobby(state, localUserId) {
   const localPlayerId = local ? local.index : -1;
   const maxOwner = activeSlots.length ? activeSlots[activeSlots.length - 1] + 1 : 0;
   const { mapW, mapH } = mapTilesForField(state.settings?.fieldSize);
-  const teamByOwner = teamByOwnerForMode(state.mode, Math.max(maxOwner, getMode(state.mode)?.maxPlayers ?? 0));
+  const teamByOwner = teamByOwnerForMode(
+    state.mode,
+    Math.max(maxOwner, getMode(state.mode)?.maxPlayers ?? 0),
+    state.seats,
+  );
   const vision = shareVisionForLobby(state.mode, localPlayerId, teamByOwner, activeSlots);
   const localSolo = activeSlots.length < 2;
   return {

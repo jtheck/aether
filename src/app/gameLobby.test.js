@@ -1,8 +1,8 @@
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { createGameLobby } from './gameLobby.js';
 import { MODE_IDS } from '../lobby/modes.js';
-import { typeChannel } from '../lobby/protocol.js';
+import { LOBBY_PROTOCOL_VERSION, MSG, typeChannel } from '../lobby/protocol.js';
 
 function fakeP2p() {
   const joined = new Set();
@@ -28,6 +28,38 @@ describe('game lobby auto listen', () => {
     assert.equal(p2p.joined.has(typeChannel('teams')), true);
     lobby.setAutoListen(false);
     assert.equal(p2p.joined.has(typeChannel('teams')), false);
+  });
+
+  it('keeps lobby order when a host heartbeats', () => {
+    mock.timers.enable({ apis: ['Date'] });
+    try {
+      let onBroadcast = null;
+      const lobby = createGameLobby({
+        getP2p: () => fakeP2p(),
+        subscribeBroadcast: (fn) => { onBroadcast = fn; return () => {}; },
+      });
+      lobby.listen('onevsone');
+      const announce = (roomId) => onBroadcast({
+        v: LOBBY_PROTOCOL_VERSION,
+        type: MSG.ANNOUNCE,
+        mode: 'onevsone',
+        roomId,
+        userId: 'host',
+        playerCount: 1,
+        maxPlayers: 2,
+      });
+      announce('lobby-a');
+      mock.timers.tick(5);
+      announce('lobby-b');
+      mock.timers.tick(3500);
+      announce('lobby-a');
+      assert.deepEqual(
+        lobby.listLobbies('onevsone').map((row) => row.roomId),
+        ['lobby-b', 'lobby-a'],
+      );
+    } finally {
+      mock.timers.reset();
+    }
   });
 
   it('leaves a drawer channel when auto-listen is off', () => {

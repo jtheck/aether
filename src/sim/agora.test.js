@@ -20,6 +20,7 @@ import {
   AGORA_UNLOCK_HOLD_TICKS,
 } from './agora.js';
 import * as fx from './fixed.js';
+import { setTeamAssignments } from './teams.js';
 
 function spawnNear(w, owner, ax, az, type = UNIT.WARRIOR) {
   return spawn(w, {
@@ -226,6 +227,101 @@ describe('agora capture', () => {
 
   it('occupies faster than the invade', () => {
     assert.ok(AGORA_TUG_TICKS < AGORA_CAPTURE_TICKS);
+  });
+
+  it('an ally cannot invade a teammate agora', () => {
+    setTeamAssignments([0, 0, 1, 1]);
+    try {
+      const w = createWorld(11);
+      w.agoraOccupyEndsMatch = 1;
+      w.agoras = createAgoras([{ owner: 0, x: 0, z: 0 }]);
+      w.kothMatchOver = 0;
+      for (let i = 0; i < 6; i++) spawnNear(w, 1, 0, 0);
+      for (let t = 0; t < 30; t++) agoraCaptureSystem(w);
+      assert.equal(w.agoras[0].progress, 0);
+      assert.equal(w.agoras[0].capturer, -1);
+      assert.equal(w.agoras[0].owner, 0);
+      assert.equal(w.kothMatchOver, 0);
+    } finally {
+      setTeamAssignments(null);
+    }
+  });
+
+  it('ally units on the pad count as defenders', () => {
+    setTeamAssignments([0, 0, 1, 1]);
+    try {
+      const w = createWorld(12);
+      w.agoras = createAgoras([{ owner: 0, x: 0, z: 0 }]);
+      spawnNear(w, 1, 0, 0);
+      spawnNear(w, 1, 0, 0);
+      spawnNear(w, 2, 0, 0);
+      spawnNear(w, 2, 0, 0);
+      agoraCaptureSystem(w);
+      assert.equal(w.agoras[0].progress, 0);
+      assert.equal(w.agoras[0].contested, 1);
+    } finally {
+      setTeamAssignments(null);
+    }
+  });
+
+  it('taking one team agora does not end the match; the last one does', () => {
+    setTeamAssignments([0, 0, 1, 1]);
+    try {
+      const w = createWorld(13);
+      w.agoraOccupyEndsMatch = 1;
+      w.kothMatchOver = 0;
+      w.matchWinner = -1;
+      w.agoras = createAgoras([
+        { owner: 0, x: 0, z: 0 },
+        { owner: 1, x: 80, z: 0 },
+      ]);
+      const first = w.agoras[0];
+      for (let i = 0; i < 3; i++) spawnNear(w, 2, first.x, first.z);
+      first.phase = AGORA_PHASE_TUG;
+      first.tug = AGORA_TUG_TICKS - 1;
+      agoraCaptureSystem(w);
+      for (let i = 0; i < AGORA_FINALE_HOLD_TICKS; i++) agoraCaptureSystem(w);
+      assert.equal(first.owner, 2);
+      assert.equal(first.captured, 0);
+      assert.equal(w.kothMatchOver, 0);
+      assert.equal(w.matchWinner, -1);
+
+      const second = w.agoras[1];
+      for (let i = 0; i < 3; i++) spawnNear(w, 2, second.x, second.z);
+      second.phase = AGORA_PHASE_TUG;
+      second.tug = AGORA_TUG_TICKS - 1;
+      agoraCaptureSystem(w);
+      for (let i = 0; i < AGORA_FINALE_HOLD_TICKS; i++) agoraCaptureSystem(w);
+      assert.equal(second.owner, 2);
+      assert.equal(second.captured, 1);
+      assert.equal(w.matchWinner, 2);
+      assert.equal(w.kothMatchOver, 1);
+    } finally {
+      setTeamAssignments(null);
+    }
+  });
+
+  it('an ally filling the tug restores the founder', () => {
+    setTeamAssignments([0, 0, 1, 1]);
+    try {
+      const w = createWorld(14);
+      w.agoraOccupyEndsMatch = 1;
+      w.kothMatchOver = 0;
+      w.agoras = createAgoras([{ owner: 0, x: 0, z: 0 }]);
+      w.agoras[0].phase = AGORA_PHASE_TUG;
+      w.agoras[0].tug = AGORA_TUG_TICKS - 1;
+      w.agoras[0].capturer = -1;
+      for (let i = 0; i < 4; i++) spawnNear(w, 1, 0, 0);
+      agoraCaptureSystem(w);
+      assert.equal(w.agoras[0].capturer, 0);
+      assert.equal(w.agoras[0].rite, AGORA_RITE_FINALE);
+      for (let i = 0; i < AGORA_FINALE_HOLD_TICKS; i++) agoraCaptureSystem(w);
+      assert.equal(w.agoras[0].owner, 0);
+      assert.equal(w.agoras[0].founder, 0);
+      assert.equal(w.kothMatchOver, 0);
+    } finally {
+      setTeamAssignments(null);
+    }
   });
 
   it('step advances capture when wired', () => {

@@ -615,11 +615,7 @@ function clickMenuToggle(doc, open) {
   const isOpen = !!menu?.classList?.contains('is-open');
   if (open === isOpen) return isOpen;
   const btn = doc.getElementById('menu_b');
-  if (btn && !btn.hidden) {
-    btn.click();
-    return !!menu?.classList?.contains('is-open');
-  }
-  doc.getElementById('graffiti_b')?.click?.();
+  if (btn && !btn.hidden) btn.click();
   return !!menu?.classList?.contains('is-open');
 }
 

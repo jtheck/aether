@@ -10,6 +10,7 @@ export const MSG = {
   CLOSED: 'lobby_closed',
   STATE: 'lobby_state',
   JOIN: 'lobby_join',
+  SPECTATE: 'lobby_spectate',
   LEAVE: 'lobby_leave',
   READY: 'lobby_ready',
   SETTING: 'lobby_setting',

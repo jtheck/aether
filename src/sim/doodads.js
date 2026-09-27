@@ -4,7 +4,7 @@
 
 import { TERRAIN, TILE_SIZE_F, worldHalfFFromField } from './field.js';
 import { SCENERY, rockFootprintRadius, sceneryTileHash } from './scenery.js';
-import { TREE_STOCK_NATURAL_MAX } from './trees.js';
+import { TREE_STOCK_NATURAL_MAX, treeScaleForStage, treeStageFromStock } from './trees.js';
 
 export const DOODAD = {
   NONE: 0,
@@ -18,8 +18,30 @@ export const MUSHROOM_HOST_STOCK = TREE_STOCK_NATURAL_MAX;
 export const MUSHROOM_AREA_RADIUS = 4;
 /** Overgrowth trees (including self) required before mushrooms sprout. */
 export const MUSHROOM_AREA_MIN = 3;
-export const MUSHROOM_PER_HOST_MIN = 3;
-export const MUSHROOM_PER_HOST_MAX = 6;
+/** Caps around an old-growth host. Some stands stay bare. */
+export const MUSHROOM_PER_HOST_MIN = 0;
+export const MUSHROOM_PER_HOST_MAX = 2;
+/** Painted mushrooms on open ground keep the fuller cluster. */
+const MUSHROOM_BARE_MIN = 3;
+const MUSHROOM_BARE_MAX = 6;
+/**
+ * Ground clearance, in trees.glb local units, times scenery modelScale 0.9.
+ * The longest ground leaf reaches ~4.04; this sits a touch inside that tip.
+ * Stock scale multiplies this in world space.
+ */
+const TREE_SKIRT_PER_SCALE = 3.3 * 0.9;
+/** Small gap so the cap rests on the skirt instead of standing off it. */
+const MUSHROOM_SKIRT_PAD = 0.3;
+/** Scatter past the skirt so a host's cluster is not one circle. */
+const MUSHROOM_RING = 0.45;
+/** Bare authored tiles (no tree) keep a tight floor cluster. */
+const MUSHROOM_BARE_INNER = 1.2;
+const MUSHROOM_BARE_RING = 1.35;
+const MUSHROOM_OPEN_TRIES = 8;
+/** How far past the host skirt a cap may walk to leave a neighbor's crown. */
+const MUSHROOM_CLEAR_EXTRA = 4;
+/** Tiles around the host that can still cover that walk. */
+const TREE_SKIRT_REACH_TILES = 10;
 
 export function ensureDoodadArrays(field) {
   if (!field) return field;
@@ -232,8 +254,91 @@ function tileWorldCenter(field, tx, tz) {
 }
 
 /**
+ * World radius of a tree's ground skirt. Stage 0 (no wood) is 0.
+ * @param {number} stock
+ */
+export function mushroomHostSkirtRadius(stock) {
+  const scale = treeScaleForStage(treeStageFromStock(stock | 0));
+  return scale > 0 ? TREE_SKIRT_PER_SCALE * scale : 0;
+}
+
+/**
+ * Neighbor crowns near a host, as world circles the cap must stay outside.
+ * @param {object} field
+ * @param {number} tx
+ * @param {number} tz
+ * @param {number} ignoreTile
+ * @returns {{ x: number, z: number, r: number }[]}
+ */
+function nearbySkirtCircles(field, tx, tz, ignoreTile) {
+  const stock = field?.treeStock;
+  if (!stock) return [];
+  const width = field.width | 0;
+  const height = field.height | 0;
+  const half = worldHalfFFromField(field);
+  const reach = TREE_SKIRT_REACH_TILES;
+  const out = [];
+  for (let z0 = tz - reach; z0 <= tz + reach; z0++) {
+    if (z0 < 0 || z0 >= height) continue;
+    const row = z0 * width;
+    const cz = (z0 + 0.5) * TILE_SIZE_F - half;
+    for (let x0 = tx - reach; x0 <= tx + reach; x0++) {
+      if (x0 < 0 || x0 >= width) continue;
+      const nti = row + x0;
+      if (nti === ignoreTile) continue;
+      const skirt = mushroomHostSkirtRadius(stock[nti]);
+      if (skirt <= 0) continue;
+      out.push({
+        x: (x0 + 0.5) * TILE_SIZE_F - half,
+        z: cz,
+        r: skirt + MUSHROOM_SKIRT_PAD,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Smallest distance along a unit ray that sits outside every circle.
+ * Starts at `tStart` (already outside the host). Returns a value above
+ * `tMax` when the ray is still inside a crown at the cap.
+ * @param {number} hx
+ * @param {number} hz
+ * @param {number} dx
+ * @param {number} dz
+ * @param {number} tStart
+ * @param {{ x: number, z: number, r: number }[]} circles
+ * @param {number} tMax
+ */
+function clearanceAlongRay(hx, hz, dx, dz, tStart, circles, tMax) {
+  let t = tStart;
+  for (let pass = 0; pass < 8; pass++) {
+    let next = t;
+    for (let i = 0; i < circles.length; i++) {
+      const c = circles[i];
+      const vx = hx - c.x;
+      const vz = hz - c.z;
+      const b = vx * dx + vz * dz;
+      const cc = vx * vx + vz * vz - c.r * c.r;
+      const disc = b * b - cc;
+      if (disc <= 1e-8) continue;
+      const s = Math.sqrt(disc);
+      const t0 = -b - s;
+      const t1 = -b + s;
+      if (t > t0 - 1e-3 && t < t1 - 1e-3 && t1 > next) next = t1;
+    }
+    if (next <= t + 1e-4) return t;
+    t = next;
+    if (t > tMax) return t;
+  }
+  return t;
+}
+
+/**
  * Deterministic forest-floor cluster around one tile center.
- * World XZ only — render fills Y from the ground.
+ * On a living tree each cap sits just outside that skirt, walked out
+ * along the shortest open ray so it is not left inside a neighbor.
+ * A cap with no open ground nearby is omitted. World XZ only — render fills Y.
  * @param {object} field
  * @param {number} tileIndex
  */
@@ -243,18 +348,47 @@ export function mushroomPlacementsForHost(field, tileIndex) {
   const tz = (ti / width) | 0;
   const tx = ti - tz * width;
   const seed = field.seed | 0;
+  const skirt = mushroomHostSkirtRadius(field.treeStock?.[ti] | 0);
+  const countMin = skirt > 0 ? MUSHROOM_PER_HOST_MIN : MUSHROOM_BARE_MIN;
+  const countMax = skirt > 0 ? MUSHROOM_PER_HOST_MAX : MUSHROOM_BARE_MAX;
   const countRoll = sceneryTileHash(tx, tz, seed + 9001);
-  const span = MUSHROOM_PER_HOST_MAX - MUSHROOM_PER_HOST_MIN + 1;
-  const count = MUSHROOM_PER_HOST_MIN + Math.min(span - 1, (countRoll * span) | 0);
+  const span = countMax - countMin + 1;
+  const count = countMin + Math.min(span - 1, (countRoll * span) | 0);
   const { x: cx, z: cz } = tileWorldCenter(field, tx, tz);
+  const inner = skirt > 0 ? skirt + MUSHROOM_SKIRT_PAD : MUSHROOM_BARE_INNER;
+  const ring = skirt > 0 ? MUSHROOM_RING : MUSHROOM_BARE_RING;
+  const circles = skirt > 0 ? nearbySkirtCircles(field, tx, tz, ti) : null;
+  const tMax = inner + MUSHROOM_CLEAR_EXTRA;
   const out = [];
   for (let i = 0; i < count; i++) {
     const hAng = sceneryTileHash(tx, tz, seed + 9100 + i * 17);
     const hRad = sceneryTileHash(tx + i, tz, seed + 9200 + i * 31);
     const hYaw = sceneryTileHash(tx, tz + i, seed + 9300);
     const hScale = sceneryTileHash(tx + 3, tz + i, seed + 9400);
-    const ang = hAng * Math.PI * 2;
-    const rad = 1.2 + hRad * 1.35;
+    let ang = hAng * Math.PI * 2;
+    let rad = inner + hRad * ring;
+    if (circles && circles.length) {
+      let bestAng = 0;
+      let bestRad = Infinity;
+      const step = (Math.PI * 2) / MUSHROOM_OPEN_TRIES;
+      for (let k = 0; k < MUSHROOM_OPEN_TRIES; k++) {
+        const a = ang + k * step;
+        const dx = Math.cos(a);
+        const dz = Math.sin(a);
+        const cleared = clearanceAlongRay(cx, cz, dx, dz, inner, circles, tMax);
+        const slack = clearanceAlongRay(
+          cx, cz, dx, dz, cleared + hRad * ring, circles, tMax,
+        );
+        if (slack <= tMax && slack < bestRad) {
+          bestRad = slack;
+          bestAng = a;
+          if (slack <= inner + hRad * ring + 1e-3) break;
+        }
+      }
+      if (bestRad > tMax) continue;
+      ang = bestAng;
+      rad = bestRad;
+    }
     out.push({
       type: DOODAD.MUSHROOM,
       host: ti,

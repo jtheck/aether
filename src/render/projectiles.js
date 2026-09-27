@@ -16,7 +16,7 @@ import {
   getProjectileDef,
 } from '../sim/projectileTypes.js';
 import { MAX_PROJECTILES } from '../sim/projectiles.js';
-import { createFireballCoreMaterial } from './holyShields.js';
+import { createFireballCoreMaterial, createFireballMesh } from './holyShields.js';
 
 // Kept modest — was 5 while debugging visibility and arrows looked gigantic.
 const PROJECTILE_VISIBILITY_SCALE = 5 / 3;
@@ -73,10 +73,8 @@ function createArchetypeMesh(engine, def) {
   if (def.mesh === PROJECTILE_MESH.ARROW) {
     return createArrowMesh(engine, `projectile-${def.name.toLowerCase()}`);
   }
-  const segments =
-    def.id === PROJECTILE.FIREBALL ? 20 :
-    def.mesh === PROJECTILE_MESH.ROCK ? 6 :
-    8;
+  if (def.id === PROJECTILE.FIREBALL) return createFireballMesh(engine);
+  const segments = def.mesh === PROJECTILE_MESH.ROCK ? 6 : 8;
   return createSphere(engine, {
     diameter: 1,
     segments,
@@ -135,6 +133,61 @@ function writeMatrix(matrices, slot, x, y, z, vx, vy, vz, scale) {
   matrices[offset + 8] = fx * sz;
   matrices[offset + 9] = fy * sz;
   matrices[offset + 10] = fz * sz;
+  matrices[offset + 11] = 0;
+  matrices[offset + 12] = x;
+  matrices[offset + 13] = y;
+  matrices[offset + 14] = z;
+  matrices[offset + 15] = 1;
+}
+
+/** Side-arc orb. Local XY faces the eye; scale matches the old diameter-1 sphere. */
+function writeFacingOrb(matrices, slot, x, y, z, scale, eye) {
+  const offset = slot * 16;
+  const s = scale * PROJECTILE_VISIBILITY_SCALE;
+  if (!(s > 0)) {
+    hideMatrix(matrices, slot);
+    return;
+  }
+  let fx = (eye?.x ?? x) - x;
+  let fy = (eye?.y ?? y) - y;
+  let fz = (eye?.z ?? z) - z;
+  const fl = Math.hypot(fx, fy, fz);
+  if (fl < 1e-4) {
+    fx = 0;
+    fy = 0;
+    fz = 1;
+  } else {
+    fx /= fl;
+    fy /= fl;
+    fz /= fl;
+  }
+  let rx = fz;
+  let ry = 0;
+  let rz = -fx;
+  const rl = Math.hypot(rx, ry, rz);
+  if (rl < 1e-4) {
+    rx = 1;
+    ry = 0;
+    rz = 0;
+  } else {
+    rx /= rl;
+    ry /= rl;
+    rz /= rl;
+  }
+  const ux = fy * rz - fz * ry;
+  const uy = fz * rx - fx * rz;
+  const uz = fx * ry - fy * rx;
+  matrices[offset] = rx * s;
+  matrices[offset + 1] = ry * s;
+  matrices[offset + 2] = rz * s;
+  matrices[offset + 3] = 0;
+  matrices[offset + 4] = ux * s;
+  matrices[offset + 5] = uy * s;
+  matrices[offset + 6] = uz * s;
+  matrices[offset + 7] = 0;
+  matrices[offset + 8] = fx * s;
+  matrices[offset + 9] = fy * s;
+  matrices[offset + 10] = fz * s;
   matrices[offset + 11] = 0;
   matrices[offset + 12] = x;
   matrices[offset + 13] = y;
@@ -260,7 +313,12 @@ export function createProjectileRenderer(engine, scene, groundYAt, onProjectile,
         dropped++;
         continue;
       }
-      writeMatrix(batch.matrices, slot, x, y, z, cur.vx[i], vy, cur.vz[i], def.scale);
+      const eye = def.id === PROJECTILE.FIREBALL ? opts.getEye?.() ?? null : null;
+      if (eye) {
+        writeFacingOrb(batch.matrices, slot, x, y, z, def.scale[0], eye);
+      } else {
+        writeMatrix(batch.matrices, slot, x, y, z, cur.vx[i], vy, cur.vz[i], def.scale);
+      }
       active++;
     }
 

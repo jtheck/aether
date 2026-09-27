@@ -61,6 +61,65 @@ function writeSphere(matrices, slot, x, y, z, radius) {
 }
 
 /**
+ * Flat mesh in local XY, spun so +Z looks at the eye.
+ * Same instance-matrix path as writeSphere — the vertex shader does not billboard.
+ */
+function writeFacingDisc(matrices, slot, x, y, z, radius, eye) {
+  const offset = slot * 16;
+  if (!(radius > 0)) {
+    hideMatrix(matrices, slot);
+    return;
+  }
+  let fx = (eye?.x ?? x) - x;
+  let fy = (eye?.y ?? y) - y;
+  let fz = (eye?.z ?? z) - z;
+  const fl = Math.hypot(fx, fy, fz);
+  if (fl < 1e-4) {
+    fx = 0;
+    fy = 0;
+    fz = 1;
+  } else {
+    fx /= fl;
+    fy /= fl;
+    fz /= fl;
+  }
+  // right = world up × forward
+  let rx = fz;
+  let ry = 0;
+  let rz = -fx;
+  const rl = Math.hypot(rx, ry, rz);
+  if (rl < 1e-4) {
+    rx = 1;
+    ry = 0;
+    rz = 0;
+  } else {
+    rx /= rl;
+    ry /= rl;
+    rz /= rl;
+  }
+  const ux = fy * rz - fz * ry;
+  const uy = fz * rx - fx * rz;
+  const uz = fx * ry - fy * rx;
+  const s = radius;
+  matrices[offset] = rx * s;
+  matrices[offset + 1] = ry * s;
+  matrices[offset + 2] = rz * s;
+  matrices[offset + 3] = 0;
+  matrices[offset + 4] = ux * s;
+  matrices[offset + 5] = uy * s;
+  matrices[offset + 6] = uz * s;
+  matrices[offset + 7] = 0;
+  matrices[offset + 8] = fx * s;
+  matrices[offset + 9] = fy * s;
+  matrices[offset + 10] = fz * s;
+  matrices[offset + 11] = 0;
+  matrices[offset + 12] = x;
+  matrices[offset + 13] = y;
+  matrices[offset + 14] = z;
+  matrices[offset + 15] = 1;
+}
+
+/**
  * Lazy pool: mesh is created on first enable, after the scene has registered.
  * Creating at count=0 before registerScene left the old debug spheres undrawable.
  *
@@ -71,6 +130,9 @@ function writeSphere(matrices, slot, x, y, z, radius) {
  *   startVisible?: boolean,
  *   name?: string,
  *   segments?: number,
+ *   createMesh?: (engine: object) => object,
+ *   billboard?: boolean,
+ *   getEye?: () => { x: number, y: number, z: number } | null,
  *   renderOrder?: number,
  *   depthWrite?: boolean,
  *   diffuseColor?: [number, number, number],
@@ -97,7 +159,9 @@ export function createPickHitboxRenderer(engine, scene, capacity, opts = {}) {
 
   function ensureMesh() {
     if (mesh) return;
-    mesh = createSphere(engine, { diameter: 2, segments });
+    mesh = opts.createMesh
+      ? opts.createMesh(engine)
+      : createSphere(engine, { diameter: 2, segments });
     mesh.pickable = false;
     if (opts.name) mesh.name = opts.name;
     if (Number.isFinite(opts.renderOrder)) mesh.renderOrder = opts.renderOrder;
@@ -169,9 +233,14 @@ export function createPickHitboxRenderer(engine, scene, capacity, opts = {}) {
         return;
       }
       ensureMesh();
+      const eye = opts.billboard ? opts.getEye?.() ?? null : null;
       for (let i = 0; i < n; i++) {
         const sp = spheres[i];
-        writeSphere(matrices, i, sp.x, sp.y, sp.z, sp.r ?? 0);
+        if (opts.billboard) {
+          writeFacingDisc(matrices, i, sp.x, sp.y, sp.z, sp.r ?? 0, eye);
+        } else {
+          writeSphere(matrices, i, sp.x, sp.y, sp.z, sp.r ?? 0);
+        }
       }
       for (let slot = n; slot < previousCount; slot++) hideMatrix(matrices, slot);
       previousCount = n;

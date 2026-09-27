@@ -119,9 +119,6 @@ export function setupMenu({
   const menuMatchLeave = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#menu-match-leave'));
   const lobbyDrawerToggles = [...drawer.querySelectorAll('.lobby-drawer-toggle, .lobby-create')];
   const gear = /** @type {HTMLElement} */ (drawer.querySelector('#settings_b'));
-  const graffiti = /** @type {HTMLElement | null} */ (
-    document.getElementById('graffiti_b') || document.querySelector('#header img')
-  );
   const exitBtn = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#fullscreen_exit_b'));
 
   function showPage(name) {
@@ -364,17 +361,6 @@ export function setupMenu({
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       button.click();
-    }
-  });
-  graffiti?.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    openMain();
-  });
-  graffiti?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      openMain();
     }
   });
   gear.addEventListener('click', () => {

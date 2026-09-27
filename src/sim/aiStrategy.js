@@ -8,7 +8,7 @@
 
 import * as fx from './fixed.js';
 import { agoraCaptureScore, agoraForOwner, AGORA_OCCUPATION_RADIUS } from './agora.js';
-import { isHostile } from './teams.js';
+import { isAlly, isHostile } from './teams.js';
 import { getUnitDef } from './unitTypes.js';
 
 export const AI_STANCE = {
@@ -213,7 +213,7 @@ export function shownHostiles(w, owner, defendRangeF = 0) {
   if (agoras) {
     for (let i = 0; i < agoras.length; i++) {
       const a = agoras[i];
-      if ((a.owner | 0) === owner || (a.founder | 0) === owner) continue;
+      if (isAlly(a.owner | 0, owner) || isAlly(a.founder | 0, owner)) continue;
       const s = agoraCaptureScore(a);
       if (s > enemyScore) enemyScore = s;
       if (s > 0) liveEnemy.push(a);
@@ -293,7 +293,7 @@ function pickContestAgora(w, owner, heat, occupyEnds, homeScore, shown) {
   let bestScore = 0;
   for (let i = 0; i < agoras.length; i++) {
     const a = agoras[i];
-    if ((a.owner | 0) === owner || (a.founder | 0) === owner) continue;
+    if (isAlly(a.owner | 0, owner) || isAlly(a.founder | 0, owner)) continue;
     if ((a.captured | 0)) continue;
     const score = agoraCaptureScore(a);
     if (score <= 0) continue;

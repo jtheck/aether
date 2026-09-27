@@ -183,8 +183,9 @@ function zoomSpeedForNormalized(normalized) {
 export const FOLLOW_ZIP_RATE = 18;
 
 /**
- * Look-target shift that keeps `aim` under the zoom this frame.
- * Positive `k` (zoom in) pulls toward aim; zoom out pushes away.
+ * Look-target shift that keeps `aim` under the cursor while zooming in.
+ * Zooming out leaves the look-at where it is — pushing away from the cursor
+ * makes the view flee the pointer.
  * @param {number} targetX
  * @param {number} targetZ
  * @param {number} aimX
@@ -194,30 +195,10 @@ export const FOLLOW_ZIP_RATE = 18;
  */
 export function zoomFocusShift(targetX, targetZ, aimX, aimZ, oldRadius, newRadius) {
   const oldR = Math.max(1e-3, Number(oldRadius) || 0);
-  const k = 1 - (Number(newRadius) || 0) / oldR;
+  const newR = Number(newRadius) || 0;
+  if (newR >= oldR) return { x: 0, z: 0 };
+  const k = 1 - newR / oldR;
   return { x: (aimX - targetX) * k, z: (aimZ - targetZ) * k };
-}
-
-/**
- * Yaw the look-target around a ground pivot. Same CCW XZ as Lite alpha
- * (`(cos α, sin α)`), so the rig orbits the pointer instead of the old look-at.
- * @param {number} targetX
- * @param {number} targetZ
- * @param {number} pivotX
- * @param {number} pivotZ
- * @param {number} dAlpha
- */
-export function rotateFocusShift(targetX, targetZ, pivotX, pivotZ, dAlpha) {
-  const a = Number(dAlpha) || 0;
-  if (Math.abs(a) < 1e-12) return { x: 0, z: 0 };
-  const dx = targetX - pivotX;
-  const dz = targetZ - pivotZ;
-  const c = Math.cos(a);
-  const s = Math.sin(a);
-  return {
-    x: pivotX + dx * c - dz * s - targetX,
-    z: pivotZ + dx * s + dz * c - targetZ,
-  };
 }
 
 /**
@@ -286,12 +267,14 @@ export function createCameraController(camera, canvas, opts = {}) {
   let zoomFloored = false;
   let zoomOutThisTick = false;
   let fovVel = 0;
-  /** Ground under the pointer — zoom and rotate share this pivot. */
+  /** Ground under the pointer — zoom-in drifts the look target toward it. */
   /** @type {{ x: number, z: number } | null} */
   let zoomFocus = null;
   let followActive = false;
   let followX = 0;
   let followZ = 0;
+  /** Set when a pan gesture drops follow. Caller consumes it so the next selection can re-lock. */
+  let followBrokenByPan = false;
   /** @type {{ x?: number, z?: number, radius?: number, alpha?: number, unclamped?: boolean, left: number, rate: number } | null} */
   let ease = null;
 
@@ -497,8 +480,22 @@ export function createCameraController(camera, canvas, opts = {}) {
     return followActive;
   }
 
+  /** Pan drops Space / spectator follow. Selection or Space re-locks on the next followXZ. */
+  function breakFollowForPan() {
+    if (!followActive) return;
+    followActive = false;
+    followBrokenByPan = true;
+  }
+
+  function consumePanBrokeFollow() {
+    const broken = followBrokenByPan;
+    followBrokenByPan = false;
+    return broken;
+  }
+
   function nudgePan(dx, dz) {
-    if (followActive) return;
+    if (!dx && !dz) return;
+    breakFollowForPan();
     markNudged();
     velocity.panX += dx;
     velocity.panZ += dz;
@@ -510,8 +507,8 @@ export function createCameraController(camera, canvas, opts = {}) {
   }
 
   function applyLookPan(panX, panZ) {
-    if (followActive) return;
     if (!panX && !panZ) return;
+    breakFollowForPan();
     markNudged();
     const { rightX, rightZ, forwardX, forwardZ } = groundAxes();
     const zoomFactor = Math.max(0.3, Math.min(2.0, camera.radius / 80));
@@ -698,32 +695,20 @@ export function createCameraController(camera, canvas, opts = {}) {
     zoomFocus = g;
   }
 
-  function applyPointerFocusPan(rBefore, rAfter, dAlpha) {
+  function applyPointerFocusPan(rBefore, rAfter) {
     if (!zoomFocus || followActive) return;
     const zooming =
       Math.abs(rAfter - rBefore) > 1e-4 ||
       zoomTend ||
       Math.abs(velocity.radius) >= ZOOM_THRESHOLD;
-    const rotating =
-      Math.abs(dAlpha) > 1e-8 ||
-      Math.abs(velocity.alpha) >= ROT_THRESHOLD;
-    if (!zooming && !rotating) {
+    if (!zooming) {
       clearZoomFocus();
       return;
     }
     const t = getTarget();
-    let x = t.x;
-    let z = t.z;
-    // Scale and yaw around the same live pointer — no extra chase, or the
-    // ground under the cursor walks and pan/rotate stop agreeing.
-    const zoomShift = zoomFocusShift(x, z, zoomFocus.x, zoomFocus.z, rBefore, rAfter);
-    x += zoomShift.x;
-    z += zoomShift.z;
-    if (Math.abs(dAlpha) > 1e-8) {
-      const yawAround = rotateFocusShift(x, z, zoomFocus.x, zoomFocus.z, dAlpha);
-      x += yawAround.x;
-      z += yawAround.z;
-    }
+    const zoomShift = zoomFocusShift(t.x, t.z, zoomFocus.x, zoomFocus.z, rBefore, rAfter);
+    const x = t.x + zoomShift.x;
+    const z = t.z + zoomShift.z;
     if (Math.abs(x - t.x) < 1e-8 && Math.abs(z - t.z) < 1e-8) return;
     clampTargetPan(x, z);
   }
@@ -762,17 +747,14 @@ export function createCameraController(camera, canvas, opts = {}) {
     applyZoomInput(delta, screen);
   }
 
-  /** @param {{ x: number, y: number }} [screen] client coords (cursor or pinch centroid) */
-  function applyRotateInput(deltaAlpha, screen) {
+  /** Yaw stays on the current look target. */
+  function applyRotateInput(deltaAlpha) {
     markNudged();
-    if (screen && Number.isFinite(screen.x) && Number.isFinite(screen.y)) {
-      setZoomFocusFromScreen(screen.x, screen.y);
-    }
     velocity.alpha += deltaAlpha;
   }
 
-  function nudgeRotate(deltaAlpha, screen) {
-    applyRotateInput(deltaAlpha, screen);
+  function nudgeRotate(deltaAlpha) {
+    applyRotateInput(deltaAlpha);
   }
 
   /** Immediate yaw — rim drag tracks the finger. Does not bank coast velocity. */
@@ -814,7 +796,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     const screen = { x: e.clientX, y: e.clientY };
     if ((e.buttons & 2) !== 0 || e.shiftKey) {
       const impulse = INVERSE_ROT * delta * ROT_WHEEL;
-      applyRotateInput(Math.max(-ROT_WHEEL_MAX, Math.min(ROT_WHEEL_MAX, impulse)), screen);
+      applyRotateInput(Math.max(-ROT_WHEEL_MAX, Math.min(ROT_WHEEL_MAX, impulse)));
     } else {
       applyZoomInput(INVERSE_ZOOM * delta * ZOOM_WHEEL, screen);
     }
@@ -863,7 +845,8 @@ export function createCameraController(camera, canvas, opts = {}) {
 
   /** Shared by RMB drag and touch centroid-pan — same feel, one formula. */
   function panByScreenDelta(screenDx, screenDy, sensBase) {
-    if (followActive) return;
+    if (!screenDx && !screenDy) return;
+    breakFollowForPan();
     const { wx, wz } = screenDeltaToGroundPan(screenDx, screenDy);
     const panSens = sensBase * panZoomFactor();
     markNudged();
@@ -980,8 +963,6 @@ export function createCameraController(camera, canvas, opts = {}) {
     }
     if (keyStates.q) applyZoomInput(KEY_ZOOM_SPEED);
     if (keyStates.t) applyZoomInput(-KEY_ZOOM_SPEED);
-
-    if (followActive) return;
 
     let panX = 0;
     let panZ = 0;
@@ -1121,7 +1102,7 @@ export function createCameraController(camera, canvas, opts = {}) {
       zoomFloored = false;
     }
 
-    applyPointerFocusPan(rBefore, camera.radius, dAlpha);
+    applyPointerFocusPan(rBefore, camera.radius);
     if (ease) {
       const u = 1 - Math.exp(-ease.rate * dt);
       const now = getTarget();
@@ -1175,6 +1156,7 @@ export function createCameraController(camera, canvas, opts = {}) {
   function reset() {
     ease = null;
     followActive = false;
+    followBrokenByPan = false;
     velocity.alpha = 0;
     velocity.radius = 0;
     velocity.panX = 0;
@@ -1225,6 +1207,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     getPose,
     stopFollow,
     isFollowing,
+    consumePanBrokeFollow,
     nudgePan,
     nudgeLookPan,
     nudgeZoom,

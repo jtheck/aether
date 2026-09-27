@@ -31,6 +31,7 @@ import { hasBakedMesh } from './bakedAssets.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
 import { softDetachMesh } from './meshLifecycle.js';
 import { SCALE_BOUNCE_MS, stageDropScale } from './scaleBounce.js';
+import { treeFireHeight } from './treeFire.js';
 
 const ATLAS_URL = '/assets/textures/atlas-hd.png';
 const ATLAS_GRID = 8;
@@ -48,6 +49,10 @@ const TREE_SHRINK_MS = SCALE_BOUNCE_MS;
 const TREE_FELL_MS = 1400;
 /** Hold full size while ink drips, then melt. */
 const TREE_FELL_DELAY_MS = 850;
+/** Charred tree lowers into the ground once the fire is out. Full size the whole way. */
+const TREE_BURN_SINK_MS = 1200;
+/** Extra bury past the crown so the tip clears the surface. */
+const TREE_BURN_SINK_MARGIN = 0.35;
 /** Never-seen trees/rocks — match the heavier shroud. */
 const FOG_DIM = 0.16;
 /** Visited trees/rocks — mid step, darker than sight, lighter than wilderness. */
@@ -129,6 +134,17 @@ function lerp3(a, b, t) {
   ];
 }
 
+/** World-Y drop that puts the crown under the surface. Scale stays put. */
+export function treeBurnSinkDepth(stockScale) {
+  return treeFireHeight(stockScale) + TREE_BURN_SINK_MARGIN;
+}
+
+/** Ease-out drop: starts immediately, settles under the ground. */
+export function treeBurnSinkDrop(t, depth) {
+  const u = t <= 0 ? 0 : t >= 1 ? 1 : 1 - (1 - t) ** 2;
+  return depth * u;
+}
+
 function resetBurnVisual(p) {
   p.lean = 0;
   p.char = 0;
@@ -138,6 +154,10 @@ function resetBurnVisual(p) {
   p.burnDurMs = 0;
   p.burnFlushLean = 0;
   p.burnFlushChar = 0;
+  p.sinking = false;
+  p.sinkT = 0;
+  p.sink = 0;
+  p.sinkDepth = 0;
 }
 
 function burnDownMs(stock, burn) {
@@ -271,7 +291,7 @@ const modelContainersByEngine = new WeakMap();
  * @param {object} field
  * @param {(field: object, x: number, z: number) => number} surfaceHeightAt
  * @param {object} camera
- * @param {{ emitFire?: (x: number, y: number, z: number, scale: number) => void }} [opts]
+ * @param {object} [opts]
  */
 export async function createSceneryFromField(engine, field, surfaceHeightAt, camera, opts = {}) {
   if (!field?.sceneryType) {
@@ -279,6 +299,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       meshes: [],
       modelsReady: Promise.resolve(),
       update() {},
+      forEachBurningTree() {},
       applyTreeUpdates() {},
       applyRockUpdates() {},
       applyAuthoredTiles() {},
@@ -592,7 +613,6 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
   }
 
   let elapsed = LOD_UPDATE_MS;
-  let fireElapsed = 0;
   let growElapsed = 0;
   /** @type {((x: number, z: number) => number) | null} */
   let fogFactor = null;
@@ -634,6 +654,32 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     if (p.scaleT >= 1) {
       p.scaling = false;
       p.stockScale = to;
+    }
+    return true;
+  }
+
+  function beginTreeSink(p) {
+    if (p.sinking) return;
+    const scale = (p.stockScale ?? 0) > 0.001 ? p.stockScale : (p.targetScale || 1);
+    p.stockScale = scale;
+    p.scaleFrom = scale;
+    p.targetScale = scale;
+    p.scaling = false;
+    p.fellDelayMs = 0;
+    p.sinking = true;
+    p.sinkT = 0;
+    p.sink = 0;
+    p.sinkDepth = treeBurnSinkDepth(scale);
+  }
+
+  function advanceTreeSink(p, dt) {
+    if (!p.sinking) return false;
+    p.sinkT = Math.min(1, (p.sinkT ?? 0) + dt / TREE_BURN_SINK_MS);
+    p.sink = treeBurnSinkDrop(p.sinkT, p.sinkDepth ?? 0);
+    if (p.sinkT >= 1) {
+      p.sinking = false;
+      p.stockScale = 0;
+      p.targetScale = 0;
     }
     return true;
   }
@@ -688,10 +734,9 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
   function update(activeCamera = camera, deltaMs = LOD_UPDATE_MS, force = false) {
     if (!activeCamera) return;
     elapsed += deltaMs;
-    fireElapsed += deltaMs;
     growElapsed += deltaMs;
 
-    // Advance scale (sprout, stage-drop, fire shrink, fell melt) on every batch.
+    // Advance scale (sprout, stage-drop, fell melt) and burn-down sink on every batch.
     if (growElapsed > 0) {
       const dt = Math.min(100, growElapsed);
       growElapsed = 0;
@@ -706,12 +751,13 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
           const p = batch.instances[i];
           const scaled = advanceInstanceScale(p, dt);
           const burned = tintTrees && advanceBurnVisual(p, dt);
+          const sunk = tintTrees && advanceTreeSink(p, dt);
           if (rocks && (p.stock | 0) <= 0 && (p.stockScale ?? 0) <= 0 && !p.scaling && p.tileIndex >= 0) {
             release.push(i);
           }
-          if (!scaled && !burned) continue;
+          if (!scaled && !burned && !sunk) continue;
           moved = true;
-          if (tintTrees) {
+          if (tintTrees && (scaled || burned)) {
             writeFogColor(batch, i);
             tinted = true;
           }
@@ -753,17 +799,6 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
         batch.dirty = false;
       }
     }
-      if (opts.emitFire && fireElapsed >= 48) {
-      fireElapsed = 0;
-      for (const batch of batches) {
-        if (batch.variant.kind !== SCENERY.TREE) continue;
-        for (let i = 0; i < batch.instances.length; i++) {
-          const p = batch.instances[i];
-          if (!(p.burn > 0) || p.stock <= 0) continue;
-          opts.emitFire(p.x, p.y, p.z, Math.max(0.65, p.stockScale));
-        }
-      }
-    }
     tickHarvestPings();
   }
 
@@ -793,19 +828,37 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       }
       const stage = treeStageFromStock(p.stock);
       const nextTarget = treeScaleForStage(stage);
+      const heldScale = p.targetScale ?? prevScale;
       if (nextStock <= 0) {
-        // Ink drips first, then melt — don't snap-hide under the blobs.
-        if (prevBurn > 0 || (p.char ?? 0) > 0) {
+        if (p.sinking || (p.sink ?? 0) > 0) {
+          // Already going under, or buried.
+        } else if (prevBurn > 0 || (p.char ?? 0) > 0) {
           if (!p.burnLeanSign) initBurnVisual(p);
           p.burnT = 1;
           p.lean = p.burnLeanMax * p.burnLeanSign;
           p.char = 1;
+          // Size was held through the fire. Lower the whole tree into the ground.
+          beginTreeSink(p);
+        } else {
+          // Chop: ink drips first, then melt. Don't snap-hide under the blobs.
+          p.scaling = false;
+          p.fellDelayMs = TREE_FELL_DELAY_MS;
+          p.targetScale = 0;
         }
-        p.scaling = false;
-        p.fellDelayMs = TREE_FELL_DELAY_MS;
-        p.targetScale = 0;
+      } else if (nextBurn > 0 && nextTarget <= heldScale + 0.001) {
+        // Keep the lit size. Stock still falls; the sink waits until the fire is out.
+        if (p.scaling && (p.targetScale ?? 0) < (p.stockScale ?? prevScale) - 0.001) {
+          const visible = p.stockScale ?? prevScale;
+          p.scaling = false;
+          p.stockScale = visible;
+          p.scaleFrom = visible;
+          p.targetScale = visible;
+        }
       } else if (wasDead) {
         p.fellDelayMs = 0;
+        p.sinking = false;
+        p.sink = 0;
+        p.sinkT = 0;
         p.stockScale = nextTarget * 0.12;
         resetBurnVisual(p);
         if (treeDoomed(p)) initBurnVisual(p);
@@ -1000,7 +1053,41 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     treeBatch = null;
   }
 
-  return { meshes, modelsReady, update, applyTreeUpdates, applyRockUpdates, applyAuthoredTiles, applyFogDim, applyFogTiles, pingHarvest, dispose };
+  function forEachBurningTree(fn) {
+    for (let b = 0; b < batches.length; b++) {
+      const batch = batches[b];
+      if (batch.variant.kind !== SCENERY.TREE) continue;
+      const instances = batch.instances;
+      for (let i = 0; i < instances.length; i++) {
+        const p = instances[i];
+        const sinking = p.sinking && (p.stockScale ?? 0) > 0;
+        if (!((p.burn > 0 && p.stock > 0) || sinking)) continue;
+        fn({
+          x: p.x,
+          y: p.y - (p.sink ?? 0),
+          z: p.z,
+          stockScale: p.stockScale || 1,
+          lean: p.lean ?? 0,
+          yaw: p.yaw ?? 0,
+          char: p.char ?? 0,
+        });
+      }
+    }
+  }
+
+  return {
+    meshes,
+    modelsReady,
+    update,
+    forEachBurningTree,
+    applyTreeUpdates,
+    applyRockUpdates,
+    applyAuthoredTiles,
+    applyFogDim,
+    applyFogTiles,
+    pingHarvest,
+    dispose,
+  };
 }
 
 function makeEmptyTreeInstance() {
@@ -1020,6 +1107,10 @@ function makeEmptyTreeInstance() {
     scaleMode: 'lerp',
     scaling: false,
     fellDelayMs: 0,
+    sinking: false,
+    sinkT: 0,
+    sink: 0,
+    sinkDepth: 0,
     lean: 0,
     char: 0,
     burnT: 0,
@@ -1267,6 +1358,10 @@ function collectInstances(field, variant, surfaceHeightAt) {
         scaleMode: 'lerp',
         scaling: false,
         fellDelayMs: 0,
+        sinking: false,
+        sinkT: 0,
+        sink: 0,
+        sinkDepth: 0,
         lean: 0,
         char: 0,
         burnT: 0,
@@ -1306,6 +1401,7 @@ function updateBatchLod(batch, cameraPos) {
     }
     const modelScale = variant.modelScale * stockScale;
     const billboardScale = variant.billboardScale * stockScale;
+    const y = p.y - (p.sink ?? 0);
     const dx = cameraPos.x - p.x;
     const dy = cameraPos.y - p.y;
     const dz = cameraPos.z - p.z;
@@ -1316,7 +1412,7 @@ function updateBatchLod(batch, cameraPos) {
           part.matrices,
           i,
           p.x,
-          p.y,
+          y,
           p.z,
           p.yaw,
           modelScale,
@@ -1332,7 +1428,7 @@ function updateBatchLod(batch, cameraPos) {
         billboardMatrices,
         i,
         p.x,
-        p.y + variant.billboardYOffset * billboardScale,
+        y + variant.billboardYOffset * billboardScale,
         p.z,
         p.yaw,
         billboardScale,

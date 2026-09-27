@@ -1,0 +1,68 @@
+{
+  "sourceUrl": "/assets/models/props/disc.glb",
+  "version": 3,
+  "sockets": [],
+  "materials": [
+    {
+      "name": "Material",
+      "baseColorFactor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "Material",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "boundMin": [
+        -4.521141529083252,
+        -1,
+        -4.530320644378662
+      ],
+      "boundMax": [
+        4.464679718017578,
+        4.368477821350098,
+        4.45550012588501
+      ],
+      "positions": {
+        "offset": 0,
+        "length": 2952,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 11808,
+        "length": 2952,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 23616,
+        "length": 996,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 27600,
+        "length": 1968,
+        "type": "f32"
+      }
+    }
+  ]
+}

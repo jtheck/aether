@@ -11,14 +11,18 @@ import {
   matchChannel,
 } from '../lobby/protocol.js';
 import {
+  addSpectator,
   canStart,
   claimSeat,
   cloneRoster,
   countHumans,
   createRoster,
+  moveRosterPerson,
   releaseSeat,
+  removeSpectator,
   seatOf,
   setSeatReady,
+  spectatorOf,
   startBlockReason,
 } from '../lobby/roster.js';
 import {
@@ -72,6 +76,10 @@ export function createMatchLobby({
   let hosting = false;
   let phase = 'idle';
   let seats = [];
+  /** Watchers in this room. They are not seats and not lockstep peers. */
+  let spectators = [];
+  /** This client entered as a watcher, not a seated player. */
+  let watching = false;
   let settings = defaultSettings('onevsone');
   let hostId = null;
   let hostName = '';
@@ -129,6 +137,8 @@ export function createMatchLobby({
       hosting,
       phase,
       seats: cloneRoster(seats),
+      spectators: spectators.map((s) => ({ ...s })),
+      watching,
       settings: { ...settings },
       hostId,
       hostName,
@@ -156,9 +166,12 @@ export function createMatchLobby({
       hostColor,
       playerCount: snap.playerCount,
       maxPlayers: snap.maxPlayers,
+      spectatorCount: spectators.length,
+      spectators: snap.spectators,
       settings: snap.settings,
       seats: snap.seats,
       phase,
+      countdownEndsAt: snap.countdownEndsAt,
     };
   }
 
@@ -309,11 +322,11 @@ export function createMatchLobby({
     };
     prevCommit = session.onCommit;
     session.onCommit = (tick, checksum) => {
-      sendTickConfirm(tick + 1);
+      if (session.role === 'player' && (session.localPlayerId ?? -1) >= 0) sendTickConfirm(tick + 1);
       prevCommit?.(tick, checksum);
     };
     dialSeatedPeers();
-    kickstartLockstep();
+    if (session.role === 'player') kickstartLockstep();
   }
 
   function detachSession() {
@@ -345,6 +358,19 @@ export function createMatchLobby({
     }
   }
 
+  function presenceHello() {
+    const me = profile();
+    if (watching) return { type: MSG.SPECTATE, name: me.name, color: me.color };
+    return {
+      type: MSG.JOIN,
+      name: me.name,
+      color: me.color,
+      dlc: me.dlc,
+      skins: me.skins,
+      ready: Boolean(seatOf(seats, me.userId)?.ready),
+    };
+  }
+
   /** Frozen board stays up; room goes back to ready-up and type-channel browse. */
   function returnToWaiting() {
     if (phase !== 'playing') return false;
@@ -357,23 +383,9 @@ export function createMatchLobby({
       startAnnounce();
       sendData(snapshot());
     } else {
-      const me = profile();
-      sendType({
-        type: MSG.JOIN,
-        name: me.name,
-        color: me.color,
-        dlc: me.dlc,
-        skins: me.skins,
-        ready: false,
-      });
-      sendData({
-        type: MSG.JOIN,
-        name: me.name,
-        color: me.color,
-        dlc: me.dlc,
-        skins: me.skins,
-        ready: false,
-      });
+      const hello = presenceHello();
+      sendType(hello);
+      sendData(hello);
     }
     emit();
     return true;
@@ -426,14 +438,13 @@ export function createMatchLobby({
   function applyState(msg) {
     if (!msg || (msg.roomId && roomId && msg.roomId !== roomId)) return;
     if (phase === 'starting' || phase === 'playing') return;
-    if (msg.seats) {
-      let next = cloneRoster(msg.seats);
+    if (msg.seats) seats = cloneRoster(msg.seats);
+    if (Array.isArray(msg.spectators)) {
+      spectators = msg.spectators.map((s) => ({ ...s }));
+    }
+    if (!hosting) {
       const me = localId();
-      if (me && !hosting && !seatOf(next, me)) {
-        const local = seatOf(seats, me);
-        if (local) next = claimSeat(next, local).seats;
-      }
-      seats = next;
+      watching = Boolean(me && !seatOf(seats, me) && spectatorOf(spectators, me));
     }
     if (msg.settings) settings = { ...settings, ...msg.settings };
     if (msg.garden && typeof msg.garden === 'object') startGarden = msg.garden;
@@ -490,6 +501,8 @@ export function createMatchLobby({
     hosting = false;
     phase = 'idle';
     seats = [];
+    spectators = [];
+    watching = false;
     hostId = null;
     hostName = '';
     hostColor = '';
@@ -516,6 +529,8 @@ export function createMatchLobby({
     hostId = me.userId;
     hostName = me.name;
     hostColor = me.color;
+    watching = false;
+    spectators = [];
     seats = createRoster(nextMode);
     seats = claimSeat(seats, { ...me, ready: true }).seats;
     joinMatchChannel();
@@ -524,30 +539,57 @@ export function createMatchLobby({
     return true;
   }
 
-  function joinRoom(nextMode, nextRoomId, from) {
-    if (!getMode(nextMode) || !nextRoomId) return false;
+  function joinRoom(nextMode, nextRoomId, from, opts = {}) {
+    const spectate = Boolean(opts.spectate);
+    const modeInfo = getMode(nextMode);
+    if (!modeInfo || !nextRoomId) return false;
+    if (spectate && !modeInfo.spectators) return false;
     if (phase !== 'idle') leaveRoom();
     const me = profile();
     if (!me.userId) return false;
     mode = nextMode;
     roomId = nextRoomId;
     hosting = false;
+    watching = spectate;
     phase = 'waiting';
     settings = defaultSettings(nextMode);
     hostFromHint = from ?? null;
     hostId = from ?? null;
     seats = createRoster(nextMode);
-    seats = claimSeat(seats, { ...me, ready: false }).seats;
+    spectators = [];
+    if (spectate) spectators = addSpectator([], me).spectators;
+    else seats = claimSeat(seats, { ...me, ready: false }).seats;
     gameLobby?.hold?.(nextMode);
     joinMatchChannel();
-    sendType({ type: MSG.JOIN, name: me.name, color: me.color, dlc: me.dlc, skins: me.skins, ready: false });
+    sendType(presenceHello());
     if (from) dial(from);
     emit();
     return true;
   }
 
+  function spectateRoom(nextMode, nextRoomId, from) {
+    return joinRoom(nextMode, nextRoomId, from, { spectate: true });
+  }
+
+  function hostAddSpectator(msg) {
+    if (!getMode(mode)?.spectators) return false;
+    if (phase === 'starting' || phase === 'playing') return false;
+    const userId = senderUserId(msg);
+    if (!userId || sameUserId(userId, localId())) return false;
+    if (seatOf(seats, userId)) return false;
+    const added = addSpectator(spectators, { userId, name: msg.name, color: msg.color });
+    if (!added.ok) return false;
+    spectators = added.spectators;
+    return true;
+  }
+
   function applyPlayLeave(userId, msg = {}) {
     if (phase !== 'playing' && phase !== 'starting') return false;
+    if (spectatorOf(spectators, userId)) {
+      spectators = removeSpectator(spectators, userId);
+      emit();
+      return true;
+    }
     const seat = seatOf(seats, userId);
     if (!seat || seat.kind !== 'human') return false;
     const playerId = msg.playerId != null ? (msg.playerId | 0) : seat.index;
@@ -569,7 +611,7 @@ export function createMatchLobby({
     if (phase === 'idle') return;
     const wasPlaying = phase === 'playing' || phase === 'starting';
     const restoreWorld = hadMatch || wasPlaying;
-    if (wasPlaying) {
+    if (wasPlaying && !watching) {
       const me = localId();
       const seat = seatOf(seats, me);
       const playerId = session?.localPlayerId ?? seat?.index ?? -1;
@@ -587,8 +629,26 @@ export function createMatchLobby({
     if (restoreWorld) onLeaveMatch?.();
   }
 
+  function movePerson(userId, dir) {
+    if (!hosting || phase === 'idle' || phase === 'starting' || phase === 'playing') return false;
+    if (!userId) return false;
+    const moved = moveRosterPerson(seats, spectators, userId, dir, {
+      hostId,
+      allowSpectators: Boolean(getMode(mode)?.spectators),
+      teams: Boolean(getMode(mode)?.teams),
+    });
+    if (!moved.ok) return false;
+    seats = moved.seats;
+    spectators = moved.spectators;
+    if (phase === 'countdown') abortCountdown(true);
+    sendData(snapshot());
+    startAnnounce();
+    emit();
+    return true;
+  }
+
   function setReady(ready) {
-    if (hosting || phase === 'idle' || phase === 'starting' || phase === 'playing') return;
+    if (watching || hosting || phase === 'idle' || phase === 'starting' || phase === 'playing') return;
     const me = localId();
     if (!me) return;
     seats = setSeatReady(seats, me, ready);
@@ -622,7 +682,9 @@ export function createMatchLobby({
   function beginCountdown() {
     startBusy = false;
     armCountdown(Date.now() + COUNTDOWN_MS);
-    sendData({ type: MSG.START, countdownEndsAt, garden: startGarden });
+    const startMsg = { type: MSG.START, countdownEndsAt, garden: startGarden };
+    sendData(startMsg);
+    sendType(startMsg);
     startAnnounce();
     emit();
   }
@@ -668,6 +730,11 @@ export function createMatchLobby({
       if (restoreWorld) onLeaveMatch?.();
       return;
     }
+    if (data.type === MSG.START && data.countdownEndsAt && !hosting) {
+      if (data.garden && typeof data.garden === 'object') startGarden = data.garden;
+      armCountdown(data.countdownEndsAt);
+      return;
+    }
     if (data.type === MSG.ANNOUNCE && !hosting) {
       if (phase === 'starting' || phase === 'playing') return;
       applyState(data);
@@ -679,6 +746,13 @@ export function createMatchLobby({
         return;
       }
       if (!hosting) return;
+      if (spectatorOf(spectators, senderUserId(data))) {
+        spectators = removeSpectator(spectators, senderUserId(data));
+        startAnnounce();
+        sendData(snapshot());
+        emit();
+        return;
+      }
       if (hostRelease(data)) {
         if (phase === 'countdown') abortCountdown(true);
         startAnnounce();
@@ -689,9 +763,17 @@ export function createMatchLobby({
     }
     if (!hosting) return;
     if (phase === 'starting' || phase === 'playing') return;
+    if (data.type === MSG.SPECTATE) {
+      if (hostAddSpectator(data)) {
+        startAnnounce();
+        sendData(snapshot());
+        emit();
+      }
+      return;
+    }
     if (data.type === MSG.JOIN) {
-      if (phase === 'countdown') return;
-      if (hostClaim(data)) {
+      const seated = phase !== 'countdown' && hostClaim(data);
+      if (seated || hostAddSpectator(data)) {
         startAnnounce();
         sendData(snapshot());
         emit();
@@ -728,17 +810,7 @@ export function createMatchLobby({
   subscribePeerConnected?.((peerId) => {
     if (phase === 'idle' || !peerId) return;
     if (hosting) sendData(snapshot(), peerId);
-    else {
-      const me = profile();
-      sendData({
-        type: MSG.JOIN,
-        name: me.name,
-        color: me.color,
-        dlc: me.dlc,
-        skins: me.skins,
-        ready: Boolean(seatOf(seats, me.userId)?.ready),
-      }, peerId);
-    }
+    else sendData(presenceHello(), peerId);
   });
 
   subscribePeerDisconnected?.((peerId) => {
@@ -746,7 +818,15 @@ export function createMatchLobby({
     if (phase === 'starting' || phase === 'playing') return;
     const userId = peerUser.get(peerId);
     peerUser.delete(peerId);
-    if (!userId || !seatOf(seats, userId)) return;
+    if (!userId) return;
+    if (spectatorOf(spectators, userId)) {
+      spectators = removeSpectator(spectators, userId);
+      startAnnounce();
+      sendData(snapshot());
+      emit();
+      return;
+    }
+    if (!seatOf(seats, userId)) return;
     seats = releaseSeat(seats, userId);
     if (phase === 'countdown') abortCountdown(true);
     startAnnounce();
@@ -797,6 +877,13 @@ export function createMatchLobby({
         return;
       }
       if (!hosting) return;
+      if (spectatorOf(spectators, senderUserId(msg))) {
+        spectators = removeSpectator(spectators, senderUserId(msg));
+        sendData(snapshot());
+        startAnnounce();
+        emit();
+        return;
+      }
       if (hostRelease(msg)) {
         if (phase === 'countdown') abortCountdown(true);
         sendData(snapshot());
@@ -808,9 +895,17 @@ export function createMatchLobby({
     if (!hosting) return;
     if (phase === 'starting' || phase === 'playing') return;
 
+    if (msg.type === MSG.SPECTATE) {
+      if (hostAddSpectator(msg)) {
+        sendData(snapshot());
+        startAnnounce();
+        emit();
+      }
+      return;
+    }
     if (msg.type === MSG.JOIN) {
-      if (phase === 'countdown') return;
-      if (hostClaim(msg)) {
+      const seated = phase !== 'countdown' && hostClaim(msg);
+      if (seated || hostAddSpectator(msg)) {
         sendData(snapshot());
         startAnnounce();
         emit();
@@ -829,8 +924,10 @@ export function createMatchLobby({
   return {
     createRoom,
     joinRoom,
+    spectateRoom,
     leaveRoom,
     setReady,
+    movePerson,
     setSetting,
     requestStart,
     attachSession,

@@ -26,6 +26,13 @@ export const HOLY_ARMOR_RADIUS = fx.fromFloat(TILE_SIZE_F * 6);
 export const HOLY_ARMOR_COOLDOWN = 115;
 /** Absorb duration on buffed units (~7s at 20Hz). */
 export const HOLY_ARMOR_DURATION = 140;
+/**
+ * Cast rings closer than this fraction of the pulse radius collapse into one.
+ * A huddled priest group was publishing one full ring per caster.
+ */
+export const HOLY_FX_MERGE = 0.85;
+/** Hard cap on rings published in one drain window (one sim tick of casts). */
+export const HOLY_FX_MAX_PULSES = 4;
 
 export function createHolyArmorFxStore() {
   return {
@@ -43,6 +50,28 @@ export function pushHolyArmorFx(w, x, y, radius) {
   store.y.push(fx.toFloat(y));
   store.radius.push(fx.toFloat(radius));
   store.count++;
+}
+
+/**
+ * Publish a cast ring unless one already covers this caster.
+ * Render-only — shield HP is applied separately and stays per unit.
+ * @returns {boolean} true when a new ring was stored
+ */
+export function pushSeparatedHolyArmorFx(w, x, y, radius) {
+  const store = w.holyArmorFx;
+  if (!store || (store.count | 0) >= HOLY_FX_MAX_PULSES) return false;
+  const wx = fx.toFloat(x);
+  const wy = fx.toFloat(y);
+  const sep = fx.toFloat(radius) * HOLY_FX_MERGE;
+  const sep2 = sep * sep;
+  const n = store.count | 0;
+  for (let i = 0; i < n; i++) {
+    const dx = store.x[i] - wx;
+    const dy = store.y[i] - wy;
+    if (dx * dx + dy * dy <= sep2) return false;
+  }
+  pushHolyArmorFx(w, x, y, radius);
+  return true;
 }
 
 /** Drain cast pulses for worker → main publish (render-only). */

@@ -1,11 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fx from './fixed.js';
-import { createField, TERRAIN, tileCenterX, tileCenterY } from './field.js';
+import { createField, TERRAIN, TILE_SIZE_F, tileCenterX, tileCenterY, worldHalfFFromField } from './field.js';
 import { createWorld } from './world.js';
 import { createBuilding } from './buildings.js';
 import { SCENERY } from './scenery.js';
-import { TREE_STOCK_NATURAL_MAX, TREE_BURN_TICKS, TREE_WOOD_PER_STAGE } from './trees.js';
+import { TREE_STOCK_GROVE_MAX, TREE_STOCK_NATURAL_MAX, TREE_BURN_TICKS, TREE_WOOD_PER_STAGE } from './trees.js';
 import { GROVE_GROW_INTERVAL_NEAR, groveGrowthSystem } from './grove.js';
 import {
   DOODAD,
@@ -20,6 +20,7 @@ import {
   isGroveOvergrowth,
   isMatureOvergrowthHost,
   mushroomHostStatesNear,
+  mushroomHostSkirtRadius,
   mushroomPlacementsForHost,
   overgrowthCountNear,
   paintDoodadBrush,
@@ -95,6 +96,54 @@ describe('grove mushroom doodads', () => {
     assert.deepEqual(a, b);
     assert.ok(a.every((p) => Number.isFinite(p.x) && Number.isFinite(p.z)));
     assert.ok(a.every((p) => p.host === tiles[0]));
+  });
+
+  function distFromTile(field, tx, tz, p) {
+    const half = worldHalfFFromField(field);
+    const cx = (tx + 0.5) * TILE_SIZE_F - half;
+    const cz = (tz + 0.5) * TILE_SIZE_F - half;
+    return Math.hypot(p.x - cx, p.z - cz);
+  }
+
+  it('rings old-growth hosts outside the canopy skirt', () => {
+    const field = blank();
+    const tx = 40;
+    const tz = 40;
+    const i = plant(field, tx, tz, TREE_STOCK_GROVE_MAX);
+    const skirt = mushroomHostSkirtRadius(TREE_STOCK_GROVE_MAX);
+    assert.ok(skirt > 8, 'a grove giant skirt is many times the old fixed ring');
+    const list = mushroomPlacementsForHost(field, i);
+    assert.ok(list.every((p) => distFromTile(field, tx, tz, p) > skirt));
+    const early = plant(field, 8, 8, MUSHROOM_HOST_STOCK + 1);
+    const earlySkirt = mushroomHostSkirtRadius(MUSHROOM_HOST_STOCK + 1);
+    const earlyList = mushroomPlacementsForHost(field, early);
+    const earlyMin = Math.min(...earlyList.map((p) => distFromTile(field, 8, 8, p)));
+    const giantMin = Math.min(...list.map((p) => distFromTile(field, tx, tz, p)));
+    assert.ok(earlyMin > earlySkirt);
+    assert.ok(giantMin > earlyMin, 'bigger trees push the cluster farther out');
+  });
+
+  it('keeps a cluster on the open side of a neighboring giant', () => {
+    const field = blank();
+    const host = plant(field, 40, 40, TREE_STOCK_GROVE_MAX);
+    plant(field, 41, 40, TREE_STOCK_GROVE_MAX);
+    const skirt = mushroomHostSkirtRadius(TREE_STOCK_GROVE_MAX);
+    const list = mushroomPlacementsForHost(field, host);
+    assert.ok(list.every((p) => distFromTile(field, 41, 40, p) > skirt));
+  });
+
+  it('leaves authored mushrooms on empty ground in a tight cluster', () => {
+    const field = blank();
+    field.terrainTypes.fill(TERRAIN.GRASS);
+    const tx = 12;
+    const tz = 14;
+    const i = tz * field.width + tx;
+    field.doodadType[i] = DOODAD.MUSHROOM;
+    const list = mushroomPlacementsForHost(field, i);
+    assert.ok(list.every((p) => {
+      const d = distFromTile(field, tx, tz, p);
+      return d >= 1.2 && d <= 2.55;
+    }));
   });
 
   it('rechecks neighbors when a dirty tile crosses the line', () => {

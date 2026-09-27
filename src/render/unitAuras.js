@@ -110,7 +110,8 @@ export function createUnitAuras(emit, groundYAt, opts = {}) {
       p.emitAcc = 0;
 
       const gy = groundYAt(p.x, p.z) + 0.22;
-      const beadCount = 18 + Math.floor((1 - t) * 14);
+      // Stay inside a Low FX pool (2048) when a few rings overlap.
+      const beadCount = 10 + Math.floor((1 - t) * 6);
       const fade = 1 - t;
       for (let b = 0; b < beadCount; b++) {
         const ang = (b / beadCount) * Math.PI * 2 + t * 0.7;
@@ -132,7 +133,7 @@ export function createUnitAuras(emit, groundYAt, opts = {}) {
           endSize: 0.08,
           drag: 1.4,
         });
-        if (Math.random() > 0.45) {
+        if (Math.random() > 0.82) {
           emit({
             position: [px, gy + 0.05, pz],
             velocity: [

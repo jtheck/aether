@@ -18,7 +18,7 @@ import {
   applyAreaHolyArmor,
   holyArmorRadius,
   holyArmorShieldAmount,
-  pushHolyArmorFx,
+  pushSeparatedHolyArmorFx,
 } from './holyArmor.js';
 import {
   SPORE_BLOOM_COOLDOWN,
@@ -402,7 +402,7 @@ function castHolyArmorGroup(w, casters) {
       radius,
       amount,
     });
-    pushHolyArmorFx(w, w.px[i], w.py[i], radius);
+    pushSeparatedHolyArmorFx(w, w.px[i], w.py[i], radius);
   }
   if (applied <= 0) return false;
   lockGroup(w, ready, HOLY_ARMOR_COOLDOWN);

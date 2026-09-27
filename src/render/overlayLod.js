@@ -10,12 +10,13 @@ export const OVERLAY_MAX_BUILDING_BARS = 128;
  * count. Each slot is HP chips + lead + underline + under dots + rings.
  */
 export const HEALTH_BAR_CAPACITY = OVERLAY_MAX_BARS + OVERLAY_MAX_BUILDING_BARS;
-/** Packed holy-shield spheres (not entity-indexed). */
-export const OVERLAY_MAX_SHIELDS = 256;
-/** Full-size chips within this XZ distance of the look-at; beyond = one step smaller. */
-export const OVERLAY_BAR_NEAR_DISTANCE = 280;
-export const OVERLAY_BAR_NEAR_DISTANCE_SQ =
-  OVERLAY_BAR_NEAR_DISTANCE * OVERLAY_BAR_NEAR_DISTANCE;
+/**
+ * Packed holy-shield rings (not entity-indexed).
+ * Lite pins the draw to this pool, so it cannot track MAX_ENTITIES (65536).
+ * Each mark is a thin ring, so the ceiling only has to cover a fight, not a
+ * sphere fill budget.
+ */
+export const OVERLAY_MAX_SHIELDS = 1024;
 /** Collar burst + idle spin within this XZ distance of the camera eye. */
 export const OVERLAY_COLLAR_SPIN_DISTANCE = 320;
 export const OVERLAY_COLLAR_SPIN_DISTANCE_SQ =
@@ -23,7 +24,7 @@ export const OVERLAY_COLLAR_SPIN_DISTANCE_SQ =
 
 /**
  * Camera refs for overlay distance.
- * - `x`/`z`: look-at target (health-bar pick + near/far size)
+ * - `x`/`z`: look-at target (which health bars to draw)
  * - `eyeX`/`eyeZ`: camera eye on XZ (collar spin)
  * @param {{ camera?: {
  *   target?: { x: number, z: number },
@@ -72,6 +73,16 @@ function swapF32(a, i, j) {
   a[j] = t;
 }
 
+/**
+ * Leave the nearest `maxN` candidates in `ids[0, maxN)`.
+ * Returns how many to draw. Mutates `ids` / `d2` order.
+ */
+export function keepNearest(ids, d2, count, maxN) {
+  if (count <= 0 || maxN <= 0) return 0;
+  if (count > maxN) selectNearest(ids, d2, count, maxN);
+  return Math.min(count, maxN);
+}
+
 /** Partition so the `maxN` nearest (by d2) occupy slots [offset, offset + maxN). */
 function selectNearest(ids, d2, count, maxN, offset = 0) {
   if (count <= maxN) return;
@@ -96,11 +107,6 @@ function selectNearest(ids, d2, count, maxN, offset = 0) {
     else if (goal >= i) left = i;
     else break;
   }
-}
-
-/** True when the chip should use the smaller far step (look-at XZ). */
-export function overlayBarIsFar(dx, dz) {
-  return dx * dx + dz * dz > OVERLAY_BAR_NEAR_DISTANCE_SQ;
 }
 
 /**

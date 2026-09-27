@@ -39,6 +39,43 @@ export function shouldFastForwardLockstep({ lagTicks = 0, draining = false } = {
 
 export { TICK_HZ, TICK_MS };
 
+/**
+ * Advance the render clock by one frame.
+ * `displayTickF` is continuous sim-ticks (10.3 = 30% from snapshot 10 toward 11).
+ * It follows wall time at the smoothed snapshot rate and never restarts when a
+ * snapshot lands, so an early tick cannot yank units forward.
+ * More than one tick behind the drawable tip is dropped — replaying a hitch is the surge.
+ * @param {number} displayTickF
+ * @param {number} dtMs
+ * @param {number} blendMs smoothed ms per sim tick
+ * @param {number} maxTick newest snapshot the renderer may show
+ */
+export function stepDisplayTick(displayTickF, dtMs, blendMs, maxTick) {
+  const blend = blendMs > 0 ? blendMs : TICK_MS;
+  const dt = dtMs > 0 ? dtMs : 0;
+  let next = (displayTickF > 0 ? displayTickF : 0) + dt / blend;
+  const cap = maxTick > 0 ? maxTick : 0;
+  if (next > cap) next = cap;
+  if (next < 0) next = 0;
+  if (cap - next > 1) next = Math.max(0, cap - 1);
+  return next;
+}
+
+/**
+ * Snapshot pair for a continuous display tick.
+ * An exact integer sits at the end of the segment that arrived there (alpha 1),
+ * because the next snapshot may not exist yet.
+ * @param {number} displayTickF
+ * @returns {{ tick: number, alpha: number }}
+ */
+export function displayPoseSample(displayTickF) {
+  const t = displayTickF > 0 ? displayTickF : 0;
+  if (t <= 0) return { tick: 0, alpha: 1 };
+  const cur = Math.ceil(t - 1e-8);
+  const alpha = t - (cur - 1);
+  return { tick: cur, alpha: alpha >= 1 ? 1 : alpha };
+}
+
 export function matchSecondsFromTick(tick) {
   return Math.max(0, Math.floor(tick / TICK_HZ));
 }
@@ -146,10 +183,15 @@ export class SimSession {
     this._commandSeq = 0;
     this._seenFrameIds = new Set();
     this.lastSnapshotAt = 0;
-    /** EMA of wall time between snapshots — used so render blend matches real tick cost. */
+    /** EMA of wall time between snapshots — display clock rate, not a per-tick restart. */
     this._displayBlendMs = TICK_MS;
+    /** False until the first real inter-snapshot gap is adopted. */
+    this._displayBlendLive = false;
+    /** Continuous render tick. Advances in pump(); snapshot arrival does not reset it. */
+    this._displayTickF = 0;
+    this._displaySample = { tick: 0, alpha: 1 };
     /** Last alpha / display tick actually drawn — pause freezes to these (not live clock). */
-    this._lastDisplayAlpha = 0;
+    this._lastDisplayAlpha = 1;
     this._lastDisplayTick = 0;
     /** Frozen render blend while pauseLockstep (null when running). */
     this._pausedDisplayAlpha = null;
@@ -240,6 +282,10 @@ export class SimSession {
     this._bindStepHandler();
     this._captureSnapshot(0);
     this.lastSnapshotAt = performance.now();
+    this._displayTickF = 0;
+    this._displayBlendMs = TICK_MS;
+    this._displayBlendLive = false;
+    this._displaySample = { tick: 0, alpha: 1 };
     return {
       count,
       field: this.field,
@@ -307,6 +353,20 @@ export class SimSession {
     this.simAcc += dt;
     // Bound clock debt: slow ticks (stress) must not accumulate a catch-up storm.
     if (this.simAcc > TICK_MS * 3) this.simAcc = TICK_MS * 3;
+    // One advance per frame, before any pose read. A second read must not cross
+    // into the next snapshot with the previous alpha — that was a full-step surge.
+    if (!this.pauseLockstep && !this.resetting) {
+      this._displayTickF = stepDisplayTick(
+        this._displayTickF,
+        dt,
+        this._displayBlendMs,
+        this._maxDisplayTick(),
+      );
+      const sample = displayPoseSample(this._displayTickF);
+      this._displaySample = sample;
+      this._lastDisplayAlpha = sample.alpha;
+      this._lastDisplayTick = sample.tick;
+    }
     this._drainPendingCommits();
   }
 
@@ -378,14 +438,16 @@ export class SimSession {
     }
   }
 
+  _maxDisplayTick() {
+    return Math.max(0, this.confirmedTick - this.inputDelayTicks);
+  }
+
   /**
    * Fraction through the current display tick (0–1).
-   * Blend window tracks real inter-snapshot time so a slow worker (stress) eases
-   * across the whole interval instead of freezing at alpha=1 after TICK_MS.
+   * Advanced in `pump` so units and projectiles share one sample.
    * While paused, hold the last *drawn* alpha so projectiles don't take one more step.
    */
   get displayAlpha() {
-    const blend = Math.max(TICK_MS, this._displayBlendMs || TICK_MS);
     if (this.pauseLockstep) {
       if (this._pausedDisplayAlpha == null) {
         this._pausedDisplayAlpha = this._lastDisplayAlpha;
@@ -393,16 +455,10 @@ export class SimSession {
       return this._pausedDisplayAlpha;
     }
     if (this._pausedDisplayAlpha != null) {
-      const a = this._pausedDisplayAlpha;
       this._pausedDisplayAlpha = null;
       this._pausedDisplayTick = null;
-      this.lastSnapshotAt = performance.now() - a * blend;
-      this._lastDisplayAlpha = a;
-      return a;
     }
-    const live = Math.min(1, (performance.now() - this.lastSnapshotAt) / blend);
-    this._lastDisplayAlpha = live;
-    return live;
+    return this._displaySample.alpha;
   }
 
   _displayTick() {
@@ -412,9 +468,11 @@ export class SimSession {
       }
       return this._pausedDisplayTick;
     }
-    const displayTick = Math.max(0, this.confirmedTick - this.inputDelayTicks);
-    this._lastDisplayTick = displayTick;
-    return displayTick;
+    if (this._pausedDisplayAlpha != null) {
+      this._pausedDisplayAlpha = null;
+      this._pausedDisplayTick = null;
+    }
+    return this._displaySample.tick;
   }
 
   /** Snapshot pair for render interpolation (display lags sim by inputDelayTicks). */
@@ -669,6 +727,9 @@ export class SimSession {
     this.inFlightFrames = [];
     this._commandSeq = 0;
     this._displayBlendMs = TICK_MS;
+    this._displayBlendLive = false;
+    this._displayTickF = 0;
+    this._displaySample = { tick: 0, alpha: 1 };
     clearSessionTableState(this);
     this.client = new SimClient();
     this.state = this.client.state;
@@ -723,6 +784,11 @@ export class SimSession {
     this._commandSeq = other._commandSeq;
     this.lastSnapshotAt = performance.now();
     this._displayBlendMs = other._displayBlendMs || TICK_MS;
+    this._displayBlendLive = true;
+    this._displayTickF = Math.max(0, this.confirmedTick - this.inputDelayTicks);
+    this._displaySample = displayPoseSample(this._displayTickF);
+    this._lastDisplayAlpha = this._displaySample.alpha;
+    this._lastDisplayTick = this._displaySample.tick;
     this._pausedDisplayAlpha = null;
     this._pausedDisplayTick = null;
     this.pauseLockstep = false;
@@ -862,13 +928,19 @@ export class SimSession {
       // the last drawn tick/alpha (an in-flight commit may still land).
       if (!this.pauseLockstep) {
         if (this.lastSnapshotAt > 0) {
-          const measured = Math.max(1, now - this.lastSnapshotAt);
-          // First real interval: adopt immediately so stress doesn't spend the
-          // opening ticks frozen on a 50ms blend window.
-          if (this._displayBlendMs <= TICK_MS) {
-            this._displayBlendMs = measured;
-          } else {
-            this._displayBlendMs = this._displayBlendMs * 0.65 + measured * 0.35;
+          const measured = now - this.lastSnapshotAt;
+          // Same-frame catch-up commits are a few ms apart. Folding those into
+          // the blend made the next interval play fast, then pop when it ended.
+          // Replay playback can sit on a tick for longer than a live sim step
+          // (⅛× is 400ms), and that whole gap is the blend.
+          const maxMeasure = this.watchingReplay ? 2000 : 250;
+          if (measured >= 8 && measured <= maxMeasure) {
+            if (!this._displayBlendLive) {
+              this._displayBlendMs = measured;
+              this._displayBlendLive = true;
+            } else {
+              this._displayBlendMs = this._displayBlendMs * 0.65 + measured * 0.35;
+            }
           }
         }
         this.lastSnapshotAt = now;

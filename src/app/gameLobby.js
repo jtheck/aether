@@ -51,8 +51,16 @@ export function createGameLobby({ getP2p, subscribeBroadcast, onChange } = {}) {
     if (data.type === MSG.ANNOUNCE) {
       if (sameUserId(senderUserId(data) ?? data.from, localUserId())) return;
       if (!data.roomId) return;
-      const row = { ...data, ts: Date.now() };
-      bucket(data.mode).set(data.roomId, row);
+      const map = bucket(data.mode);
+      const prev = map.get(data.roomId);
+      const now = Date.now();
+      // `ts` is liveness only. `listedAt` stays at first sight so a heartbeat
+      // does not move the row.
+      map.set(data.roomId, {
+        ...data,
+        ts: now,
+        listedAt: prev?.listedAt ?? now,
+      });
       emit();
       return;
     }
@@ -139,7 +147,15 @@ export function createGameLobby({ getP2p, subscribeBroadcast, onChange } = {}) {
   function listLobbies(mode) {
     prune(mode);
     const rows = [...(lists.get(mode)?.values() ?? [])];
-    rows.sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
+    rows.sort((a, b) => {
+      const listed = (b.listedAt ?? 0) - (a.listedAt ?? 0);
+      if (listed !== 0) return listed;
+      const idA = String(a.roomId ?? '');
+      const idB = String(b.roomId ?? '');
+      if (idA < idB) return -1;
+      if (idA > idB) return 1;
+      return 0;
+    });
     return rows;
   }
 

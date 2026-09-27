@@ -121,8 +121,34 @@ export const WAVE_PRESET_RING = wavePresetRing();
 export const WAVE_PRESET_TUBE_CORNERS = nanotubeCorners();
 export const WAVE_PRESET_TUBE = WAVE_PRESET_TUBE_CORNERS;
 
-/** Pair, ring, tube — spawn collapses each; toggle only picks a baked bank. */
-export const WAVE_PRESETS = [WAVE_PRESET_PAIR, WAVE_PRESET_RING, WAVE_PRESET_TUBE];
+/** Sources along the tube axis — the step before the full lattice. */
+export const WAVE_LINE_COUNT = 12;
+
+export function wavePresetLine(count = WAVE_LINE_COUNT) {
+  const corners = WAVE_PRESET_TUBE_CORNERS;
+  let y0 = 0;
+  let y1 = 14;
+  if (corners.length) {
+    y0 = Infinity;
+    y1 = -Infinity;
+    for (let i = 0; i < corners.length; i++) {
+      const y = corners[i].y;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    }
+  }
+  const n = Math.max(2, count | 0);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    out.push({ x: 0, y: y0 + ((y1 - y0) * i) / (n - 1), z: 0 });
+  }
+  return out;
+}
+
+export const WAVE_PRESET_LINE = wavePresetLine();
+
+/** Pair, ring, line, tube — spawn collapses each; toggle only picks a baked bank. */
+export const WAVE_PRESETS = [WAVE_PRESET_PAIR, WAVE_PRESET_RING, WAVE_PRESET_LINE, WAVE_PRESET_TUBE];
 export const WAVE_PRESET_CAP = WAVE_PRESETS.length;
 /** Interleaved [Bx,By,Bz,Cx,Cy,Cz] per preset per particle. */
 export const WAVE_COEFF_STRIDE = WAVE_PRESET_CAP * 6;
@@ -180,7 +206,7 @@ export function waveEmitterFocus() {
   return WAVE_PRESET_CENTROIDS[presetIndex];
 }
 
-/** Keep this many chunk-edges around each live emitter (full density, last to page out). */
+/** Keep this many chunk-edges around each live emitter (stay resident, same density as the field). */
 export const STREAM_EMITTER_KEEP_CHUNKS = 1.35;
 
 export function waveEmitterKeepR(chunkSize) {
@@ -216,10 +242,11 @@ export function waveChunkNearEmitter(bounds, keepR) {
   return waveChunkEmitDist2(bounds) <= r * r;
 }
 
-/** ~5 ms of collapse — pair/ring are cheap, tube is not. */
+/** ~5 ms of collapse — pair/ring are cheap, a line is in between, tube is not. */
 export function waveBakeParticleBudget() {
   const s = WAVE_PRESETS[presetIndex].length;
   if (s <= 6) return 10000;
+  if (s <= 16) return 4000;
   return Math.max(400, Math.floor(4500 / 5.2));
 }
 
@@ -267,7 +294,7 @@ export function bakeDirtyWaveStore(store, p = presetIndex) {
   return baked;
 }
 
-/** @type {'pair'|'ring'|'tube'} */
+/** @type {'pair'|'ring'|'line'|'tube'} */
 let presetId = 'pair';
 let presetIndex = 0;
 
@@ -290,29 +317,20 @@ function setEmitterBalls(list) {
   for (const s of list) WAVE_EMITTER_BALLS.push({ x: s.x, y: s.y, z: s.z });
 }
 
-const PRESET_ORDER = /** @type {const} */ (['pair', 'ring', 'tube']);
+const PRESET_ORDER = /** @type {const} */ (['pair', 'ring', 'line', 'tube']);
 
 function applyWavePreset(id) {
-  if (id === 'ring') {
-    presetId = 'ring';
-    presetIndex = 1;
-    setLiveSources(WAVE_PRESET_RING);
-    setEmitterBalls(WAVE_PRESET_RING);
-  } else if (id === 'tube') {
-    presetId = 'tube';
-    presetIndex = 2;
-    setLiveSources(WAVE_PRESET_TUBE);
-    setEmitterBalls(WAVE_PRESET_TUBE_CORNERS);
-  } else {
-    presetId = 'pair';
-    presetIndex = 0;
-    setLiveSources(WAVE_PRESET_PAIR);
-    setEmitterBalls(WAVE_PRESET_PAIR);
-  }
+  let i = PRESET_ORDER.indexOf(id);
+  if (i < 0) i = 0;
+  presetId = PRESET_ORDER[i];
+  presetIndex = i;
+  const sources = WAVE_PRESETS[i];
+  setLiveSources(sources);
+  setEmitterBalls(sources);
   return presetId;
 }
 
-/** Swap which baked bank the write loop uses. No rebake. @returns {'pair'|'ring'|'tube'} */
+/** Swap which baked bank the write loop uses. No rebake. @returns {'pair'|'ring'|'line'|'tube'} */
 export function toggleWavePreset() {
   return stepWavePreset(1);
 }

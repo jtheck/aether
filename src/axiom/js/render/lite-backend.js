@@ -21,7 +21,6 @@ import {
   createTexture2DFromPixels,
   disposeEngine,
   disposeScene,
-  flushThinInstances,
   loadTexture2D,
   registerScene,
   removeFromScene,
@@ -31,11 +30,13 @@ import {
   setStandardAmbientTexture,
   setStandardEmissiveTexture,
   setStandardOpacityTexture,
+  setShaderUniform,
   setThinInstanceColors,
   setThinInstanceCount,
   setThinInstances,
 } from '@babylonjs/lite';
 import { WAVE_BALL_CAP, WAVE_EMITTER_BALLS, wavePresetId } from '../sim/behaviors.js';
+import { buildTetraPlacements, isSlowTetraDevice, TETRA_PHASE_STEP } from './tetraField.js';
 import { getNanotubeLattice } from '../sim/nanotube.js';
 
 function identityPark(count) {
@@ -122,7 +123,7 @@ export function createLiteBackend() {
   /** @type {Map<string, any>} */
   const species = new Map();
 
-  /** @type {{ mesh: any, waveA: Float32Array, waveB: Float32Array, matrices: Float32Array, phase: number } | null} */
+  /** @type {{ mesh: any, phase: number } | null} */
   let tetras = null;
 
   /** @type {any} */
@@ -259,39 +260,42 @@ export function createLiteBackend() {
     const mesh = createPolyhedron(engine, { type: 0, size: 0.03 });
     mesh.name = 'tetrahedron';
     mesh.pickable = false;
-    const mat = createStandardMaterial();
-    mat.diffuseColor = [0.75, 0.75, 0.75];
-    mesh.material = mat;
+    mesh.boundMin = [-12, -4, -12];
+    mesh.boundMax = [12, 4, 12];
+    mesh.material = createShaderMaterial({
+      name: 'tetra-wave',
+      attributes: ['position', 'normal'],
+      uniforms: [
+        'world',
+        'viewProjection',
+        { name: 'tetraPhase', type: 'f32', defaultValue: 0 },
+      ],
+      vertexSource: `struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32> };
+@vertex fn mainVertex(input: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  let instanceWorld = mat4x4<f32>(input.world0, input.world1, input.world2, input.world3);
+  let finalWorld = shaderSystem.world * instanceWorld;
+  var p = input.position;
+  p.y += cos(instanceWorld[3].x + shaderUniforms.tetraPhase) + sin(instanceWorld[3].z + shaderUniforms.tetraPhase);
+  let worldPos = finalWorld * vec4<f32>(p, 1.0);
+  out.position = shaderSystem.viewProjection * worldPos;
+  out.normal = (finalWorld * vec4<f32>(input.normal, 0.0)).xyz;
+  return out;
+}`,
+      fragmentSource: `struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32> };
+@fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
+  let n = normalize(input.normal);
+  let ndl = max(dot(n, normalize(vec3<f32>(0.5, 1.0, 1.25))), 0.0);
+  return vec4<f32>(vec3<f32>(0.8) * (0.35 + 0.65 * ndl), 1.0);
+}`,
+      backFaceCulling: true,
+      depthWrite: true,
+    });
 
-    const xs = [];
-    const zs = [];
-    for (let ix = -10; ix < 10; ix += 0.75) {
-      for (let iz = -10; iz < 10; iz += 0.75) {
-        xs.push(ix);
-        zs.push(iz);
-      }
-    }
-    const n = xs.length;
-    const waveA = new Float32Array(n);
-    const waveB = new Float32Array(n);
-    const matrices = new Float32Array(n * 16);
-    for (let i = 0; i < n; i++) {
-      const x = xs[i];
-      const z = zs[i];
-      waveA[i] = Math.cos(x) + Math.sin(z);
-      waveB[i] = Math.cos(z) - Math.sin(x);
-      const o = i * 16;
-      matrices[o] = 1;
-      matrices[o + 5] = 1;
-      matrices[o + 10] = 1;
-      matrices[o + 12] = x;
-      matrices[o + 13] = waveA[i];
-      matrices[o + 14] = z;
-      matrices[o + 15] = 1;
-    }
-    setThinInstances(mesh, matrices, n);
+    const { matrices, count } = buildTetraPlacements(isSlowTetraDevice());
+    setThinInstances(mesh, matrices, count);
     addToScene(scene, mesh);
-    tetras = { mesh, waveA, waveB, matrices, phase: 0 };
+    tetras = { mesh, phase: 0 };
   }
 
   function syncWaveEmitters() {
@@ -399,14 +403,8 @@ export function createLiteBackend() {
 
     tickScenery() {
       if (!tetras) return;
-      tetras.phase += 0.00314;
-      const { waveA, waveB, matrices, mesh, phase } = tetras;
-      const c = Math.cos(phase);
-      const s = Math.sin(phase);
-      for (let i = 0; i < waveA.length; i++) {
-        matrices[i * 16 + 13] = waveA[i] * c + waveB[i] * s;
-      }
-      flushThinInstances(mesh);
+      tetras.phase += TETRA_PHASE_STEP;
+      setShaderUniform(tetras.mesh.material, 'tetraPhase', tetras.phase);
     },
 
     resize() {

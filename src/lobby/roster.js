@@ -132,6 +132,177 @@ export function canStart(modeId, seats) {
   return allHumansReady(seats);
 }
 
+/**
+ * @typedef {{ userId: string, name: string, color: string }} LobbySpectator
+ */
+
+/** @param {LobbySpectator[]} list @param {{ userId?: string, name?: string, color?: string }} player */
+export function addSpectator(list, player) {
+  const next = (list ?? []).map((s) => ({ ...s }));
+  if (player?.userId == null || player.userId === '') return { spectators: next, ok: false };
+  const existing = next.find((s) => sameUserId(s.userId, player.userId));
+  if (existing) {
+    if (player.name != null) existing.name = player.name;
+    if (player.color != null) existing.color = player.color;
+    return { spectators: next, ok: true };
+  }
+  next.push({
+    userId: player.userId,
+    name: player.name ?? '',
+    color: player.color ?? '',
+  });
+  return { spectators: next, ok: true };
+}
+
+/** @param {LobbySpectator[]} list @param {string | null | undefined} userId */
+export function removeSpectator(list, userId) {
+  return (list ?? []).filter((s) => !sameUserId(s.userId, userId));
+}
+
+function blankSeat(seat) {
+  seat.userId = null;
+  seat.name = '';
+  seat.color = '';
+  seat.dlc = [];
+  seat.skins = {};
+  seat.ready = false;
+  seat.kind = 'empty';
+}
+
+function writeSeat(seat, player, hostId) {
+  seat.userId = player.userId;
+  seat.name = player.name ?? '';
+  seat.color = player.color ?? '';
+  seat.dlc = copyDlc(player.dlc);
+  seat.skins = copySkins(player.skins);
+  seat.kind = 'human';
+  seat.ready = sameUserId(player.userId, hostId);
+}
+
+function swapSeatPlayers(a, b) {
+  const hold = {
+    userId: a.userId,
+    name: a.name,
+    color: a.color,
+    dlc: copyDlc(a.dlc),
+    skins: copySkins(a.skins),
+    ready: a.ready,
+    kind: a.kind,
+  };
+  a.userId = b.userId;
+  a.name = b.name;
+  a.color = b.color;
+  a.dlc = copyDlc(b.dlc);
+  a.skins = copySkins(b.skins);
+  a.ready = b.ready;
+  a.kind = b.kind;
+  b.userId = hold.userId;
+  b.name = hold.name;
+  b.color = hold.color;
+  b.dlc = hold.dlc;
+  b.skins = hold.skins;
+  b.ready = hold.ready;
+  b.kind = hold.kind;
+}
+
+/**
+ * Host moves one person one row. Seats stay in index order, then Watching.
+ * Crossing into Watching frees the seat. Crossing out fills the bottom open seat,
+ * or swaps with the last seat when the roster is full. The host stays ready.
+ * @param {LobbySeat[]} seats
+ * @param {LobbySpectator[]} spectators
+ * @param {string} userId
+ * @param {number} dir -1 up, +1 down
+ * @param {{ hostId?: string, allowSpectators?: boolean }} [opts]
+ */
+export function moveRosterPerson(seats, spectators, userId, dir, opts = {}) {
+  const nextSeats = cloneRoster(seats);
+  const nextSpecs = (spectators ?? []).map((s) => ({ ...s }));
+  const priorIndex = new Map(
+    seats.filter((s) => s.kind === 'human' && s.userId).map((s) => [s.userId, s.index]),
+  );
+  const priorTeam = new Map(
+    seats.filter((s) => s.kind === 'human' && s.userId).map((s) => [s.userId, s.team]),
+  );
+  const allowSpectators = opts.allowSpectators !== false;
+  const hostId = opts.hostId;
+  const seat = seatOf(nextSeats, userId);
+  const specIndex = nextSpecs.findIndex((s) => sameUserId(s.userId, userId));
+  if (!seat && specIndex < 0) return { seats: nextSeats, spectators: nextSpecs, ok: false };
+
+  if (seat && opts.teams) {
+    const order = [
+      ...nextSeats.filter((s) => s.team === 0),
+      ...nextSeats.filter((s) => s.team === 1),
+    ];
+    const pos = order.findIndex((s) => s.index === seat.index);
+    const onTeam = nextSeats.filter((s) => s.team === seat.team).length;
+    const neighbor = dir < 0 ? order[pos - 1] : order[pos + 1];
+    if (neighbor && neighbor.team !== seat.team) {
+      if (onTeam <= 1) return { seats: nextSeats, spectators: nextSpecs, ok: false };
+      seat.team = neighbor.team;
+    } else if (neighbor) {
+      swapSeatPlayers(seat, neighbor);
+    } else if (dir > 0 && allowSpectators) {
+      nextSpecs.unshift({ userId: seat.userId, name: seat.name, color: seat.color });
+      blankSeat(seat);
+    } else {
+      return { seats: nextSeats, spectators: nextSpecs, ok: false };
+    }
+  } else if (seat) {
+    if (dir < 0) {
+      if (seat.index <= 0) return { seats: nextSeats, spectators: nextSpecs, ok: false };
+      swapSeatPlayers(nextSeats[seat.index], nextSeats[seat.index - 1]);
+    } else if (seat.index < nextSeats.length - 1) {
+      swapSeatPlayers(nextSeats[seat.index], nextSeats[seat.index + 1]);
+    } else if (allowSpectators) {
+      nextSpecs.unshift({ userId: seat.userId, name: seat.name, color: seat.color });
+      blankSeat(seat);
+    } else {
+      return { seats: nextSeats, spectators: nextSpecs, ok: false };
+    }
+  } else if (dir > 0) {
+    if (specIndex >= nextSpecs.length - 1) return { seats: nextSeats, spectators: nextSpecs, ok: false };
+    const hold = nextSpecs[specIndex];
+    nextSpecs[specIndex] = nextSpecs[specIndex + 1];
+    nextSpecs[specIndex + 1] = hold;
+  } else if (specIndex > 0) {
+    const hold = nextSpecs[specIndex];
+    nextSpecs[specIndex] = nextSpecs[specIndex - 1];
+    nextSpecs[specIndex - 1] = hold;
+  } else {
+    const empty = [...nextSeats].reverse().find((s) => s.kind === 'empty');
+    const spec = nextSpecs[specIndex];
+    if (empty) {
+      writeSeat(empty, spec, hostId);
+      nextSpecs.splice(specIndex, 1);
+    } else if (nextSeats.length) {
+      const last = nextSeats[nextSeats.length - 1];
+      const displaced = last.kind === 'human'
+        ? { userId: last.userId, name: last.name, color: last.color }
+        : null;
+      writeSeat(last, spec, hostId);
+      if (displaced?.userId) nextSpecs[specIndex] = displaced;
+      else nextSpecs.splice(specIndex, 1);
+    } else {
+      return { seats: nextSeats, spectators: nextSpecs, ok: false };
+    }
+  }
+
+  for (const s of nextSeats) {
+    if (s.kind !== 'human' || !s.userId) continue;
+    if (priorIndex.get(s.userId) === s.index && priorTeam.get(s.userId) === s.team) continue;
+    s.ready = sameUserId(s.userId, hostId);
+  }
+  return { seats: nextSeats, spectators: nextSpecs, ok: true };
+}
+
+/** @param {LobbySpectator[]} list @param {string | null | undefined} userId */
+export function spectatorOf(list, userId) {
+  if (userId == null || userId === '') return null;
+  return (list ?? []).find((s) => sameUserId(s.userId, userId)) ?? null;
+}
+
 /** @param {string} modeId @param {LobbySeat[]} seats */
 export function startBlockReason(modeId, seats) {
   const mode = getMode(modeId);

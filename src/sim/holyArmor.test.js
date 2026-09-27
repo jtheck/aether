@@ -10,8 +10,10 @@ import { applyDamage } from './damage.js';
 import {
   HOLY_ARMOR_DURATION,
   HOLY_ARMOR_RADIUS,
+  HOLY_FX_MAX_PULSES,
   applyAreaHolyArmor,
   holyArmorShieldAmount,
+  pushSeparatedHolyArmorFx,
   takeHolyArmorUpdates,
 } from './holyArmor.js';
 
@@ -146,6 +148,27 @@ function castsAreDeterministic() {
   assert.equal(run(77), run(77));
 }
 
+function clusteredCastsShareOneRing() {
+  const w = createWorld(3);
+  const radius = HOLY_ARMOR_RADIUS;
+  assert.equal(pushSeparatedHolyArmorFx(w, 0, 0, radius), true);
+  assert.equal(pushSeparatedHolyArmorFx(w, fx.fromInt(4), 0, radius), false, 'huddled caster shares the ring');
+  const far = fx.mul(radius, fx.fromFloat(2));
+  assert.equal(pushSeparatedHolyArmorFx(w, far, 0, radius), true, 'separated caster gets its own ring');
+  assert.equal(takeHolyArmorUpdates(w).count, 2);
+}
+
+function pulsePublishCaps() {
+  const w = createWorld(4);
+  const step = fx.mul(HOLY_ARMOR_RADIUS, fx.fromFloat(2));
+  let kept = 0;
+  for (let i = 0; i < HOLY_FX_MAX_PULSES + 3; i++) {
+    if (pushSeparatedHolyArmorFx(w, fx.mul(step, fx.fromInt(i)), 0, HOLY_ARMOR_RADIUS)) kept++;
+  }
+  assert.equal(kept, HOLY_FX_MAX_PULSES);
+  assert.equal(takeHolyArmorUpdates(w).count, HOLY_FX_MAX_PULSES);
+}
+
 function shieldScalesFromPriestDamage() {
   const expected = Math.max(8, Math.round(getUnitDef(UNIT.PRIEST).attackDamage * 1.8));
   assert.equal(holyArmorShieldAmount(UNIT.PRIEST), expected);
@@ -154,5 +177,7 @@ function shieldScalesFromPriestDamage() {
 castBuffsFriendliesInRadius();
 shieldAbsorbsThenExpires();
 castsAreDeterministic();
+clusteredCastsShareOneRing();
+pulsePublishCaps();
 shieldScalesFromPriestDamage();
 console.log('holyArmor.test.js: ok');

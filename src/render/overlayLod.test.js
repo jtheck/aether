@@ -1,11 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  OVERLAY_BAR_NEAR_DISTANCE,
-  OVERLAY_BAR_NEAR_DISTANCE_SQ,
   markNearestN,
   markSelectedThenNearest,
-  overlayBarIsFar,
 } from './overlayLod.js';
 
 function pack(ids, d2) {
@@ -13,15 +10,6 @@ function pack(ids, d2) {
   const dBuf = new Float32Array(d2);
   return { idBuf, dBuf };
 }
-
-describe('overlay bar near/far', () => {
-  it('treats look-at distance past the near radius as far', () => {
-    assert.equal(overlayBarIsFar(0, 0), false);
-    assert.equal(overlayBarIsFar(OVERLAY_BAR_NEAR_DISTANCE, 0), false);
-    assert.equal(overlayBarIsFar(OVERLAY_BAR_NEAR_DISTANCE + 1, 0), true);
-    assert.ok(OVERLAY_BAR_NEAR_DISTANCE_SQ > 0);
-  });
-});
 
 describe('markSelectedThenNearest', () => {
   it('keeps a far selected unit even when nearer wounded fill the disk', () => {

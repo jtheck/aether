@@ -2,6 +2,7 @@
 // Requires aetherDesktop.steam from steam-build bridge.js.
 
 import { packsOwnedFromSteamDlc } from './dlcCatalog.js';
+import { isAlly } from '../sim/teams.js';
 
 export const ACH_FIRST_LAUNCH = 'ACH_FIRST_LAUNCH';
 export const ACH_FIRST_MATCH = 'ACH_FIRST_MATCH';
@@ -127,7 +128,7 @@ export function isKothAgoraDefeat(session) {
   if ((session.role ?? 'player') !== 'player') return false;
   const winner = session.matchWinner;
   if (winner == null || winner < 0) return false;
-  if (winner === (session.localPlayerId ?? 0)) return false;
+  if (isAlly(winner, session.localPlayerId ?? 0)) return false;
   return sessionHasCapturedAgora(session);
 }
 

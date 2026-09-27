@@ -97,6 +97,7 @@ export function replayConfigFromLive(cfg) {
   if (cfg.noCenterBlock != null) out.noCenterBlock = Boolean(cfg.noCenterBlock);
   if (cfg.agoraOccupyEndsMatch != null) out.agoraOccupyEndsMatch = cfg.agoraOccupyEndsMatch | 0;
   if (cfg.homeAgoras) out.homeAgoras = true;
+  if (cfg.localSolo) out.localSolo = true;
   return out;
 }
 
@@ -148,11 +149,18 @@ export function formatReplayBytes(n) {
 
 export const REPLAY_EXT = '.gecho';
 
+/** Download slug. Offline 1vAI uses KOTH rules but is not a King of the Hill lobby. */
+export function replayModeSlug(config) {
+  const mode = String(config?.mode || 'match').replace(/[^\w-]+/g, '');
+  if (config?.localSolo && mode === 'koth') return '1vai';
+  return mode || 'match';
+}
+
 /** @param {object | null | undefined} file @param {Date} [now] */
 export function replayFileName(file, now = new Date()) {
-  const mode = String(file?.config?.mode || 'match').replace(/[^\w-]+/g, '');
+  const mode = replayModeSlug(file?.config);
   const day = now.toISOString().slice(0, 10);
-  return `aether-${mode || 'match'}-${day}${REPLAY_EXT}`;
+  return `aether-${mode}-${day}${REPLAY_EXT}`;
 }
 
 const REPLAY_ACCEPT = `${REPLAY_EXT},.json,application/json`;

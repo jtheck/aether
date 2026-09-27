@@ -13,7 +13,12 @@ export function formatTypeLobbyRow(lobby) {
   const title = (lobby.hostName ?? '').trim() || 'Open lobby';
   const seats = `${lobby.playerCount ?? 0}/${lobby.maxPlayers ?? 0}`;
   const field = lobby.settings?.fieldSize;
-  const meta = field ? `${seats}  ·  ${field}` : seats;
+  const watching = lobby.spectatorCount
+    ?? (Array.isArray(lobby.spectators) ? lobby.spectators.length : 0);
+  const bits = [seats];
+  if (field) bits.push(field);
+  if (watching > 0) bits.push(`${watching} watching`);
+  const meta = bits.join('  ·  ');
   return { title, meta, label: `Join ${title}, ${seats}` };
 }
 
@@ -25,6 +30,7 @@ export function formatMatchStatus(state) {
   const mode = getMode(state.mode);
   const name = (state.hostName ?? '').trim();
   const seats = `${state.playerCount ?? 0}/${state.maxPlayers ?? mode?.maxPlayers ?? 0}`;
+  if (state.watching) return { title: name ? `Watching ${name}` : 'Watching', meta: seats };
   if (state.hosting) return { title: `Your ${mode?.name ?? 'lobby'}`, meta: seats };
   return { title: name ? `In ${name}'s ${mode?.name ?? 'lobby'}` : 'In lobby', meta: seats };
 }
@@ -66,7 +72,7 @@ export function syncTypeLobbyList(listEl, emptyEl, lobbies) {
   if (emptyEl) emptyEl.hidden = lobbies.length > 0;
   const keep = new Set(lobbies.map((lobby) => lobby.roomId));
   for (const btn of [...listEl.querySelectorAll('[data-room-id]')]) {
-    if (!keep.has(btn.dataset.roomId)) btn.remove();
+    if (!keep.has(btn.dataset.roomId) || btn.dataset.spectate === '1') btn.remove();
   }
   for (const lobby of lobbies) {
     const row = formatTypeLobbyRow(lobby);
@@ -102,7 +108,35 @@ function setHidden(el, hidden) {
   el.hidden = hidden;
 }
 
-function paintSeats(container, seats, { teams, localId, compact }) {
+function paintMoves(row, userId, hostMoves) {
+  let moves = row.querySelector('.lobby-seat-moves');
+  if (!hostMoves) {
+    moves?.remove();
+    return;
+  }
+  if (!moves) {
+    moves = document.createElement('span');
+    moves.className = 'lobby-seat-moves';
+    const up = document.createElement('button');
+    up.type = 'button';
+    up.className = 'lobby-seat-move';
+    up.dataset.dir = '-1';
+    up.textContent = '↑';
+    const down = document.createElement('button');
+    down.type = 'button';
+    down.className = 'lobby-seat-move';
+    down.dataset.dir = '1';
+    down.textContent = '↓';
+    moves.append(up, down);
+    row.append(moves);
+  }
+  for (const btn of moves.querySelectorAll('button')) {
+    btn.dataset.userId = userId || '';
+    btn.hidden = !userId;
+  }
+}
+
+function paintSeats(container, seats, { teams, localId, compact, spectators, hostMoves }) {
   if (!container) return;
   const groups = teams
     ? [
@@ -110,6 +144,19 @@ function paintSeats(container, seats, { teams, localId, compact }) {
       { label: 'Team B', items: seats.filter((s) => s.team === 1) },
     ]
     : [{ label: compact ? '' : 'Players', items: seats }];
+  if (spectators?.length) {
+    groups.push({
+      label: 'Watching',
+      items: spectators.map((s) => ({
+        kind: 'human',
+        name: s.name,
+        userId: s.userId,
+        color: s.color,
+        ready: false,
+        watching: true,
+      })),
+    });
+  }
 
   const wanted = groups.length;
   while (container.children.length > wanted) container.lastElementChild?.remove();
@@ -148,11 +195,13 @@ function paintSeats(container, seats, { teams, localId, compact }) {
       if (seat.kind === 'human') {
         setText(nameEl, formatSeatName(seat, localId));
         if (nameEl) nameEl.style.color = seat.color || '';
-        setText(statusEl, seat.ready ? 'Ready' : 'Not ready');
+        setText(statusEl, seat.watching ? 'Watching' : (seat.ready ? 'Ready' : 'Not ready'));
+        paintMoves(row, seat.userId, hostMoves);
       } else {
         setText(nameEl, 'Waiting…');
         if (nameEl) nameEl.style.color = '';
         setText(statusEl, '');
+        paintMoves(row, '', hostMoves);
       }
     });
   });
@@ -295,6 +344,8 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
       state?.loadingMap,
       workshopItems.flatMap((item) => (item.gardens || []).map((g) => `${item.id}:${g.file}`)).join(),
       JSON.stringify(state?.seats ?? []),
+      JSON.stringify(state?.spectators ?? []),
+      state?.watching,
       overlayParked, matchOverOn,
     ].join('/');
     if (sig === lastSig) return;
@@ -346,11 +397,16 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
     setText(sideStatus, status.title);
     setText(sideMeta, status.meta);
     setText(panelTitle, `${mode?.name ?? 'Lobby'} — ${state.hosting ? 'host' : status.title}`);
-    paintSeats(sideSeats, state.seats, { teams: Boolean(mode?.teams), localId, compact: true });
-    paintSeats(panelSeats, state.seats, { teams: Boolean(mode?.teams), localId, compact: false });
+    const hostMoves = state.hosting && (state.phase === 'waiting' || state.phase === 'countdown');
+    paintSeats(sideSeats, state.seats, {
+      teams: Boolean(mode?.teams), localId, compact: true, spectators: state.spectators, hostMoves,
+    });
+    paintSeats(panelSeats, state.seats, {
+      teams: Boolean(mode?.teams), localId, compact: false, spectators: state.spectators, hostMoves,
+    });
 
-    setHidden(sideReady, state.hosting);
-    setHidden(panelReady, state.hosting);
+    setHidden(sideReady, state.hosting || state.watching);
+    setHidden(panelReady, state.hosting || state.watching);
     if (sideReady) {
       sideReady.disabled = state.phase === 'starting' || inPlay;
       setText(sideReady, mySeat?.ready ? 'Unready' : 'Ready');
@@ -433,6 +489,14 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
     refresh();
   }
 
+  function onMoveClick(e) {
+    const btn = e.target instanceof Element ? e.target.closest('[data-dir][data-user-id]') : null;
+    if (!btn) return;
+    matchLobby.movePerson(btn.dataset.userId, Number(btn.dataset.dir));
+    refresh();
+  }
+  sideSeats?.addEventListener('click', onMoveClick);
+  panelSeats?.addEventListener('click', onMoveClick);
   sideReady?.addEventListener('click', toggleReady);
   panelReady?.addEventListener('click', toggleReady);
   sideStart?.addEventListener('click', () => { matchLobby.requestStart(); refresh(); });

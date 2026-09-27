@@ -5,7 +5,6 @@ import {
   spawnInBox,
   spawnInBoxSphere,
   spawnClusterInBox,
-  resizeInBox,
   randomClusterCenter,
   resizeInBoxSphere,
   boxSphereOverlapFraction,
@@ -30,6 +29,8 @@ import {
   chunkCameraDist,
   frustumRushTarget,
   streamDistanceScale,
+  emitterDensityScale,
+  STREAM_EMITTER_BUDGET_FRAC,
 } from './chunks.js';
 import {
   writeCompressionWavePositions,
@@ -137,6 +138,11 @@ export function createWorld(opts = {}) {
     flockDefs.length,
     Math.floor(targetTotal / Math.max(1, estimateHotChunks(chunkRadius))),
   );
+  /** Point-flock share of `targetTotal`. Emitter surplus is a slice of this. */
+  let emitterPointBudget = 0;
+  let pointFlockCount = 1;
+  /** Non-retiring cubes inside a live emitter keep bubble. */
+  let emitterKeepCount = 0;
 
   // High-water caps (store sizing). Mesh accents use a fixed per-chunk recipe and
   // are not resized when the FPS throttle moves the point budget.
@@ -188,6 +194,38 @@ export function createWorld(opts = {}) {
 
   function keepsEmitter(ch) {
     return waveChunkNearEmitter(ch.bounds, emitterKeepR);
+  }
+
+  function countWantedKeeps(wanted) {
+    let n = 0;
+    for (const key of wanted) {
+      const [x, y, z] = key.split(',').map(Number);
+      if (waveChunkNearEmitter(chunkBounds(x, y, z, chunkSize), emitterKeepR)) n++;
+    }
+    emitterKeepCount = n;
+  }
+
+  function countActiveKeeps() {
+    let n = 0;
+    for (const ch of active.values()) {
+      if (ch.retiring || !keepsEmitter(ch)) continue;
+      n++;
+    }
+    emitterKeepCount = n;
+  }
+
+  /**
+   * Extra dots one keep-cube may take above the volume field.
+   * Per-cube multiplier fades as the keep set grows, and the sum of bonuses
+   * cannot exceed `STREAM_EMITTER_BUDGET_FRAC` of the point budget.
+   */
+  function emitterBonus(base) {
+    if (emitterKeepCount <= 0 || base <= 0) return 0;
+    const lifted = Math.max(0, Math.round(base * emitterDensityScale(emitterKeepCount)) - base);
+    const share =
+      (emitterPointBudget * STREAM_EMITTER_BUDGET_FRAC) /
+      (emitterKeepCount * pointFlockCount);
+    return Math.min(lifted, share);
   }
   /** Bumps when the active chunk set changes (wireframe / debug consumers). */
   let chunksVersion = 0;
@@ -257,8 +295,9 @@ export function createWorld(opts = {}) {
   function pointWant(ch, f, sphere) {
     if (ch.retiring) return 0;
     const cap = Math.min(f.storeCap, f.chunkCap);
-    if (keepsEmitter(ch)) return cap;
-    return Math.round(cap * chunkFrac(ch, sphere) * densityScale(ch));
+    const base = Math.round(cap * chunkFrac(ch, sphere) * densityScale(ch));
+    if (!keepsEmitter(ch)) return base;
+    return Math.round(base + emitterBonus(base));
   }
 
   function fillChunk(ch, sphere) {
@@ -278,6 +317,8 @@ export function createWorld(opts = {}) {
         } else {
           store.count = 0;
         }
+      } else if (f.isPoint) {
+        spawnInBoxSphere(store, pointWant(ch, f, sphere), ch.bounds, sphere);
       } else if (keepsEmitter(ch)) {
         spawnInBox(store, cap, ch.bounds);
       } else {
@@ -358,6 +399,7 @@ export function createWorld(opts = {}) {
     for (const [key, ch] of active) {
       ch.retiring = !wanted.has(key);
     }
+    countWantedKeeps(wanted);
     const sphere = volumeSphere();
     for (const key of wanted) {
       if (!active.has(key)) {
@@ -428,6 +470,10 @@ export function createWorld(opts = {}) {
       meshPerChunk += f.chunkCap;
     }
     const pointBudget = Math.max(0, targetTotal - meshPerChunk * liveChunks);
+    emitterPointBudget = pointBudget;
+    let points = 0;
+    for (let i = 0; i < flocks.length; i++) if (flocks[i].isPoint) points++;
+    pointFlockCount = Math.max(1, points);
     const pointPerChunk = Math.floor(pointBudget / Math.max(1, liveChunks));
     perChunkTotal = pointPerChunk + meshPerChunk;
     for (let i = 0; i < flocks.length; i++) {
@@ -440,6 +486,7 @@ export function createWorld(opts = {}) {
   /** In-view cubes rush to min density first; pad / behind share whatever slew is left. */
   function easePointCounts() {
     if (!Number.isFinite(lastChunk.cx)) return;
+    countActiveKeeps();
     const sphere = volumeSphere();
     /** @type {{ ch: any, store: any, want: number, cur: number }[]} */
     const jobs = [];
@@ -521,8 +568,7 @@ export function createWorld(opts = {}) {
         if (left <= 0) break;
         const add = Math.min(job.floor - job.cur, left, bakeRoom());
         if (add <= 0) continue;
-        if (keepsEmitter(job.ch)) resizeInBox(job.store, job.cur + add, job.ch.bounds);
-        else resizeInBoxSphere(job.store, job.cur + add, job.ch.bounds, sphere);
+        resizeInBoxSphere(job.store, job.cur + add, job.ch.bounds, sphere);
         const grew = job.store.count - job.cur;
         job.cur = job.store.count;
         left -= Math.max(0, grew);
@@ -557,8 +603,7 @@ export function createWorld(opts = {}) {
             if (job.cur < job.want) {
               share = Math.min(share, bakeRoom());
               if (share <= 0) continue;
-              if (keepsEmitter(job.ch)) resizeInBox(job.store, job.cur + share, job.ch.bounds);
-              else resizeInBoxSphere(job.store, job.cur + share, job.ch.bounds, sphere);
+              resizeInBoxSphere(job.store, job.cur + share, job.ch.bounds, sphere);
             } else {
               job.store.count = job.cur - share;
             }

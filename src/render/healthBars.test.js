@@ -9,7 +9,6 @@ import {
   HORIZON_FADE_START,
   LOOK_DOWN_SCALE_MIN,
   TARGET_DOT_PX,
-  TARGET_DOT_PX_FAR,
   chipHorizonScale,
   chipLookDownScale,
   chipScreenPixels,
@@ -116,6 +115,7 @@ import {
   OVERLAY_MAX_BARS,
   OVERLAY_MAX_BUILDING_BARS,
   OVERLAY_MAX_SHIELDS,
+  keepNearest,
 } from './overlayLod.js';
 
 describe('health chip overlay budget', () => {
@@ -123,7 +123,18 @@ describe('health chip overlay budget', () => {
     assert.equal(HEALTH_BAR_CAPACITY, OVERLAY_MAX_BARS + OVERLAY_MAX_BUILDING_BARS);
     assert.ok(HEALTH_BAR_CAPACITY <= 4096);
     assert.ok(OVERLAY_MAX_BARS >= 3072);
-    assert.ok(OVERLAY_MAX_SHIELDS <= 256);
+    assert.ok(OVERLAY_MAX_SHIELDS >= 256);
+    assert.ok(OVERLAY_MAX_SHIELDS <= 2048);
+  });
+
+  it('keeps the nearest shield candidates when the pool overflows', () => {
+    const ids = new Int32Array([0, 1, 2, 3]);
+    const d2 = new Float32Array([9, 1, 4, 16]);
+    const n = keepNearest(ids, d2, 4, 2);
+    assert.equal(n, 2);
+    const picked = new Set([ids[0], ids[1]]);
+    assert.equal(picked.has(1), true);
+    assert.equal(picked.has(2), true);
   });
 });
 
@@ -178,16 +189,6 @@ describe('health chip screen-constant size', () => {
     assert.ok(Math.abs(chipScreenPixels(close, 50, vh, fov) - TARGET_DOT_PX) < 1e-6);
     assert.ok(Math.abs(chipScreenPixels(far, 700, vh, fov) - TARGET_DOT_PX) < 1e-6);
     assert.ok(far > close * 10);
-  });
-
-  it('uses a smaller far-step pixel target', () => {
-    assert.equal(TARGET_DOT_PX_FAR, TARGET_DOT_PX * 0.5);
-    const fov = 0.8;
-    const vh = 1080;
-    const near = worldSizeForScreenPx(TARGET_DOT_PX, 200, vh, fov);
-    const far = worldSizeForScreenPx(TARGET_DOT_PX_FAR, 200, vh, fov);
-    assert.ok(far < near);
-    assert.ok(Math.abs(chipScreenPixels(far, 200, vh, fov) - TARGET_DOT_PX_FAR) < 1e-6);
   });
 
   it('keeps the underline one pixel and fills the atlas cell', () => {

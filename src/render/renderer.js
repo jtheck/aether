@@ -75,7 +75,7 @@ import { createCelestialRig } from './celestial.js';
 import { createTerrainFromField, createTileGridOverlay, createPlacementGridOverlay, surfaceHeightAt } from './terrain.js';
 import { createProjectileRenderer } from './projectiles.js';
 import { createPickHitboxRenderer } from './pickHitboxes.js';
-import { createHolyShieldMaterial } from './holyShields.js';
+import { createHolyShieldMaterial, createHolyShieldMesh } from './holyShields.js';
 import { createWorkRadiusRings } from './workRadiusRings.js';
 import { createFrogRenderer } from './frogs.js';
 import { createArrowTrails } from './arrowTrails.js';
@@ -86,6 +86,7 @@ import { createMonkLobFx } from './monkLobFx.js';
 import { createSporeBloomFx } from './sporeBloomFx.js';
 import { createLocustFx } from './locustFx.js';
 import { createBuildingFire } from './buildingFire.js';
+import { forEachTreeFireAnchor, treeCrownCenterY } from './treeFire.js';
 import { createFireballFx } from './fireballFx.js';
 import { createMushroomPreviews } from './mushrooms.js';
 import { createCarryLoads } from './carryLoads.js';
@@ -963,9 +964,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let ground = null;
   /** @type {object | null} */
   let fieldSnap = opts.field ?? null;
-  /** Late-bound so scenery can emit before the particle system exists. */
-  const treeFireEmit = { fn: null };
-
   function allowContinuousFx() {
     return fxEmitChance >= 1 || Math.random() < fxEmitChance;
   }
@@ -989,17 +987,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   function sceneryOpts() {
     return {
-      emitFire(x, y, z, scale) {
-        if (!fxEnabled || !socketFireEnabled || !allowContinuousFx()) return;
-        const eye = cameraEyePos();
-        if (eye && Number.isFinite(fxDistanceSq) && fxDistanceSq > 0) {
-          const dx = eye.x - x;
-          const dy = eye.y - y;
-          const dz = eye.z - z;
-          if (dx * dx + dy * dy + dz * dz > fxDistanceSq) return;
-        }
-        treeFireEmit.fn?.(x, y, z, scale);
-      },
       // 3D trees/rocks pop in after Phase A register — fold them into CSM.
       onModelMesh(mesh) {
         if (!mesh) return;
@@ -1444,7 +1431,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     Math.max(capacity, gpuCapacity, 1) + 64,
   );
   // Packed overlay — not entity-indexed. Matching entity count made stress
-  // draw tens of thousands of hidden 24-seg spheres (Lite keeps ti.count at cap).
+  // draw tens of thousands of hidden spheres (Lite keeps ti.count at cap).
+  // The mark is a camera-facing ring; the sphere only ever read as that circle.
   const holyShields = createPickHitboxRenderer(
     engine,
     scene,
@@ -1452,9 +1440,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     {
       startVisible: true,
       name: 'holy-shield',
-      segments: 24,
       renderOrder: 190,
+      createMesh: createHolyShieldMesh,
       createMaterial: createHolyShieldMaterial,
+      billboard: true,
+      getEye: cameraEyePos,
     },
   );
   const particles = await createParticleSystem(engine, scene, {
@@ -1561,68 +1551,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let auraScratch = null;
   /** Latest sim tick for time-based FX (spore seed expiry). */
   let fxSimTick = 0;
-  /** Wide at the base, then pull inward while climbing (column, not fountain). */
-  treeFireEmit.fn = (x, groundY, z, scale = 1) => {
-    const s = Math.max(0.65, scale);
-    const count = Math.max(1, Math.round(6 * Math.min(1, fxEmitChance)));
-    for (let i = 0; i < count; i++) {
-      const ang = Math.random() * Math.PI * 2;
-      const rad = (0.35 + Math.random() * 1.35) * s;
-      const ox = Math.cos(ang) * rad;
-      const oz = Math.sin(ang) * rad;
-      const px = x + ox;
-      const pz = z + oz;
-      // Keep births near the roots / lower trunk.
-      const py = groundY + 0.15 + Math.random() * 0.9 * s;
-      const roll = Math.random();
-      const color =
-        roll > 0.62
-          ? [1, 0.88, 0.35, 0.36]
-          : roll > 0.28
-            ? [1, 0.48, 0.08, 0.4]
-            : [0.95, 0.18, 0.02, 0.32];
-      const w = (0.28 + Math.random() * 0.38) * s;
-      const h = (0.65 + Math.random() * 0.85) * s;
-      // Inward toward trunk + mostly up. Outer sparks die sooner.
-      const pull = 0.55 + Math.random() * 0.45;
-      const life = 1.1 + Math.random() * 0.7 + (1.1 - Math.min(1, rad / (1.7 * s))) * 0.8;
-      particles.emit({
-        ...puffSprite(),
-        position: [px, py, pz],
-        velocity: [
-          -ox * pull,
-          2.4 + Math.random() * 2.6 * s,
-          -oz * pull,
-        ],
-        gravity: [0, 1.5, 0],
-        color,
-        lifetime: life,
-        startSize: [w, h],
-        endSize: [w * 0.15, h * 0.35],
-        drag: 0.95,
-      });
-    }
-    for (let i = 0; i < 2; i++) {
-      const ang = Math.random() * Math.PI * 2;
-      const rad = (0.2 + Math.random() * 0.7) * s;
-      const ox = Math.cos(ang) * rad;
-      const oz = Math.sin(ang) * rad;
-      particles.emit({
-        position: [x + ox, groundY + 0.2 + Math.random() * 0.5 * s, z + oz],
-        velocity: [
-          -ox * 0.7,
-          2.8 + Math.random() * 2.2,
-          -oz * 0.7,
-        ],
-        gravity: [0, 1.2, 0],
-        color: [1, 0.7, 0.2, 0.5],
-        lifetime: 1.6 + Math.random() * 0.8,
-        startSize: 0.16 * s,
-        endSize: 0.03,
-        drag: 0.45,
-      });
-    }
-  };
   // Overlay selected-then-nearest + building slack. Matching entity count
   // allocated capacity × 13 alpha-sorted billboards (50k stress → ~650k sprites).
   const healthBars = createHealthBars(engine, scene, {
@@ -2383,6 +2311,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       shouldDraw(x, z, owner) {
         return visionDraw.fn ? visionDraw.fn(x, z, owner) : true;
       },
+      getEye: cameraEyePos,
     },
   );
 
@@ -2607,15 +2536,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         emitUnitSocketFire('smoke');
         emitBuildingSocketFx('smoke');
       }
-      // Sparkle is sampled every frame so each staff can sit on its own phase.
+      // Sparkle / tree tongues / ground patches are sampled every frame so
+      // they don't pop on the shared 70ms camp tick.
       if (fxStep > 0) {
         emitUnitSocketFire('sparkle', fxStep);
         emitBuildingSocketFx('sparkle', fxStep);
-      }
-      groundFireElapsed += fxDt;
-      if (groundFireElapsed >= groundFireIntervalMs) {
-        groundFireElapsed = 0;
-        emitGroundFirePatches();
+        emitBurningTreeFires(fxStep);
+        emitGroundFirePatches(fxStep);
       }
       particles.update(fxDt);
       unitAuras.update(fxDt);
@@ -2652,43 +2579,98 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     fireballFx.update(fxDt);
   });
 
-  function emitGroundFirePatches() {
+  /** First-sight bursts so new tree / ground fires don't trickle in. */
+  const groundFirePrimed = new Set();
+  const treeFirePrimed = new Set();
+
+  function nearCamera(x, y, z) {
+    const eye = cameraEyePos();
+    if (!eye || !(fxDistanceSq > 0)) return true;
+    const dx = eye.x - x;
+    const dy = eye.y - y;
+    const dz = eye.z - z;
+    return dx * dx + dy * dy + dz * dz <= fxDistanceSq;
+  }
+
+  /** Burning trees: overlapping tongues through the trunk and inner canopy. */
+  function emitBurningTreeFires(dtMs) {
+    if (!socketFireEnabled) return;
+    const period = SOCKET_FX_CADENCE.fire * Math.max(0.5, (unitFxIntervalMs || 80) / 80);
+    const smokePeriod = SOCKET_FX_CADENCE.smoke * Math.max(0.5, (unitFxIntervalMs || 80) / 80);
+    const seen = new Set();
+    terrain?.forEachBurningTree?.((tree) => {
+      const cy = treeCrownCenterY(tree.y, tree.stockScale);
+      if (!nearCamera(tree.x, cy, tree.z)) return;
+      const key = `${(tree.x * 2) | 0}:${(tree.z * 2) | 0}`;
+      seen.add(key);
+      const prime = !treeFirePrimed.has(key);
+      treeFirePrimed.add(key);
+      const slot = ((tree.x * 2) | 0) * 17 + ((tree.z * 2) | 0);
+      const salt = tree.x * 0.013 + tree.z * 0.021;
+      forEachTreeFireAnchor(tree, (site) => {
+        const hits = prime
+          ? site.kind === 'trunk' ? 4 : 6
+          : socketPhaseHits(slot, site.index, period, dtMs, salt);
+        for (let h = 0; h < hits; h++) {
+          emitSocketFlame(site.x, site.y, site.z, site.scale, 'torch');
+        }
+        if (!site.smoke || prime) return;
+        const puffs = socketPhaseHits(slot, site.index + 40, smokePeriod, dtMs, salt + 0.4);
+        for (let h = 0; h < puffs; h++) {
+          emitSocketFlame(site.x, site.y, site.z, site.scale, 'smoke');
+        }
+      });
+    });
+    if (!seen.size) {
+      treeFirePrimed.clear();
+      return;
+    }
+    for (const key of treeFirePrimed) {
+      if (!seen.has(key)) treeFirePrimed.delete(key);
+    }
+  }
+
+  /**
+   * Warlock ground fire: camp-sized hearths, each on its own phase so the
+   * patch doesn't pop as one beat.
+   */
+  function emitGroundFirePatches(dtMs) {
+    if (!socketFireEnabled) return;
+    const period = Math.max(24, groundFireIntervalMs || SOCKET_FX_CADENCE.fire);
+    const s = SOCKET_FX_INHERENT * MODEL_BASE_SCALE;
+    const seen = new Set();
     for (const [slot, fire] of groundFires) {
       const remain = fire.endsAtMs - particleClockMs;
       if (remain <= 0) {
         groundFires.delete(slot);
         continue;
       }
-      if (!allowContinuousFx()) continue;
-      const gy = groundYAt(fire.x, fire.z);
-      const r = Math.max(1.2, fire.radius * 0.85);
-      const fade = Math.max(0.3, Math.min(1, remain / (FIRE_ZONE_VISUAL_MS * 0.85)));
-      const count = 3 + Math.floor(fade * 3);
-      for (let i = 0; i < count; i++) {
-        const ang = Math.random() * Math.PI * 2;
-        const rad = Math.random() * r;
-        const ox = Math.cos(ang) * rad;
-        const oz = Math.sin(ang) * rad;
-        const roll = Math.random();
-        particles.emit({
-          ...puffSprite(),
-          position: [fire.x + ox, gy + 0.1 + Math.random() * 0.35, fire.z + oz],
-          velocity: [
-            (Math.random() - 0.5) * 0.6,
-            1.4 + Math.random() * 2.2,
-            (Math.random() - 0.5) * 0.6,
-          ],
-          gravity: [0, 1.1, 0],
-          color:
-            roll > 0.55
-              ? [1, 0.75, 0.2, 0.45 * fade]
-              : [1, 0.35, 0.05, 0.4 * fade],
-          lifetime: 0.4 + Math.random() * 0.35,
-          startSize: [0.45 + Math.random() * 0.55, 0.9 + Math.random() * 0.9],
-          endSize: [0.08, 0.2],
-          drag: 1.1,
-        });
+      const gy = groundYAt(fire.x, fire.z) + 0.15;
+      if (!nearCamera(fire.x, gy, fire.z)) continue;
+      const fade = Math.max(0, Math.min(1, remain / (FIRE_ZONE_VISUAL_MS * 0.85)));
+      const sites = fade < 0.15 ? 1 : 5;
+      const rad = Math.min(2.4, Math.max(1.5, (fire.radius || 4) * 0.48));
+      for (let i = 0; i < sites; i++) {
+        const key = `${slot}:${i}`;
+        seen.add(key);
+        const prime = !groundFirePrimed.has(key);
+        groundFirePrimed.add(key);
+        const ang = (i / 4) * Math.PI * 2 + (slot + 1) * 0.7;
+        const x = i === 0 ? fire.x : fire.x + Math.cos(ang) * rad;
+        const z = i === 0 ? fire.z : fire.z + Math.sin(ang) * rad;
+        const hits = prime
+          ? 10
+          : socketPhaseHits(slot, i, period, dtMs, 0.31);
+        if (!hits) continue;
+        for (let h = 0; h < hits; h++) emitSocketFlame(x, gy, z, s, 'torch');
       }
+    }
+    if (!seen.size) {
+      groundFirePrimed.clear();
+      return;
+    }
+    for (const key of groundFirePrimed) {
+      if (!seen.has(key)) groundFirePrimed.delete(key);
     }
   }
 
@@ -2931,6 +2913,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const bSize = (0.32 + Math.random() * 0.22) * s;
       particles.emit({
         ...puffSprite(0.6),
+        cull: false,
         // Sunk by a fraction of the disc's own width, so only the top of the
         // pool shows and discs surface into the flame instead of appearing in
         // mid-air. Tied to bSize so resizing cannot bury or float the pool.
@@ -2984,6 +2967,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const size = (0.11 + Math.random() * 0.12) * s;
       particles.emit({
         ...puffSprite(),
+        cull: false,
         position: [x + cs * rad, y + Math.random() * 0.06 * s, z + sn * rad],
         // Mostly tangential with a little outward drift — drag bleeds the
         // swirl off early, leaving a curved kick rather than an orbit.
@@ -3012,6 +2996,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const eAng = Math.random() * Math.PI * 2;
       const kick = (0.2 + Math.random() * 0.4) * s;
       particles.emit({
+        cull: false,
         position: [x, y + 0.04 * s, z],
         velocity: [
           Math.cos(eAng) * kick,
@@ -5027,6 +5012,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       locustFx.clear();
       fireballFx.clear();
       buildingFire.clear();
+      treeFirePrimed.clear();
+      groundFirePrimed.clear();
       mushrooms?.clear?.();
       holyShields.clear();
       carryLoads.clear();

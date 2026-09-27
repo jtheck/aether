@@ -1,5 +1,6 @@
 // Decisive-match wipe — HUD pop is living units. When agora occupy also
-// ends the match, a side with 0 pop loses. KOTH keeps its own elimination.
+// ends the match, a side with 0 pop loses. Taking one agora only ends it
+// once that side holds no agora (see agora.js). KOTH keeps its own elimination.
 
 import { livingByOwner } from './world.js';
 import { teamOf } from './teams.js';

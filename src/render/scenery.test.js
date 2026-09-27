@@ -1,7 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { treeScaleForStage } from '../sim/trees.js';
-import { treeTintRgb } from './scenery.js';
+import { treeFireHeight } from './treeFire.js';
+import { treeBurnSinkDepth, treeBurnSinkDrop, treeTintRgb } from './scenery.js';
 
 function luma(rgb) {
   return rgb[0] * 0.3 + rgb[1] * 0.59 + rgb[2] * 0.11;
@@ -38,5 +39,18 @@ describe('tree tint', () => {
     const toMature = Math.abs(luma(justOver) - luma(mature));
     const toGiant = Math.abs(luma(justOver) - luma(giant));
     assert.ok(toMature < toGiant, 'first extra stage still reads as a mature tree');
+  });
+});
+
+describe('burned tree sink', () => {
+  it('buries the crown without changing scale', () => {
+    const scale = treeScaleForStage(6);
+    const depth = treeBurnSinkDepth(scale);
+    assert.ok(depth > treeFireHeight(scale), 'the tip clears the surface');
+    assert.equal(treeBurnSinkDrop(0, depth), 0);
+    assert.equal(treeBurnSinkDrop(1, depth), depth);
+    const mid = treeBurnSinkDrop(0.5, depth);
+    assert.ok(mid > depth * 0.5, 'the drop starts right away');
+    assert.ok(mid < depth);
   });
 });

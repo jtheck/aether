@@ -239,6 +239,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       meshes: [],
       modelsReady: Promise.resolve(),
       update() {},
+      forEachBurningTree() {},
       applyTreeUpdates() {},
       applyRockUpdates() {},
       applyAuthoredSceneryTiles() {},
@@ -265,6 +266,9 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       specGlint.update();
       scenery.update(activeCamera, deltaMs);
       doodads.update(deltaMs);
+    },
+    forEachBurningTree(fn) {
+      if (!disposed) scenery.forEachBurningTree?.(fn);
     },
     applyTreeUpdates(updates) {
       if (disposed) return;

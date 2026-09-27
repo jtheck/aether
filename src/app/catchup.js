@@ -140,6 +140,8 @@ export async function replayCatchUp(session, matchConfig, ledgerFrames, targetTi
  *   onProgress?: (p: { tick: number, targetTick: number }) => void,
  *   fromTick?: number,
  *   stayPaused?: boolean,
+ *   shouldContinue?: () => boolean,
+ *   onBatch?: (tick: number) => void | Promise<void>,
  * }} [options]
  */
 export async function replayCatchUpInto(session, matchConfig, ledgerFrames, targetTick, expectedChecksum, options = {}) {
@@ -164,6 +166,8 @@ export async function replayCatchUpInto(session, matchConfig, ledgerFrames, targ
       targetTick,
       ticksPerFrame,
       onProgress,
+      options.shouldContinue,
+      options.onBatch,
     );
 
     if (!sameCatchupChecksum(session._lastChecksum, expectedChecksum)) {
@@ -181,7 +185,7 @@ export async function replayCatchUpInto(session, matchConfig, ledgerFrames, targ
   }
 }
 
-async function runReplayTicks(session, byTick, humanPlayers, fromTick, targetTick, ticksPerFrame, onProgress) {
+async function runReplayTicks(session, byTick, humanPlayers, fromTick, targetTick, ticksPerFrame, onProgress, shouldContinue, onBatch) {
   const startTick = Math.max(1, (fromTick | 0) + 1);
   if (startTick > targetTick) {
     session.catchupProgress = { tick: targetTick | 0, targetTick: targetTick | 0 };
@@ -200,16 +204,24 @@ async function runReplayTicks(session, byTick, humanPlayers, fromTick, targetTic
   };
 
   if (ticksPerFrame <= 0) {
-    for (let t = startTick; t <= targetTick; t++) await commitOne(t);
+    for (let t = startTick; t <= targetTick; t++) {
+      if (shouldContinue && !shouldContinue()) return;
+      await commitOne(t);
+    }
     return;
   }
 
   for (let t = startTick; t <= targetTick; ) {
     const batchEnd = Math.min(t + ticksPerFrame - 1, targetTick);
-    for (let tick = t; tick <= batchEnd; tick++) await commitOne(tick);
+    for (let tick = t; tick <= batchEnd; tick++) {
+      if (shouldContinue && !shouldContinue()) return;
+      await commitOne(tick);
+    }
     session.lastSnapshotAt = performance.now();
     session.catchupProgress = { tick: batchEnd, targetTick: targetTick | 0 };
     onProgress?.({ tick: batchEnd, targetTick });
+    if (onBatch) await onBatch(batchEnd);
+    if (shouldContinue && !shouldContinue()) return;
     if (batchEnd < targetTick) await waitAnimationFrame();
     t = batchEnd + 1;
   }

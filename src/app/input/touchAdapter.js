@@ -750,10 +750,7 @@ export function createTouchAdapter({ canvas, camera, game }) {
         ? overshoot1d(totalAngle, 0, PINCH_ANGLE_DEADZONE_RAD)
         : dangle;
       if (Math.abs(applyAngle) > 1e-4) {
-        camera.nudgeRotate(applyAngle * PINCH_ROTATE_SENS * w.rotate, {
-          x: centroid.x,
-          y: centroid.y,
-        });
+        camera.nudgeRotate(applyAngle * PINCH_ROTATE_SENS * w.rotate);
       }
     }
     // Pan: full 1-finger strength when slide leads; only soften when zoom/twist dominate.

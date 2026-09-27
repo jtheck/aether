@@ -83,15 +83,14 @@ describe('1vAI home agoras', () => {
   it('camps the usual mix around a home agora for each seat', () => {
     const w = buildWorldFromConfig({
       seed: 3,
-      mode: 'koth',
-      homeAgoras: true,
-      agoraOccupyEndsMatch: 1,
+      mode: '1vai',
       activeSlots: [0, 1],
     });
     const half = w.worldHalfF;
     const expected = defaultMatchAgoras(half, w.mapW);
     assert.equal(w.agoras.length, 2);
     assert.equal(w.agoraOccupyEndsMatch, 1);
+    assert.ok(!w.koth);
     assert.equal(w.agoras[0].owner, expected[0].owner);
     assert.equal(w.agoras[1].owner, expected[1].owner);
     assert.ok(Math.hypot(fx.toFloat(w.agoras[0].x) - expected[0].x, fx.toFloat(w.agoras[0].z) - expected[0].z) < 0.01);
@@ -404,9 +403,7 @@ describe('koth spawn pads', () => {
   it('aims the intro camera at the home agora when one exists', () => {
     const w = buildWorldFromConfig({
       seed: 3,
-      mode: 'koth',
-      homeAgoras: true,
-      agoraOccupyEndsMatch: 1,
+      mode: '1vai',
       activeSlots: [0, 1],
     });
     const home = spawnCameraHomeXZ(w, 0);

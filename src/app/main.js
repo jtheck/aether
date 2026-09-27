@@ -98,8 +98,9 @@ import {
 import {
   OVERLAY_COLLAR_SPIN_DISTANCE_SQ,
   OVERLAY_MAX_BARS,
+  OVERLAY_MAX_SHIELDS,
+  keepNearest,
   markSelectedThenNearest,
-  overlayBarIsFar,
   overlayCameraRef,
 } from '../render/overlayLod.js';
 import { posePassengerOnTransport, seatsForUnitType } from '../render/transportSeats.js';
@@ -144,7 +145,7 @@ import {
   saveReplayToDisk,
 } from './replay.js';
 import { createReplayController } from './replayWatch.js';
-import { chapterIdForGardenUrl, chapterLabelFor, gardenUrlForChapter, isLobbyPlayMode } from '../lobby/modes.js';
+import { chapterIdForGardenUrl, chapterLabelFor, gardenUrlForChapter, getMode, isLobbyPlayMode } from '../lobby/modes.js';
 import { liveConfigFromLobby } from '../lobby/startConfig.js';
 import { createMatchStory } from '../story/matchPlay.js';
 import { castIndexFromUnits, normalizeSpeaker } from '../story/cast.js';
@@ -163,7 +164,7 @@ import {
 import { createExitMarks } from '../story/exits.js';
 import { liveConfigKeepsAdventure, resetAdventureRuntime } from '../story/adventureRuntime.js';
 import { CHAPTER_FLUSH_MS, chapterVotesReady, gardenFromChapterVotes, pickCanonicalChapter } from '../story/chapterSync.js';
-import { getTeamAssignments, getTeamNeutralPairs, setTeamAssignments, setTeamNeutralPairs } from '../sim/teams.js';
+import { getTeamAssignments, getTeamNeutralPairs, isAlly, setTeamAssignments, setTeamNeutralPairs } from '../sim/teams.js';
 import { aetherSteam } from './steam.js';
 import {
   localOwnedPacks,
@@ -182,6 +183,7 @@ let replayCtl = {
   armFromSession() {},
   openFromMenu() {},
   togglePlay() { return false; },
+  nudgeSpeed() { return false; },
   isWatching() { return false; },
 };
 
@@ -245,9 +247,14 @@ const SEL_SPIN_EPS = 1e-3;
 const RING_TINT_WHITE = 0;
 const RING_TINT_RED = 1;
 const RING_TINT_YELLOW = 2;
-/** Skip matrix rewrite when display pose is within this (world units / radians). */
-const POSE_XZ_EPS = 0.03;
+/**
+ * Skip a matrix rewrite when the display pose barely moved.
+ * 0.03 was about two frames of a walk at 144Hz, so the mesh held then hopped.
+ */
+const POSE_XZ_EPS = 0.001;
 const POSE_XZ_EPS_SQ = POSE_XZ_EPS * POSE_XZ_EPS;
+/** Terrain height can stay cached across a few centimeters of XZ. */
+const GROUND_XZ_EPS = 0.03;
 const POSE_YAW_EPS = 0.03;
 const POSE_SIZE_EPS = 0.002;
 const POSE_LOFT_EPS = 0.02;
@@ -942,6 +949,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     fogHidden: new Uint8Array(CAP),
     drawable: new Uint8Array(CAP),
   };
+  /** Reused holy-shield slots — one object per pool entry, not per frame. */
+  const shieldSlots = Array.from({ length: OVERLAY_MAX_SHIELDS }, () => ({
+    x: 0, y: 0, z: 0, r: 0,
+  }));
   bufs.wasAlive.fill(1);
   bufs.cacheGx.fill(NaN);
   bufs.cacheGz.fill(NaN);
@@ -1505,6 +1516,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   let selectedBuildings = [];
   /** Space held: camera zips to / locks on the current selection. */
   let spaceFollowHeld = false;
+  /** Cleared when a pan drops follow. Selection changes and Space re-arm it. */
+  let selectionFollowArmed = true;
 
   function selectionFollowPoint() {
     return selectionCentroidXZ({
@@ -1527,19 +1540,34 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     });
   }
 
+  function engageSelectionFollow() {
+    selectionFollowArmed = true;
+    renderer.cameraController?.consumePanBrokeFollow?.();
+    pushSelectionFollow();
+  }
+
   function pushSelectionFollow() {
+    const cam = renderer.cameraController;
+    if (!selectionFollowArmed) {
+      cam?.consumePanBrokeFollow?.();
+      return;
+    }
+    if (cam?.consumePanBrokeFollow?.()) {
+      selectionFollowArmed = false;
+      return;
+    }
     if (!spaceFollowHeld && !isObservingBoard()) return;
     const c = selectionFollowPoint();
     if (!c) {
-      renderer.cameraController?.stopFollow?.();
+      cam?.stopFollow?.();
       return;
     }
-    renderer.cameraController?.followXZ?.(c.x, c.z);
+    cam?.followXZ?.(c.x, c.z);
   }
 
   function releaseSpaceFollow() {
     spaceFollowHeld = false;
-    if (isObservingBoard() && selectionFollowPoint()) {
+    if (selectionFollowArmed && isObservingBoard() && selectionFollowPoint()) {
       pushSelectionFollow();
       return;
     }
@@ -2528,7 +2556,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     enqueueCommand: (cmd) => submitIssuedCommand(cmd),
     onSelectionChanged: () => {
       updateColors();
-      pushSelectionFollow();
+      engageSelectionFollow();
     },
     onControlGroupJump: () => {
       if (matchStory.driving()) return;
@@ -2560,7 +2588,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       syncBuildingHighlight(list);
       syncRallyFlagMarkers();
       syncWorkRadiusRing();
-      pushSelectionFollow();
+      engageSelectionFollow();
       if (isObservingBoard()) {
         closeRadial();
         return;
@@ -2884,9 +2912,18 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
       if (!bootInteractive) return;
       spaceFollowHeld = true;
-      pushSelectionFollow();
+      engageSelectionFollow();
       renderer.cameraController?.tick?.(16);
       return;
+    }
+    if (e.code === 'Minus' || e.code === 'NumpadSubtract' || e.code === 'Equal' || e.code === 'NumpadAdd') {
+      if (isCameraFollowTypingTarget(document.activeElement)) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const slower = e.code === 'Minus' || e.code === 'NumpadSubtract';
+      if (replayCtl.nudgeSpeed(slower ? -1 : 1)) {
+        e.preventDefault();
+        return;
+      }
     }
     if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.code === 'KeyO') {
@@ -3300,8 +3337,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
     const groundYCached = (i, x, z) => {
       if (
-        Math.abs(cacheGx[i] - x) <= POSE_XZ_EPS &&
-        Math.abs(cacheGz[i] - z) <= POSE_XZ_EPS &&
+        Math.abs(cacheGx[i] - x) <= GROUND_XZ_EPS &&
+        Math.abs(cacheGz[i] - z) <= GROUND_XZ_EPS &&
         Number.isFinite(cacheGy[i])
       ) {
         return cacheGy[i];
@@ -3723,7 +3760,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       renderer.writeHealthBar?.(hbSel[o], hbSel[o + 1], hbSel[o + 2], hbSel[o + 3], {
         armor: false,
         holy: false,
-        far: overlayBarIsFar(hbSel[o] - refX, hbSel[o + 1] - refZ),
         owner: hbSelOwner[s],
         hp: hbSelHp[s],
         manaReady: hbSelMana[s],
@@ -3735,7 +3771,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       renderer.writeHealthBar?.(hbHurt[o], hbHurt[o + 1], hbHurt[o + 2], hbHurt[o + 3], {
         armor: false,
         holy: false,
-        far: overlayBarIsFar(hbHurt[o] - refX, hbHurt[o + 1] - refZ),
         owner: hbHurtOwner[s],
         hp: hbHurtHp[s],
         manaReady: hbHurtMana[s],
@@ -3752,7 +3787,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         armor: false,
         holy: false,
         agora: true,
-        far: overlayBarIsFar(a.x - refX, a.z - refZ),
         owner: a.owner,
         founder: a.founder ?? a.owner,
         capturer: a.capturer,
@@ -3795,7 +3829,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         armor: false,
         holy: false,
         building: true,
-        far: overlayBarIsFar(x - refX, z - refZ),
         owner,
         hp: hpLeft,
       });
@@ -3827,7 +3860,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           armor: false,
           holy: false,
           building: true,
-          far: overlayBarIsFar(b.x - refX, b.z - refZ),
           owner: b.owner,
           hp,
         });
@@ -3898,23 +3930,34 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       });
     }
     if (renderer.syncHolyShields) {
-      const shieldSpheres = [];
+      // Health-bar pick already finished; reuse its candidate buffers.
+      const ids = bufs.overlayBarIds;
+      const d2 = bufs.overlayBarD2;
+      let cand = 0;
       for (let i = 0; i < n; i++) {
         if (!world.alive[i] || fogHidden[i]) continue;
         if (!(world.shieldHp[i] > 0)) continue;
+        const dx = renderX[i] - eyeX;
+        const dz = renderZ[i] - eyeZ;
+        ids[cand] = i;
+        d2[cand] = dx * dx + dz * dz;
+        cand++;
+      }
+      const take = keepNearest(ids, d2, cand, OVERLAY_MAX_SHIELDS);
+      for (let s = 0; s < take; s++) {
+        const i = ids[s];
         const def = getUnitDef(world.type[i]);
         const pick = def.pickRadius ?? 1.8;
         // Pick spheres sit inside the VAT mesh; the shield has to wrap the body.
         const zs = zoomFor(def);
-        const wrap = Math.max(pick * 2.2, (def.size ?? 5) * 0.5) * zs;
-        shieldSpheres.push({
-          x: renderX[i],
-          y: renderY[i] + pick * 0.35 * zs,
-          z: renderZ[i],
-          r: wrap,
-        });
+        const slot = shieldSlots[s];
+        slot.x = renderX[i];
+        slot.y = renderY[i] + pick * 0.35 * zs;
+        slot.z = renderZ[i];
+        slot.r = Math.max(pick * 1.65, (def.size ?? 5) * 0.37) * zs;
       }
-      renderer.syncHolyShields(shieldSpheres);
+      for (let s = take; s < OVERLAY_MAX_SHIELDS; s++) shieldSlots[s].r = 0;
+      renderer.syncHolyShields(take > 0 ? shieldSlots : null);
     }
     profSplit('fx');
     if (DEBUG_KOTH && matchMeta.mode === 'koth' && performance.now() - lastRenderDebugAt > 3000) {
@@ -4386,9 +4429,9 @@ function sweepCameraToArmy(ctx, cfg) {
 function wantsMatchStartCue(cfg) {
   if (!cfg || cfg.watchingReplay) return false;
   if (cfg.mode === 'staging' || cfg.mode === 'sandbox' || cfg.mode === 'legacy') return false;
-  // Post-leave skirmish backdrop is not a match start.
-  if (cfg.mode === 'skirmish') return false;
-  return cfg.mode === 'koth' || isLobbyPlayMode(cfg.mode);
+  // Adventure chapters and the post-leave skirmish backdrop are not a match start.
+  if (cfg.mode === 'adventure' || cfg.mode === 'skirmish') return false;
+  return cfg.mode === 'koth' || cfg.mode === '1vai' || isLobbyPlayMode(cfg.mode);
 }
 
 const SOLO_AI_DIFFICULTY_LABEL = ['Easy', 'Casual', 'Normal', 'Hard', 'Expert'];
@@ -4415,7 +4458,7 @@ async function startSoloAiMatch(ctx, opts = {}) {
     sharedVision = false,
     shareVisionWith,
     garden = null,
-    mode = 'koth',
+    mode = '1vai',
   } = opts;
   const seed = garden?.s ?? (Math.random() * 0xffffffff) >>> 0;
   const temperament = opts.temperament ?? pickMatchAiTemperament(seed);
@@ -4441,8 +4484,8 @@ async function startSoloAiMatch(ctx, opts = {}) {
       inputEnabled: true,
       armyPerSide,
       garden,
-      homeAgoras: !garden && mode === 'koth',
-      agoraOccupyEndsMatch: garden || mode !== 'koth' ? undefined : 1,
+      homeAgoras: !garden && mode === '1vai',
+      agoraOccupyEndsMatch: mode === '1vai' ? 1 : undefined,
       matchId: `solo-${Date.now().toString(36)}`,
       fog,
       sharedVision,
@@ -4585,6 +4628,18 @@ function ownerStats(world) {
   };
 }
 
+let lobbyResultSeats = null;
+
+function winnerName(winner) {
+  const seats = lobbyResultSeats;
+  if (Array.isArray(seats)) {
+    const seat = seats.find((s) => s.index === winner && s.kind === 'human');
+    const name = (seat?.name ?? '').trim();
+    if (name) return name;
+  }
+  return `Player ${formatGameNumber(winner)}`;
+}
+
 function matchEndedByAgora(session) {
   const list = session.agoras;
   if (!list?.length) return false;
@@ -4617,14 +4672,21 @@ function showMatchOver(session) {
   if (session.matchWinner != null && session.matchWinner >= 0) {
     const winner = session.matchWinner;
     const agora = matchEndedByAgora(session);
-    const localWin = winner === (session.localPlayerId ?? 0);
-    title = localWin ? 'Victory' : 'Defeat';
-    if (agora) {
-      sub = localWin
-        ? 'Agora captured'
-        : `Player ${formatGameNumber(winner)} captured the agora`;
+    const localId = session.localPlayerId ?? 0;
+    const watching = session.role === 'spectator' || localId < 0;
+    const localWin = localId >= 0 && isAlly(winner, localId);
+    if (watching) {
+      title = `${winnerName(winner)} won`;
+      sub = agora ? 'Agora captured' : '';
     } else {
-      sub = localWin ? 'Last standing' : 'No pop remaining';
+      title = localWin ? 'Victory' : 'Defeat';
+      if (agora) {
+        sub = localWin
+          ? 'Agora captured'
+          : `Player ${formatGameNumber(winner)} captured the agora`;
+      } else {
+        sub = localWin ? 'Last standing' : 'No pop remaining';
+      }
     }
     if (agora) aetherSteam.notifyKothDefeat(session);
   } else if (k) {
@@ -4804,6 +4866,7 @@ const SPLASH_SETTLE_MAX_MS = 900;
 function workerSimMode(mode) {
   if (mode === 'staging' || mode === 'sandbox') return 'staging';
   if (mode === 'skirmish' || isLobbyPlayMode(mode)) return 'skirmish';
+  if (mode === '1vai') return '1vai';
   return 'koth';
 }
 
@@ -4887,7 +4950,8 @@ async function loadAdventureGardenUrl(ctx, url, kothShard, extras = {}) {
 async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
   if (!ctx?.session) return;
   const cfg = liveConfigFromLobby(snapshot, kothShard?.getUserId?.() ?? null);
-  if (cfg.localPlayerId < 0) {
+  const spectating = cfg.localPlayerId < 0;
+  if (spectating && !getMode(snapshot.mode)?.spectators) {
     setStatusText('Not seated — cannot start');
     return;
   }
@@ -4933,6 +4997,7 @@ async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
       ctx.endAdventure?.();
     }
     if (!cfg.localSolo) matchLobby?.attachSession?.(ctx.session);
+    lobbyResultSeats = Array.isArray(snapshot.seats) ? snapshot.seats : [];
     sideMenu?.close?.();
     ctx.matchStory?.playIntro(garden?.story);
     const label = snapshot.mode === 'teams'

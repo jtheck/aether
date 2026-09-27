@@ -4,6 +4,7 @@
  */
 import { WAVE_BALL_CAP, WAVE_EMITTER_BALLS, wavePresetId } from '../sim/behaviors.js';
 import { getNanotubeLattice } from '../sim/nanotube.js';
+import { buildTetraPlacements, isSlowTetraDevice, TETRA_PHASE_STEP } from './tetraField.js';
 
 /**
  * @returns {import('./backend.js').AxiomRenderer & { getEngine: () => any }}
@@ -22,7 +23,7 @@ export function createBabylonBackend() {
   const species = new Map();
 
   /** Classic bobbing tetra field (scenery, not sim particles). */
-  /** @type {{ mesh: any, xs: Float32Array, zs: Float32Array, matrices: Float32Array, phase: number } | null} */
+  /** @type {{ mesh: any, phase: number } | null} */
   let tetras = null;
 
   /** Debug wireframes for streamed chunk cubes (shared-edge line grid). */
@@ -87,47 +88,61 @@ export function createBabylonBackend() {
   }
 
   function createTetraField(B) {
+    if (!B.Effect.ShadersStore.tetraWaveVertexShader) {
+      B.Effect.ShadersStore.tetraWaveVertexShader = `
+        precision highp float;
+        attribute vec3 position;
+        attribute vec3 normal;
+        attribute vec4 world0;
+        attribute vec4 world1;
+        attribute vec4 world2;
+        attribute vec4 world3;
+        uniform mat4 viewProjection;
+        uniform float tetraPhase;
+        varying vec3 vNormal;
+        void main(void) {
+          mat4 finalWorld = mat4(world0, world1, world2, world3);
+          vec3 p = position;
+          p.y += cos(finalWorld[3].x + tetraPhase) + sin(finalWorld[3].z + tetraPhase);
+          vec4 worldPos = finalWorld * vec4(p, 1.0);
+          vNormal = mat3(finalWorld) * normal;
+          gl_Position = viewProjection * worldPos;
+        }`;
+      B.Effect.ShadersStore.tetraWaveFragmentShader = `
+        precision highp float;
+        varying vec3 vNormal;
+        void main(void) {
+          vec3 n = normalize(vNormal);
+          float ndl = max(dot(n, normalize(vec3(0.5, 1.0, 1.25))), 0.0);
+          vec3 col = vec3(0.8) * (0.35 + 0.65 * ndl);
+          gl_FragColor = vec4(col, 1.0);
+        }`;
+    }
+    const mat = new B.ShaderMaterial(
+      'tetraWave',
+      scene,
+      { vertex: 'tetraWave', fragment: 'tetraWave' },
+      {
+        attributes: ['position', 'normal', 'world0', 'world1', 'world2', 'world3'],
+        uniforms: ['viewProjection', 'tetraPhase'],
+      },
+    );
+    mat.setFloat('tetraPhase', 0);
+    mat.backFaceCulling = true;
+
     const mesh = B.MeshBuilder.CreatePolyhedron(
       'tetrahedron',
       { type: 0, size: 0.03 },
       scene,
     );
+    mesh.material = mat;
     mesh.isPickable = false;
     mesh.alwaysSelectAsActiveMesh = true;
 
-    const xs = [];
-    const zs = [];
-    for (let ix = -10; ix < 10; ix += 0.75) {
-      for (let iz = -10; iz < 10; iz += 0.75) {
-        xs.push(ix);
-        zs.push(iz);
-      }
-    }
-    const n = xs.length;
-    const xsArr = new Float32Array(xs);
-    const zsArr = new Float32Array(zs);
-    // Angle-add bake: y = cos(x+φ)+sin(z+φ) = a·cosφ + b·sinφ
-    const waveA = new Float32Array(n);
-    const waveB = new Float32Array(n);
-    const matrices = new Float32Array(n * 16);
-    for (let i = 0; i < n; i++) {
-      const x = xsArr[i];
-      const z = zsArr[i];
-      waveA[i] = Math.cos(x) + Math.sin(z);
-      waveB[i] = Math.cos(z) - Math.sin(x);
-      const o = i * 16;
-      matrices[o] = 1;
-      matrices[o + 5] = 1;
-      matrices[o + 10] = 1;
-      matrices[o + 12] = x;
-      matrices[o + 13] = waveA[i]; // phase 0
-      matrices[o + 14] = z;
-      matrices[o + 15] = 1;
-    }
-    mesh.thinInstanceSetBuffer('matrix', matrices, 16, false);
-    mesh.thinInstanceCount = n;
-
-    tetras = { mesh, waveA, waveB, matrices, phase: 0 };
+    const { matrices, count } = buildTetraPlacements(isSlowTetraDevice());
+    mesh.thinInstanceSetBuffer('matrix', matrices, 16, true);
+    mesh.thinInstanceCount = count;
+    tetras = { mesh, phase: 0 };
   }
 
   return {
@@ -235,16 +250,8 @@ export function createBabylonBackend() {
 
     tickScenery() {
       if (!tetras) return;
-      // Match original gY += 0.00314 per frame (not dt-scaled)
-      tetras.phase += 0.00314;
-      const { waveA, waveB, matrices, mesh, phase } = tetras;
-      const c = Math.cos(phase);
-      const s = Math.sin(phase);
-      const n = waveA.length;
-      for (let i = 0; i < n; i++) {
-        matrices[i * 16 + 13] = waveA[i] * c + waveB[i] * s;
-      }
-      mesh.thinInstanceBufferUpdated('matrix');
+      tetras.phase += TETRA_PHASE_STEP;
+      tetras.mesh.material?.setFloat?.('tetraPhase', tetras.phase);
     },
 
     resize() {

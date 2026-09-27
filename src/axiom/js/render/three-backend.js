@@ -6,6 +6,7 @@ import * as THREE from '../../vendor/three.module.min.js';
 import { WAVE_BALL_CAP, WAVE_EMITTER_BALLS, wavePresetId } from '../sim/behaviors.js';
 import { getNanotubeLattice } from '../sim/nanotube.js';
 import { isImmersiveVrSupported, requestImmersiveVr } from '../xr.js';
+import { buildTetraPlacements, isSlowTetraDevice, TETRA_PHASE_STEP } from './tetraField.js';
 
 /**
  * @returns {import('./backend.js').AxiomRenderer & {
@@ -32,7 +33,7 @@ export function createThreeBackend() {
   /** @type {Map<string, any>} */
   const species = new Map();
 
-  /** @type {{ mesh: THREE.InstancedMesh, waveA: Float32Array, waveB: Float32Array, matrices: Float32Array, phase: number } | null} */
+  /** @type {{ mesh: THREE.InstancedMesh, phase: { value: number } } | null} */
   let tetras = null;
 
   /** @type {THREE.LineSegments | null} */
@@ -228,41 +229,25 @@ export function createThreeBackend() {
 
   function createTetraField() {
     const geo = new THREE.TetrahedronGeometry(0.03);
-    const mat = new THREE.MeshStandardMaterial({
-      color: 0xcccccc,
-      roughness: 0.7,
-      metalness: 0.05,
-    });
-    const xs = [];
-    const zs = [];
-    for (let ix = -10; ix < 10; ix += 0.75) {
-      for (let iz = -10; iz < 10; iz += 0.75) {
-        xs.push(ix);
-        zs.push(iz);
-      }
-    }
-    const n = xs.length;
-    const xsArr = new Float32Array(xs);
-    const zsArr = new Float32Array(zs);
-    const waveA = new Float32Array(n);
-    const waveB = new Float32Array(n);
-    const matrices = new Float32Array(n * 16);
-    const mesh = new THREE.InstancedMesh(geo, mat, n);
+    const mat = new THREE.MeshLambertMaterial({ color: 0xcccccc });
+    const phase = { value: 0 };
+    mat.customProgramCacheKey = () => 'tetra-wave';
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms.tetraPhase = phase;
+      shader.vertexShader = `uniform float tetraPhase;\n${shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        transformed.y += cos(instanceMatrix[3].x + tetraPhase) + sin(instanceMatrix[3].z + tetraPhase);`,
+      )}`;
+    };
+    const { matrices, count } = buildTetraPlacements(isSlowTetraDevice());
+    const mesh = new THREE.InstancedMesh(geo, mat, count);
     mesh.frustumCulled = false;
-    const m = new THREE.Matrix4();
-    for (let i = 0; i < n; i++) {
-      const x = xsArr[i];
-      const z = zsArr[i];
-      waveA[i] = Math.cos(x) + Math.sin(z);
-      waveB[i] = Math.cos(z) - Math.sin(x);
-      m.makeTranslation(x, waveA[i], z);
-      m.toArray(matrices, i * 16);
-      mesh.setMatrixAt(i, m);
-    }
+    mesh.instanceMatrix.array.set(matrices);
     mesh.instanceMatrix.needsUpdate = true;
-    mesh.count = n;
+    mesh.count = count;
     scene.add(mesh);
-    tetras = { mesh, waveA, waveB, matrices, phase: 0 };
+    tetras = { mesh, phase };
   }
 
   function makeSpeciesMaterial(tint, hardCircle) {
@@ -381,19 +366,7 @@ export function createThreeBackend() {
 
     tickScenery() {
       if (!tetras) return;
-      tetras.phase += 0.00314;
-      const { waveA, waveB, matrices, mesh, phase } = tetras;
-      const c = Math.cos(phase);
-      const s = Math.sin(phase);
-      const n = waveA.length;
-      const m = new THREE.Matrix4();
-      for (let i = 0; i < n; i++) {
-        const o = i * 16;
-        matrices[o + 13] = waveA[i] * c + waveB[i] * s;
-        m.fromArray(matrices, o);
-        mesh.setMatrixAt(i, m);
-      }
-      mesh.instanceMatrix.needsUpdate = true;
+      tetras.phase.value += TETRA_PHASE_STEP;
     },
 
     resize() {

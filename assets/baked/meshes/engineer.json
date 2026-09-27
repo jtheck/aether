@@ -27,6 +27,98 @@
       "emissiveImage": null
     },
     {
+      "name": "pants",
+      "baseColorFactor": [
+        0.0013141309609636664,
+        0.0007667437894269824,
+        0.023114405572414398,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "shoes",
+      "baseColorFactor": [
+        0.23202931880950928,
+        0.05722421407699585,
+        0.010666301473975182,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "shirt",
+      "baseColorFactor": [
+        0.6194158792495728,
+        0.8488568663597107,
+        0.7325073480606079,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "hat",
+      "baseColorFactor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
       "name": "TeamColor",
       "baseColorFactor": [
         0.800000011920929,
@@ -57,67 +149,207 @@
       "materialIndex": 0,
       "reverseWinding": true,
       "boundMin": [
-        -0.6843329071998596,
-        -0.013004442676901817,
-        -0.11790403723716736
+        -1.2627742290496826,
+        1.402435302734375,
+        -0.11875279992818832
       ],
       "boundMax": [
-        0.7596445083618164,
-        2.1285085678100586,
-        0.5165542960166931
+        1.4128637313842773,
+        1.9735064506530762,
+        0.38256019353866577
       ],
       "positions": {
         "offset": 0,
-        "length": 1920,
+        "length": 636,
         "type": "f32"
       },
       "normals": {
-        "offset": 7680,
-        "length": 1920,
+        "offset": 2544,
+        "length": 636,
         "type": "f32"
       },
       "indices": {
-        "offset": 15360,
-        "length": 972,
+        "offset": 5088,
+        "length": 324,
         "type": "u32"
       },
       "uvs": {
-        "offset": 19248,
-        "length": 1280,
+        "offset": 6384,
+        "length": 424,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "pants",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "boundMin": [
+        -0.29293227195739746,
+        0.15846145153045654,
+        -0.07012161612510681
+      ],
+      "boundMax": [
+        0.38344913721084595,
+        0.9723973870277405,
+        0.3076767921447754
+      ],
+      "positions": {
+        "offset": 8080,
+        "length": 342,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 9448,
+        "length": 342,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 10816,
+        "length": 174,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 11512,
+        "length": 228,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "shoes",
+      "materialIndex": 2,
+      "reverseWinding": true,
+      "boundMin": [
+        -0.3396512567996979,
+        -0.013004422187805176,
+        -0.09366615116596222
+      ],
+      "boundMax": [
+        0.4201969504356384,
+        0.1848675012588501,
+        0.5165543556213379
+      ],
+      "positions": {
+        "offset": 12424,
+        "length": 246,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 13408,
+        "length": 246,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 14392,
+        "length": 126,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 14896,
+        "length": 164,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "shirt",
+      "materialIndex": 3,
+      "reverseWinding": true,
+      "boundMin": [
+        -0.7853738069534302,
+        0.9561943411827087,
+        -0.0763954222202301
+      ],
+      "boundMax": [
+        0.8456785678863525,
+        1.654309630393982,
+        0.2565101981163025
+      ],
+      "positions": {
+        "offset": 15552,
+        "length": 504,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 17568,
+        "length": 504,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 19584,
+        "length": 252,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 20592,
+        "length": 336,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "hat",
+      "materialIndex": 4,
+      "reverseWinding": true,
+      "boundMin": [
+        -0.2544553279876709,
+        1.9234938621520996,
+        -0.20723244547843933
+      ],
+      "boundMax": [
+        0.34149715304374695,
+        2.239201068878174,
+        0.4663510024547577
+      ],
+      "positions": {
+        "offset": 21936,
+        "length": 552,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 24144,
+        "length": 552,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 26352,
+        "length": 276,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 27456,
+        "length": 368,
         "type": "f32"
       }
     },
     {
       "materialName": "TeamColor",
-      "materialIndex": 1,
+      "materialIndex": 5,
       "reverseWinding": true,
       "boundMin": [
-        0.33437904715538025,
-        0.6331608295440674,
-        -0.7396729588508606
+        0.33437901735305786,
+        0.6331608891487122,
+        -0.7396730184555054
       ],
       "boundMax": [
         0.7322348952293396,
-        1.1848024129867554,
+        1.1848022937774658,
         1.2143155336380005
       ],
       "positions": {
-        "offset": 24368,
+        "offset": 28928,
         "length": 72,
         "type": "f32"
       },
       "normals": {
-        "offset": 24656,
+        "offset": 29216,
         "length": 72,
         "type": "f32"
       },
       "indices": {
-        "offset": 24944,
+        "offset": 29504,
         "length": 36,
         "type": "u32"
       },
       "uvs": {
-        "offset": 25088,
+        "offset": 29648,
         "length": 48,
         "type": "f32"
       }

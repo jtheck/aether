@@ -13,6 +13,7 @@ import {
   isSteamOverlayHotkey,
 } from './steam.js';
 import { DLC_FIRST_RESPONDER, DLC_FIRST_RESPONDER_APP_ID } from './dlcCatalog.js';
+import { setTeamAssignments } from '../sim/teams.js';
 
 function fakeSteam(opts = {}) {
   const unlocked = [];
@@ -269,5 +270,20 @@ describe('isKothAgoraDefeat', () => {
     assert.equal(isKothAgoraDefeat({ matchWinner: -1, localPlayerId: 0, role: 'player', agoras: captured }), false);
     assert.equal(isKothAgoraDefeat({ matchWinner: 1, localPlayerId: 0, role: 'player' }), false);
     assert.equal(isKothAgoraDefeat({ localPlayerId: 0, role: 'player' }), false);
+  });
+
+  it('is not a defeat when an ally took the last agora', () => {
+    setTeamAssignments([0, 0, 1, 1]);
+    try {
+      const captured = [{ captured: 1 }];
+      assert.equal(isKothAgoraDefeat({
+        matchWinner: 1, localPlayerId: 0, role: 'player', agoras: captured,
+      }), false);
+      assert.equal(isKothAgoraDefeat({
+        matchWinner: 2, localPlayerId: 0, role: 'player', agoras: captured,
+      }), true);
+    } finally {
+      setTeamAssignments(null);
+    }
   });
 });

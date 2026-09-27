@@ -88,8 +88,6 @@ export const NORMAL_DOT_DIAMETER = 0.4;
 export const TARGET_DOT_PX = 8;
 /** Agora capture chips stay a bit larger than unit HP pips. */
 export const TARGET_AGORA_DOT_PX = 14;
-/** Half size past the look-at near radius. */
-export const TARGET_DOT_PX_FAR = TARGET_DOT_PX * 0.5;
 const DOT_DIAMETER_MAIN_MUL = 0.88;
 /** First HP pip — a tick larger than the other chips. */
 export const DOT_DIAMETER_FIRST_MUL = 0.96;
@@ -1140,7 +1138,7 @@ export function createHealthBars(engine, scene, opts = {}) {
      * @param {number} z
      * @param {number} _unitSize unused — chips are a fixed small size for all units
      * @param {number} ratio 0..1
-     * @param {{ armor?: boolean, holy?: boolean, building?: boolean, agora?: boolean, far?: boolean, owner?: number, founder?: number, capturer?: number, progress?: number, tug?: number, phase?: number, contested?: number, direction?: number, hold?: number, rite?: number, hp?: number, manaReady?: number, seatsFilled?: number }} [flags]
+     * @param {{ armor?: boolean, holy?: boolean, building?: boolean, agora?: boolean, owner?: number, founder?: number, capturer?: number, progress?: number, tug?: number, phase?: number, contested?: number, direction?: number, hold?: number, rite?: number, hp?: number, manaReady?: number, seatsFilled?: number }} [flags]
      */
     write(x, y, z, _unitSize, ratio, flags = {}) {
       if (used >= capacity) return;
@@ -1151,9 +1149,7 @@ export function createHealthBars(engine, scene, opts = {}) {
       const holy = !!flags.holy;
       const agora = !!flags.agora;
       const count = agora ? AGORA_CHIP_COUNT : flags.building ? BUILDING_CHIP_COUNT : UNIT_CHIP_COUNT;
-      const targetPx = agora
-        ? TARGET_AGORA_DOT_PX
-        : flags.far ? TARGET_DOT_PX_FAR : TARGET_DOT_PX;
+      const targetPx = agora ? TARGET_AGORA_DOT_PX : TARGET_DOT_PX;
 
       const [bx, by, bz] = placeChipAnchor(x, y, z);
       const eye = cameraEye();

@@ -356,6 +356,13 @@ export function setupMenu({
     exitBtn.textContent = fullscreenButtonLabel(on);
   }
 
+  const graffiti = document.getElementById('graffiti_b');
+  graffiti?.addEventListener('click', () => openMain());
+  graffiti?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    openMain();
+  });
   button.addEventListener('click', () => setOpen(!isOpen()));
   button.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' || e.key === ' ') {

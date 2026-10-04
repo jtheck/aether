@@ -35,7 +35,7 @@ const CLEAR_COLOR = SKY_ZENITH;
 // the exposure above 1, and its sun sheen takes less than that.
 // Contrast is the extra snap on the PBR meshes.
 export const EXPOSURE = 2.15;
-const CONTRAST = 1.3;
+export const CONTRAST = 1.3;
 /** Forge brightness / contrast sliders. Presets stay inside these. */
 export const EXPOSURE_RANGE = { min: 0.55, max: 3 };
 export const CONTRAST_RANGE = { min: 0.75, max: 1.7 };

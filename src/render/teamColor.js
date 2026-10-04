@@ -1,16 +1,57 @@
 // TeamColor patches: white albedo × thin-instance owner tint.
 // Shared by VAT shirts, static units, buildings, and flags.
-// Unlit so the colour-picker hex is what you see — outdoor PBR + gray
-// emissive was washing that swatch into a chalk pastel.
+// Unlit so outdoor PBR does not grade the swatch. The picker hex is display
+// sRGB (name row, health bar). The mesh shader still applies exposure, gamma,
+// and contrast, so the instance color is the inverse of that grade.
 
 import {
   createTexture2DFromPixels,
   setPbrUnlit,
 } from '../vendor/lite/liteVendor.js';
-import { EXPOSURE } from './celestial.js';
+import { CONTRAST, EXPOSURE } from './celestial.js';
 
-/** Undo the scene exposure lift so #FF0000 on a roof matches the menu row. */
+/** Undo the scene exposure lift. Gamma and contrast are inverted per channel. */
 export const TEAM_COLOR_UNLIT = 1 / EXPOSURE;
+
+function clamp01(v) {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+/** Inverse of the PBR contrast mix (identity below 1, smoothstep blend above). */
+function undoContrast(display, contrast) {
+  const c = clamp01(display);
+  if (contrast < 1) {
+    return contrast > 0 ? clamp01((c - 0.5 * (1 - contrast)) / contrast) : 0.5;
+  }
+  if (contrast === 1) return c;
+  const mixAmount = contrast - 1;
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 16; i++) {
+    const mid = (lo + hi) * 0.5;
+    const high = mid * mid * (3 - 2 * mid);
+    const out = mid + (high - mid) * mixAmount;
+    if (out < c) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) * 0.5;
+}
+
+/**
+ * Display sRGB 0–1 → instance color for an unlit TeamColor mesh.
+ * Exposure is cancelled by TEAM_COLOR_UNLIT, so this only undoes contrast
+ * and the shader's pow(color, 1/2.2).
+ * @param {ArrayLike<number>} displayRgb
+ * @param {number} [contrast]
+ * @returns {[number, number, number]}
+ */
+export function sceneTeamRgb(displayRgb, contrast = CONTRAST) {
+  return [
+    undoContrast(displayRgb[0], contrast) ** 2.2,
+    undoContrast(displayRgb[1], contrast) ** 2.2,
+    undoContrast(displayRgb[2], contrast) ** 2.2,
+  ];
+}
 
 /** Shared 1×1 white + ORM so authored TeamColor maps cannot fight the tint. */
 let teamColorMaps = null;

@@ -21,7 +21,7 @@ import { constructionVisualStage } from '../sim/construction.js';
 import { capacityFor } from '../sim/capacity.js';
 import { USE_GPU_PICK } from './pickMode.js';
 import { ownerTint } from './ownerTints.js';
-import { isTeamColorMaterial, prepareTeamColorMaterial } from './teamColor.js';
+import { isTeamColorMaterial, prepareTeamColorMaterial, sceneTeamRgb } from './teamColor.js';
 
 /** Start small; grow by powers of two when place() needs more. */
 const INITIAL_CAPACITY = 32;
@@ -104,7 +104,7 @@ function writeSlotColor(colors, slot, rgb, boost = 1) {
 }
 
 function writeOwnerColor(colors, slot, owner, boost = 1) {
-  writeSlotColor(colors, slot, ownerTint(owner), boost);
+  writeSlotColor(colors, slot, sceneTeamRgb(ownerTint(owner)), boost);
 }
 
 function writeMatrix(matrices, slot, x, y, z, yaw, sx, sy = sx, sz = sx) {
@@ -910,7 +910,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
     const owner = batch.owners?.[slot] ?? 0;
     for (const layer of batch.layers) {
       if (!layer.colors) continue;
-      const tint = layer.isTeamColor ? ownerTint(owner) : [1, 1, 1];
+      const tint = layer.isTeamColor ? sceneTeamRgb(ownerTint(owner)) : [1, 1, 1];
       writeSlotColor(layer.colors, slot, tint, boost);
       setThinInstanceColors(layer.mesh, layer.colors);
     }

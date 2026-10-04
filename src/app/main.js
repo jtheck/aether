@@ -73,6 +73,7 @@ import {
   observerSheetOwners,
 } from './observerData.js';
 import { ownerTint, setLocalOwnerTint, setOwnerTints } from '../render/ownerTints.js';
+import { sceneTeamRgb } from '../render/teamColor.js';
 import { TECH, TECH_BY_ID } from '../sim/tech.js';
 import { createRenderer } from '../render/renderer.js';
 import { rimKeyForBuildingType, sharedRimKey } from '../render/workRadiusRings.js';
@@ -1159,7 +1160,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         continue;
       }
       // TeamColor parts read this as a solid owner swatch; other parts stay white.
-      const c = ownerTint(world.owner[i]);
+      // Encode so the mesh grade displays the same hex as the name and health bar.
+      const c = sceneTeamRgb(ownerTint(world.owner[i]));
       const alpha = world.alive[i] ? 1 : fade;
       colors[i * 4] = c[0];
       colors[i * 4 + 1] = c[1];
@@ -2103,7 +2105,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       menuUnlocked = true;
       sideMenu.setAvailable?.(true);
       document.getElementById('header')?.classList.add('map-ready');
-      setGraffitiHeaderVisible(isLobbyGraffitiScene(bootCfg.mode));
+      syncLobbyChrome(bootCfg.mode);
     }
   };
   let storyCast = storyCastFromGarden(garden);
@@ -4226,6 +4228,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
     ctx.setMatchMeta({ mode: 'staging', matchId: cfg.matchId });
     ctx.session.setRole(cfg.role ?? 'spectator');
     setGraffitiHeaderVisible(true);
+    setCommunityChatAway(false);
     setStatusText('Looking for live shard…');
     return;
   }
@@ -4257,7 +4260,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
     ctx.setInteractive?.(false);
     setStatusText(cfg.loadingLabel ?? (localSolo ? 'Starting 1v1…' : 'Loading match…'));
   }
-  setGraffitiHeaderVisible(isLobbyGraffitiScene(cfg.mode));
+  syncLobbyChrome(cfg.mode);
 
   const simMode = workerSimMode(cfg.mode);
   const humanPlayers = cfg.humanPlayers ?? activeSlots;
@@ -5045,8 +5048,22 @@ function isLobbyGraffitiScene(mode) {
   return mode === 'skirmish' || mode === 'staging';
 }
 
+/** Porch chat stays up on the loading skirmish, the lobby, and the unit tester. */
+function communityChatStaysUp(mode) {
+  return mode === 'skirmish' || mode === 'staging' || mode === 'sandbox';
+}
+
 function setGraffitiHeaderVisible(on) {
   document.getElementById('header')?.classList.toggle('in-match', !on);
+}
+
+function setCommunityChatAway(away) {
+  document.body?.classList.toggle('match-chat-away', !!away);
+}
+
+function syncLobbyChrome(mode) {
+  setGraffitiHeaderVisible(isLobbyGraffitiScene(mode));
+  setCommunityChatAway(!communityChatStaysUp(mode));
 }
 
 /**

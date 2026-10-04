@@ -16,7 +16,7 @@ import { meshRoofY, roofChipLift, DEFAULT_AGORA_ROOF, agoraPropTint, pickAgoraWi
 import { AGORA_PHASE_TUG, AGORA_RITE_FINALE } from '../sim/agora.js';
 import { USE_GPU_PICK } from './pickMode.js';
 import { ownerTint } from './ownerTints.js';
-import { isTeamColorMaterial, prepareTeamColorMaterial } from './teamColor.js';
+import { isTeamColorMaterial, prepareTeamColorMaterial, sceneTeamRgb } from './teamColor.js';
 import { forEachRallyDash } from './rallyDash.js';
 import { MODEL_BASE_SCALE } from './modelScale.js';
 
@@ -361,9 +361,10 @@ function writeAgoraBodyColor(layer, slot, rgb, boost = 1) {
   if (!layer.colors) return;
   const o = slot * 4;
   if (layer.isTeamColor) {
-    layer.colors[o] = Math.min(1, rgb[0] * boost);
-    layer.colors[o + 1] = Math.min(1, rgb[1] * boost);
-    layer.colors[o + 2] = Math.min(1, rgb[2] * boost);
+    const tint = sceneTeamRgb(rgb);
+    layer.colors[o] = Math.min(1, tint[0] * boost);
+    layer.colors[o + 1] = Math.min(1, tint[1] * boost);
+    layer.colors[o + 2] = Math.min(1, tint[2] * boost);
   } else {
     layer.colors[o] = boost;
     layer.colors[o + 1] = boost;
@@ -568,9 +569,9 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
       for (const layer of batchLayers) {
         writeMatrix(layer.matrices, i, px, py, pz, yaw2, sx, sy, sz);
         if (layer.isTeamColor) {
-          if (a.attackMove) writeRallyColor(layer.colors, i, owner, 1, true);
-          else if (pose && pose.owner >= 0) writeTint(layer.colors, i, ownerTint(tintOwner), 1);
-          else writeTint(layer.colors, i, agoraPropTint(a), 1);
+          if (a.attackMove) writeTint(layer.colors, i, sceneTeamRgb(ATTACK_MOVE_TINT), 1);
+          else if (pose && pose.owner >= 0) writeTint(layer.colors, i, sceneTeamRgb(ownerTint(tintOwner)), 1);
+          else writeTint(layer.colors, i, sceneTeamRgb(agoraPropTint(a)), 1);
         } else {
           const o = i * 4;
           if (a.attackMove) {

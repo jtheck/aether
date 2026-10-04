@@ -8,6 +8,7 @@
 
 import {
   attachVat,
+  createMeshFromData,
   debugPbrExtIds,
   loadGltf,
   stopAnimation,
@@ -22,10 +23,16 @@ import {
 import { isTeamColorName, prepareTeamColorMaterial } from './teamColor.js';
 import {
   appendCarryLocomotion,
+  bindingOf,
   CARRY_IDLE_CLIP,
   CARRY_OVERLAY,
   CARRY_WALK_CLIP,
+  goToFrameCpu,
+  rigidPropMeshMatrix,
   sampleVatGroups,
+  skinPositions,
+  transformNormalsByMat4,
+  transformPointsByMat4,
 } from './vatBakeCpu.js';
 
 /** Per-instance VAT clip id (low 7 bits). High bit = frozen (fps=0). */
@@ -82,6 +89,149 @@ export function isVatUnitType(typeId) {
   return typeId in VAT_UNIT_DEFS;
 }
 
+function pickClipName(names, preds) {
+  for (const pred of preds) {
+    const hit = names.find(pred);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * Map authored glTF animation names onto VAT roles.
+ * Exact names win (`idle`, `walk_cycle`, `Run`, `Attack`); otherwise a
+ * name that contains the role. Unclassified clips still leave the bind pose:
+ * the first one plays as idle and walk.
+ * @param {string[]} names
+ * @returns {{ idleClip: string, walkClip: string, carryClip?: string, chopClip?: string, attackClip?: string } | null}
+ */
+export function vatRolesFromClipNames(names) {
+  const list = [];
+  const seen = new Set();
+  for (const raw of names ?? []) {
+    const name = String(raw ?? '').trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    list.push(name);
+  }
+  if (list.length === 0) return null;
+
+  const idle = pickClipName(list, [
+    (n) => /^idle$/i.test(n),
+    (n) => /idle/i.test(n),
+  ]);
+  const walk = pickClipName(list, [
+    (n) => /^walk_cycle$/i.test(n),
+    (n) => /^walk$/i.test(n),
+    (n) => /^run$/i.test(n),
+    (n) => /walk/i.test(n) && !/carry/i.test(n),
+    (n) => /run/i.test(n) && !/carry/i.test(n),
+    (n) => /walk/i.test(n),
+  ]);
+  const carry = pickClipName(list, [
+    (n) => /^carry$/i.test(n),
+    (n) => /carry/i.test(n) && !/walk/i.test(n),
+  ]);
+  const chop = pickClipName(list, [
+    (n) => /^chop$/i.test(n),
+    (n) => /chop/i.test(n),
+  ]);
+  const attack = pickClipName(list, [
+    (n) => /^attack$/i.test(n),
+    (n) => /attack/i.test(n),
+    (n) => /swing/i.test(n),
+  ]);
+
+  if (!idle && !walk && !carry && !chop && !attack) {
+    return { idleClip: list[0], walkClip: list[0] };
+  }
+  const idleClip = idle ?? walk ?? attack ?? carry ?? chop ?? list[0];
+  const walkClip = walk ?? idleClip;
+  return {
+    idleClip,
+    walkClip,
+    ...(carry ? { carryClip: carry } : {}),
+    ...(chop ? { chopClip: chop } : {}),
+    ...(attack ? { attackClip: attack } : {}),
+  };
+}
+
+/** @param {ArrayBuffer | ArrayBufferView} buffer */
+export function parseGlbJson(buffer) {
+  const bytes = buffer instanceof ArrayBuffer
+    ? new Uint8Array(buffer)
+    : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  if (bytes.byteLength < 20) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (view.getUint32(0, true) !== 0x46546C67) return null;
+  const chunkLen = view.getUint32(12, true);
+  const chunkType = view.getUint32(16, true);
+  if (chunkType !== 0x4E4F534A || 20 + chunkLen > bytes.byteLength) return null;
+  const text = new TextDecoder().decode(bytes.subarray(20, 20 + chunkLen)).replace(/\0+$/g, '').trim();
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * VAT def for a skinned GLB that already has clips. Null for rigid meshes.
+ * @param {string} url
+ * @param {object | null | undefined} json
+ * @returns {VatUnitDef | null}
+ */
+export function vatDefFromGlbJson(url, json) {
+  const skinned = (json?.skins?.length ?? 0) > 0
+    && (json?.nodes ?? []).some((node) => node?.skin != null);
+  if (!skinned) return null;
+  const roles = vatRolesFromClipNames((json?.animations ?? []).map((anim) => anim?.name));
+  if (!roles) return null;
+  return { url, scale: 1, ...roles };
+}
+
+/** @type {Map<string, Promise<VatUnitDef | null>>} */
+const vatSniffCache = new Map();
+
+/**
+ * Read a GLB header and return a VAT def when the file is skinned and has clips.
+ * Cached per URL. Failures stay on the static mesh path.
+ * @param {string} url
+ * @returns {Promise<VatUnitDef | null>}
+ */
+export function sniffVatDef(url) {
+  let pending = vatSniffCache.get(url);
+  if (!pending) {
+    pending = fetch(url).then(async (res) => {
+      if (!res.ok) return null;
+      return vatDefFromGlbJson(url, parseGlbJson(await res.arrayBuffer()));
+    }).catch((err) => {
+      console.warn('[vat] clip sniff failed', url, err);
+      return null;
+    });
+    vatSniffCache.set(url, pending);
+  }
+  return pending;
+}
+
+/**
+ * VAT bake entries for unit GLBs that have clips but are not already registered.
+ * @param {string[]} urls
+ * @param {string[]} knownUrls
+ */
+export async function extraVatBakeDefs(urls, knownUrls) {
+  const known = new Set(knownUrls);
+  /** @type {VatUnitDef[]} */
+  const out = [];
+  for (const url of urls) {
+    if (!url || known.has(url)) continue;
+    known.add(url);
+    const def = await sniffVatDef(url);
+    if (def) out.push(def);
+  }
+  return out;
+}
+
 /**
  * Lite packs VAT instance params in a 1×(N*2) rgba32float texture
  * (`instanceIndex * 2` texels). Cap is therefore maxTextureDimension2D / 2.
@@ -135,7 +285,7 @@ function collectSkinnedMeshes(node, out = []) {
   return out;
 }
 
-/** VAT only instances skinned prims — hide leftover rigid meshes (e.g. unskinned sword). */
+/** Hide rigid meshes that are not parented to a joint. Bone-parented weapons stay. */
 function hideUnskinnedProps(root, skinned) {
   const keep = new Set(skinned);
   const visit = (node) => {
@@ -407,6 +557,351 @@ async function tryLoadOfflineVatBake(engine, def) {
   };
 }
 
+/** @type {Map<string, Promise<object | null>>} */
+const glbJsonCache = new Map();
+
+function loadGlbJson(url) {
+  let pending = glbJsonCache.get(url);
+  if (!pending) {
+    pending = fetch(url).then(async (res) => {
+      if (!res.ok) return null;
+      return parseGlbJson(await res.arrayBuffer());
+    }).catch(() => null);
+    glbJsonCache.set(url, pending);
+  }
+  return pending;
+}
+
+function collectRigidMeshes(node, out = []) {
+  if (node?.material && !node.skeleton && !/anchor/i.test(node.name || '')) out.push(node);
+  for (const child of node?.children ?? []) collectRigidMeshes(child, out);
+  return out;
+}
+
+function jointIndexForName(binding, nodes, name) {
+  const joints = binding?.jointNodes;
+  if (!joints || !name) return -1;
+  for (let bi = 0; bi < joints.length; bi++) {
+    if (nodes[joints[bi]]?.name === name) return bi;
+  }
+  return -1;
+}
+
+function bindingForMesh(groups, mesh) {
+  for (const group of groups ?? []) {
+    const binding = bindingOf(group, mesh);
+    if (binding?.jointNodes) return binding;
+  }
+  return null;
+}
+
+/**
+ * glTF load parent pointers stay null until addToScene. Walk `.children`
+ * and link them so joint lookup and world matrices see the bone chain.
+ * @returns {Map<object, object>}
+ */
+function linkChildParents(root) {
+  /** @type {Map<object, object>} */
+  const parents = new Map();
+  const visit = (node) => {
+    for (const child of node?.children ?? []) {
+      if (!child) continue;
+      parents.set(child, node);
+      if (child.parent !== node) child.parent = node;
+      visit(child);
+    }
+  };
+  visit(root);
+  return parents;
+}
+
+function findPropJoint(mesh, parents, skinned, groups, nodes) {
+  let node = parents.get(mesh);
+  while (node) {
+    for (let si = 0; si < skinned.length; si++) {
+      const binding = bindingForMesh(groups, skinned[si]);
+      const jointIndex = jointIndexForName(binding, nodes, node.name);
+      if (jointIndex >= 0) {
+        return { bakeIndex: si, jointIndex, bone: node, binding };
+      }
+    }
+    node = parents.get(node);
+  }
+  return null;
+}
+
+function writeFloatBuffer(engine, gpuBuffer, data) {
+  if (!gpuBuffer || !(data?.byteLength > 0) || gpuBuffer.size < data.byteLength) return false;
+  engine._device.queue.writeBuffer(gpuBuffer, 0, data);
+  return true;
+}
+
+function rigidSkeleton(engine, vertexCount, jointIndex) {
+  const device = engine._device;
+  const joints = new Uint32Array(vertexCount * 4);
+  const weights = new Float32Array(vertexCount * 4);
+  for (let i = 0; i < vertexCount; i++) {
+    joints[i * 4] = jointIndex;
+    weights[i * 4] = 1;
+  }
+  const usage = GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST;
+  const mapBuffer = (label, data) => {
+    const buffer = device.createBuffer({
+      label,
+      size: Math.max(4, data.byteLength),
+      usage,
+      mappedAtCreation: true,
+    });
+    new Uint8Array(buffer.getMappedRange()).set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+    buffer.unmap();
+    return buffer;
+  };
+  const jointsBuffer = mapBuffer('rigid-joints', joints);
+  const weightsBuffer = mapBuffer('rigid-weights', weights);
+  const boneMatrices = new Float32Array(16);
+  boneMatrices[0] = boneMatrices[5] = boneMatrices[10] = boneMatrices[15] = 1;
+  const boneTexture = device.createTexture({
+    label: 'rigid-bone',
+    size: [4, 1],
+    format: 'rgba32float',
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+  });
+  device.queue.writeTexture(
+    { texture: boneTexture },
+    boneMatrices,
+    { bytesPerRow: 64 },
+    { width: 4, height: 1 },
+  );
+  return {
+    boneTexture,
+    boneCount: 1,
+    joints,
+    weights,
+    jointsBuffer,
+    weightsBuffer,
+    joints1: null,
+    weights1: null,
+    joints1Buffer: null,
+    weights1Buffer: null,
+    _skinBuffers: { jointsBuffer, weightsBuffer, joints1Buffer: null, weights1Buffer: null },
+  };
+}
+
+function matchMeshFrame(dst, src, parents) {
+  const oldParent = parents.get(dst);
+  if (oldParent?.children) {
+    const index = oldParent.children.indexOf(dst);
+    if (index >= 0) oldParent.children.splice(index, 1);
+  }
+  dst.parent = src.parent;
+  if (src.parent?.children && !src.parent.children.includes(dst)) src.parent.children.push(dst);
+  if (src.position && dst.position?.set) dst.position.set(src.position.x, src.position.y, src.position.z);
+  if (src.rotationQuaternion && dst.rotationQuaternion?.set) {
+    dst.rotationQuaternion.set(
+      src.rotationQuaternion.x,
+      src.rotationQuaternion.y,
+      src.rotationQuaternion.z,
+      src.rotationQuaternion.w,
+    );
+  }
+  if (src.scaling && dst.scaling?.set) dst.scaling.set(src.scaling.x, src.scaling.y, src.scaling.z);
+}
+
+/**
+ * A mesh parented to a joint (Blender bone-parent, no armature weights) is
+ * rewritten into that joint and drawn with the body's VAT texture.
+ * @returns {Promise<object[]>}
+ */
+async function prepareBoneParentedProps(engine, root, skinned, groups, url) {
+  const parents = linkChildParents(root);
+  const rigid = collectRigidMeshes(root);
+  if (rigid.length === 0 || !groups?.length) return [];
+  const json = await loadGlbJson(url);
+  const nodes = json?.nodes;
+  if (!nodes) return [];
+  const props = [];
+  for (const mesh of rigid) {
+    try {
+      const hit = findPropJoint(mesh, parents, skinned, groups, nodes);
+      const positions = mesh._cpuPositions;
+      if (!hit || !positions?.length) continue;
+      const boneWorld = hit.bone.worldMatrix;
+      const propWorld = mesh.worldMatrix;
+      const into = boneWorld && propWorld
+        ? rigidPropMeshMatrix(hit.binding.inverseBindMatrices, hit.jointIndex * 16, boneWorld, propWorld)
+        : null;
+      const nextPos = into && transformPointsByMat4(into, positions);
+      if (!nextPos || !writeFloatBuffer(engine, mesh._gpu?.positionBuffer, nextPos)) continue;
+      mesh._cpuPositions = nextPos;
+      const normals = mesh._cpuNormals;
+      if (normals?.length === positions.length) {
+        const nextN = transformNormalsByMat4(into, normals);
+        if (nextN && writeFloatBuffer(engine, mesh._gpu?.normalBuffer, nextN)) mesh._cpuNormals = nextN;
+      }
+      mesh.skeleton = rigidSkeleton(engine, (positions.length / 3) | 0, hit.jointIndex);
+      mesh._vatBakeIndex = hit.bakeIndex;
+      matchMeshFrame(mesh, skinned[hit.bakeIndex], parents);
+      props.push(mesh);
+    } catch (err) {
+      console.warn('[vat] prop bind failed', mesh?.name, err);
+    }
+  }
+  return props;
+}
+
+function posedBoneMatrices(group, mesh, skinned) {
+  const donor = mesh._vatBakeIndex != null ? skinned[mesh._vatBakeIndex] : mesh;
+  return bindingOf(group, donor)?.boneMatrices ?? donor?.skeleton?.boneMatrices ?? null;
+}
+
+function boundsFromPositions(positions) {
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < positions.length; i += 3) {
+    const x = positions[i];
+    const y = positions[i + 1];
+    const z = positions[i + 2];
+    if (x < min[0]) min[0] = x;
+    if (y < min[1]) min[1] = y;
+    if (z < min[2]) min[2] = z;
+    if (x > max[0]) max[0] = x;
+    if (y > max[1]) max[1] = y;
+    if (z > max[2]) max[2] = z;
+  }
+  return { min, max };
+}
+
+function listedVatDefForUrl(url) {
+  for (const def of Object.values(VAT_UNIT_DEFS)) {
+    if (def.url === url) return def;
+  }
+  return null;
+}
+
+/** Same LH / CW normals the static mesh bake uses, so the icon lights from the outside. */
+function smoothNormalsLH(positions, indices) {
+  const normals = new Float32Array(positions.length);
+  for (let i = 0; i < indices.length; i += 3) {
+    const ia = indices[i] * 3;
+    const ib = indices[i + 1] * 3;
+    const ic = indices[i + 2] * 3;
+    const abx = positions[ib] - positions[ia];
+    const aby = positions[ib + 1] - positions[ia + 1];
+    const abz = positions[ib + 2] - positions[ia + 2];
+    const acx = positions[ic] - positions[ia];
+    const acy = positions[ic + 1] - positions[ia + 1];
+    const acz = positions[ic + 2] - positions[ia + 2];
+    const nx = acy * abz - acz * aby;
+    const ny = acz * abx - acx * abz;
+    const nz = acx * aby - acy * abx;
+    for (const o of [ia, ib, ic]) {
+      normals[o] += nx;
+      normals[o + 1] += ny;
+      normals[o + 2] += nz;
+    }
+  }
+  for (let i = 0; i < normals.length; i += 3) {
+    const len = Math.hypot(normals[i], normals[i + 1], normals[i + 2]) || 1;
+    normals[i] /= len;
+    normals[i + 1] /= len;
+    normals[i + 2] /= len;
+  }
+  return normals;
+}
+
+function iconMaterialStub(mesh, gltf) {
+  const name = String(mesh.material?.name || '').replace(/_clone$/i, '');
+  const live = mesh.material?.baseColorFactor ?? mesh.material?._baseColorFactor;
+  const desc = gltf?.materials?.find((m) => m.name === name);
+  const factor = (live?.length >= 3 ? live : null)
+    ?? desc?.pbrMetallicRoughness?.baseColorFactor
+    ?? [0.72, 0.75, 0.8, 1];
+  return { name, baseColorFactor: factor.slice(0, 4) };
+}
+
+function meshFromPosedPart(engine, url, index, source, positions, gltf) {
+  const indices = source._cpuIndices instanceof Uint32Array
+    ? source._cpuIndices
+    : new Uint32Array(source._cpuIndices);
+  const normals = smoothNormalsLH(positions, indices);
+  const uvs = source._cpuUvs ? new Float32Array(source._cpuUvs) : undefined;
+  const mesh = createMeshFromData(engine, `${url}#idle${index}`, positions, normals, indices, uvs);
+  mesh.material = iconMaterialStub(source, gltf);
+  mesh.pickable = false;
+  const box = boundsFromPositions(positions);
+  mesh.boundMin = box.min;
+  mesh.boundMax = box.max;
+  mesh.position?.set?.(0, 0, 0);
+  mesh.scaling?.set?.(1, 1, 1);
+  mesh.rotationQuaternion?.set?.(0, 0, 0, 1);
+  return mesh;
+}
+
+/**
+ * One still from the idle clip, baked like the static icon meshes.
+ * Null when the GLB has no idle clip — caller keeps the bind-pose bake.
+ * @returns {Promise<object[] | null>}
+ */
+export async function loadIdleIconMeshes(engine, url) {
+  const def = listedVatDefForUrl(url) ?? await sniffVatDef(url);
+  if (!def?.idleClip) return null;
+  const [container, gltf] = await Promise.all([
+    loadGltf(engine, url),
+    loadGlbJson(url),
+  ]);
+  const root = container.entities?.[0];
+  if (!root) return null;
+  const skinned = collectSkinnedMeshes(root);
+  if (!skinned.length) return null;
+  const groups = container.animationGroups ?? [];
+  for (const group of groups) stopAnimation(group);
+  const props = await prepareBoneParentedProps(engine, root, skinned, groups, url);
+  const idle = collectVatBakeGroups(groups, def).idle;
+  if (!idle) return null;
+  goToFrameCpu(idle, 0);
+
+  const posedMeshes = [];
+  for (const mesh of [...skinned, ...props]) {
+    const bind = mesh._cpuPositions;
+    const mats = posedBoneMatrices(idle, mesh, skinned);
+    const skel = mesh.skeleton;
+    const world = mesh.worldMatrix;
+    if (!bind?.length || !mats || !skel?.joints || !skel?.weights || !mesh._cpuIndices || !(world?.length >= 16)) {
+      continue;
+    }
+    const localPos = skinPositions(
+      mats, skel.joints, skel.weights, bind, undefined, skel.joints1, skel.weights1,
+    );
+    const posed = transformPointsByMat4(world, localPos);
+    posedMeshes.push(meshFromPosedPart(engine, url, posedMeshes.length, mesh, posed, gltf));
+  }
+  return posedMeshes.length ? posedMeshes : null;
+}
+
+function donorMaterial(skinned) {
+  return skinned.find((m) => /material\.001/i.test(materialName(m)))?.material
+    ?? skinned.find((m) => /kicks/i.test(materialName(m)))?.material
+    ?? skinned.find((m) => !isTeamColorPart(m))?.material
+    ?? null;
+}
+
+function pushVatParts(engine, list, cached, donorMat, parts) {
+  for (let i = 0; i < list.length; i++) {
+    const mesh = list[i];
+    const bakeIndex = mesh._vatBakeIndex ?? i;
+    const handle = attachVatReserved(engine, mesh, cached.bakedList[bakeIndex], cached.bakeClipName);
+    const team = isTeamColorPart(mesh);
+    if (mesh.material) {
+      mesh.material.doubleSided = true;
+      mesh.material._renderFeatures = undefined;
+    }
+    if (team) prepareTeamColorMaterial(engine, mesh, donorMat);
+    mesh.pickable = false;
+    if ('visible' in mesh) mesh.visible = true;
+    parts.push({ mesh, handle, isTeamColor: team });
+  }
+}
+
 /**
  * Load glTF, bake idle/walk/carry for every skinned primitive, attach VAT.
  * Keeps the glTF hierarchy (required for correct skin space).
@@ -427,10 +922,12 @@ export async function loadVatUnitTemplate(engine, def) {
 
   const skinned = collectSkinnedMeshes(root);
   if (skinned.length === 0) throw new Error(`no skinned mesh in ${def.url}`);
-  hideUnskinnedProps(root, skinned);
 
   const groups = container.animationGroups ?? [];
   for (const g of groups) stopAnimation(g);
+  const props = await prepareBoneParentedProps(engine, root, skinned, groups, def.url);
+  const meshes = props.length ? [...skinned, ...props] : skinned;
+  hideUnskinnedProps(root, meshes);
 
   let cached = vatBakeCache.get(def.url);
   if (!cached) {
@@ -458,27 +955,10 @@ export async function loadVatUnitTemplate(engine, def) {
       vatBakeCache.set(def.url, cached);
     }
 
-    // Attach all prims (first shard path continues below).
-    const donorMat = skinned.find((m) => /material\.001/i.test(materialName(m)))?.material
-      ?? skinned.find((m) => /kicks/i.test(materialName(m)))?.material
-      ?? skinned.find((m) => !isTeamColorPart(m))?.material
-      ?? null;
-
+    const donorMat = donorMaterial(skinned);
     /** @type {{ mesh: object, handle: object, isTeamColor: boolean }[]} */
     const parts = [];
-    for (let i = 0; i < skinned.length; i++) {
-      const mesh = skinned[i];
-      const handle = attachVatReserved(engine, mesh, cached.bakedList[i], cached.bakeClipName);
-      const team = isTeamColorPart(mesh);
-      if (mesh.material) {
-        mesh.material.doubleSided = true;
-        mesh.material._renderFeatures = undefined;
-      }
-      if (team) prepareTeamColorMaterial(engine, mesh, donorMat);
-      mesh.pickable = false;
-      if ('visible' in mesh) mesh.visible = true;
-      parts.push({ mesh, handle, isTeamColor: team });
-    }
+    pushVatParts(engine, meshes, cached, donorMat, parts);
 
     const extIds = typeof debugPbrExtIds === 'function' ? debugPbrExtIds() : [];
     if (!extIds.includes('vat')) {
@@ -510,26 +990,10 @@ export async function loadVatUnitTemplate(engine, def) {
     throw new Error(`VAT bake/mesh count mismatch for ${def.url}`);
   }
 
-  const donorMat = skinned.find((m) => /material\.001/i.test(materialName(m)))?.material
-    ?? skinned.find((m) => /kicks/i.test(materialName(m)))?.material
-    ?? skinned.find((m) => !isTeamColorPart(m))?.material
-    ?? null;
-
+  const donorMat = donorMaterial(skinned);
   /** @type {{ mesh: object, handle: object, isTeamColor: boolean }[]} */
   const parts = [];
-  for (let i = 0; i < skinned.length; i++) {
-    const mesh = skinned[i];
-    const handle = attachVatReserved(engine, mesh, cached.bakedList[i], cached.bakeClipName);
-    const team = isTeamColorPart(mesh);
-    if (mesh.material) {
-      mesh.material.doubleSided = true;
-      mesh.material._renderFeatures = undefined;
-    }
-    if (team) prepareTeamColorMaterial(engine, mesh, donorMat);
-    mesh.pickable = false;
-    if ('visible' in mesh) mesh.visible = true;
-    parts.push({ mesh, handle, isTeamColor: team });
-  }
+  pushVatParts(engine, meshes, cached, donorMat, parts);
 
   return {
     root,

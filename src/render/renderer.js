@@ -1,7 +1,7 @@
 // render/ — Babylon Lite view layer.
 //
 // Units are thin-instanced GLB meshes (one draw call per type × owner in KOTH).
-// Villagers use Lite VAT (baked idle/walk/carry) on the same thin-instance path.
+// Skinned units with clips use Lite VAT on the same thin-instance path.
 
 import {
   createEngine,
@@ -64,6 +64,7 @@ import {
   isVatUnitType,
   loadVatUnitTemplate,
   maxVatInstancesPerBatch,
+  sniffVatDef,
   vatWant,
   vatWalkFps,
   VAT_CLIP,
@@ -96,6 +97,7 @@ import { createBuildingProps } from './buildings.js';
 import { createBuildingRadialMenu } from './buildingRadial.js';
 import { createBuildingActionRadial } from './buildingActionRadial.js';
 import { createSelectionHud } from './selectionHud.js';
+import { nextSelectionRingDrawCount } from './selectionRingDraw.js';
 import { createControlGroupHud } from './controlGroupHud.js';
 import { createSceneConfirm } from './sceneConfirm.js';
 import { createGamepadCursor } from './gamepadCursor.js';
@@ -645,10 +647,25 @@ function vatBatchSockets(vat, def) {
   return [...(def?.extraSockets ?? [])];
 }
 
-/** VAT when registered; otherwise static mesh bake (interim until all units are skinned). */
-async function createTypeBatch(engine, typeId, activeCount, gpuCap, packId = null) {
+/**
+ * Registered VAT types keep their authored clip map. Every other unit model
+ * is sniffed: a skinned GLB with clips plays those clips, a rigid GLB stays
+ * on the static mesh bake.
+ * @param {number} typeId
+ * @param {string | null} [packId]
+ */
+async function resolveBatchVatDef(typeId, packId = null) {
   if (isVatUnitType(typeId)) {
-    const def = resolveVatDef(typeId, packId) ?? VAT_UNIT_DEFS[typeId];
+    return resolveVatDef(typeId, packId) ?? VAT_UNIT_DEFS[typeId] ?? null;
+  }
+  const url = resolveUnitModelUrl(typeId, packId);
+  if (!url) return null;
+  return sniffVatDef(url);
+}
+
+async function createTypeBatch(engine, typeId, activeCount, gpuCap, packId = null) {
+  const def = await resolveBatchVatDef(typeId, packId);
+  if (def) {
     const vat = await loadVatUnitTemplate(engine, def);
     const cap = Math.max(activeCount, gpuCap, 1);
     const matrices = new Float32Array(cap * 16);
@@ -820,21 +837,26 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   // mesh.world × local bounds, so board-scale TI units vanish or become ~2 texels).
   // Keep worldSpaceBias tiny — unit height is ~1–2; 0.15+ eats character contact shadows.
   // Note: Lite keeps darkness / worldSpaceBias on an internal csmCfg, not sg._config.
-  // Quality is fixed at construction: the depth texture is allocated at these
-  // dimensions and csmCfg is captured in the generator's closures, with no
-  // setter and no dispose. Changing tiers therefore needs a reload — see the
-  // settings menu, which persists the choice and says so.
+  // Map size is fixed at construction (the depth texture is allocated here,
+  // with no dispose). Changing quality tiers needs a reload — see settings.
+  // shadowMaxZ is not: syncShadowCoverage updates it when the board or zoom changes.
   const shadowQuality = opts.shadowQuality ?? {};
   const shadowOpts = {
     mapSize: shadowQuality.mapSize ?? 2048,
     numCascades: shadowQuality.numCascades ?? 4,
-    lambda: 0.85,
+    // 0.5 keeps texels on the far ground. 0.85 parked sunny-side shadows
+    // (they fall away from the camera) in one coarse last cascade.
+    lambda: 0.5,
     cascadeBlendPercentage: 0.08,
     stabilizeCascades: true,
     shadowMaxZ: tableHalfF * 2.75,
+    // Far plane stays on the camera frustum. Lite otherwise clamps it to the
+    // caster bounds, which clips the cast shadow on the ground (build-lite).
     worldSpaceBias: 0.02,
     // 0 = black in shadow, 1 = no shadow (PCF mixes darkness→1 by lit factor).
-    darkness: 0.16,
+    // Sun term only — fill and grass emissive stay up, so this has to be low
+    // or a sunny-side shadow disappears into the lawn.
+    darkness: 0.05,
     frustumEdgeFalloff: 0.04,
     forceRefreshEveryFrame: true,
   };
@@ -898,7 +920,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   shadowOffCaster.name = 'shadow-off-caster';
   shadowOffCaster.material = shadowOffCasterMat;
   shadowOffCaster.visible = false;
-  shadowOffCaster.receiveShadows = false;
+  // Stay a shadow receiver forever. Lite compiles standard-material shadow
+  // sampling only if the build includes a receiver. Map swaps drop the old
+  // grass before the new grass exists; this hidden sphere keeps that compile on.
+  shadowOffCaster.receiveShadows = true;
   shadowOffCaster.position.y = -1000;
   addToScene(scene, shadowOffCaster);
   const SHADOW_CASTERS_OFF = [shadowOffCaster];
@@ -1236,7 +1261,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
 
   /**
-   * Lazy VAT-first unit batches (static mesh fallback when not in VAT_UNIT_DEFS).
+   * Lazy unit batches. Skinned GLBs with clips take VAT; rigid meshes stay static.
    * @param {number} typeId
    * @param {number} owner
    * @param {number[]} entityIds
@@ -1250,8 +1275,15 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (pending) return pending;
     pending = (async () => {
       try {
-        if (isVatUnitType(typeId)) {
-          await addVatShards(typeId, entityIds, owner);
+        const vatDef = await resolveBatchVatDef(typeId, packForOwnerType(owner, typeId));
+        if (vatDef) {
+          try {
+            await addVatShards(typeId, entityIds, owner);
+          } catch (err) {
+            if (isVatUnitType(typeId)) throw err;
+            console.warn(`[vat] unit type ${typeId} clips failed, static mesh`, err);
+            await createAndRegisterStaticBatch(typeId, entityIds, owner);
+          }
         } else if (hasUnitModel(typeId)) {
           await createAndRegisterStaticBatch(typeId, entityIds, owner);
         }
@@ -1339,7 +1371,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   const RING_DIAM = 1;
   const RING_H = 0.12;
   let ringCap = Math.max(capacity, gpuCapacity, 1);
-  let selRingLiveCount = capacity;
+  // Draw count covers the highest visible collar only. Matching entity count
+  // submitted a zero-scale collar per unit for the whole match.
+  let selRingLiveCount = 0;
+  let ringShown = new Uint8Array(ringCap);
   /** @type {object[]} */
   let selRingParts = [];
   let useCollar = false;
@@ -1389,7 +1424,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   for (let p = 0; p < selRingParts.length; p++) {
     const mesh = selRingParts[p];
     setThinInstances(mesh, ringMatrices, ringCap);
-    setThinInstanceCount(mesh, capacity);
+    setThinInstanceCount(mesh, 0);
     setThinInstanceColors(mesh, ringColorBufs[p]);
     addToScene(scene, mesh);
   }
@@ -2340,7 +2375,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   function isBackdropMesh(mesh) {
     const name = mesh?.name || '';
-    return name === 'distant-mountains' || name.startsWith('backdrop-');
+    return name === 'distant-mountains' || name === 'sky-dome' || name.startsWith('backdrop-');
   }
 
   function deferShadowCaster(mesh) {
@@ -2440,6 +2475,18 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     });
   }
 
+  /** New board meshes must run through the material swap after receiveShadows is set. */
+  function requeueTerrainShadowReceivers() {
+    const q = scene._materialSwapQueue;
+    if (!Array.isArray(q) || !terrain?.meshes) return;
+    for (const root of terrain.meshes) {
+      forEachMesh(root, (mesh) => {
+        if (!mesh.receiveShadows || isBackdropMesh(mesh)) return;
+        if (!q.includes(mesh)) q.push(mesh);
+      });
+    }
+  }
+
   function sameCasterList(a, b) {
     if (a === b) return true;
     if (!a || !b) return false;
@@ -2448,32 +2495,70 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     return true;
   }
 
+  /**
+   * Cascades are fit once at boot from the loading-screen board. A later map
+   * (1v1, unit tester, stress) pulls the camera farther than that, and every
+   * sample past shadowMaxZ falls outside the last slice and comes back fully lit.
+   */
+  function syncShadowCoverage() {
+    const cfg = shadowGen?._config;
+    if (!cfg) return;
+    const half = fieldSnap ? worldHalfFFromField(fieldSnap) : tableHalfF;
+    const radius = camera?.radius;
+    const look = Number.isFinite(radius) ? radius * 1.45 : 0;
+    const cover = Math.max(half * 2.75, look, 80);
+    if (cfg._shadowMaxZ !== cover) cfg._shadowMaxZ = cover;
+  }
+
+  function shadowCasterReady(mesh) {
+    return !!mesh?.material?._buildGroup?._materialFamily;
+  }
+
+  function installShadowCasters(list) {
+    shadowCasterList = list;
+    setShadowTaskCasterMeshes(shadowGen, shadowCasterList);
+    // The setter sets _preloadPending and the shadow pass skips until that
+    // promise resolves — after this frame's execute. Map loads change the
+    // caster list in beforeRender, so the pass skips the frame that should
+    // re-record and the new board keeps an empty map. Modules are already
+    // loaded once a task exists.
+    if (shadowGen._shadowTaskState) shadowGen._preloadPending = undefined;
+    scene._renderableVersion = (scene._renderableVersion | 0) + 1;
+  }
+
   function applyShadowState() {
     // Never detach the generator or pass an empty caster list — both broke Lite
     // CSM (billboard pipeline crash, or near-cascade dead / far still lit).
     // Off = dummy caster only (cheap map fill) + receivers cleared (fully lit).
+    syncShadowCoverage();
     if (!shadowsEnabled) {
       if (!sameCasterList(shadowCasterList, SHADOW_CASTERS_OFF)) {
-        shadowCasterList = SHADOW_CASTERS_OFF;
-        setShadowTaskCasterMeshes(shadowGen, shadowCasterList);
+        try {
+          installShadowCasters(SHADOW_CASTERS_OFF);
+        } catch {
+          shadowCasterList = SHADOW_CASTERS_OFF;
+        }
       }
       markShadowReceivers(false);
       return;
     }
     markShadowReceivers(true);
-    const next = collectShadowCasters();
+    const ready = [];
+    const found = collectShadowCasters();
+    for (let i = 0; i < found.length; i++) {
+      if (shadowCasterReady(found[i])) ready.push(found[i]);
+    }
+    const next = ready.length ? ready : SHADOW_CASTERS_OFF;
     if (!sameCasterList(shadowCasterList, next)) {
-      shadowCasterList = next;
       try {
-        setShadowTaskCasterMeshes(shadowGen, shadowCasterList);
+        installShadowCasters(next);
       } catch (err) {
         // Progressive boot: caster list included a mesh Lite can't shadow yet.
         console.warn('[boot] setShadowTaskCasterMeshes failed; keeping prior casters', err);
-        shadowCasterList = SHADOW_CASTERS_OFF;
         try {
-          setShadowTaskCasterMeshes(shadowGen, shadowCasterList);
+          installShadowCasters(SHADOW_CASTERS_OFF);
         } catch {
-          /* ignore */
+          shadowCasterList = SHADOW_CASTERS_OFF;
         }
       }
     }
@@ -3483,11 +3568,16 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       next.set(ringColorBufs[p].subarray(0, oldCap * 4));
       ringColorBufs[p] = next;
     }
+    const nextShown = new Uint8Array(newCap);
+    nextShown.set(ringShown.subarray(0, oldCap));
+    ringShown = nextShown;
     ringCap = newCap;
     for (let p = 0; p < selRingParts.length; p++) {
       const mesh = selRingParts[p];
       setThinInstances(mesh, ringMatrices, newCap);
       setThinInstanceColors(mesh, ringColorBufs[p]);
+      // setThinInstances adopts the buffer length as the draw count.
+      setThinInstanceCount(mesh, selRingLiveCount);
     }
   }
 
@@ -3498,13 +3588,21 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     for (const mesh of selRingParts) setThinInstanceCount(mesh, count);
   }
 
+  function noteSelectionRing(i, visible) {
+    if (i < 0) return;
+    if (i >= ringShown.length) ensureSelRingCapacity(i + 1);
+    const next = nextSelectionRingDrawCount(ringShown, i, visible, selRingLiveCount);
+    if (next !== selRingLiveCount) setSelRingCount(next);
+  }
+
   /** Hide every unit collar — table reset zeros CPU selection without a deselect edge. */
   function clearSelectionRings() {
     ringMatrices.fill(0);
+    ringShown.fill(0);
     for (const mesh of selRingParts) {
       setThinInstances(mesh, ringMatrices, ringCap);
-      setThinInstanceCount(mesh, selRingLiveCount);
     }
+    setSelRingCount(0);
     selectionHud.setGroups?.([]);
   }
 
@@ -3958,9 +4056,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     setCount(n) {
       ensureEntityCapacity(n);
-      setSelRingCount(n);
-      writeSelRingColors(n, useCollar ? 'white' : 'cyan');
-      pushSelRingColors();
+      ensureSelRingCapacity(n);
     },
 
     clearSelectionRings,
@@ -4033,7 +4129,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     /**
      * Draw (or clear with null / []) flat ground rings for drop-off work radii.
      * Optional `links` are terrain-draped attach lines (silo ghost → source).
-     * `rimKey` tints the outer rim by resource (wood / stone / mineral / food).
+     * `rimKey` tints the inner film by resource (wood / stone / mineral / food).
+     * The outer rim stays the owner's color.
      * @param {{ x: number, z: number, radius: number, rimKey?: string } | { x: number, z: number, radius: number, rimKey?: string }[] | null} spec
      * @param {{ x0: number, z0: number, x1: number, z1: number, rimKey?: string }[] | null} [links]
      */
@@ -4440,6 +4537,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         terrain = next;
         sceneryModelsReady = next.modelsReady ?? Promise.resolve();
         applyShadowState();
+        // New grass is a fresh standard material. Requeue it now that
+        // receiveShadows is set so the swap compiles shadow sampling in.
+        requeueTerrainShadowReceivers();
         rebuildTileGrid(snap);
         fogApi?.attachOverlay?.(engine, scene, snap);
         fogApi?.syncOverlay?.();
@@ -4873,7 +4973,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     /** Rebuild type-batch mapping when entity count/types change (e.g. staging → live). */
     rebuildFromTypes(count, typesArr, ownersArr, drawable) {
-      setSelRingCount(count);
+      ensureSelRingCapacity(count);
       const stillUnmapped = mapEntitySlots(count, typesArr, ownersArr, drawable);
       flushAllBatches();
       return stillUnmapped;
@@ -4882,6 +4982,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     /** Entities dropped from the batches at the last rebuild (see mapEntitySlots). */
     retiredEntityCount() {
       return retiredEntities;
+    },
+
+    /** Faded corpse dropped from the batches. Safe to skip in the pose loop. */
+    isEntityRetired(i) {
+      return entityRetired[i] === 1;
     },
 
     /** Write instance transforms from sim/world positions (avoids origin flash after rebuild). */
@@ -5092,6 +5197,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         if (useCollar) writeSelectionCollar(ringMatrices, i, 0, 0, 0, 0, 0);
         else writeFlatRing(ringMatrices, i, 0, 0, 0, RING_DIAM, RING_H, 0);
         writeSelRingColorAt(i, tint);
+        noteSelectionRing(i, false);
         for (const mesh of selRingParts) markThinInstanceSlotDirty(mesh, i);
         return;
       }
@@ -5109,6 +5215,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         writeFlatRing(ringMatrices, i, x, z, diam * zoomS, RING_DIAM, RING_H, gy);
       }
       writeSelRingColorAt(i, tint);
+      noteSelectionRing(i, true);
       for (const mesh of selRingParts) markThinInstanceSlotDirty(mesh, i);
     },
 

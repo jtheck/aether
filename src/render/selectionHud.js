@@ -19,6 +19,7 @@ import {
   updateDefaultTextData,
 } from '../vendor/lite/liteVendor.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
+import { loadIdleIconMeshes } from './vatUnits.js';
 import { formatGameNumber } from '../sim/formatGameNumber.js';
 import { localHudSkin, resolveUnitModelUrl } from '../app/dlcCatalog.js';
 import {
@@ -174,7 +175,7 @@ export function selectionGroupsFromUnits(ids, world, nameOf) {
 }
 
 /** Overlay icon: skip depth so terrain / units / buildings cannot cover the strip. */
-function makeIconMaterial(source) {
+function makeIconMaterial(source, cullBack = true) {
   const src =
     source?.baseColorFactor ?? source?._baseColorFactor ?? source?.diffuseColor;
   const base =
@@ -198,9 +199,11 @@ function makeIconMaterial(source) {
       'viewProjection',
       { name: 'iconColor', type: 'vec3<f32>', defaultValue: color },
     ],
-    backFaceCulling: true,
-    depthWrite: false,
-    depthCompare: 'always',
+    backFaceCulling: cullBack,
+    // Write depth so a quiver or sword behind the body stays behind it.
+    // The chip still sits nearer than the world, so the ground does not cover it.
+    depthWrite: true,
+    depthCompare: 'greater-equal',
     vertexSource: `struct VertexOutput {
   @builtin(position) position: vec4<f32>,
   @location(0) worldN: vec3<f32>,
@@ -366,7 +369,9 @@ export async function createSelectionHud(engine, scene, screen = {}) {
 
   async function loadIconInner(key, url) {
     try {
-      const parts = await loadBakedUnitMeshParts(engine, url);
+      let parts = null;
+      if (key.startsWith('u:')) parts = await loadIdleIconMeshes(engine, url);
+      if (!parts?.length) parts = await loadBakedUnitMeshParts(engine, url);
       const layers = [];
       const min = [Infinity, Infinity, Infinity];
       const max = [-Infinity, -Infinity, -Infinity];
@@ -651,14 +656,14 @@ export async function createSelectionHud(engine, scene, screen = {}) {
         const wx = ray.ox + ray.dx * ICON_DEPTH;
         const wy = ray.oy + ray.dy * ICON_DEPTH;
         const wz = ray.oz + ray.dz * ICON_DEPTH;
-        // Upright icon yawed to face the camera (matches radial icon authoring).
+        // Authored face is model +Z (glTF forward, including the node's own spin).
+        // Point that at the camera.
         let thx = eye.x - wx;
         let thz = eye.z - wz;
         const hlen = Math.hypot(thx, thz) || 1;
         thx /= hlen;
         thz /= hlen;
-        // right = (-screenRight); forward = -towardCameraHorizontal.
-        showIcon(iconKey, wx, wy, wz, -thz, 0, thx, -thx, 0, -thz, compress, hoverT);
+        showIcon(iconKey, wx, wy, wz, thz, 0, -thx, thx, 0, thz, compress, hoverT);
         shownKeys.add(iconKey);
       }
 

@@ -1,8 +1,13 @@
 // Health chips: unit row is 7 HP pips, buildings add one more on each end (9).
-// Team color sits on the left pip plus a line under the HP row (O_____).
-// Casters show up to 3 ready-mana dots under that line; vehicles reuse those
-// dots for filled passenger seats. HP is green above 66%, yellow above 33%,
-// then red. Agora rows are o-o-o-o-o (dots on both ends, rectangles between).
+// Team color is a 30-60-90 under the line: short edge on the left, long
+// edge flat on the line, hypotenuse to the right tip. The face matches
+// the line; the left edge is a lighter tint.
+// Each HP pip is a rounded square with a lighter rim on the top and right.
+// Casters show up to 3 ready-mana dots under that line, each with a ring
+// brighter on the right and bottom;
+// vehicles reuse the dots (no ring) for filled passenger seats. HP is green
+// above 66%, yellow above 33%, then red. Agora rows are o-o-o-o-o (dots on
+// both ends, rectangles between).
 // Contest (still owned) walks right → left and inks each pip. Unlock pauses,
 // melts the whole row right → left, then seed-builds it left → right. After
 // that the pad is neutral — anyone can fight — and gaining walks left → right
@@ -64,19 +69,29 @@ const FRAME_RING_HOLY = 3;
 const FRAME_RING_ARMOR = 4;
 const FRAME_LINE = 5;
 const FRAME_RECT = 6;
-const ATLAS_COLUMNS = 7;
+/** Filled mana disc with a pale ring. Not the team pip. */
+const FRAME_MANA = 7;
+/** Team wedge face. Agora dots and seat pips stay on the circle frame. */
+const FRAME_TEAM_WEDGE = 8;
+/** Lighter left edge of the team wedge, drawn over the face. */
+const FRAME_TEAM_EDGE = 9;
+const ATLAS_COLUMNS = 10;
 /** Corner radius as a fraction of half-extent. 0 = sharp square, 1 = circle. */
 export const CHIP_BIG_CORNER_MUL = 0.48;
 export const CHIP_SMALL_CORNER_MUL = 0.48;
 export const CHIP_LEAD_CORNER_MUL = 1;
-/** Top/bottom bar thickness on big chips, as a fraction of the atlas cell. */
+/** Rim thickness on HP chips, as a fraction of the atlas cell. */
 export const CHIP_BASELINE_MUL = 0.075;
-/** Atlas alpha of those bars vs the chip fill. */
+/** Bottom edge — darker than the fill. */
 export const CHIP_BASELINE_ALPHA = 0.5;
-/** Right-edge tick — full atlas alpha. */
+/** Top and right rim — lighter than the fill. */
 export const CHIP_EDGE_ALPHA = 1;
-/** Middle of the HP pip, under the right-edge tick. */
-export const CHIP_BODY_ALPHA = 0.85;
+/** Fill inside the rim. Dimmer so the right edge reads brighter. */
+export const CHIP_BODY_ALPHA = 0.55;
+/** Right-edge thickness, as a fraction of the atlas cell. Wider than the top rim. */
+export const CHIP_RIGHT_MUL = 0.18;
+/** Right edge — full atlas value, brighter than the fill and the top rim. */
+export const CHIP_RIGHT_SHADE = 1;
 /** Sprite alpha is raised so the dropped middle stays near the old look. */
 export const CHIP_FILL_ALPHA_GREEN = 0.5;
 export const CHIP_FILL_ALPHA_RED = 1;
@@ -95,8 +110,28 @@ export const DOT_DIAMETER_FIRST_MUL = 0.96;
 export const DOT_DIAMETER_ALTERNATE_MUL = 0.58;
 /** Circles stay 1:1 — leftover from the old wide squares. */
 export const DOT_ALTERNATE_WIDTH_MUL = 1;
-/** Permanent left team pip — larger than the HP chips. */
+/** Horizontal scale of the team triangle vs a normal chip. */
 export const DOT_DIAMETER_LEAD_MUL = 1.22 - 1 / TARGET_DOT_PX;
+/** Short leg of the 30-60-90, in CSS pixels. The long leg along the line is √3 times this. */
+export const TEAM_WEDGE_SHORT_PX = 8;
+/** Long leg over short leg. */
+export const TEAM_WEDGE_SQRT3 = Math.sqrt(3);
+/** Fraction of the long leg that sits on the underline, past its left end. */
+export const TEAM_WEDGE_INSET = 0.78;
+/** Left edge of the cell, fraction from center. */
+export const TEAM_WEDGE_X_LEFT = -0.44;
+/** Where the hypotenuse meets the line, fraction from center. */
+export const TEAM_WEDGE_X_TIP = 0.40;
+/** Right edge of the cell — a short tail past the tip so the join stays seamless. */
+export const TEAM_WEDGE_X_EXTENT = 0.46;
+/** Team-line center in the cell. Negative is screen-up; the triangle hangs below. */
+export const TEAM_WEDGE_Y_LINE = -0.42;
+/** Bottom of the short left edge. Positive is screen-down. */
+export const TEAM_WEDGE_Y_LOW = 0.46;
+/** Left-edge highlight width, as a fraction of the atlas cell. */
+export const TEAM_WEDGE_EDGE_MUL = 0.14;
+/** How far the left edge mixes toward white, past the team color. */
+export const TEAM_WEDGE_EDGE_LIFT = 0.42;
 /** Ready-mana / filled-seat dots under the HP line — a hair under the HP chips. */
 export const DOT_DIAMETER_UNDER_MUL = 0.86;
 /** Center gap — visual tiles are smaller than the billboard, so this can sit under 0.72. */
@@ -113,8 +148,13 @@ export const LINE_RIGHT_TRIM = 1 / 3;
 const UNDER_DOWN_MUL = 1.42;
 const UNDER_SPACING_MUL = 1.22;
 const UNDER_SPACING_PACKED_MUL = 0.98;
-/** Saturated cobalt — dark enough to sit under HP, not greyed-out. */
+/** Saturated cobalt fill. The atlas darkens this under the pale ring tint. */
 export const RGB_MANA = [0.16, 0.40, 0.92];
+/** Ring around a ready-mana dot — lighter than the fill, not a white halo. */
+export const RGB_MANA_RING = [0.40, 0.58, 0.96];
+/** Disc radius in the mana cell. The ring sits between inner and outer. */
+const MANA_DISC_OUTER = 0.44;
+const MANA_DISC_INNER = 0.30;
 /** Filled vehicle seats — same cool grey as HUD `--pop-ink` (`#b8c0cc`). */
 export const RGB_SEAT = [184 / 255, 192 / 255, 204 / 255];
 /** Agora milestone dots — a bit smaller so five still fit the roof. */
@@ -174,8 +214,8 @@ export const HORIZON_HIDE = 1;
 /** Skip draws when the horizon scale is at or below this. */
 export const HORIZON_HIDE_EPS = 0.04;
 
-/** Max sprites per slot: HP chips + lead + line + under dots + rings. */
-const SPRITES_PER_SLOT = CHIP_COUNT_MAX + 1 + 1 + UNDER_DOT_MAX + 4;
+/** Max sprites per slot: HP chips + lead + edge + line + under dots + rings. */
+const SPRITES_PER_SLOT = CHIP_COUNT_MAX + 1 + 1 + 1 + UNDER_DOT_MAX + 4;
 /**
  * Toward-camera pull so chips win depth against terrain and unit meshes.
  * (Billboard API always depth-tests; bias is the HUD-style always-visible path.)
@@ -193,6 +233,22 @@ function sdRoundBox(px, py, half, corner) {
   return Math.hypot(ox, oy) + Math.min(Math.max(ax, ay), 0) - corner;
 }
 
+/**
+ * Shade of an HP pip. `px`/`py` are atlas pixels from the chip center
+ * (+x right, +y down, which is screen-down). The right edge is the bright rim.
+ * @param {number} px
+ * @param {number} py
+ * @param {number} half chip half-extent in atlas pixels
+ */
+export function hpChipShade(px, py, half) {
+  const line = half * (CHIP_BASELINE_MUL / 0.36);
+  const right = half * (CHIP_RIGHT_MUL / 0.36);
+  if (px > half - right) return CHIP_RIGHT_SHADE;
+  if (py < -half + line) return CHIP_EDGE_ALPHA;
+  if (py > half - line) return CHIP_BASELINE_ALPHA;
+  return CHIP_BODY_ALPHA;
+}
+
 function writeSoftChip(pixels, ox, size, cornerMul, opts = {}) {
   const cx = size * 0.5;
   const cy = size * 0.5;
@@ -200,10 +256,7 @@ function writeSoftChip(pixels, ox, size, cornerMul, opts = {}) {
   const half = size * 0.36;
   const corner = half * Math.max(0, cornerMul);
   const feather = size * 0.02;
-  const line = size * CHIP_BASELINE_MUL;
-  const topLine = !!opts.topLine;
-  const bottomLine = !!opts.bottomLine;
-  const rightLine = !!opts.rightLine;
+  const rim = !!(opts.topLine || opts.bottomLine || opts.rightLine);
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const px = x + 0.5 - cx;
@@ -213,13 +266,119 @@ function writeSoftChip(pixels, ox, size, cornerMul, opts = {}) {
       if (d <= 0) a = 1;
       else if (d < feather) a = 1 - d / feather;
       const i = ((y * size * ATLAS_COLUMNS) + ox + x) * 4;
-      // Premult-safe: keep RGB 0 when the texel is empty so filtered
-      // edges don't pick up a white fringe over the scene.
-      const bar = (bottomLine && py > half - line) || (topLine && py < -half + line);
-      const edge = rightLine && px > half - line;
-      if (edge) a *= CHIP_EDGE_ALPHA;
-      else if (bar) a *= CHIP_BASELINE_ALPHA;
-      else if (topLine || bottomLine || rightLine) a *= CHIP_BODY_ALPHA;
+      // Shade lives in RGB so the rim stays a lighter color when the sprite
+      // is translucent. Empty texels stay black so the filter doesn't fringe.
+      const shade = rim ? hpChipShade(px, py, half) : 1;
+      const rgb = a > 0 ? Math.round(shade * 255) : 0;
+      pixels[i] = rgb;
+      pixels[i + 1] = rgb;
+      pixels[i + 2] = rgb;
+      pixels[i + 3] = Math.round(a * 255);
+    }
+  }
+}
+
+/** How much of the ring stays on the dim side (top / left). Right and bottom are full. */
+export const MANA_RING_DIM = 0.32;
+
+/**
+ * Ring brightness from the disc center. +x is screen-right, +y is screen-down.
+ * 0 at the top-left, 1 at the right and the bottom.
+ * @param {number} nx
+ * @param {number} ny
+ */
+export function manaRingLit(nx, ny) {
+  return Math.max(0, Math.min(1, 0.5 + 0.5 * (nx + ny)));
+}
+
+/** Atlas RGB of the mana fill so it still lands on RGB_MANA under the ring tint. */
+function manaFillBytes() {
+  return RGB_MANA.map((c, i) => Math.round(255 * c / RGB_MANA_RING[i]));
+}
+
+function writeManaDisc(pixels, ox, size) {
+  const cx = size * 0.5;
+  const cy = size * 0.5;
+  const outer = size * MANA_DISC_OUTER;
+  const inner = size * MANA_DISC_INNER;
+  const feather = size * 0.02;
+  const fill = manaFillBytes();
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+      let a = 0;
+      if (d <= outer) a = 1;
+      else if (d < outer + feather) a = 1 - (d - outer) / feather;
+      const i = ((y * size * ATLAS_COLUMNS) + ox + x) * 4;
+      if (a <= 0) {
+        pixels[i] = 0;
+        pixels[i + 1] = 0;
+        pixels[i + 2] = 0;
+        pixels[i + 3] = 0;
+        continue;
+      }
+      let ring = 0;
+      if (d >= inner + feather) ring = 1;
+      else if (d > inner - feather) ring = (d - (inner - feather)) / (2 * feather);
+      const lit = manaRingLit((x + 0.5 - cx) / outer, (y + 0.5 - cy) / outer);
+      const strength = MANA_RING_DIM + (1 - MANA_RING_DIM) * lit;
+      const k = ring * strength;
+      pixels[i] = Math.round(fill[0] + (255 - fill[0]) * k);
+      pixels[i + 1] = Math.round(fill[1] + (255 - fill[1]) * k);
+      pixels[i + 2] = Math.round(fill[2] + (255 - fill[2]) * k);
+      pixels[i + 3] = Math.round(a * 255);
+    }
+  }
+}
+
+function writeTeamWedge(pixels, ox, size) {
+  const cx = size * 0.5;
+  const cy = size * 0.5;
+  const feather = size * 0.02;
+  const g = teamWedgeBounds(size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const px = x + 0.5 - cx;
+      const py = y + 0.5 - cy;
+      const pxClamp = Math.min(g.xR, Math.max(g.xL, px));
+      const top = teamWedgeTop(pxClamp, size);
+      let a = 0;
+      const bottom = teamWedgeBottom(pxClamp, size);
+      if (top != null && bottom != null) {
+        const d = Math.min(py - top, bottom - py, px - g.xL, g.xR - px);
+        if (d >= 0) a = 1;
+        else if (d > -feather) a = 1 + d / feather;
+      }
+      const i = ((y * size * ATLAS_COLUMNS) + ox + x) * 4;
+      const rgb = a > 0 ? 255 : 0;
+      pixels[i] = rgb;
+      pixels[i + 1] = rgb;
+      pixels[i + 2] = rgb;
+      pixels[i + 3] = Math.round(a * 255);
+    }
+  }
+}
+
+function writeTeamEdge(pixels, ox, size) {
+  const cx = size * 0.5;
+  const cy = size * 0.5;
+  const feather = size * 0.02;
+  const g = teamWedgeBounds(size);
+  const edge = size * TEAM_WEDGE_EDGE_MUL;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const px = x + 0.5 - cx;
+      const py = y + 0.5 - cy;
+      const pxClamp = Math.min(g.xR, Math.max(g.xL, px));
+      const top = teamWedgeTop(pxClamp, size);
+      const bottom = teamWedgeBottom(pxClamp, size);
+      let a = 0;
+      if (top != null && bottom != null && teamWedgeOnEdge(pxClamp, size)) {
+        const d = Math.min(py - top, bottom - py, px - g.xL, g.xR - px, g.xL + edge - px);
+        if (d >= 0) a = 1;
+        else if (d > -feather) a = 1 + d / feather;
+      }
+      const i = ((y * size * ATLAS_COLUMNS) + ox + x) * 4;
       const rgb = a > 0 ? 255 : 0;
       pixels[i] = rgb;
       pixels[i + 1] = rgb;
@@ -294,6 +453,9 @@ function createHealthChipAtlas(engine) {
   writeRoundedRing(pixels, TEX * 4, TEX, 0.94);
   writeUnderline(pixels, TEX * 5, TEX);
   writeSoftChip(pixels, TEX * 6, TEX, 0);
+  writeManaDisc(pixels, TEX * FRAME_MANA, TEX);
+  writeTeamWedge(pixels, TEX * FRAME_TEAM_WEDGE, TEX);
+  writeTeamEdge(pixels, TEX * FRAME_TEAM_EDGE, TEX);
   const texture = createTexture2DFromPixels(engine, pixels, w, h, {
     minFilter: 'linear',
     magFilter: 'linear',
@@ -371,6 +533,86 @@ export function chipLineLayout(totalWidth, spacing) {
   const full = Math.max(spacing, totalWidth + spacing * 0.55);
   const width = full * (1 - LINE_RIGHT_TRIM);
   return { width, along: -full * LINE_RIGHT_TRIM * 0.5 };
+}
+
+/**
+ * 30-60-90 extents in atlas pixels. +x is toward the underline, +y is screen-down.
+ * Right angle at the top-left, short leg down the left, long leg along the line.
+ * @param {number} size
+ */
+export function teamWedgeBounds(size) {
+  const xL = size * TEAM_WEDGE_X_LEFT;
+  const xTip = size * TEAM_WEDGE_X_TIP;
+  const xR = size * TEAM_WEDGE_X_EXTENT;
+  const yLine = size * TEAM_WEDGE_Y_LINE;
+  const yLow = size * TEAM_WEDGE_Y_LOW;
+  const span = yLow - yLine;
+  const lineH = span * (LINE_MIN_PX / TEAM_WEDGE_SHORT_PX);
+  return { xL, xR, x1: xTip, yLow, yLine, lineH };
+}
+
+/**
+ * Top edge. Flat on the team line for the whole wedge, including the tail.
+ * Null when x is outside.
+ * @param {number} px
+ * @param {number} size
+ */
+export function teamWedgeTop(px, size) {
+  const g = teamWedgeBounds(size);
+  if (px < g.xL || px > g.xR) return null;
+  return g.yLine - g.lineH * 0.5;
+}
+
+/**
+ * Hypotenuse from the bottom of the short edge up to the line. The tail stays on the line.
+ * Null when x is outside.
+ * @param {number} px
+ * @param {number} size
+ */
+export function teamWedgeBottom(px, size) {
+  const g = teamWedgeBounds(size);
+  if (px < g.xL || px > g.xR) return null;
+  const lineBot = g.yLine + g.lineH * 0.5;
+  if (px >= g.x1) return lineBot;
+  const t = (px - g.xL) / (g.x1 - g.xL);
+  return g.yLow + (lineBot - g.yLow) * t;
+}
+
+/** True on the vertical left strip. The face and the line tail are not part of it. */
+export function teamWedgeOnEdge(px, size) {
+  const g = teamWedgeBounds(size);
+  return px <= g.xL + size * TEAM_WEDGE_EDGE_MUL;
+}
+
+/** Lighter than the team color, drawn over the short left edge. */
+export function teamEdgeRgb(rgb) {
+  const k = TEAM_WEDGE_EDGE_LIFT;
+  return [
+    rgb[0] + (1 - rgb[0]) * k,
+    rgb[1] + (1 - rgb[1]) * k,
+    rgb[2] + (1 - rgb[2]) * k,
+  ];
+}
+
+/**
+ * Place the 30-60-90 so its top edge is the underline and most of the long
+ * leg sits on that line, in toward the chips.
+ * @param {number} totalWidth
+ * @param {number} spacing
+ * @param {number} normalDot
+ */
+export function teamWedgeLayout(totalWidth, spacing, normalDot) {
+  const spanY = TEAM_WEDGE_Y_LOW - TEAM_WEDGE_Y_LINE;
+  const spanX = TEAM_WEDGE_X_TIP - TEAM_WEDGE_X_LEFT;
+  const dot = Math.max(0, normalDot);
+  const height = dot * (TEAM_WEDGE_SHORT_PX / TARGET_DOT_PX) / spanY;
+  const width = dot * (TEAM_WEDGE_SHORT_PX * TEAM_WEDGE_SQRT3 / TARGET_DOT_PX) / spanX;
+  const { width: lineW, along: lineAlong } = chipLineLayout(totalWidth, spacing);
+  const lineLeft = lineAlong - lineW * 0.5;
+  const longLeg = spanX * width;
+  const along = lineLeft + longLeg * TEAM_WEDGE_INSET - TEAM_WEDGE_X_TIP * width;
+  const baselineShift = TEAM_WEDGE_Y_LINE * height;
+  return { along, width, height, lineLeft, baselineShift };
 }
 
 /** Snap a CSS-pixel Y to a device-pixel center so a 1px bar cannot strobe. */
@@ -514,6 +756,19 @@ export function chipDotAlpha(_index, filled, ratio) {
 export function underDotRgb(flags = {}) {
   if ((flags.seatsFilled | 0) > 0) return RGB_SEAT;
   return RGB_MANA;
+}
+
+/** Sprite tint. Mana uses the pale ring; the fill is darkened in the atlas. */
+export function underDotTint(flags = {}) {
+  if ((flags.seatsFilled | 0) > 0) return RGB_SEAT;
+  if ((flags.manaReady | 0) > 0) return RGB_MANA_RING;
+  return RGB_MANA;
+}
+
+/** Mana discs carry a ring. Seat dots stay plain circles. */
+export function underDotFrame(flags = {}) {
+  if ((flags.manaReady | 0) > 0 && (flags.seatsFilled | 0) <= 0) return FRAME_MANA;
+  return FRAME_LEAD_ROUND;
 }
 
 /** Ready mana charges, or filled vehicle seats — not both. */
@@ -968,6 +1223,7 @@ function makeSlot() {
     active: false,
     dots,
     lead: makeSpriteState(),
+    edge: makeSpriteState(),
     line: makeSpriteState(),
     under,
     /** Rings on two inner HP chips. */
@@ -1041,6 +1297,7 @@ export function createHealthBars(engine, scene, opts = {}) {
     if (!slot.active) return;
     for (let i = 0; i < CHIP_COUNT_MAX; i++) hideSprite(slot.dots[i]);
     hideSprite(slot.lead);
+    hideSprite(slot.edge);
     hideSprite(slot.line);
     for (let i = 0; i < UNDER_DOT_MAX; i++) hideSprite(slot.under[i]);
     for (let i = 0; i < 2; i++) {
@@ -1276,6 +1533,7 @@ export function createHealthBars(engine, scene, opts = {}) {
       const teamRgb = ownerTint(flags.owner);
       if (agora) {
         hideSprite(slot.lead);
+        hideSprite(slot.edge);
         hideSprite(slot.line);
         for (let i = 0; i < UNDER_DOT_MAX; i++) hideSprite(slot.under[i]);
         const row = agoraRowLayout(normalDot);
@@ -1503,16 +1761,30 @@ export function createHealthBars(engine, scene, opts = {}) {
         }
         for (let i = count; i < CHIP_COUNT_MAX; i++) hideSprite(slot.dots[i]);
         const lineDown = normalDot * LINE_DOWN_MUL;
+        const wedge = teamWedgeLayout(totalWidth, spacing, normalDot);
         placeAlong(
           slot.lead,
-          -spacing - (totalWidth * 0.5),
-          normalDot * DOT_DIAMETER_LEAD_MUL,
-          normalDot * DOT_DIAMETER_LEAD_MUL,
+          wedge.along,
+          wedge.width,
+          wedge.height,
           teamRgb,
           CHIP_TEAM_FILL_ALPHA,
-          FRAME_LEAD_ROUND,
+          FRAME_TEAM_WEDGE,
           teamNudge,
-          lineDown,
+          lineDown - wedge.baselineShift,
+          true,
+        );
+        placeAlong(
+          slot.edge,
+          wedge.along,
+          wedge.width,
+          wedge.height,
+          teamEdgeRgb(teamRgb),
+          CHIP_TEAM_FILL_ALPHA,
+          FRAME_TEAM_EDGE,
+          teamNudge + normalDot * 0.15,
+          lineDown - wedge.baselineShift,
+          true,
         );
         const { width: lineW, along: lineAlong } = chipLineLayout(totalWidth, spacing);
         placeAlong(
@@ -1530,7 +1802,8 @@ export function createHealthBars(engine, scene, opts = {}) {
         const underN = underDotCount(flags);
         const underSpace = normalDot * (underN > 3 ? UNDER_SPACING_PACKED_MUL : UNDER_SPACING_MUL);
         const underWidth = Math.max(0, underN - 1) * underSpace;
-        const underRgb = underDotRgb(flags);
+        const underRgb = underDotTint(flags);
+        const underFrame = underDotFrame(flags);
         const underD = normalDot * DOT_DIAMETER_UNDER_MUL;
         for (let i = 0; i < UNDER_DOT_MAX; i++) {
           const spr = slot.under[i];
@@ -1546,7 +1819,7 @@ export function createHealthBars(engine, scene, opts = {}) {
             underD,
             underRgb,
             CHIP_TEAM_FILL_ALPHA,
-            FRAME_LEAD_ROUND,
+            underFrame,
             teamNudge,
             normalDot * UNDER_DOWN_MUL,
           );
@@ -1572,6 +1845,7 @@ export function createHealthBars(engine, scene, opts = {}) {
         const slot = slots[s];
         for (let i = 0; i < CHIP_COUNT_MAX; i++) slot.dots[i].handle = null;
         slot.lead.handle = null;
+        slot.edge.handle = null;
         slot.line.handle = null;
         for (let i = 0; i < UNDER_DOT_MAX; i++) slot.under[i].handle = null;
         for (let i = 0; i < 2; i++) {

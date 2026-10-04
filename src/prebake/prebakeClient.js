@@ -10,7 +10,7 @@ import {
   mergeSlicedParts,
 } from '../render/bakeMerge.js';
 import { allMeshBakeUrls, allVatBakeDefs } from './bakeUrls.js';
-import { collectVatBakeGroups, vatSampleGroups } from '../render/vatUnits.js';
+import { collectVatBakeGroups, extraVatBakeDefs, vatSampleGroups } from '../render/vatUnits.js';
 import {
   appendCarryLocomotion,
   CARRY_OVERLAY,
@@ -235,7 +235,14 @@ export async function runPrebake() {
   createSceneContext(engine);
 
   const meshUrls = allMeshBakeUrls();
-  const vatDefs = allVatBakeDefs();
+  const listedVat = allVatBakeDefs();
+  const vatDefs = [
+    ...listedVat,
+    ...await extraVatBakeDefs(
+      Object.values(UNIT_MODEL_URLS),
+      listedVat.map((def) => def.url),
+    ),
+  ];
   /** @type {Record<string, object>} */
   const files = {};
   /** @type {Record<string, { x: number, y: number, z: number }>} */

@@ -5,8 +5,14 @@ import {
   evaluateSampler,
   fillRestTrs,
   isCarryOverlayBoneName,
+  mat4InvertTo,
   overlayNodeIndices,
   recomputeOverlayWorlds,
+  rigidPropMeshMatrix,
+  skinNormals,
+  skinPositions,
+  transformNormalsByMat4,
+  transformPointsByMat4,
 } from './vatBakeCpu.js';
 
 function overlayNames() {
@@ -93,9 +99,60 @@ function samplerPicksSingleKey() {
   assert.deepEqual([...out], [4, 5, 6]);
 }
 
+function ident(tx = 0, ty = 0, tz = 0) {
+  const m = new Float32Array(16);
+  m[0] = m[5] = m[10] = m[15] = 1;
+  m[12] = tx;
+  m[13] = ty;
+  m[14] = tz;
+  return m;
+}
+
+function rigidPropStaysOnTheBone() {
+  const ibm = ident();
+  const bone = ident(0, 1, 0);
+  const prop = ident(0.5, 1, 0);
+  const into = rigidPropMeshMatrix(ibm, 0, bone, prop);
+  const local = transformPointsByMat4(into, new Float32Array([0, 0, 0]));
+  assert.ok(Math.abs(local[0] - 0.5) < 1e-5, `local x ${local[0]}`);
+  assert.ok(Math.abs(local[1]) < 1e-5, `local y ${local[1]}`);
+  const posed = transformPointsByMat4(ident(0, 2, 0), local);
+  assert.ok(Math.abs(posed[0] - 0.5) < 1e-5, `posed x ${posed[0]}`);
+  assert.ok(Math.abs(posed[1] - 2) < 1e-5, `posed y ${posed[1]}`);
+  const n = transformNormalsByMat4(into, new Float32Array([0, 1, 0]));
+  assert.ok(Math.abs(n[1] - 1) < 1e-5, `normal y ${n[1]}`);
+}
+
+function invertRoundTrips() {
+  const m = ident(3, -2, 4);
+  const inv = new Float32Array(16);
+  assert.equal(mat4InvertTo(inv, 0, m, 0), true);
+  const back = transformPointsByMat4(m, transformPointsByMat4(inv, new Float32Array([1, 2, 3])));
+  assert.ok(Math.abs(back[0] - 1) < 1e-5);
+  assert.ok(Math.abs(back[1] - 2) < 1e-5);
+  assert.ok(Math.abs(back[2] - 3) < 1e-5);
+}
+
+function skinOneBoneMovesTheVertex() {
+  const mats = new Float32Array(16);
+  mats[0] = mats[5] = mats[10] = mats[15] = 1;
+  mats[13] = 2;
+  const joints = new Uint32Array([0, 0, 0, 0]);
+  const weights = new Float32Array([1, 0, 0, 0]);
+  const dst = skinPositions(mats, joints, weights, new Float32Array([1, 0, 0]));
+  assert.ok(Math.abs(dst[0] - 1) < 1e-5);
+  assert.ok(Math.abs(dst[1] - 2) < 1e-5);
+  assert.ok(Math.abs(dst[2]) < 1e-5);
+  const n = skinNormals(mats, joints, weights, new Float32Array([0, 1, 0]));
+  assert.ok(Math.abs(n[1] - 1) < 1e-5);
+}
+
 overlayNames();
 overlayNodesFromCarryTargets();
 oneKeyCarryWritesRotation();
 overlayChildFollowsWalkedParent();
 samplerPicksSingleKey();
+rigidPropStaysOnTheBone();
+invertRoundTrips();
+skinOneBoneMovesTheVertex();
 console.log('vatBakeCpu.test.js ok');

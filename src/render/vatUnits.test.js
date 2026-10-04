@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { UNIT } from '../sim/unitTypes.js';
 import {
   BRIGAND_TORCH_SOCKET,
   clipForVatState,
   maxVatInstancesPerBatch,
+  parseGlbJson,
   primeVatInstanceCapacity,
+  vatDefFromGlbJson,
   vatInstanceTexelWidth,
+  vatRolesFromClipNames,
   vatWant,
   vatWalkFps,
   vatWalkGait,
@@ -15,6 +20,10 @@ import {
   VAT_FROZEN,
   VAT_UNIT_DEFS,
 } from './vatUnits.js';
+
+function glbJson(rel) {
+  return parseGlbJson(readFileSync(fileURLToPath(new URL(rel, import.meta.url))));
+}
 
 function texelWidthMatchesLitePacking() {
   // Lite dual-packs each instance into 2 rgba32float texels on a 1-row texture.
@@ -93,6 +102,48 @@ function warriorHooksAuthoredClipNames() {
   assert.equal(def.attackClip, 'Attack_Swing');
 }
 
+function sniffedRolesMatchAuthoredDefs() {
+  for (const def of [VAT_UNIT_DEFS[UNIT.VILLAGER], VAT_UNIT_DEFS[UNIT.WARRIOR]]) {
+    const file = def.url.split('/').pop();
+    const sniffed = vatDefFromGlbJson(def.url, glbJson(`../../assets/models/${file}`));
+    assert.ok(sniffed, file);
+    assert.equal(sniffed.idleClip, def.idleClip, file);
+    assert.equal(sniffed.walkClip, def.walkClip, file);
+    assert.equal(sniffed.carryClip, def.carryClip, file);
+    assert.equal(sniffed.chopClip, def.chopClip, file);
+    assert.equal(sniffed.attackClip, def.attackClip, file);
+  }
+}
+
+function monkClipsLeaveTheBindPose() {
+  const sniffed = vatDefFromGlbJson('/assets/models/monk.glb', glbJson('../../assets/models/monk.glb'));
+  assert.equal(sniffed.idleClip, 'Idle');
+  assert.equal(sniffed.walkClip, 'Walk');
+  assert.equal(sniffed.attackClip, 'Attack');
+  assert.equal(sniffed.carryClip, undefined);
+}
+
+function rigidGlbStaysOffVat() {
+  assert.equal(vatDefFromGlbJson('/assets/models/archer.glb', glbJson('../../assets/models/archer.glb')), null);
+  assert.equal(vatDefFromGlbJson('/x.glb', {
+    animations: [{ name: 'spin' }],
+    nodes: [{ name: 'Cube' }],
+  }), null);
+}
+
+function clipNamesMapOntoRoles() {
+  const vill = vatRolesFromClipNames(['carry', 'chop', 'idle', 'idle.001', 'walk_cycle']);
+  assert.equal(vill.idleClip, 'idle');
+  assert.equal(vill.walkClip, 'walk_cycle');
+  assert.equal(vill.carryClip, 'carry');
+  assert.equal(vill.chopClip, 'chop');
+  const posed = vatRolesFromClipNames(['ArmatureAction']);
+  assert.equal(posed.idleClip, 'ArmatureAction');
+  assert.equal(posed.walkClip, 'ArmatureAction');
+  assert.equal(vatRolesFromClipNames([]), null);
+  assert.equal(vatRolesFromClipNames(['', null]), null);
+}
+
 function brigandKeepsVillagerBakeAndATorch() {
   const def = VAT_UNIT_DEFS[UNIT.BRIGAND];
   const vill = VAT_UNIT_DEFS[UNIT.VILLAGER];
@@ -108,6 +159,10 @@ function brigandKeepsVillagerBakeAndATorch() {
 
 texelWidthMatchesLitePacking();
 warriorHooksAuthoredClipNames();
+sniffedRolesMatchAuthoredDefs();
+monkClipsLeaveTheBindPose();
+rigidGlbStaysOffVat();
+clipNamesMapOntoRoles();
 brigandKeepsVillagerBakeAndATorch();
 vatWalkFpsScalesWithRate();
 vatWantPrefersChopOverIdle();

@@ -20,6 +20,22 @@ import {
   worldSizeForScreenPx,
   chipLineHeight,
   chipLineLayout,
+  manaRingLit,
+  MANA_RING_DIM,
+  teamWedgeBounds,
+  teamWedgeBottom,
+  teamWedgeLayout,
+  teamEdgeRgb,
+  teamWedgeOnEdge,
+  teamWedgeTop,
+  TEAM_WEDGE_EDGE_LIFT,
+  TEAM_WEDGE_INSET,
+  TEAM_WEDGE_SHORT_PX,
+  TEAM_WEDGE_SQRT3,
+  TEAM_WEDGE_X_LEFT,
+  TEAM_WEDGE_X_TIP,
+  TEAM_WEDGE_Y_LINE,
+  TEAM_WEDGE_Y_LOW,
   LINE_MIN_PX,
   LINE_ATLAS_HALF_MUL,
   LINE_RIGHT_TRIM,
@@ -45,8 +61,11 @@ import {
   MANA_BANK_DOTS,
   DOT_DIAMETER_UNDER_MUL,
   RGB_MANA,
+  RGB_MANA_RING,
   RGB_SEAT,
   underDotRgb,
+  underDotTint,
+  underDotFrame,
   DOT_ALTERNATE_WIDTH_MUL,
   AGORA_CHIP_COUNT,
   AGORA_DASH_COUNT,
@@ -103,6 +122,9 @@ import {
   CHIP_BASELINE_ALPHA,
   CHIP_BODY_ALPHA,
   CHIP_EDGE_ALPHA,
+  CHIP_RIGHT_MUL,
+  CHIP_RIGHT_SHADE,
+  hpChipShade,
   CHIP_SMALL_CORNER_MUL,
   DOT_DIAMETER_ALTERNATE_MUL,
   DOT_DIAMETER_FIRST_MUL,
@@ -201,6 +223,50 @@ describe('health chip screen-constant size', () => {
     assert.ok(Math.abs(chipScreenPixels(far, 400, vh, fov) - LINE_MIN_PX) < 1e-6);
     const close = chipLineHeight(2, 80, vh, fov);
     assert.ok(Math.abs(chipScreenPixels(close, 80, vh, fov) - LINE_MIN_PX) < 1e-6);
+  });
+
+  it('hangs a 30-60-90 under the line with the short edge on the left', () => {
+    const size = 64;
+    const g = teamWedgeBounds(size);
+    const lineTop = g.yLine - g.lineH * 0.5;
+    const lineBot = g.yLine + g.lineH * 0.5;
+    const leftTop = teamWedgeTop(g.xL, size);
+    const leftBot = teamWedgeBottom(g.xL, size);
+    const midPx = (g.xL + g.x1) * 0.5;
+    const midBot = teamWedgeBottom(midPx, size);
+    assert.equal(teamWedgeTop(g.xL - 1, size), null);
+    assert.equal(leftTop, lineTop);
+    assert.equal(teamWedgeTop(g.x1, size), lineTop);
+    assert.equal(leftBot, g.yLow);
+    assert.equal(g.yLow, size * TEAM_WEDGE_Y_LOW);
+    assert.ok(leftBot > lineBot);
+    assert.ok(Math.abs(teamWedgeBottom(g.x1, size) - lineBot) < 1e-6);
+    assert.ok(Math.abs(midBot - (leftBot + lineBot) * 0.5) < 1e-6);
+    assert.ok(g.yLine < 0 && g.yLow > g.yLine);
+    assert.equal(teamWedgeOnEdge(g.xL + 1, size), true);
+    assert.equal(teamWedgeOnEdge(midPx, size), false);
+    const lit = teamEdgeRgb([0.2, 0.5, 1]);
+    assert.ok(lit[0] > 0.2 && lit[1] > 0.5 && lit[2] === 1);
+    assert.ok(Math.abs(lit[0] - (0.2 + 0.8 * TEAM_WEDGE_EDGE_LIFT)) < 1e-6);
+    const spacing = 0.82;
+    const totalWidth = (UNIT_CHIP_COUNT - 1) * spacing;
+    const wedge = teamWedgeLayout(totalWidth, spacing, 1);
+    const { width: lineW, along: lineAlong } = chipLineLayout(totalWidth, spacing);
+    const lineLeft = lineAlong - lineW * 0.5;
+    const spanX = TEAM_WEDGE_X_TIP - TEAM_WEDGE_X_LEFT;
+    const spanY = TEAM_WEDGE_Y_LOW - TEAM_WEDGE_Y_LINE;
+    const longLeg = spanX * wedge.width;
+    const shortLeg = spanY * wedge.height;
+    assert.ok(Math.abs(longLeg / shortLeg - TEAM_WEDGE_SQRT3) < 1e-6);
+    assert.ok(Math.abs(TEAM_WEDGE_SQRT3 - Math.sqrt(3)) < 1e-12);
+    assert.equal(TEAM_WEDGE_SHORT_PX, 8);
+    const tip = wedge.along + TEAM_WEDGE_X_TIP * wedge.width;
+    const left = wedge.along + TEAM_WEDGE_X_LEFT * wedge.width;
+    assert.ok(Math.abs(tip - (lineLeft + longLeg * TEAM_WEDGE_INSET)) < 1e-6);
+    assert.ok(tip > lineLeft);
+    assert.ok(left < lineLeft);
+    assert.ok(Math.abs(wedge.baselineShift - TEAM_WEDGE_Y_LINE * wedge.height) < 1e-6);
+    assert.ok(TEAM_WEDGE_INSET > 0.5);
   });
 
   it('trims a third of the underline from the right', () => {
@@ -304,7 +370,7 @@ describe('health chip bars', () => {
     assert.equal(chipDotVisible(0, 0), false);
   });
 
-  it('rounds HP chips; the left team pip is a circle', () => {
+  it('rounds HP chips; the circle frame stays round', () => {
     assert.equal(CHIP_SMALL_CORNER_MUL, CHIP_BIG_CORNER_MUL);
     assert.equal(CHIP_LEAD_CORNER_MUL, 1);
     assert.ok(CHIP_BIG_CORNER_MUL > 0.36);
@@ -314,10 +380,22 @@ describe('health chip bars', () => {
     assert.equal(chipDotFrame(2), 0);
     assert.ok(CHIP_BASELINE_MUL > 0.05 && CHIP_BASELINE_MUL < 0.12);
     assert.equal(CHIP_BASELINE_ALPHA, 0.5);
-    assert.equal(CHIP_BODY_ALPHA, 0.85);
+    assert.equal(CHIP_BODY_ALPHA, 0.55);
     assert.ok(CHIP_BODY_ALPHA < CHIP_EDGE_ALPHA);
     assert.ok(CHIP_BASELINE_ALPHA < CHIP_BODY_ALPHA);
     assert.equal(CHIP_EDGE_ALPHA, 1);
+    assert.equal(CHIP_RIGHT_SHADE, 1);
+    assert.ok(CHIP_RIGHT_MUL > CHIP_BASELINE_MUL);
+    assert.ok(CHIP_RIGHT_SHADE > CHIP_BODY_ALPHA);
+    const half = 10;
+    const line = half * (CHIP_BASELINE_MUL / 0.36);
+    const right = half * (CHIP_RIGHT_MUL / 0.36);
+    assert.equal(hpChipShade(0, -half + line * 0.5, half), CHIP_EDGE_ALPHA);
+    assert.equal(hpChipShade(half - right * 0.5, 0, half), CHIP_RIGHT_SHADE);
+    assert.equal(hpChipShade(-half + line * 0.5, 0, half), CHIP_BODY_ALPHA);
+    assert.equal(hpChipShade(0, 0, half), CHIP_BODY_ALPHA);
+    assert.equal(hpChipShade(0, half - line * 0.5, half), CHIP_BASELINE_ALPHA);
+    assert.ok(hpChipShade(half - right * 0.5, 0, half) > hpChipShade(0, 0, half));
   });
 
   it('keeps team color off the HP chips', () => {
@@ -355,6 +433,19 @@ describe('health chip bars', () => {
     assert.equal(underDotCount({ agora: true, seatsFilled: 2 }), 0);
     assert.equal(underDotCount({ seatsFilled: 2, manaReady: 3 }), 2);
     assert.deepEqual(underDotRgb({ manaReady: 3 }), RGB_MANA);
+    assert.deepEqual(underDotTint({ manaReady: 3 }), RGB_MANA_RING);
+    assert.ok(RGB_MANA_RING[0] > RGB_MANA[0] && RGB_MANA_RING[1] > RGB_MANA[1] && RGB_MANA_RING[2] >= RGB_MANA[2]);
+    assert.ok(RGB_MANA_RING[0] < 0.55 && RGB_MANA_RING[1] < 0.75);
+    assert.equal(manaRingLit(1, 1), 1);
+    assert.equal(manaRingLit(-1, -1), 0);
+    assert.equal(manaRingLit(1, 0), 1);
+    assert.equal(manaRingLit(0, 1), 1);
+    assert.ok(manaRingLit(1, 0) > manaRingLit(-1, 0));
+    assert.ok(manaRingLit(0, 1) > manaRingLit(0, -1));
+    assert.ok(MANA_RING_DIM > 0.15 && MANA_RING_DIM < 0.5);
+    assert.notEqual(underDotFrame({ manaReady: 3 }), underDotFrame({ seatsFilled: 2 }));
+    assert.equal(underDotFrame({ seatsFilled: 2, manaReady: 3 }), underDotFrame({ seatsFilled: 1 }));
+    assert.deepEqual(underDotTint({ seatsFilled: 2 }), RGB_SEAT);
     assert.deepEqual(underDotRgb({ seatsFilled: 2 }), RGB_SEAT);
     assert.ok(Math.abs(RGB_SEAT[0] - RGB_SEAT[1]) < 0.06);
     assert.ok(RGB_SEAT[2] > RGB_SEAT[0]);

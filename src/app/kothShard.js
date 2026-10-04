@@ -1565,15 +1565,9 @@ export function createKothShard(options = {}) {
   function convergeToBestMatch() {
     if (phase !== SHARD_PHASE.LIVE) return false;
     const myActive = role === 'spectator' ? 0 : countActive(roster);
-    // Pinning protects a selected/created established match, but a solo host
-    // must still participate in deterministic simultaneous-start convergence.
-    if (
-      pinnedMatchId
-      && matchId === pinnedMatchId
-      && !(role === 'player' && myActive <= 1)
-    ) {
-      return false;
-    }
+    // A lobby the player created or picked from the list stays put, including
+    // a solo host. Unpinned discovery can still fold two simultaneous starts.
+    if (pinnedMatchId && matchId === pinnedMatchId) return false;
     if (role === 'player' && myActive >= MIN_LIVE_PLAYERS) return false;
     if (role === 'player') noteSelfLiveMatch();
     const best = bestLiveMatch();
@@ -1647,6 +1641,9 @@ export function createKothShard(options = {}) {
       if (role === 'spectator') scheduleMatchLobbyConnect(presence.matchId);
       return true;
     }
+    // Created or picked lobbies are pinned to this matchId before go-live.
+    // Do not abandon them for a different match that is already on the list.
+    if (pinnedMatchId && pinnedMatchId === matchId && presence.matchId !== matchId) return false;
     // Established multi-army matches never abandon via follow/converge. A solo
     // host is allowed to yield even after its clock or peer link has started.
     if (role === 'player' && phase === SHARD_PHASE.LIVE) {
@@ -3575,16 +3572,21 @@ export function createKothShard(options = {}) {
   // one join pipeline — the board is never rebuilt for them. This is the ONLY
   // path that creates a public match.
   async function startSoloLive() {
-    const existing = bestLiveMatch();
-    if (existing?.matchId && existing.from && existing.matchId !== matchId) {
-      if (DEBUG_KOTH) {
-        console.info('[KOTH] solo-live aborted — joining existing match', {
-          existing: shortId(existing.matchId),
-          mine: shortId(matchId),
-        });
+    // Explicit "Start a lobby" pins the new matchId first. Discovery (no pin)
+    // still joins a match that is already up instead of splitting a cold start.
+    const creatingPinned = pinnedMatchId && pinnedMatchId === matchId;
+    if (!creatingPinned) {
+      const existing = bestLiveMatch();
+      if (existing?.matchId && existing.from && existing.matchId !== matchId) {
+        if (DEBUG_KOTH) {
+          console.info('[KOTH] solo-live aborted — joining existing match', {
+            existing: shortId(existing.matchId),
+            mine: shortId(matchId),
+          });
+        }
+        followLivePresence(existing);
+        return;
       }
-      followLivePresence(existing);
-      return;
     }
     roster = createEmptyRoster();
     roster[0] = { userId: localUserId, state: 'active', playerId: 0 };
@@ -5502,14 +5504,8 @@ export function createKothShard(options = {}) {
     startLiveLobby() {
       if (phase === SHARD_PHASE.LIVE) return;
       cancelDiscoverStart();
-      // "Start" is also the safe entry point from the lobby UI. If a healthy
-      // public match is already visible, join it instead of splitting the same
-      // players across a second solo-live shard.
-      const existing = bestLiveMatch();
-      if (existing?.matchId && existing.from) {
-        pinnedMatchId = existing.matchId;
-        return followLivePresence(existing);
-      }
+      // The lobby list is how you join. This button always opens a new lobby,
+      // even when other King of the Hill matches are already visible.
       clearSavedMatch();
       matchId = generateMatchId();
       seed = hashSeed(matchId);

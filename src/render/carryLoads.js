@@ -20,18 +20,20 @@ const MINERAL = RESOURCE_INDEX.mineral + 1;
 const HEAD_LIFT = 1.62;
 const INITIAL_CAP = 256;
 
+// Untextured, so the ground exposure grade hits these whole. Colors sit
+// under that grade instead of blowing out on the sun side.
 const KIND = {
   wood: {
     code: WOOD,
     // Horizontal log (cylinder along X after Rz 90°).
-    sx: 0.95,
-    sy: 3.2,
-    sz: 0.95,
+    sx: 1.3,
+    sy: 4.35,
+    sz: 1.3,
     rx: 0,
     rz: Math.PI / 2,
-    yLift: 0.55,
-    color: [0.42, 0.22, 0.1],
-    emissive: [0.1, 0.05, 0.02],
+    yLift: 0.72,
+    color: [0.22, 0.12, 0.055],
+    emissive: [0.025, 0.012, 0.005],
     mesh: 'log',
   },
   stone: {
@@ -42,8 +44,8 @@ const KIND = {
     rx: Math.PI * 0.15,
     rz: Math.PI * 0.1,
     yLift: 1.05,
-    color: [0.5, 0.5, 0.5],
-    emissive: [0.1, 0.1, 0.1],
+    color: [0.22, 0.22, 0.22],
+    emissive: [0.025, 0.025, 0.025],
     mesh: 'box',
   },
   mineral: {
@@ -54,8 +56,8 @@ const KIND = {
     rx: Math.PI * 0.12,
     rz: Math.PI * -0.08,
     yLift: 0.95,
-    color: [0.7, 0.6, 0.8],
-    emissive: [0.2, 0.15, 0.2],
+    color: [0.22, 0.16, 0.26],
+    emissive: [0.03, 0.018, 0.035],
     mesh: 'box',
   },
 };

@@ -126,6 +126,7 @@ import {
 import { chasePoseXZ } from './poseInterp.js';
 import { init as initAudio, playMatchStart, playThunder, thunderPlaysForStrikes } from './audio.js';
 import { SimSession, TICK_HZ, formatHudMatchClock, matchSecondsFromTick } from './simSession.js';
+import { corpseCompactDue } from './corpseCompact.js';
 import { createKothShard, kothModeFromSearch } from './kothShard.js';
 import { setupKothLobby } from './kothLobby.js';
 import {
@@ -349,8 +350,23 @@ function applyOwnerTintsFromCfg(renderer, cfg, localPlayerId) {
   renderer?.refreshOwnerTints?.();
 }
 
+function initGetfireChat() {
+  if (typeof GETFIRE === 'undefined') return;
+  GETFIRE({
+    topicNames: ['AEG', 'gaming'],
+    defaultName: 'Strategist',
+    startOpen: false,
+    startPreview: false,
+    clickAwayHide: false,
+    mouseOutFade: true,
+    titleAlerts: true,
+    devMode: window.location.protocol !== 'https:',
+  });
+}
+
 async function main() {
   console.log("©'26 Aether.Garden");
+  initGetfireChat();
   installNavGuard();
   const canvas = document.getElementById('canvas');
   initAudio();
@@ -3221,6 +3237,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   let lastUnmappedRebuild = 0;
   // Compacting corpses out of the batches costs a full remap + pose rewrite, so let a
   // few accumulate first. A remap already happens on every spawn (count change).
+  // The fraction is of units still alive or fading. Gating on the original army
+  // left the last few thousand stress corpses in every shadow cascade.
   const CORPSE_COMPACT_MIN = 64;
   const CORPSE_COMPACT_FRACTION = 0.08;
   const CORPSE_COMPACT_MS = 1000;
@@ -3477,6 +3495,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     };
 
     for (let i = 0; i < n; i++) {
+      if (renderer.isEntityRetired?.(i)) {
+        corpses++;
+        continue;
+      }
       if (fogHidden[i]) {
         // Keep the fade running while hidden. Skipping it leaves a unit that died in
         // fog at deathFade 1 forever, so it never becomes eligible for compaction.
@@ -3971,14 +3993,18 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (drawStats.unmapped > 0 && performance.now() - lastUnmappedRebuild > 400) {
       lastUnmappedRebuild = performance.now();
       renderEntityCount = syncDrawnEntities();
-    } else {
-      // Corpses the renderer has not dropped yet still cost a draw per shadow cascade.
-      const held = corpses - (renderer.retiredEntityCount?.() ?? corpses);
-      if (held >= Math.max(CORPSE_COMPACT_MIN, n * CORPSE_COMPACT_FRACTION)
-        && performance.now() - lastCorpseCompact > CORPSE_COMPACT_MS) {
-        lastCorpseCompact = performance.now();
-        renderEntityCount = syncDrawnEntities();
-      }
+    } else if (corpseCompactDue({
+      count: n,
+      fadedCorpses: corpses,
+      retired: renderer.retiredEntityCount?.() ?? 0,
+      now: performance.now(),
+      lastCompact: lastCorpseCompact,
+      minHold: CORPSE_COMPACT_MIN,
+      fraction: CORPSE_COMPACT_FRACTION,
+      minIntervalMs: CORPSE_COMPACT_MS,
+    })) {
+      lastCorpseCompact = performance.now();
+      renderEntityCount = syncDrawnEntities();
     }
     if (colorsDirty) renderer.setColors(colors);
     if (renderer.getPickHitboxesVisible?.()) {

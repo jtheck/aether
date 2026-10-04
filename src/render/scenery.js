@@ -98,7 +98,7 @@ function unseenGreenKill(t) {
   return (t - VISITED_FOG_T) / (1 - VISITED_FOG_T);
 }
 /**
- * Untextured PBR + outdoor key / 1.55 exposure reads as a chalk wash.
+ * Untextured PBR + outdoor key / 2.15 exposure reads as a chalk wash.
  * Thin-instance color multiplies albedo (same path as fog), so this hits
  * both the GLB/bake meshes and the atlas billboards.
  */

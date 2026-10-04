@@ -26,9 +26,19 @@ const KIND_LOOK = {
   emit: { diffuse: [0.94, 0.95, 0.9], ground: [0.7, 0.72, 0.62] },
 };
 
-const CLEAR_COLOR = [0.2, 0.23, 0.21];
-export const EXPOSURE = 1.55;
-const CONTRAST = 1.05;
+/** Display-space sky. The dome in terrain.js paints the gradient; this is the gap color. */
+export const SKY_ZENITH = [0.27, 0.45, 0.66];
+export const SKY_HORIZON = [0.62, 0.7, 0.72];
+export const SKY_HORIZON_SUN = [0.9, 0.74, 0.52];
+const CLEAR_COLOR = SKY_ZENITH;
+// Exposure is the all-angle lift for PBR. Lit standard ground takes most of
+// the exposure above 1, and its sun sheen takes less than that.
+// Contrast is the extra snap on the PBR meshes.
+export const EXPOSURE = 2.15;
+const CONTRAST = 1.3;
+/** Forge brightness / contrast sliders. Presets stay inside these. */
+export const EXPOSURE_RANGE = { min: 0.55, max: 3 };
+export const CONTRAST_RANGE = { min: 0.75, max: 1.7 };
 
 /**
  * @param {number} azDeg 0 = +Z, 90 = +X
@@ -70,11 +80,11 @@ export function defaultCelestialState() {
     clearColor: [...CLEAR_COLOR],
     bodies: [
       // Key stays directional; fill is only a floor so yaw does not go black.
-      // Keep it well below the key or CSM on grass washes out except when
-      // looking into the sun (shadows fall into the near cascade).
+      // Fill is unshadowed, so a high value lifts the grass inside the sun
+      // shadow and the cast shape vanishes on the sunny side.
       // Exposure is the all-angle lift — do not balance by pushing the key.
       { kind: BODY.SUN, azimuth: 56, elevation: 36, intensity: 1.85 },
-      { kind: BODY.HEMI, azimuth: 236, elevation: 68, intensity: 0.48 },
+      { kind: BODY.HEMI, azimuth: 236, elevation: 68, intensity: 0.34 },
     ],
   };
 }
@@ -83,8 +93,8 @@ export function defaultCelestialState() {
  * Curated lighting moods. Body 0 is always the directional key (casts shadows);
  * body 1 is the fill, kept ~opposite so camera yaw never collapses to black.
  * Mood comes from kind (sun = warm, moon = cool-neutral), the key/fill ratio,
- * and the exposure / contrast / clearColor grade (exposure is the all-angle
- * brightness lift, matching the default rig). Single source of truth: the game
+ * and exposure / contrast. Exposure is the whole-map brightness; the default
+ * rig is the bright one, and dusk / night step down from it. Single source of truth: the game
  * renderer and the forge both build from createCelestialRig, so these render
  * identically in-game.
  * @type {{ id: string, name: string, state: ReturnType<typeof defaultCelestialState> }[]}
@@ -95,8 +105,8 @@ export const CELESTIAL_PRESETS = [
     id: 'noon',
     name: 'High Noon',
     state: {
-      exposure: 1.5,
-      contrast: 1.0,
+      exposure: 2.05,
+      contrast: 1.05,
       clearColor: [0.21, 0.25, 0.23],
       bodies: [
         { kind: BODY.SUN, azimuth: 120, elevation: 76, intensity: 1.85 },
@@ -108,8 +118,8 @@ export const CELESTIAL_PRESETS = [
     id: 'golden',
     name: 'Golden Hour',
     state: {
-      exposure: 1.62,
-      contrast: 1.16,
+      exposure: 2.15,
+      contrast: 1.4,
       clearColor: [0.26, 0.19, 0.12],
       bodies: [
         { kind: BODY.SUN, azimuth: 95, elevation: 12, intensity: 1.9 },
@@ -121,8 +131,8 @@ export const CELESTIAL_PRESETS = [
     id: 'dusk',
     name: 'Blue Dusk',
     state: {
-      exposure: 1.42,
-      contrast: 1.12,
+      exposure: 1.35,
+      contrast: 1.2,
       clearColor: [0.12, 0.15, 0.21],
       bodies: [
         { kind: BODY.MOON, azimuth: 68, elevation: 12, intensity: 1.3 },
@@ -134,8 +144,8 @@ export const CELESTIAL_PRESETS = [
     id: 'night',
     name: 'Moonlit Night',
     state: {
-      exposure: 1.22,
-      contrast: 1.18,
+      exposure: 0.8,
+      contrast: 1.28,
       clearColor: [0.06, 0.09, 0.13],
       bodies: [
         { kind: BODY.MOON, azimuth: 210, elevation: 58, intensity: 1.05 },
@@ -147,8 +157,8 @@ export const CELESTIAL_PRESETS = [
     id: 'overcast',
     name: 'Overcast',
     state: {
-      exposure: 1.5,
-      contrast: 0.9,
+      exposure: 1.85,
+      contrast: 0.92,
       clearColor: [0.24, 0.25, 0.24],
       bodies: [
         { kind: BODY.SUN, azimuth: 140, elevation: 80, intensity: 0.9 },
@@ -160,8 +170,8 @@ export const CELESTIAL_PRESETS = [
     id: 'rim',
     name: 'Rim Light',
     state: {
-      exposure: 1.5,
-      contrast: 1.3,
+      exposure: 1.75,
+      contrast: 1.5,
       clearColor: [0.11, 0.12, 0.11],
       bodies: [
         { kind: BODY.SUN, azimuth: 205, elevation: 9, intensity: 2.1 },

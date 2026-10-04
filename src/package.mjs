@@ -33,6 +33,7 @@ function mustExist(rel, hint) {
 mustExist('vendor/lite/liteVendor.js', 'run: npm run build:lite');
 mustExist('vendor/howler.js', 'run: npm run build:howler');
 mustExist('vendor/getfire-p2p.js');
+mustExist('vendor/getfire.js');
 
 if (!existsSync(BAKED) || !existsSync(join(BAKED, 'sockets.json'))) {
   console.warn('⚠️  assets/baked/ incomplete — run: npm run prebake');
@@ -187,6 +188,7 @@ mkdirSync(join(DEPLOY, 'config'), { recursive: true });
 cpSync(join(ROOT, 'config', 'offline.html'), join(DEPLOY, 'config', 'offline.html'));
 mkdirSync(join(DEPLOY, 'vendor'), { recursive: true });
 cpSync(join(ROOT, 'vendor', 'getfire-p2p.js'), join(DEPLOY, 'vendor', 'getfire-p2p.js'));
+cpSync(join(ROOT, 'vendor', 'getfire.js'), join(DEPLOY, 'vendor', 'getfire.js'));
 cpSync(join(ROOT, 'vendor', 'lite'), join(DEPLOY, 'vendor', 'lite'), { recursive: true });
 if (existsSync(join(ROOT, 'vendor', 'lite-explorer'))) {
   cpSync(join(ROOT, 'vendor', 'lite-explorer'), join(DEPLOY, 'vendor', 'lite-explorer'), { recursive: true });

@@ -1,5 +1,5 @@
 // Gather-reach rings — terrain-draped annulus.
-// Resource-tinted outer rim fading through owner color into transparency.
+// Owner-colored outer rim fading through the resource tint into transparency.
 // Vertices sample ground height so the ribbon sits on the terrain instead of
 // burying. Same-kind overlapping disks draw as a union outline: visible arcs
 // chain at the true circle crossings so the terrain-draped ribbon stays one
@@ -425,8 +425,8 @@ function createRingMaterial() {
   let t = 1.0 - input.uv.y;
   let rim = shaderUniforms.rim;
   let tint = shaderUniforms.tint;
-  // Outer third stays the resource rim. Then team color, then gone.
-  let film = mix(rim, tint, smoothstep(0.28, 0.72, t));
+  // Outer third stays the owner color. Then the resource tint, then gone.
+  let film = mix(tint, rim, smoothstep(0.28, 0.72, t));
   let fade = pow(1.0 - t, 1.15);
   let edge = pow(1.0 - t, 4.2);
   let alpha = clamp(fade * 0.72 + edge * 0.28, 0.0, 1.0);
@@ -448,7 +448,7 @@ function allocMesh(engine, name, maxSegs, rimOnly = false) {
   for (let s = 0; s < maxSegs; s++) {
     const vb = s * VERTS_PER_SEG;
     const o = vb * 2;
-    // Independent quad — uv.y drives the film fade (1 = resource rim).
+    // Independent quad — uv.y drives the film fade (1 = owner rim).
     const inner = rimOnly ? 1 : 0;
     uvs[o] = 0;
     uvs[o + 1] = 1;

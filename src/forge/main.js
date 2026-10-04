@@ -85,6 +85,8 @@ import {
 } from './waveRoute.js';
 import {
   CELESTIAL_PRESETS,
+  CONTRAST_RANGE,
+  EXPOSURE_RANGE,
   celestialPresetState,
   createCelestialRig,
   defaultCelestialState,
@@ -1975,12 +1977,16 @@ function mountUi() {
       </div>
     </div>
     <div id="panel-light" class="panel" style="display:none">
-      <p class="hint">Body 1 casts shadows. Hemi / emit fill the olive board; moon is a cool second sun.</p>
+      <p class="hint">Brightness is the whole map, sky included. Intensity is one light. A strong fill washes the shadows. Body 1 casts them.</p>
       <label>Preset</label>
       <select id="light-preset">
         <option value="">— pick a mood —</option>
         ${CELESTIAL_PRESETS.map((p) => `<option value="${p.id}">${p.name}</option>`).join('')}
       </select>
+      <label>Brightness <span id="light-exposure-label"></span></label>
+      <input id="light-exposure" type="range" min="${EXPOSURE_RANGE.min}" max="${EXPOSURE_RANGE.max}" step="0.01">
+      <label>Contrast <span id="light-contrast-label"></span></label>
+      <input id="light-contrast" type="range" min="${CONTRAST_RANGE.min}" max="${CONTRAST_RANGE.max}" step="0.01">
       ${[0, 1].map((i) => `
         <p class="hint">${i === 0 ? 'Body 1' : 'Body 2'}</p>
         <label>Kind</label>
@@ -2215,6 +2221,10 @@ function syncLightUi() {
     document.getElementById(`light-${i}-el-label`).textContent = `${Math.round(b.elevation)}°`;
     document.getElementById(`light-${i}-int-label`).textContent = b.intensity.toFixed(2);
   }
+  document.getElementById('light-exposure').value = String(s.exposure);
+  document.getElementById('light-contrast').value = String(s.contrast);
+  document.getElementById('light-exposure-label').textContent = s.exposure.toFixed(2);
+  document.getElementById('light-contrast-label').textContent = s.contrast.toFixed(2);
 }
 
 function readLightUi() {
@@ -2226,6 +2236,8 @@ function readLightUi() {
     s.bodies[i].elevation = Number(document.getElementById(`light-${i}-el`).value);
     s.bodies[i].intensity = Number(document.getElementById(`light-${i}-int`).value);
   }
+  s.exposure = Number(document.getElementById('light-exposure').value);
+  s.contrast = Number(document.getElementById('light-contrast').value);
   celestial.apply(s);
   persistCelestial();
   // Hand-tuning diverges from the preset — drop the label so it is not misleading.
@@ -2247,6 +2259,9 @@ function bindLightUi() {
     for (const id of [`light-${i}-kind`, `light-${i}-az`, `light-${i}-el`, `light-${i}-int`]) {
       document.getElementById(id).addEventListener('input', readLightUi);
     }
+  }
+  for (const id of ['light-exposure', 'light-contrast']) {
+    document.getElementById(id).addEventListener('input', readLightUi);
   }
   document.getElementById('light-preset').addEventListener('change', (e) => {
     const id = e.currentTarget.value;

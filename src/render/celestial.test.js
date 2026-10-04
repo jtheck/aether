@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   BODY,
   CELESTIAL_PRESETS,
+  CONTRAST_RANGE,
+  EXPOSURE_RANGE,
   azElFromDirection,
   celestialPresetState,
   defaultCelestialState,
@@ -47,6 +49,14 @@ describe('celestial presets', () => {
       assert.ok(s, 'preset resolves');
       // Body 0 must be directional so it drives the CSM shadow generator.
       assert.ok(DIRECTIONAL.has(s.bodies[0].kind), 'body 0 is a directional key');
+      assert.ok(
+        s.exposure >= EXPOSURE_RANGE.min && s.exposure <= EXPOSURE_RANGE.max,
+        `exposure ${s.exposure} in [${EXPOSURE_RANGE.min},${EXPOSURE_RANGE.max}]`,
+      );
+      assert.ok(
+        s.contrast >= CONTRAST_RANGE.min && s.contrast <= CONTRAST_RANGE.max,
+        `contrast ${s.contrast} in [${CONTRAST_RANGE.min},${CONTRAST_RANGE.max}]`,
+      );
       for (const b of s.bodies) {
         assert.ok(b.elevation >= 5 && b.elevation <= 85, `elevation ${b.elevation} in [5,85]`);
         assert.ok(b.intensity >= 0 && b.intensity <= 2.5, `intensity ${b.intensity} in [0,2.5]`);

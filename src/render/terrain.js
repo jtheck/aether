@@ -38,6 +38,7 @@ import {
 import { createSceneryFromField } from './scenery.js';
 import { createDoodadsFromField } from './doodads.js';
 import { createBackdropsFromField } from './backdrops.js';
+import { EXPOSURE, SKY_HORIZON, SKY_HORIZON_SUN, SKY_ZENITH } from './celestial.js';
 import { softDetachMesh } from './meshLifecycle.js';
 import { classifyGridTile, placementFillKind, placementGridWindow } from './placementGrid.js';
 import * as fx from '../sim/fixed.js';
@@ -75,8 +76,9 @@ const TERRAIN_LOOK = {
   [TERRAIN.GRASS]: {
     diffuseColor: [1.12, 1.38, 1.08],
     ambientColor: [0.16, 0.24, 0.14],
-    // Soft sheen only — shore atlas cells already look tiled; spec must not flash them.
-    specularColor: [0.032, 0.048, 0.022],
+    // Soft sheen only — shore atlas cells already look tiled; spec must not flash
+    // them. Short of the sun-mirror value.
+    specularColor: [0.027, 0.039, 0.018],
     specularPower: 10,
   },
   [TERRAIN.WATER]: {
@@ -116,7 +118,8 @@ const FRAME_INNER_OVERLAP = 2.4;
 const FRAME_BOTTOM_Y = -9;
 const FRAME_TOP_RISE = 0.8;
 const PLINTH_TOP_EXTRA = FRAME_TOP_RISE * 2.25;
-const FRAME_UV_WORLD_SIZE = 28;
+/** World length of one wood-grain tile. The texture tiles, so this is grain scale. */
+const FRAME_UV_WORLD_SIZE = 10;
 const FRAME_ARC_MATCH = 0.9;
 
 /** @type {WeakMap<object, object>} */
@@ -150,8 +153,9 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
   const atlasMeshes = chunkSize
     ? buildChunkedAtlasMeshes(engine, field, atlasMaterials, active, chunkSize, atlasByChunk, atlasRev, specMap.uv)
     : buildAtlasMeshes(engine, field, atlasMaterials, active, specMap.uv);
+  const backdrop = buildEnvironmentMeshes(engine, scene, field);
   const built = [
-    ...buildEnvironmentMeshes(engine, field),
+    ...backdrop.meshes,
     ...buildTableFrameMeshes(engine, field, active),
     ...atlasMeshes,
     ...(specGlint.mesh ? [specGlint.mesh] : []),
@@ -264,6 +268,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     update(activeCamera, deltaMs) {
       if (disposed) return;
       specGlint.update();
+      backdrop.update();
       scenery.update(activeCamera, deltaMs);
       doodads.update(deltaMs);
     },
@@ -429,13 +434,14 @@ function createAtlasMaterials(textures, specTexture) {
     const mat = createStandardMaterial();
     mat.diffuseColor = look.diffuseColor;
     mat.ambientColor = look.ambientColor;
-    // Dim floor only — a brighter emissive filled CSM so tree shadows
-    // vanished into the grass except when looking into the sun.
-    mat.emissiveColor = [0.038, 0.044, 0.030];
+    // Kept small. Emissive is unshadowed, so it fills cast shadows on the grass.
+    mat.emissiveColor = [0.016, 0.018, 0.012];
     mat.specularColor = look.specularColor;
     mat.specularPower = look.specularPower;
     mat.specularCoordIndex = 1;
     mat.diffuseTexture = textures.get(atlasId) ?? null;
+    // Atlas only. Rails and haul props leave this unset and stay at full grade.
+    mat.diffuseLevel = 0.963;
     mat.backFaceCulling = true;
     materials.set(terrainBucketKey(atlasId, terrain), mat);
   }
@@ -1263,10 +1269,13 @@ function extrudeFrameLoop(pos, norm, uv, idx, pts, field, shape, corners, topY) 
   }
   const closeLen = Math.hypot(loop[0].x - loop[loop.length - 1].x, loop[0].z - loop[loop.length - 1].z);
   const uEnd = u + closeLen / FRAME_UV_WORLD_SIZE;
+  const turns = Math.max(1, Math.round(uEnd));
+  const uScale = uEnd > 1e-5 ? turns / uEnd : 1;
+  for (let i = 0; i < uAt.length; i++) uAt[i] *= uScale;
   for (let i = 0; i < loop.length; i++) {
     const j = (i + 1) % loop.length;
     const u0 = uAt[i];
-    const u1 = i + 1 === loop.length ? uEnd : uAt[j];
+    const u1 = i + 1 === loop.length ? turns : uAt[j];
     pushFrameSpan(
       pos, norm, uv, idx,
       inner[i].x, inner[i].z, inner[j].x, inner[j].z,
@@ -1302,14 +1311,17 @@ function pushFrameSpan(pos, norm, uv, idx, ax, az, bx, bz, aox, aoz, box, boz, t
   pushFaceNormals(norm, ox / ol, 0, oz / ol);
   pushFaceNormals(norm, -ox / ol, 0, -oz / ol);
   pushFaceNormals(norm, 0, -1, 0);
-  const vWall = (outerTop - FRAME_BOTTOM_Y) / FRAME_UV_WORLD_SIZE;
-  const v0 = Math.hypot(aox - ax, aoz - az) / FRAME_UV_WORLD_SIZE;
-  const v1 = Math.hypot(box - bx, boz - bz) / FRAME_UV_WORLD_SIZE;
+  const vInner = (topY - FRAME_BOTTOM_Y) / FRAME_UV_WORLD_SIZE;
+  const vOuter = (outerTop - FRAME_BOTTOM_Y) / FRAME_UV_WORLD_SIZE;
+  const vTop0 = Math.hypot(aox - ax, aoz - az) / FRAME_UV_WORLD_SIZE;
+  const vTop1 = Math.hypot(box - bx, boz - bz) / FRAME_UV_WORLD_SIZE;
+  // V walks inner wall → top → outer wall so a grain line crosses the edges.
+  // The inner wall's vertex order is reversed; its U follows that order.
   uv.push(
-    u0, 0, u1, 0, u1, v1, u0, v0,
-    u0, 0, u1, 0, u1, vWall, u0, vWall,
-    u0, 0, u1, 0, u1, vWall, u0, vWall,
-    u0, 0, u1, 0, u1, v1, u0, v0,
+    u0, vInner, u1, vInner, u1, vInner + vTop1, u0, vInner + vTop0,
+    u0, vInner + vTop0, u1, vInner + vTop1, u1, vInner + vTop1 + vOuter, u0, vInner + vTop0 + vOuter,
+    u1, vInner, u0, vInner, u0, 0, u1, 0,
+    u0, 0, u1, 0, u1, vTop1, u0, vTop0,
   );
   for (let face = 0; face < 4; face++) {
     const o = base + face * 4;
@@ -1384,20 +1396,30 @@ function pushRoundedPrism(pos, norm, uv, idx, x, z, half, cornerR, top, bottom, 
     disc.idx.push(discBase, discBase + 1 + i, discBase + 1 + ((i + 1) % n));
   }
   const v = h / FRAME_UV_WORLD_SIZE;
+  let perimeter = 0;
+  const segLens = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const len = Math.hypot(ring[(i + 1) % n].x - ring[i].x, ring[(i + 1) % n].z - ring[i].z);
+    segLens[i] = len;
+    perimeter += len;
+  }
+  // Whole revolutions of the tile, so the strip meets itself without a seam.
+  const turns = Math.max(1, Math.round(perimeter / FRAME_UV_WORLD_SIZE));
+  const uPer = perimeter > 1e-5 ? turns / perimeter : 0;
   let u = 0;
   for (let i = 0; i < n; i++) {
+    const len = segLens[i];
+    if (len < 1e-5) continue;
     const a = ring[i];
     const b = ring[(i + 1) % n];
-    const len = Math.hypot(b.x - a.x, b.z - a.z);
-    if (len < 1e-5) continue;
-    const u0 = u / FRAME_UV_WORLD_SIZE;
-    const u1 = (u + len) / FRAME_UV_WORLD_SIZE;
+    const u0 = u;
+    const u1 = u + len * uPer;
     const o = pos.length / 3;
     pos.push(a.x, top, a.z, b.x, top, b.z, b.x, bottom, b.z, a.x, bottom, a.z);
     norm.push(a.nx, 0, a.nz, b.nx, 0, b.nz, b.nx, 0, b.nz, a.nx, 0, a.nz);
-    uv.push(u0, 0, u1, 0, u1, v, u0, v);
+    uv.push(u0, v, u1, v, u1, 0, u0, 0);
     idx.push(o, o + 1, o + 2, o, o + 2, o + 3);
-    u += len;
+    u = u1;
   }
 }
 
@@ -1416,13 +1438,23 @@ function pushBox(pos, norm, uv, idx, x, z, size, top, bottom) {
     [[x0, top, z1], [x1, top, z1], [x1, bottom, z1], [x0, bottom, z1], [0, 0, 1]],
     [[x0, top, z0], [x0, top, z1], [x0, bottom, z1], [x0, bottom, z0], [-1, 0, 0]],
   ];
+  const uTop = size / FRAME_UV_WORLD_SIZE;
+  const vSide = h / FRAME_UV_WORLD_SIZE;
+  const turns = Math.max(1, Math.round((size * 4) / FRAME_UV_WORLD_SIZE));
+  const uF = turns / 4;
+  // Side U walks the perimeter and closes on a whole number of tiles.
+  const sideUv = [
+    [uF, vSide, 0, vSide, 0, 0, uF, 0],
+    [uF * 2, vSide, uF, vSide, uF, 0, uF * 2, 0],
+    [uF * 3, vSide, uF * 2, vSide, uF * 2, 0, uF * 3, 0],
+    [uF * 4, vSide, uF * 3, vSide, uF * 3, 0, uF * 4, 0],
+  ];
   for (let f = 0; f < faces.length; f++) {
     const face = faces[f];
     for (let v = 0; v < 4; v++) pos.push(...face[v]);
     pushFaceNormals(norm, ...face[4]);
-    const u = size / FRAME_UV_WORLD_SIZE;
-    const v = (f === 0 ? size : h) / FRAME_UV_WORLD_SIZE;
-    uv.push(0, 0, u, 0, u, v, 0, v);
+    if (f === 0) uv.push(0, 0, uTop, 0, uTop, uTop, 0, uTop);
+    else uv.push(...sideUv[f - 1]);
     const o = base + f * 4;
     idx.push(o, o + 1, o + 2, o, o + 2, o + 3);
   }
@@ -1434,18 +1466,21 @@ function getWoodTexture(engine) {
   const size = 128;
   const pixels = new Uint8Array(size * size * 4);
   for (let y = 0; y < size; y++) {
-    const v = (y / size) * Math.PI * 2;
+    const v = y / size;
     for (let x = 0; x < size; x++) {
-      const u = (x / size) * Math.PI * 2;
-      // Plank grain along U (rail length). Low-frequency V so a thin rail looks like one board.
-      const broad = Math.sin(v * 2.2 + Math.sin(u * 1.15) * 0.35);
-      const fine = Math.sin(v * 5.4 + u * 0.55) * 0.16;
-      const wander = Math.sin(u * 0.85 + v * 1.6) * 0.08;
-      const grain = broad * 0.82 + fine + wander;
+      const u = x / size;
+      // Integer cycles only, so the tile meets itself on every edge.
+      // One soft wave across the board, plus a quiet finer grain. High-contrast
+      // bands read as stripes on the rail sides.
+      const along = Math.sin(u * Math.PI * 2);
+      const along2 = Math.sin(u * Math.PI * 4);
+      const soft = Math.sin((v + along * 0.07) * Math.PI * 2);
+      const fine = Math.sin((v * 3 + along2 * 0.04) * Math.PI * 2);
+      const grain = soft * 0.42 + fine * 0.16;
       const o = (y * size + x) * 4;
-      pixels[o] = Math.max(0, Math.min(255, 132 + grain * 28));
-      pixels[o + 1] = Math.max(0, Math.min(255, 74 + grain * 16));
-      pixels[o + 2] = Math.max(0, Math.min(255, 36 + grain * 9));
+      pixels[o] = Math.max(0, Math.min(255, 108 + grain * 14));
+      pixels[o + 1] = Math.max(0, Math.min(255, 62 + grain * 8));
+      pixels[o + 2] = Math.max(0, Math.min(255, 30 + grain * 5));
       pixels[o + 3] = 255;
     }
   }
@@ -1520,11 +1555,11 @@ function getEndgrainTexture(engine) {
 function createEndgrainMaterial(texture) {
   const mat = createStandardMaterial();
   mat.diffuseTexture = texture;
-  mat.diffuseColor = [0.82, 0.62, 0.4];
-  mat.ambientColor = [0.28, 0.18, 0.1];
-  mat.emissiveColor = [0.03, 0.016, 0.008];
-  mat.specularColor = [0.12, 0.08, 0.05];
-  mat.specularPower = 36;
+  mat.diffuseColor = [0.5, 0.38, 0.25];
+  mat.ambientColor = [0.1, 0.06, 0.04];
+  mat.emissiveColor = [0.012, 0.006, 0.003];
+  mat.specularColor = [0.05, 0.035, 0.02];
+  mat.specularPower = 28;
   mat.backFaceCulling = false;
   return mat;
 }
@@ -1532,23 +1567,189 @@ function createEndgrainMaterial(texture) {
 function createWoodMaterial(texture, dark) {
   const mat = createStandardMaterial();
   mat.diffuseTexture = texture;
-  mat.diffuseColor = dark ? [0.68, 0.49, 0.32] : [0.9, 0.72, 0.5];
-  mat.ambientColor = dark ? [0.24, 0.14, 0.08] : [0.34, 0.21, 0.12];
-  mat.emissiveColor = [0.025, 0.012, 0.006];
-  mat.specularColor = [0.16, 0.11, 0.07];
-  mat.specularPower = 48;
+  mat.diffuseColor = dark ? [0.38, 0.28, 0.18] : [0.48, 0.38, 0.26];
+  mat.ambientColor = dark ? [0.08, 0.05, 0.03] : [0.10, 0.06, 0.04];
+  mat.emissiveColor = [0.01, 0.005, 0.003];
+  mat.specularColor = [0.05, 0.035, 0.02];
+  mat.specularPower = 32;
   mat.backFaceCulling = false;
   return mat;
 }
 
-function buildEnvironmentMeshes(engine, field) {
+function wgslVec3(rgb) {
+  return `vec3<f32>(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+}
+
+function buildEnvironmentMeshes(engine, scene, field) {
   const worldWidth = field.width * TILE_SIZE_F;
   const worldHeight = field.height * TILE_SIZE_F;
   const boardRadius = Math.hypot(worldWidth, worldHeight) * 0.5;
-  return [buildMountainRing(engine, field.seed ?? 0, boardRadius)];
+  const seaY = -22;
+  const mountains = buildMountainRing(engine, scene, field.seed ?? 0, boardRadius, seaY);
+  const sea = buildSea(engine, scene, boardRadius * 10, boardRadius * 3.2, seaY);
+  const sky = buildSkyDome(engine, scene);
+  return {
+    meshes: [sky.mesh, sea.mesh, mountains.mesh],
+    update() {
+      const sun = readSunDir(scene);
+      const exposure = Number(scene?.imageProcessing?.exposure);
+      const grade = (Number.isFinite(exposure) ? exposure : EXPOSURE) / EXPOSURE;
+      sky.update(sun, grade);
+      sea.update(sun, grade);
+      mountains.update(sun, grade);
+    },
+  };
 }
 
-function buildMountainRing(engine, seed, boardRadius) {
+function buildSea(engine, scene, radius, shadeRadius, y) {
+  const segs = 96;
+  const positions = [0, y, 0];
+  const indices = [];
+  for (let i = 0; i <= segs; i++) {
+    const a = (i / segs) * Math.PI * 2;
+    positions.push(Math.cos(a) * radius, y, Math.sin(a) * radius);
+  }
+  for (let i = 1; i <= segs; i++) indices.push(0, i, i + 1);
+  const mesh = createMeshFromData(
+    engine,
+    'backdrop-sea',
+    new Float32Array(positions),
+    new Float32Array(positions.length),
+    new Uint32Array(indices),
+  );
+  const material = createShaderMaterial({
+    name: 'backdrop-sea',
+    attributes: ['position'],
+    uniforms: [
+      'world',
+      'viewProjection',
+      'cameraPosition',
+      { name: 'sunDir', type: 'vec3<f32>', defaultValue: [0.45, -0.72, 0.35] },
+      { name: 'grade', type: 'f32', defaultValue: 1 },
+      { name: 'radius', type: 'f32', defaultValue: shadeRadius },
+    ],
+    backFaceCulling: false,
+    vertexSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) worldPos: vec3<f32>,
+};
+@vertex fn mainVertex(input: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  let worldPos4 = shaderSystem.world * vec4<f32>(input.position, 1.0);
+  out.worldPos = worldPos4.xyz;
+  out.position = shaderSystem.viewProjection * worldPos4;
+  return out;
+}`,
+    fragmentSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) worldPos: vec3<f32>,
+};
+@fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
+  let toSun = normalize(-shaderUniforms.sunDir);
+  let view = normalize(shaderSystem.cameraPosition - input.worldPos);
+  let h = normalize(view + toSun);
+  let glint = pow(clamp(h.y, 0.0, 1.0), 64.0);
+  let t = clamp(length(input.worldPos.xz) / max(shaderUniforms.radius, 1.0), 0.0, 1.0);
+  let near = vec3<f32>(0.05, 0.16, 0.20);
+  let far = vec3<f32>(0.025, 0.08, 0.12);
+  var col = mix(near, far, t);
+  col += vec3<f32>(0.22, 0.30, 0.28) * glint * 0.45;
+  return vec4<f32>(col * shaderUniforms.grade, 1.0);
+}`,
+  });
+  mesh.material = material;
+  mesh.pickable = false;
+  mesh.receiveShadows = false;
+  return {
+    mesh,
+    update(sunDir, grade) {
+      setShaderUniform(material, 'sunDir', sunDir);
+      setShaderUniform(material, 'grade', grade);
+    },
+  };
+}
+
+function buildSkyDome(engine, scene) {
+  const radius = 24000;
+  const latSteps = 14;
+  const lonSteps = 32;
+  const positions = [];
+  const indices = [];
+  for (let y = 0; y <= latSteps; y++) {
+    const phi = (y / latSteps - 0.5) * Math.PI;
+    const cy = Math.sin(phi);
+    const ring = Math.cos(phi);
+    for (let x = 0; x <= lonSteps; x++) {
+      const theta = (x / lonSteps) * Math.PI * 2;
+      positions.push(Math.cos(theta) * ring * radius, cy * radius, Math.sin(theta) * ring * radius);
+    }
+  }
+  const stride = lonSteps + 1;
+  for (let y = 0; y < latSteps; y++) {
+    for (let x = 0; x < lonSteps; x++) {
+      const a = y * stride + x;
+      const b = a + 1;
+      const c = a + stride + 1;
+      const d = a + stride;
+      // Camera sits inside, so the shell faces inward.
+      indices.push(a, c, b, a, d, c);
+    }
+  }
+  const mesh = createMeshFromData(
+    engine,
+    'sky-dome',
+    new Float32Array(positions),
+    new Float32Array(positions.length),
+    new Uint32Array(indices),
+  );
+  const material = createShaderMaterial({
+    name: 'sky-dome',
+    attributes: ['position'],
+    uniforms: [
+      'world',
+      'viewProjection',
+      'cameraPosition',
+      { name: 'sunDir', type: 'vec3<f32>', defaultValue: [0.45, -0.72, 0.35] },
+      { name: 'grade', type: 'f32', defaultValue: 1 },
+    ],
+    backFaceCulling: false,
+    vertexSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) worldPos: vec3<f32>,
+};
+@vertex fn mainVertex(input: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  let worldPos4 = shaderSystem.world * vec4<f32>(input.position, 1.0);
+  out.worldPos = worldPos4.xyz;
+  out.position = shaderSystem.viewProjection * worldPos4;
+  return out;
+}`,
+    fragmentSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) worldPos: vec3<f32>,
+};
+@fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
+  let dir = normalize(input.worldPos - shaderSystem.cameraPosition);
+  let lift = smoothstep(0.0, 0.22, dir.y);
+  let sun = pow(clamp(dot(dir, normalize(-shaderUniforms.sunDir)), 0.0, 1.0), 2.0);
+  let horizon = mix(${wgslVec3(SKY_HORIZON)}, ${wgslVec3(SKY_HORIZON_SUN)}, sun);
+  let sky = mix(horizon, ${wgslVec3(SKY_ZENITH)}, lift);
+  return vec4<f32>(sky * shaderUniforms.grade, 1.0);
+}`,
+  });
+  mesh.material = material;
+  mesh.pickable = false;
+  mesh.receiveShadows = false;
+  return {
+    mesh,
+    update(sunDir, grade) {
+      setShaderUniform(material, 'sunDir', sunDir);
+      setShaderUniform(material, 'grade', grade);
+    },
+  };
+}
+
+function buildMountainRing(engine, scene, seed, boardRadius, seaY) {
   const segments = 112;
   const radii = [boardRadius * 1.38, boardRadius * 1.85, boardRadius * 2.7, boardRadius * 3.5];
   const positions = [];
@@ -1561,10 +1762,13 @@ function buildMountainRing(engine, seed, boardRadius) {
         Math.sin(a * 7 + seed * 0.017) * 0.48 +
         Math.sin(a * 13 - seed * 0.011) * 0.27 +
         Math.cos(a * 23 + seed * 0.007) * 0.13;
-      let y = -84;
-      if (ring === 1) y = -18 + wave * 82;
-      else if (ring === 2) y = 18 + wave * 142;
-      else if (ring === 3) y = -8 + wave * 105;
+      const crest = Math.min(1, Math.max(0, wave * 0.55 + 0.5));
+      // Troughs dip under the sea. Crests stand well above it, or the ring
+      // is only the tops of low waves and reads as a flat island.
+      let y = seaY - 70;
+      if (ring === 1) y = seaY - 8 + crest * 72;
+      else if (ring === 2) y = seaY - 12 + crest * 130;
+      else if (ring === 3) y = seaY - 6 + crest * 96;
       const radius = radii[ring] * (1 + wave * 0.045);
       positions.push(Math.cos(a) * radius, y, Math.sin(a) * radius);
       uvs.push(s / 12, ring / (radii.length - 1));
@@ -1591,16 +1795,57 @@ function buildMountainRing(engine, seed, boardRadius) {
     idx,
     new Float32Array(uvs),
   );
-  const mat = createStandardMaterial();
-  mat.diffuseColor = [0.16, 0.18, 0.16];
-  mat.ambientColor = [0.12, 0.14, 0.12];
-  mat.emissiveColor = [0.03, 0.034, 0.028];
-  mat.specularColor = [0.025, 0.04, 0.045];
-  mat.backFaceCulling = false;
-  mesh.material = mat;
+  const material = createShaderMaterial({
+    name: 'distant-mountains',
+    attributes: ['position', 'normal'],
+    uniforms: [
+      'world',
+      'viewProjection',
+      { name: 'sunDir', type: 'vec3<f32>', defaultValue: [0.45, -0.72, 0.35] },
+      { name: 'grade', type: 'f32', defaultValue: 1 },
+      { name: 'seaY', type: 'f32', defaultValue: seaY },
+    ],
+    backFaceCulling: false,
+    vertexSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) worldPos: vec3<f32>,
+  @location(1) worldN: vec3<f32>,
+};
+@vertex fn mainVertex(input: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  let worldPos4 = shaderSystem.world * vec4<f32>(input.position, 1.0);
+  out.worldPos = worldPos4.xyz;
+  out.worldN = (shaderSystem.world * vec4<f32>(input.normal, 0.0)).xyz;
+  out.position = shaderSystem.viewProjection * worldPos4;
+  return out;
+}`,
+    fragmentSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) worldPos: vec3<f32>,
+  @location(1) worldN: vec3<f32>,
+};
+@fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
+  let y = input.worldPos.y;
+  if (y < shaderUniforms.seaY) { discard; }
+  let n = normalize(input.worldN);
+  let toSun = normalize(-shaderUniforms.sunDir);
+  let ndl = clamp(dot(n, toSun), 0.0, 1.0);
+  let h = smoothstep(0.0, 110.0, y - shaderUniforms.seaY);
+  let shade = mix(vec3<f32>(0.11, 0.15, 0.13), vec3<f32>(0.55, 0.56, 0.46), h);
+  let col = shade * mix(0.42, 1.25, ndl);
+  return vec4<f32>(col * shaderUniforms.grade, 1.0);
+}`,
+  });
+  mesh.material = material;
   mesh.pickable = false;
   mesh.receiveShadows = false;
-  return mesh;
+  return {
+    mesh,
+    update(sunDir, grade) {
+      setShaderUniform(material, 'sunDir', sunDir);
+      setShaderUniform(material, 'grade', grade);
+    },
+  };
 }
 
 function computeSmoothNormals(positions, indices) {

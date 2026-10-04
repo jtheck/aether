@@ -403,6 +403,197 @@ function mat4ComposeInto(dst, off, tx, ty, tz, qx, qy, qz, qw, sx, sy, sz) {
   dst[off + 15] = 1;
 }
 
+/** Invert a column-major mat4. Returns false when the matrix is singular. */
+export function mat4InvertTo(dst, d, src, s = 0) {
+  const a00 = src[s], a01 = src[s + 1], a02 = src[s + 2], a03 = src[s + 3];
+  const a10 = src[s + 4], a11 = src[s + 5], a12 = src[s + 6], a13 = src[s + 7];
+  const a20 = src[s + 8], a21 = src[s + 9], a22 = src[s + 10], a23 = src[s + 11];
+  const a30 = src[s + 12], a31 = src[s + 13], a32 = src[s + 14], a33 = src[s + 15];
+  const b00 = a00 * a11 - a01 * a10;
+  const b01 = a00 * a12 - a02 * a10;
+  const b02 = a00 * a13 - a03 * a10;
+  const b03 = a01 * a12 - a02 * a11;
+  const b04 = a01 * a13 - a03 * a11;
+  const b05 = a02 * a13 - a03 * a12;
+  const b06 = a20 * a31 - a21 * a30;
+  const b07 = a20 * a32 - a22 * a30;
+  const b08 = a20 * a33 - a23 * a30;
+  const b09 = a21 * a32 - a22 * a31;
+  const b10 = a21 * a33 - a23 * a31;
+  const b11 = a22 * a33 - a23 * a32;
+  let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+  if (Math.abs(det) < 1e-10) return false;
+  det = 1 / det;
+  dst[d] = (a11 * b11 - a12 * b10 + a13 * b09) * det;
+  dst[d + 1] = (a02 * b10 - a01 * b11 - a03 * b09) * det;
+  dst[d + 2] = (a31 * b05 - a32 * b04 + a33 * b03) * det;
+  dst[d + 3] = (a22 * b04 - a21 * b05 - a23 * b03) * det;
+  dst[d + 4] = (a12 * b08 - a10 * b11 - a13 * b07) * det;
+  dst[d + 5] = (a00 * b11 - a02 * b08 + a03 * b07) * det;
+  dst[d + 6] = (a32 * b02 - a30 * b05 - a33 * b01) * det;
+  dst[d + 7] = (a20 * b05 - a22 * b02 + a23 * b01) * det;
+  dst[d + 8] = (a10 * b10 - a11 * b08 + a13 * b06) * det;
+  dst[d + 9] = (a01 * b08 - a00 * b10 - a03 * b06) * det;
+  dst[d + 10] = (a30 * b04 - a31 * b02 + a33 * b00) * det;
+  dst[d + 11] = (a21 * b02 - a20 * b04 - a23 * b00) * det;
+  dst[d + 12] = (a11 * b07 - a10 * b09 - a12 * b06) * det;
+  dst[d + 13] = (a00 * b09 - a01 * b07 + a02 * b06) * det;
+  dst[d + 14] = (a31 * b01 - a30 * b03 - a32 * b00) * det;
+  dst[d + 15] = (a20 * b03 - a21 * b01 + a22 * b00) * det;
+  return true;
+}
+
+/**
+ * Matrix that takes a bone-parented prop's local vertices into the skinned
+ * mesh's space, weighted entirely to `inverseBind` at `bindOffset`.
+ * @returns {Float32Array | null}
+ */
+export function rigidPropMeshMatrix(inverseBind, bindOffset, boneWorld, propWorld) {
+  const invBone = new Float32Array(16);
+  const invIbm = new Float32Array(16);
+  if (!mat4InvertTo(invBone, 0, boneWorld, 0)) return null;
+  if (!mat4InvertTo(invIbm, 0, inverseBind, bindOffset)) return null;
+  const local = new Float32Array(16);
+  const into = new Float32Array(16);
+  mat4MultiplyInto(local, 0, invBone, 0, propWorld, 0);
+  mat4MultiplyInto(into, 0, invIbm, 0, local, 0);
+  return into;
+}
+
+function accumulateSkin(boneMatrices, joints, weights, x, y, z, v, acc, normals) {
+  if (!joints || !weights) return;
+  const base = v * 4;
+  for (let k = 0; k < 4; k++) {
+    const w = weights[base + k];
+    if (!(w > 0)) continue;
+    const m = (joints[base + k] | 0) * 16;
+    if (m < 0 || m + 15 >= boneMatrices.length) continue;
+    if (normals) {
+      acc[0] += w * (boneMatrices[m] * x + boneMatrices[m + 4] * y + boneMatrices[m + 8] * z);
+      acc[1] += w * (boneMatrices[m + 1] * x + boneMatrices[m + 5] * y + boneMatrices[m + 9] * z);
+      acc[2] += w * (boneMatrices[m + 2] * x + boneMatrices[m + 6] * y + boneMatrices[m + 10] * z);
+    } else {
+      acc[0] += w * (boneMatrices[m] * x + boneMatrices[m + 4] * y + boneMatrices[m + 8] * z + boneMatrices[m + 12]);
+      acc[1] += w * (boneMatrices[m + 1] * x + boneMatrices[m + 5] * y + boneMatrices[m + 9] * z + boneMatrices[m + 13]);
+      acc[2] += w * (boneMatrices[m + 2] * x + boneMatrices[m + 6] * y + boneMatrices[m + 10] * z + boneMatrices[m + 14]);
+    }
+    acc[3] += w;
+  }
+}
+
+/**
+ * One skinning pass. `dst` is mesh-local: bone matrices already include inverse bind.
+ * Missing weights copy the bind vertex through.
+ */
+export function skinPositions(boneMatrices, joints, weights, src, dst = new Float32Array(src.length), joints1 = null, weights1 = null) {
+  const acc = [0, 0, 0, 0];
+  const vertCount = src.length / 3;
+  for (let v = 0; v < vertCount; v++) {
+    const x = src[v * 3];
+    const y = src[v * 3 + 1];
+    const z = src[v * 3 + 2];
+    acc[0] = acc[1] = acc[2] = acc[3] = 0;
+    accumulateSkin(boneMatrices, joints, weights, x, y, z, v, acc, false);
+    accumulateSkin(boneMatrices, joints1, weights1, x, y, z, v, acc, false);
+    const o = v * 3;
+    if (!(acc[3] > 0)) {
+      dst[o] = x;
+      dst[o + 1] = y;
+      dst[o + 2] = z;
+    } else {
+      dst[o] = acc[0];
+      dst[o + 1] = acc[1];
+      dst[o + 2] = acc[2];
+    }
+  }
+  return dst;
+}
+
+/** Weighted upper 3×3 of the skin matrices, then renormalize. */
+export function skinNormals(boneMatrices, joints, weights, src, dst = new Float32Array(src.length), joints1 = null, weights1 = null) {
+  const acc = [0, 0, 0, 0];
+  const vertCount = src.length / 3;
+  for (let v = 0; v < vertCount; v++) {
+    const x = src[v * 3];
+    const y = src[v * 3 + 1];
+    const z = src[v * 3 + 2];
+    acc[0] = acc[1] = acc[2] = acc[3] = 0;
+    accumulateSkin(boneMatrices, joints, weights, x, y, z, v, acc, true);
+    accumulateSkin(boneMatrices, joints1, weights1, x, y, z, v, acc, true);
+    const o = v * 3;
+    const len = Math.hypot(acc[0], acc[1], acc[2]);
+    if (!(acc[3] > 0) || !(len > 0)) {
+      dst[o] = x;
+      dst[o + 1] = y;
+      dst[o + 2] = z;
+    } else {
+      dst[o] = acc[0] / len;
+      dst[o + 1] = acc[1] / len;
+      dst[o + 2] = acc[2] / len;
+    }
+  }
+  return dst;
+}
+
+export function transformPointsByMat4(m, src, dst = new Float32Array(src.length)) {
+  for (let i = 0; i < src.length; i += 3) {
+    const x = src[i];
+    const y = src[i + 1];
+    const z = src[i + 2];
+    dst[i] = m[0] * x + m[4] * y + m[8] * z + m[12];
+    dst[i + 1] = m[1] * x + m[5] * y + m[9] * z + m[13];
+    dst[i + 2] = m[2] * x + m[6] * y + m[10] * z + m[14];
+  }
+  return dst;
+}
+
+/** Inverse-transpose of the mat4's upper 3×3, column-major 3×3, or null. */
+function mat3InvTranspose(m) {
+  const a = m[0], b = m[1], c = m[2];
+  const d = m[4], e = m[5], f = m[6];
+  const g = m[8], h = m[9], i = m[10];
+  const A = e * i - f * h;
+  const B = f * g - d * i;
+  const C = d * h - e * g;
+  const det = a * A + b * B + c * C;
+  if (Math.abs(det) < 1e-10) return null;
+  const inv = 1 / det;
+  // inverse, then transpose → columns of the inverse become rows, stored column-major
+  // inv row0 = (A, -(b*i-c*h), (b*f-c*e)) * inv
+  const i00 = A * inv;
+  const i01 = (c * h - b * i) * inv;
+  const i02 = (b * f - c * e) * inv;
+  const i10 = B * inv;
+  const i11 = (a * i - c * g) * inv;
+  const i12 = (c * d - a * f) * inv;
+  const i20 = C * inv;
+  const i21 = (b * g - a * h) * inv;
+  const i22 = (a * e - b * d) * inv;
+  return new Float32Array([
+    i00, i10, i20,
+    i01, i11, i21,
+    i02, i12, i22,
+  ]);
+}
+
+export function transformNormalsByMat4(m, src, dst = new Float32Array(src.length)) {
+  const n = mat3InvTranspose(m);
+  if (!n) return null;
+  for (let i = 0; i < src.length; i += 3) {
+    const x = src[i];
+    const y = src[i + 1];
+    const z = src[i + 2];
+    const nx = n[0] * x + n[3] * y + n[6] * z;
+    const ny = n[1] * x + n[4] * y + n[7] * z;
+    const nz = n[2] * x + n[5] * y + n[8] * z;
+    const len = Math.hypot(nx, ny, nz) || 1;
+    dst[i] = nx / len;
+    dst[i + 1] = ny / len;
+    dst[i + 2] = nz / len;
+  }
+  return dst;
+}
+
 function mat4MultiplyInto(dst, d, a, i, b, j) {
   const a0 = a[i], a1 = a[i + 1], a2 = a[i + 2], a3 = a[i + 3];
   const a4 = a[i + 4], a5 = a[i + 5], a6 = a[i + 6], a7 = a[i + 7];

@@ -153,7 +153,7 @@ export function stepXrRig(rig, ctx, frame, time) {
   const pose = frame.getViewerPose(ctx.referenceSpace);
   if (!pose) return;
   const head = poseHead(pose);
-  setXrEyeFromPose(pose.transform.matrix);
+  setXrEyeFromPose(pose.transform.matrix, pose.views);
   if (!rig.seeded) {
     ctx._referenceSpace = ctx.referenceSpace.getOffsetReferenceSpace(
       new XRRigidTransform(referenceOffset(head, rig.eye)),

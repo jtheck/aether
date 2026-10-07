@@ -129,6 +129,8 @@ import {
   DOT_DIAMETER_ALTERNATE_MUL,
   DOT_DIAMETER_FIRST_MUL,
   DOT_DIAMETER_LEAD_MUL,
+  headsetChipAxes,
+  chipScreenUpPixelsForDown,
 } from './healthBars.js';
 import { OWNER_TINTS, ownerTint, setLocalOwnerTint } from './ownerTints.js';
 import { CAMERA_CLOSE_SPAN, cameraZoomNormalized } from './cameraController.js';
@@ -568,5 +570,28 @@ describe('health chip bars', () => {
     const arrive = agoraFlipStyle(0.9);
     assert.equal(arrive.rgb, null);
     assert.ok(arrive.size > 0.5);
+  });
+});
+
+describe('headsetChipAxes', () => {
+  it('lays rows along the head right and lifts along the head up', () => {
+    // Head turned 90 degrees (facing +X) and pitched down 30 degrees.
+    const p = Math.PI / 6;
+    const wm = new Float32Array(16);
+    wm[0] = 0; wm[1] = 0; wm[2] = -1;
+    wm[4] = Math.sin(p); wm[5] = Math.cos(p); wm[6] = 0;
+    wm[8] = Math.cos(p); wm[9] = -Math.sin(p); wm[10] = 0;
+    wm[12] = 3; wm[13] = 40; wm[14] = -2; wm[15] = 1;
+    const axes = headsetChipAxes(wm);
+    assert.deepEqual(axes.eye, [3, 40, -2]);
+    assert.ok(Math.abs(axes.right[0]) < 1e-6 && Math.abs(axes.right[1] + 1) < 1e-6);
+    assert.ok(Math.abs(axes.up[1] - Math.cos(p)) < 1e-6);
+    assert.ok(Math.abs(axes.down - Math.sin(p)) < 1e-6);
+  });
+
+  it('keeps the desktop up-gap formula', () => {
+    for (const beta of [0.3, 0.82, 1.4]) {
+      assert.equal(chipScreenUpPixels(beta), chipScreenUpPixelsForDown(Math.cos(beta)));
+    }
   });
 });

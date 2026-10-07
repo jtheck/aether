@@ -685,8 +685,37 @@ export function chipScreenUpDir(alpha, beta) {
 /** Extra screen-up pixels: a base gap plus more when the camera looks down. */
 export function chipScreenUpPixels(beta) {
   const b = Number.isFinite(beta) ? beta : 0.82;
-  const down = Math.max(0, Math.cos(b));
-  return CHIP_SCREEN_UP_PX + CHIP_SCREEN_UP_TILT_PX * down;
+  return chipScreenUpPixelsForDown(Math.cos(b));
+}
+
+/** Same gap from how far the view points down (0 level, 1 straight down). */
+export function chipScreenUpPixelsForDown(down) {
+  return CHIP_SCREEN_UP_PX + CHIP_SCREEN_UP_TILT_PX * Math.max(0, down);
+}
+
+/**
+ * Chip layout axes for a headset pose (Lite left-handed world matrix).
+ * Right is the head's right, flattened so rows stay level when the head
+ * rolls. Up is the head's up, which is screen-up in the eye.
+ * @param {ArrayLike<number>} wm
+ */
+export function headsetChipAxes(wm) {
+  let rx = wm[0];
+  let rz = wm[2];
+  const rl = Math.hypot(rx, rz);
+  if (rl > 1e-5) {
+    rx /= rl;
+    rz /= rl;
+  } else {
+    rx = 1;
+    rz = 0;
+  }
+  return {
+    eye: [wm[12], wm[13], wm[14]],
+    right: [rx, rz],
+    up: [wm[4], wm[5], wm[6]],
+    down: Math.max(0, -wm[9]),
+  };
 }
 
 const RGB_GREEN = [0.12, 0.92, 0.2];
@@ -1309,17 +1338,36 @@ export function createHealthBars(engine, scene, opts = {}) {
     slot.active = false;
   }
 
+  /** Layout axes for this frame: orbit camera on the desktop, head pose in XR. */
+  let viewEye = null;
+  let viewRight = [1, 0];
+  let viewUp = chipScreenUpDir(0, 0.82);
+  let viewUpPx = chipScreenUpPixels(0.82);
+
   function cameraRight() {
-    const cam = scene?.camera;
-    if (!cam || typeof cam.alpha !== 'number') return [1, 0];
-    const a = cam.alpha;
-    return [-Math.sin(a), Math.cos(a)];
+    return viewRight;
   }
 
   function cameraEye() {
-    const wm = scene?.camera?.worldMatrix;
-    if (!wm) return null;
-    return [wm[12], wm[13], wm[14]];
+    return viewEye;
+  }
+
+  function readViewAxes(cam, headset) {
+    if (headset?.worldMatrix) {
+      const axes = headsetChipAxes(headset.worldMatrix);
+      viewEye = axes.eye;
+      viewRight = axes.right;
+      viewUp = axes.up;
+      viewUpPx = chipScreenUpPixelsForDown(axes.down);
+      return;
+    }
+    const wm = cam?.worldMatrix;
+    viewEye = wm ? [wm[12], wm[13], wm[14]] : null;
+    viewRight = cam && typeof cam.alpha === 'number'
+      ? [-Math.sin(cam.alpha), Math.cos(cam.alpha)]
+      : [1, 0];
+    viewUp = chipScreenUpDir(cam?.alpha ?? 0, cam?.beta ?? 0.82);
+    viewUpPx = chipScreenUpPixels(cam?.beta ?? 0.82);
   }
 
   /**
@@ -1327,15 +1375,12 @@ export function createHealthBars(engine, scene, opts = {}) {
    * view ray so terrain/meshes don't occlude them.
    */
   function placeChipAnchor(x, y, z) {
-    const cam = scene?.camera;
-    const a = cam?.alpha ?? 0;
-    const beta = cam?.beta ?? 0.82;
-    const [ux, uy, uz] = chipScreenUpDir(a, beta);
+    const [ux, uy, uz] = viewUp;
     const eye = cameraEye();
     const dist = eye
       ? Math.max(1e-3, Math.hypot(eye[0] - x, eye[1] - y, eye[2] - z))
       : 80;
-    const upW = worldSizeForScreenPx(chipScreenUpPixels(beta), dist, viewH, fov);
+    const upW = worldSizeForScreenPx(viewUpPx, dist, viewH, fov);
     const lx = x + ux * upW;
     const ly = y + uy * upW;
     const lz = z + uz * upW;
@@ -1375,8 +1420,14 @@ export function createHealthBars(engine, scene, opts = {}) {
       viewH = viewportHeight();
       viewW = viewportWidth();
       deviceH = engine?.canvas?.height > 1 ? engine.canvas.height : viewH;
-      const cam = scene?.camera;
-      viewProjection = cam && viewW > 1 && viewH > 1
+      // In XR, scene.camera is the shadow stand-in: its fov is widened for
+      // both eyes and its projection is not any screen. Chips take the
+      // desktop fov so they cover the same angle as on the monitor, and
+      // skip pixel-row snapping (there is no single pixel grid).
+      const headset = opts.getHeadsetView?.() ?? null;
+      const cam = headset ?? scene?.camera;
+      readViewAxes(cam, headset);
+      viewProjection = !headset && cam && viewW > 1 && viewH > 1
         ? getViewProjectionMatrix(cam, viewW / viewH)
         : null;
       const camFov = cam?.fov;
@@ -1424,8 +1475,7 @@ export function createHealthBars(engine, scene, opts = {}) {
       const filled = agora ? 0 : chipBarFilled(r, count, flags.hp);
       const ringAt = ringDotIndices(count);
 
-      const cam = scene?.camera;
-      const [ux, uy, uz] = chipScreenUpDir(cam?.alpha, cam?.beta);
+      const [ux, uy, uz] = viewUp;
 
       /**
        * @param {ReturnType<typeof makeSpriteState>} spr

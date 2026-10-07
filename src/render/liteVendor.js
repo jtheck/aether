@@ -96,6 +96,8 @@ export {
   enableStandardVertexColors,
   enableXrCompatibleAdapter,
   isXrSessionSupported,
+  isWebGpuXrSupported,
+  isWebXrPresent,
   enterXr,
   exitXr,
   pointerSelection,

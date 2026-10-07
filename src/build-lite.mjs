@@ -26,7 +26,7 @@ const LITE_PATCHES = [
   {
     // Cascade index is compared against scene.view of whichever camera draws
     // the color pass. In XR that is the eye, while the maps are fitted to the
-    // orbit stand-in on scene.camera. The eye's near slice then samples an
+    // two-eye stand-in on scene.camera. The eye's near slice then samples an
     // empty map and the ground under the headset comes back fully lit.
     file: /csm-shadow-task-hooks\.js$/,
     from: 'import { _cameraChangeKey, getEffectiveAspectRatio, getViewProjectionMatrix } from "../camera/camera.js";',
@@ -86,6 +86,32 @@ const LITE_PATCHES = [
     from: 'const textureLevel = (features & 127) !== 0 ? 1 : 0;',
     to: 'const textureLevel = (features & 127) !== 0 ? (mat.diffuseLevel ?? 1) : 0;',
   },
+  {
+    // The XR frame only runs scene._update and the eye tasks. The shadow
+    // task lives in the canvas frame graph, which is stopped in XR, so the
+    // maps froze on the last desktop frame.
+    file: /xr-session\.js$/,
+    from: 'ctx.scene._update();',
+    to: 'ctx.scene._update(); for (const t of ctx.scene._frameGraph._tasks) if (t.name === "shadow") t.execute?.();',
+  },
+  {
+    // Shader-material meshes keep one system UBO shared by both eye tasks,
+    // written with queue.writeBuffer. In one submit the last eye's matrices
+    // win for both eyes. Submit per eye so each sees its own write.
+    file: /xr-session\.js$/,
+    from: 'unit.task.execute?.();',
+    to: 'unit.task.execute?.(); if (i < views.length - 1) { eng._device.queue.submit([eng._currentEncoder.finish()]); eng._currentEncoder = eng._device.createCommandEncoder({ label: "xr-eye" }); }',
+  },
+  {
+    file: /xr-session\.js$/,
+    from: 'eng._device.queue.submit([encoder.finish()]);',
+    to: 'const lastEncoder = eng._currentEncoder; eng._device.queue.submit([lastEncoder.finish()]);',
+  },
+  {
+    file: /xr-session\.js$/,
+    from: 'eng._gpuTaskTimerResolve?.(encoder);',
+    to: 'eng._gpuTaskTimerResolve?.(lastEncoder);',
+  },
 ];
 
 function liteGameplayPatches() {
@@ -93,7 +119,7 @@ function liteGameplayPatches() {
   return {
     name: 'aether-lite-patches',
     setup(build) {
-      build.onLoad({ filter: /csm-shadow-task-hooks\.js$|csm-shadow-fragment-core\.js$|csm-directional-shadow-generator\.js$|standard-group-builder\.js$|standard-template\.js$|standard-renderable\.js$/ }, (args) => {
+      build.onLoad({ filter: /csm-shadow-task-hooks\.js$|csm-shadow-fragment-core\.js$|csm-directional-shadow-generator\.js$|standard-group-builder\.js$|standard-template\.js$|standard-renderable\.js$|xr-session\.js$/ }, (args) => {
         const patches = LITE_PATCHES.filter((p) => p.file.test(args.path));
         if (!patches.length) return null;
         let src = readFileSync(args.path, 'utf8');

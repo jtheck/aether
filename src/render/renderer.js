@@ -32,7 +32,7 @@ import {
   setPbrUnlit,
 } from '../vendor/lite/liteVendor.js';
 import { USE_GPU_PICK } from './pickMode.js';
-import { writeAnchoredOrbit, xrEye, xrShadowDepth } from './xrEye.js';
+import { xrEye, xrFitFov, xrShadowCover } from './xrEye.js';
 import { projectWorldToCanvas } from './screenProject.js';
 import { getUnitDef } from '../sim/unitTypes.js';
 import { GATHER_ACT } from '../sim/gather.js';
@@ -825,18 +825,19 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   // the environment ring and even parts of the board at wide zoom levels.
   camera.farPlane = 40000;
   scene.camera = camera;
-  // Cascades are fitted to scene.camera's look-at spot, and the cascade index
-  // is taken from that same view (see the fitView patch in build-lite). The
-  // desktop camera orbits a point on the table. This stand-in does the same
-  // orbit around the ground under the headset. The headset view stays the
-  // picture you see; it does not pick the slice.
+  // Cascades are fitted to scene.camera, and the cascade index is taken from
+  // that same view (see the fitView patch in build-lite). In the headset this
+  // stand-in sits on the head with a frustum wide enough for both eyes. Its
+  // fov, near plane and shadow distance must hold still while the head does:
+  // any change resizes the cascades and every shadow on the board swims.
+  const XR_FIT_NEAR = 0.25;
   const xrShadowWorld = new Float32Array(16);
   let xrShadowVer = 1;
   const xrFit = {
     fov: camera.fov,
-    nearPlane: camera.nearPlane,
+    nearPlane: XR_FIT_NEAR,
     farPlane: camera.farPlane,
-    _radius: camera.radius,
+    _cover: 0,
     get worldMatrix() {
       return xrShadowWorld;
     },
@@ -854,19 +855,20 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   function poseXrShadowCamera() {
     const xr = xrEye();
     if (!xr) return;
-    const gy = groundYAt(xr.x, xr.z);
-    xrFit.fov = camera.fov;
+    xrShadowWorld.set(xr.worldMatrix);
+    const target = scene.surface?.scRT;
+    const w = target?._width || canvas.width || 1;
+    const h = target?._height || canvas.height || 1;
+    const fov = xrFitFov(w / h);
+    if (xrFit.fov !== fov) xrFit.fov = fov;
     xrFit.farPlane = camera.farPlane;
-    xrFit._radius = writeAnchoredOrbit(
-      xrShadowWorld,
-      xr.x,
-      xr.y,
-      xr.z,
-      gy,
-      camera.alpha ?? -Math.PI / 2.1,
-      camera.beta ?? Math.PI / 3.2,
+    const height = xrViewRadius(xr);
+    const half = fieldSnap ? worldHalfFFromField(fieldSnap) : tableHalfF;
+    xrFit._cover = xrShadowCover(
+      height,
+      Math.max(half * 2.75, 80),
+      xrFit._cover,
     );
-    xrFit.nearPlane = xrShadowDepth(xrFit._radius).near;
     xrShadowVer += 1;
     xrFit._viewVer = -1;
     xrFit._vpVer = -1;
@@ -1093,20 +1095,25 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     return { x: p?.x ?? 0, y: p?.y ?? 0, z: p?.z ?? 0 };
   }
 
-  /** Distance that drives unit size. In the headset this is how far the head
-   *  is from the orbit target, not the desktop camera's frozen radius. */
+  /** Head height over the ground below it. The headset stands in for the
+   *  desktop zoom with this, the same distance the shadow range follows. */
+  function xrViewRadius(xr) {
+    return Math.max(1, xr.y - groundYAt(xr.x, xr.z));
+  }
+
+  /** Distance that drives unit size: orbit radius on the desktop, head height in XR. */
   function viewDistance() {
     const xr = xrEye();
-    if (xr) return Math.hypot(xr.x, xr.y, xr.z);
+    if (xr) return xrViewRadius(xr);
     return camera?.radius;
   }
 
   /** Orbit camera on the desktop. In XR, the same readers see the headset:
-   *  position, worldMatrix, and radius (distance from the board center). */
+   *  position, worldMatrix, and radius (head height over the ground). */
   function viewCamera() {
     const xr = xrEye();
     if (!xr) return camera;
-    const radius = Math.hypot(xr.x, xr.y, xr.z);
+    const radius = xrViewRadius(xr);
     return {
       worldMatrix: xr.worldMatrix,
       position: xr,
@@ -1667,6 +1674,17 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     capacity: HEALTH_BAR_CAPACITY,
     getViewportHeight: () => canvasCoords(0, 0).height,
     getViewportWidth: () => canvasCoords(0, 0).width,
+    getHeadsetView() {
+      const xr = xrEye();
+      if (!xr) return null;
+      return {
+        worldMatrix: xr.worldMatrix,
+        fov: camera.fov,
+        radius: xrViewRadius(xr),
+        lowerRadiusLimit: camera.lowerRadiusLimit,
+        upperRadiusLimit: camera.upperRadiusLimit,
+      };
+    },
     emit: (init) => particles.emit(init),
     groundYAt,
   });
@@ -2579,14 +2597,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     const cfg = shadowGen?._config;
     if (!cfg) return;
     const half = fieldSnap ? worldHalfFFromField(fieldSnap) : tableHalfF;
-    const xr = xrEye();
-    const radius = xr ? xrFit._radius : camera?.radius;
+    const radius = camera?.radius;
     const look = Number.isFinite(radius) ? radius * 1.45 : 0;
-    // Headset: the pole is short when you are down on the board. A map-wide
-    // range spends the sharp slices on the air in front of the pole and leaves
-    // the ground in the coarse last slice.
-    const cover = xr
-      ? xrShadowDepth(radius).far
+    // Headset: the range follows head height in coarse steps (xrShadowCover),
+    // so the near slice sharpens as you drop toward the board.
+    const cover = xrEye() && xrFit._cover > 0
+      ? xrFit._cover
       : Math.max(half * 2.75, look, 80);
     if (cfg._shadowMaxZ !== cover) cfg._shadowMaxZ = cover;
   }
@@ -2679,6 +2695,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (xrEye()) {
       poseXrShadowCamera();
       scene.camera = xrFit;
+      syncShadowCoverage();
     } else if (scene.camera !== camera) scene.camera = camera;
     // Celestial spin demo (no-op unless toggled). Uses wall-clock delta so the
     // sun keeps sweeping even when the sim is paused.
@@ -4136,7 +4153,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     releaseHeadsetCamera() {
+      xrFit._cover = 0;
       if (scene.camera !== camera) scene.camera = camera;
+      syncShadowCoverage();
     },
 
     /** Resolves when boot asset work is done and input should feel smooth. */

@@ -10,7 +10,7 @@ import {
   invalidateRenderBundles,
   startEngine,
   getViewProjectionMatrix,
-  mat4Invert,
+  invertMat4,
   createMeshFromData,
   createStandardMaterial,
 } from '../vendor/lite/liteVendor.js';
@@ -175,7 +175,7 @@ function pickGround(clientX, clientY) {
   const w = rect.width || 1;
   const h = rect.height || 1;
   const vp = getViewProjectionMatrix(camera, w / h);
-  const inv = mat4Invert(vp);
+  const inv = invertMat4(vp);
   if (!inv) return null;
   const ndcX = (2 * (clientX - rect.left)) / w - 1;
   const ndcY = 1 - (2 * (clientY - rect.top)) / h;

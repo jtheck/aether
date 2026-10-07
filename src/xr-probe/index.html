@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lite XR probe</title>
+  <script type="importmap">
+  {
+    "imports": {
+      "@babylonjs/lite": "../node_modules/@babylonjs/lite/lib/index.js"
+    }
+  }
+  </script>
+  <style>
+    html, body { margin: 0; height: 100%; background: #111; color: #eee; font: 14px/1.4 system-ui, sans-serif; }
+    canvas { display: block; width: 100%; height: 100%; }
+    #hud { position: fixed; left: 12px; top: 12px; max-width: 36rem; }
+    button { font: inherit; padding: 0.4rem 0.8rem; }
+    pre { white-space: pre-wrap; margin: 0.5rem 0 0; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div id="hud">
+    <button id="enter" type="button" disabled>Enter XR</button>
+    <pre id="log"></pre>
+  </div>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

@@ -103,14 +103,18 @@ function el(tag, props = {}) {
     querySelectorAll(sel) {
       const out = [];
       const wantBtn = sel.includes('button');
+      const wantSummary = sel.includes('summary');
       const wantInput = sel.includes('input');
       const wantSelect = sel.includes('select');
       const wantSettings = sel.includes('#settings_b');
+      const wantHelp = sel.includes('#help_b');
       const walk = (n) => {
         if (wantBtn && n.tagName === 'BUTTON') out.push(n);
+        if (wantSummary && n.tagName === 'SUMMARY') out.push(n);
         if (wantInput && n.tagName === 'INPUT') out.push(n);
         if (wantSelect && n.tagName === 'SELECT') out.push(n);
         if (wantSettings && n.id === 'settings_b') out.push(n);
+        if (wantHelp && n.id === 'help_b') out.push(n);
         if (sel === '.page.is-active' && n.classList.contains('page') && n.classList.contains('is-active')) {
           out.push(n);
         }
@@ -746,6 +750,33 @@ describe('createGamepadAdapter', () => {
     pad.tick();
     assert.equal(side.classList.contains('is-open'), false);
     assert.ok(menuBtn);
+    pad.dispose();
+  });
+
+  it('B closes the help popup and leaves the side menu open', () => {
+    const { doc, side } = menuDoc();
+    const help = el('div', { id: 'help_pop', hidden: false });
+    const close = el('button', { id: 'help_close' });
+    attach(help, close);
+    close.click = () => { help.hidden = true; };
+    side.classList.add('is-open');
+    const inner = doc.getElementById;
+    doc.getElementById = (id) => {
+      if (id === 'help_pop') return help;
+      if (id === 'help_close') return close;
+      return inner(id);
+    };
+    const b = [];
+    b[PAD.B] = btn(true);
+    const pad = createGamepadAdapter({
+      camera: {},
+      root: doc,
+      getGamepads: () => [stdPad({ buttons: b })],
+      autoStart: false,
+    });
+    pad.tick();
+    assert.equal(help.hidden, true);
+    assert.equal(side.classList.contains('is-open'), true);
     pad.dispose();
   });
 

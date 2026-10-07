@@ -80,7 +80,7 @@ createServer(async (req, res) => {
   try {
     let path = decodeURIComponent((req.url || '/').split('?')[0]);
     // Trailing slash required so relative script/css URLs resolve under /axiom/ and /forge/.
-    if (path === '/axiom' || path === '/forge') {
+    if (path === '/axiom' || path === '/forge' || path === '/xr-probe') {
       res.writeHead(302, { Location: `${path}/` });
       res.end();
       return;
@@ -88,6 +88,7 @@ createServer(async (req, res) => {
     if (path === '/') path = '/index.html';
     if (path === '/axiom/') path = '/axiom/index.html';
     if (path === '/forge/') path = '/forge/index.html';
+    if (path === '/xr-probe/') path = '/xr-probe/index.html';
     const file = resolvePath(path.replace(/^\//, ''));
     const body = await readFile(file);
     res.writeHead(200, {
@@ -105,5 +106,6 @@ createServer(async (req, res) => {
   console.log(`serving src/ at http://localhost:${PORT}`);
   console.log(`axiom soft-landing at http://localhost:${PORT}/axiom/`);
   console.log(`forge editor at http://localhost:${PORT}/forge/`);
+  console.log(`lite XR probe at http://localhost:${PORT}/xr-probe/`);
   console.log('edit app/ sim/ render/ — refresh browser, no rebuild');
 });

@@ -20,8 +20,8 @@ const REMNANT = 2;
 const LANDING_SITES = 3;
 /** Hard cap across shots + chew sites so a saturated blob cannot fill the particle pool. */
 const MAX_INSECTS = 200;
-/** Tighter than particle size-cull (~660): far swarms stay in sync, they just do not emit. */
-const CULL_RANGE = 280;
+/** Match PARTICLE_CULL_MAX_RANGE — far swarms stay in sync, they just do not emit. */
+const CULL_RANGE = 200;
 
 const BODY = [
   [0.46, 0.5, 0.14, 0.92],

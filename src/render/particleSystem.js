@@ -23,11 +23,14 @@ export const PARTICLE_INITIAL_CAPACITY = 8192;
 /** Absolute ceiling so a runaway emitter cannot OOM. */
 export const PARTICLE_HARD_MAX = 262144;
 /**
- * Size-aware camera cull: keep if dist ≤ max(MIN, size × K).
- * Tiny staff sparks (~0.16) fall off near MIN; fireball-scale (~2–8+) keep far.
- * K set so fireball-sized FX reach ~3× the prior mid-tune range.
+ * Camera-distance cull. Closest play zoom is radius 50, so the unit under the
+ * crosshair is ~50 away and the near melee sits inside MAX. Past that the
+ * sprites are specks — drop them instead of filling the billboard pool.
+ * Size still stretches tiny sparks up toward MAX; nothing outlives the cap.
+ * FX tier `distance` in settings.js should stay ≤ this cap.
  */
-export const PARTICLE_CULL_MIN_RANGE = 220;
+export const PARTICLE_CULL_MIN_RANGE = 80;
+export const PARTICLE_CULL_MAX_RANGE = 200;
 export const PARTICLE_CULL_SIZE_K = 660;
 
 function atlasFromAlphaDisk(engine, soft) {
@@ -171,7 +174,8 @@ async function atlasFromPuffSprite(engine) {
 
 function cullRange(size, scale = 1) {
   const s = Math.max(0.05, scale);
-  return Math.max(PARTICLE_CULL_MIN_RANGE * s, size * PARTICLE_CULL_SIZE_K * s);
+  const bySize = Math.max(PARTICLE_CULL_MIN_RANGE, size * PARTICLE_CULL_SIZE_K);
+  return Math.min(PARTICLE_CULL_MAX_RANGE, bySize) * s;
 }
 
 /**

@@ -43,6 +43,11 @@ export function createLiteExplorerToggle(ctx) {
             StandardToneMapping: lite.StandardToneMapping,
             AcesToneMapping: lite.AcesToneMapping,
             NeutralToneMapping: lite.NeutralToneMapping,
+            isPbrMaterial: lite.isPbrMaterial,
+            isStandardMaterial: lite.isStandardMaterial,
+            getMeshGeometry: lite.getMeshGeometry,
+            getMaterialFamily: lite.getMaterialFamily,
+            getViewProjectionMatrix: lite.getViewProjectionMatrix,
           },
         },
         {

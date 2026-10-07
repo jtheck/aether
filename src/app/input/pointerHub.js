@@ -202,6 +202,8 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
 
   function onKeyDown(e) {
     if (!syncActive().active) return;
+    const help = document.getElementById('help_pop');
+    if (help && !help.hidden) return;
     camera.handleKeyDown(e);
   }
 

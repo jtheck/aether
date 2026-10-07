@@ -76,6 +76,15 @@ import { ownerTint, setLocalOwnerTint, setOwnerTints } from '../render/ownerTint
 import { sceneTeamRgb } from '../render/teamColor.js';
 import { TECH, TECH_BY_ID } from '../sim/tech.js';
 import { createRenderer } from '../render/renderer.js';
+import {
+  enableXrCompatibleAdapter,
+  enterXr,
+  exitXr,
+  isXrSessionSupported,
+  pointerSelection,
+} from '../vendor/lite/liteVendor.js';
+import { createXrRig, stepXrRig } from './xrRig.js';
+import { clearXrEye } from '../render/xrEye.js';
 import { rimKeyForBuildingType, sharedRimKey } from '../render/workRadiusRings.js';
 import { createFogOfWar } from '../render/fogOfWar.js';
 import { shareVisionOwnersFromCfg } from '../render/visionShare.js';
@@ -522,7 +531,59 @@ function shouldBootLoadingScreenMatch(bootCfg) {
   return true;
 }
 
+let matchXr = null;
+
+function paintXrButton(on) {
+  const button = document.getElementById('xr_button');
+  if (!button) return;
+  button.classList.toggle('is-on', on);
+  button.title = on ? 'Exit XR' : 'Enter XR';
+  button.setAttribute('aria-pressed', on ? 'true' : 'false');
+  button.setAttribute('aria-label', on ? 'Exit XR' : 'Enter XR');
+}
+
+async function toggleMatchXr(renderer) {
+  if (matchXr) {
+    const ctx = matchXr;
+    matchXr = null;
+    clearXrEye();
+    renderer.releaseHeadsetCamera?.();
+    paintXrButton(false);
+    await exitXr(ctx);
+    return;
+  }
+  const cam = renderer.camera.worldMatrix;
+  const eye = [cam[12], cam[13], cam[14]];
+  const reach = Math.max(120, Math.hypot(eye[0], eye[1], eye[2]));
+  const rig = createXrRig(eye, {
+    floor: (x, z) => renderer.groundHeight(x, z),
+    clearance: 6,
+    maxY: Math.max(eye[1], renderer.camera.upperRadiusLimit ?? eye[1]),
+    maxRange: renderer.camera.upperRadiusLimit ?? Math.hypot(eye[0], eye[2]),
+  });
+  matchXr = await enterXr(renderer.scene, {
+    depthNear: 0.08,
+    // Sky dome radius is 24000. A short far plane clips it to flat clear color.
+    depthFar: renderer.camera.farPlane || 40000,
+    features: [pointerSelection({
+      maxLength: reach,
+      laserThickness: 0.08,
+      cursorSize: 0.45,
+      enableOnAllControllers: true,
+    })],
+    onFrame: (ctx, frame, time) => stepXrRig(rig, ctx, frame, time),
+    onEnd: () => {
+      matchXr = null;
+      clearXrEye();
+      renderer.releaseHeadsetCamera?.();
+      paintXrButton(false);
+    },
+  });
+  paintXrButton(true);
+}
+
 async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide = 0, kothShard, solo = false }) {
+  const xrSupportPromise = isXrSessionSupported('immersive-vr');
   const skirmish = bootCfg.mode === 'skirmish';
   let kothLobbyUi = { refresh() {} };
   let lobbyUi = { refresh() {} };
@@ -592,6 +653,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   const bootAaEnabled = resolveAaEnabled();
   const bootLocalSkins = localSelectedSkins();
   setLocalHudSkins(bootLocalSkins);
+  const xrSupported = await xrSupportPromise;
+  if (xrSupported) enableXrCompatibleAdapter();
   const renderer = await createRenderer(canvas, count, {
     shadowQuality: shadowTier(bootShadowMode),
     fxMode: bootFxMode,
@@ -897,6 +960,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     },
     getHudLocked: () => screenshotHudRef.current?.isLocked() ?? false,
     setHudLocked: (on) => screenshotHudRef.current?.setLocked(on),
+    xrSupported,
+    onToggleXr: () => toggleMatchXr(renderer),
   });
   const liteExplorer = createLiteExplorerToggle({
     engine: renderer.engine,
@@ -2923,6 +2988,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   screenshotHudRef.current = screenshotHud;
 
   window.addEventListener('keydown', (e) => {
+    if (sideMenu.isHelpOpen?.() && e.code !== 'Escape') {
+      e.preventDefault();
+      return;
+    }
     if (inputApi.handleControlGroupKeyDown?.(e)) return;
     if (e.code === 'Space') {
       if (isCameraFollowTypingTarget(document.activeElement)) return;
@@ -2956,6 +3025,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     if (e.code === 'Escape') {
       e.preventDefault();
+      if (sideMenu.closeHelp?.()) return;
       if (screenshotHud.isHidden()) return;
       if (placingType) {
         inputApi.cancelPlacement?.();
@@ -3245,6 +3315,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   const CORPSE_COMPACT_FRACTION = 0.08;
   const CORPSE_COMPACT_MS = 1000;
   let lastCorpseCompact = 0;
+  // Compact / unmapped rebuild reassigns thin-instance slots and does not move
+  // matrices with them. Doing that after the pose write draws one frame from the
+  // old slot — flyers drop to a zeroed corpse matrix, everyone else hitches.
+  // Arm it here and run it at the start of the next frame, before poses.
+  let remapBeforePose = false;
   let lastUnitZoomS = 1;
   /** Reused per-frame: selected living unit ids (health-bar / HUD order). */
   const selUnitIds = [];
@@ -3402,11 +3477,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
     if (renderer.consumePoseResync?.()) {
       renderEntityCount = syncDrawnEntities();
+      remapBeforePose = false;
     }
     if (n !== renderEntityCount) {
       renderEntityCount = n;
       renderer.setCount(n);
       syncDrawnEntities();
+      remapBeforePose = false;
+    } else if (remapBeforePose) {
+      remapBeforePose = false;
+      renderEntityCount = syncDrawnEntities();
+      colorsDirty = true;
     }
     // Apply lob flight snapshot before drawing so loft/trail match this frame.
     if (!session.resetting) {
@@ -3994,7 +4075,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     if (drawStats.unmapped > 0 && performance.now() - lastUnmappedRebuild > 400) {
       lastUnmappedRebuild = performance.now();
-      renderEntityCount = syncDrawnEntities();
+      remapBeforePose = true;
     } else if (corpseCompactDue({
       count: n,
       fadedCorpses: corpses,
@@ -4006,7 +4087,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       minIntervalMs: CORPSE_COMPACT_MS,
     })) {
       lastCorpseCompact = performance.now();
-      renderEntityCount = syncDrawnEntities();
+      remapBeforePose = true;
     }
     if (colorsDirty) renderer.setColors(colors);
     if (renderer.getPickHitboxesVisible?.()) {

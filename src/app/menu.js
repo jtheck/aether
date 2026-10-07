@@ -41,6 +41,8 @@ import {
   toggleFullscreen,
   tryExitFullscreen,
 } from './fullscreen.js';
+import { blowGraffiti } from './graffitiPuff.js';
+import { mountHelpRoster } from './helpRoster.js';
 
 /**
  * @param {object} opts
@@ -59,6 +61,8 @@ import {
  * @param {() => unknown} [opts.onUnitSkinsChange]
  * @param {() => boolean} [opts.getHudLocked]
  * @param {(on: boolean) => unknown} [opts.setHudLocked]
+ * @param {boolean} [opts.xrSupported]
+ * @param {() => unknown} [opts.onToggleXr]
  */
 export function setupMenu({
   renderer,
@@ -70,6 +74,8 @@ export function setupMenu({
   onUnitSkinsChange,
   getHudLocked,
   setHudLocked,
+  xrSupported = false,
+  onToggleXr,
 }) {
   // Shadow dimensions are locked in at renderer construction, so anything other
   // than the tier we booted with only takes effect on reload. MSAA sample count
@@ -119,6 +125,19 @@ export function setupMenu({
   const menuMatchLeave = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#menu-match-leave'));
   const lobbyDrawerToggles = [...drawer.querySelectorAll('.lobby-drawer-toggle, .lobby-create')];
   const gear = /** @type {HTMLElement} */ (drawer.querySelector('#settings_b'));
+  const xrButton = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#xr_button'));
+  if (xrButton) {
+    xrButton.hidden = !xrSupported;
+    xrButton.addEventListener('click', () => {
+      Promise.resolve(onToggleXr?.()).catch((err) => {
+        console.warn('[xr] session failed', err);
+        xrButton.classList.remove('is-on');
+        xrButton.title = 'Enter XR';
+        xrButton.setAttribute('aria-pressed', 'false');
+        xrButton.setAttribute('aria-label', 'Enter XR');
+      });
+    });
+  }
   const exitBtn = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#fullscreen_exit_b'));
 
   function showPage(name) {
@@ -335,6 +354,29 @@ export function setupMenu({
     return drawer.querySelector('.page.is-active')?.dataset.page ?? 'main';
   }
 
+  const helpBtn = /** @type {HTMLElement | null} */ (drawer.querySelector('#help_b'));
+  const helpPop = /** @type {HTMLElement | null} */ (document.getElementById('help_pop'));
+  const helpClose = /** @type {HTMLButtonElement | null} */ (document.getElementById('help_close'));
+
+  function setHelpOpen(open, restoreFocus = false) {
+    if (!helpPop) return;
+    if (helpPop.hidden === !open) return;
+    helpPop.hidden = !open;
+    helpBtn?.classList.toggle('is-on', open);
+    helpBtn?.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) {
+      helpClose?.focus();
+      return;
+    }
+    if (restoreFocus && drawer.classList.contains('is-open')) helpBtn?.focus();
+  }
+
+  function closeHelp() {
+    if (!helpPop || helpPop.hidden) return false;
+    setHelpOpen(false, true);
+    return true;
+  }
+
   function setOpen(open) {
     drawer.classList.toggle('is-open', open);
     button.classList.toggle('is-open', open);
@@ -342,6 +384,7 @@ export function setupMenu({
     button.setAttribute('aria-expanded', open ? 'true' : 'false');
     button.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
     button.title = open ? 'Close' : 'Menu';
+    if (!open) setHelpOpen(false);
     if (open) syncFromState();
   }
 
@@ -357,11 +400,15 @@ export function setupMenu({
   }
 
   const graffiti = document.getElementById('graffiti_b');
-  graffiti?.addEventListener('click', () => openMain());
+  const pressGraffiti = () => {
+    if (graffiti instanceof HTMLImageElement) blowGraffiti(graffiti);
+    openMain();
+  };
+  graffiti?.addEventListener('click', pressGraffiti);
   graffiti?.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
     e.preventDefault();
-    openMain();
+    pressGraffiti();
   });
   button.addEventListener('click', () => setOpen(!isOpen()));
   button.addEventListener('keydown', (e) => {
@@ -371,10 +418,22 @@ export function setupMenu({
     }
   });
   gear.addEventListener('click', () => {
+    setHelpOpen(false);
     const onSettings = activePage() === 'settings';
     showPage(onSettings ? 'main' : 'settings');
     if (!onSettings) syncFromState();
   });
+  helpBtn?.addEventListener('click', () => setHelpOpen(!!helpPop?.hidden));
+  helpBtn?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    helpBtn.click();
+  });
+  helpClose?.addEventListener('click', () => closeHelp());
+  helpPop?.addEventListener('click', (e) => {
+    if (e.target === helpPop) closeHelp();
+  });
+  if (helpPop) mountHelpRoster(helpPop);
   const steamStoreLink = drawer.querySelector('#steam_store_a');
   if (steamStoreLink && aetherSteam.isAvailable()) steamStoreLink.hidden = true;
   const forgeLink = drawer.querySelector('#forge_editor_a');
@@ -395,9 +454,14 @@ export function setupMenu({
     close: () => setOpen(false),
     openMain,
     isOpen,
-    /** Escape: open menu → settings → try leave F11 / fullscreen. */
+    closeHelp,
+    isHelpOpen() {
+      return !!helpPop && !helpPop.hidden;
+    },
+    /** Escape: help card, then open menu → settings → try leave F11 / fullscreen. */
     async handleEscape() {
       if (button.hidden) return false;
+      if (closeHelp()) return true;
       const step = escapeMenuStep({ menuOpen: isOpen(), page: activePage() });
       if (step === 'open-menu') {
         openMain();

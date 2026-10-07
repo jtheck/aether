@@ -38,8 +38,8 @@
     "package": "node package.mjs"
   },
   "dependencies": {
-    "@babylonjs/lite": "1.23.0",
-    "babylon-lite-explorer": "^0.4.1",
+    "@babylonjs/lite": "1.33.0",
+    "babylon-lite-explorer": "0.6.0",
     "esbuild": "^0.28.1",
     "howler": "^2.2.4",
     "javascript-obfuscator": "^4.1.1"

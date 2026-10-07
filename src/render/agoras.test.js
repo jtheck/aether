@@ -13,6 +13,7 @@ import {
   agoraFlagDisintegratePose,
   agoraFlagDrawPose,
   agoraFlagSlamPose,
+  flagScaleForDist,
   emitAgoraFlagDisintegrate,
   emitAgoraFlagSlam,
   stepAgoraFlagAct,
@@ -90,6 +91,19 @@ describe('agora ownership flags', () => {
     }, 800);
     assert.equal(stay.mode, AGORA_FLAG_PLANTED);
     assert.equal(stay.fx, null);
+  });
+
+  it('eases flag scale with distance instead of matching it', () => {
+    const mid = flagScaleForDist(110);
+    const near = flagScaleForDist(55);
+    const far = flagScaleForDist(220);
+    assert.ok(Math.abs(mid - 2.15) < 1e-6);
+    assert.ok(near > 2.15 * 0.5);
+    assert.ok(near < mid);
+    assert.ok(far < 2.15 * 2);
+    assert.ok(far > mid);
+    assert.ok(flagScaleForDist(1) >= 1.35);
+    assert.ok(flagScaleForDist(4000) <= 3.4);
   });
 
   it('stops on the deck instead of squashing through it', () => {

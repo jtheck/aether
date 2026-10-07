@@ -38,7 +38,7 @@ export const FX_LABELS = ['Off', 'Low', 'Med', 'Full'];
 
 /**
  * hardMax: particle pool ceiling (GPU billboard buffers still ratchet up to peak).
- * distance: camera cull for continuous FX (socket fire, sparkles) — independent of scenery LOD.
+ * distance: camera cull for continuous FX (socket fire, sparkles). Stay ≤ PARTICLE_CULL_MAX_RANGE.
  * emitChance: keep-probability for continuous emitters (combat bursts stay full).
  * cullRangeScale: tightens size-aware particle camera cull.
  */
@@ -61,7 +61,7 @@ export const FX_TIERS = [
     groundFireIntervalMs: 140,
     sparkleIntervalMs: 160,
     emitChance: 0.4,
-    distance: 380,
+    distance: 110,
     cullRangeScale: 0.55,
     socketFire: true,
   },
@@ -72,7 +72,7 @@ export const FX_TIERS = [
     groundFireIntervalMs: 80,
     sparkleIntervalMs: 100,
     emitChance: 0.7,
-    distance: 650,
+    distance: 150,
     cullRangeScale: 0.75,
     socketFire: true,
   },
@@ -83,7 +83,7 @@ export const FX_TIERS = [
     groundFireIntervalMs: 55,
     sparkleIntervalMs: 70,
     emitChance: 1,
-    distance: 900,
+    distance: 200,
     cullRangeScale: 1,
     socketFire: true,
   },

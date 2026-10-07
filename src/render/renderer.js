@@ -23,7 +23,7 @@ import {
   registerSceneWithShadowSupport,
   startEngine,
   getViewProjectionMatrix,
-  mat4Invert,
+  invertMat4,
   loadFont,
   createCsmDirectionalShadowGenerator,
   setShadowTaskCasterMeshes,
@@ -32,6 +32,7 @@ import {
   setPbrUnlit,
 } from '../vendor/lite/liteVendor.js';
 import { USE_GPU_PICK } from './pickMode.js';
+import { writeAnchoredOrbit, xrEye, xrShadowDepth } from './xrEye.js';
 import { projectWorldToCanvas } from './screenProject.js';
 import { getUnitDef } from '../sim/unitTypes.js';
 import { GATHER_ACT } from '../sim/gather.js';
@@ -161,7 +162,7 @@ function matVec4(m, x, y, z, w) {
 }
 
 function pickingRay(canvasX, canvasY, vp, width, height) {
-  const inv = mat4Invert(vp);
+  const inv = invertMat4(vp);
   if (!inv) return null;
   const ndcX = (2 * canvasX) / width - 1;
   const ndcY = 1 - (2 * canvasY) / height;
@@ -824,6 +825,53 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   // the environment ring and even parts of the board at wide zoom levels.
   camera.farPlane = 40000;
   scene.camera = camera;
+  // Cascades are fitted to scene.camera's look-at spot, and the cascade index
+  // is taken from that same view (see the fitView patch in build-lite). The
+  // desktop camera orbits a point on the table. This stand-in does the same
+  // orbit around the ground under the headset. The headset view stays the
+  // picture you see; it does not pick the slice.
+  const xrShadowWorld = new Float32Array(16);
+  let xrShadowVer = 1;
+  const xrFit = {
+    fov: camera.fov,
+    nearPlane: camera.nearPlane,
+    farPlane: camera.farPlane,
+    _radius: camera.radius,
+    get worldMatrix() {
+      return xrShadowWorld;
+    },
+    get worldMatrixVersion() {
+      return xrShadowVer;
+    },
+    _viewCache: new Float32Array(16),
+    _projCache: new Float32Array(16),
+    _vpCache: new Float32Array(16),
+    _viewVer: -1,
+    _projVer: -1,
+    _vpVer: -1,
+    _projAspect: -1,
+  };
+  function poseXrShadowCamera() {
+    const xr = xrEye();
+    if (!xr) return;
+    const gy = groundYAt(xr.x, xr.z);
+    xrFit.fov = camera.fov;
+    xrFit.farPlane = camera.farPlane;
+    xrFit._radius = writeAnchoredOrbit(
+      xrShadowWorld,
+      xr.x,
+      xr.y,
+      xr.z,
+      gy,
+      camera.alpha ?? -Math.PI / 2.1,
+      camera.beta ?? Math.PI / 3.2,
+    );
+    xrFit.nearPlane = xrShadowDepth(xrFit._radius).near;
+    xrShadowVer += 1;
+    xrFit._viewVer = -1;
+    xrFit._vpVer = -1;
+    xrFit._projVer = -1;
+  }
   // Camera input is owned by cameraController (v1 mouse/keyboard). Do not attachControl —
   // Lite would still register wheel/touch handlers that fight our hub.
   const cameraController = createCameraController(camera, canvas, { worldHalfF: cameraHalfF });
@@ -874,7 +922,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     groundFireIntervalMs: 55,
     sparkleIntervalMs: 70,
     emitChance: 1,
-    distance: 900,
+    distance: 200,
     cullRangeScale: 1,
     socketFire: true,
   };
@@ -1037,15 +1085,42 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
 
   function cameraEyePos() {
+    const xr = xrEye();
+    if (xr) return xr;
     const wm = camera.worldMatrix;
     if (wm && Number.isFinite(wm[12])) return { x: wm[12], y: wm[13], z: wm[14] };
     const p = camera.position;
     return { x: p?.x ?? 0, y: p?.y ?? 0, z: p?.z ?? 0 };
   }
 
+  /** Distance that drives unit size. In the headset this is how far the head
+   *  is from the orbit target, not the desktop camera's frozen radius. */
+  function viewDistance() {
+    const xr = xrEye();
+    if (xr) return Math.hypot(xr.x, xr.y, xr.z);
+    return camera?.radius;
+  }
+
+  /** Orbit camera on the desktop. In XR, the same readers see the headset:
+   *  position, worldMatrix, and radius (distance from the board center). */
+  function viewCamera() {
+    const xr = xrEye();
+    if (!xr) return camera;
+    const radius = Math.hypot(xr.x, xr.y, xr.z);
+    return {
+      worldMatrix: xr.worldMatrix,
+      position: xr,
+      radius,
+      lowerRadiusLimit: camera.lowerRadiusLimit,
+      upperRadiusLimit: camera.upperRadiusLimit,
+      nearPlane: camera.nearPlane,
+      farPlane: camera.farPlane,
+    };
+  }
+
   /** Authored size at min radius; grows with orbit zoom (visual only). */
   function currentUnitZoomScale(def) {
-    const r = camera?.radius;
+    const r = viewDistance();
     if (!Number.isFinite(r)) return 1;
     const minR = camera.lowerRadiusLimit ?? 50;
     const maxR = camera.upperRadiusLimit ?? r;
@@ -1928,7 +2003,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
     getSkyOrigin(impactX, impactY, impactZ, seed) {
       const eye = cameraEyePos();
-      const radius = Math.max(40, camera.radius ?? 200);
+      const radius = Math.max(40, viewDistance() ?? 200);
       // Always start above the camera so the bolt enters from off-screen.
       const aboveCam = eye.y + radius * 0.45 + 60;
       const aboveImpact = impactY + Math.max(90, radius * 0.2);
@@ -2166,7 +2241,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const side = resolveViewCenterHit(padCursorBrushPx, 0);
       if (side) brushWorld = Math.hypot(side.x - hit.x, side.z - hit.z);
     }
-    gamepadCursor.update?.(camera, { brushWorld });
+    gamepadCursor.update?.(viewCamera(), { brushWorld });
   }
 
   try {
@@ -2504,9 +2579,15 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     const cfg = shadowGen?._config;
     if (!cfg) return;
     const half = fieldSnap ? worldHalfFFromField(fieldSnap) : tableHalfF;
-    const radius = camera?.radius;
+    const xr = xrEye();
+    const radius = xr ? xrFit._radius : camera?.radius;
     const look = Number.isFinite(radius) ? radius * 1.45 : 0;
-    const cover = Math.max(half * 2.75, look, 80);
+    // Headset: the pole is short when you are down on the board. A map-wide
+    // range spends the sharp slices on the air in front of the pole and leaves
+    // the ground in the coarse last slice.
+    const cover = xr
+      ? xrShadowDepth(radius).far
+      : Math.max(half * 2.75, look, 80);
     if (cfg._shadowMaxZ !== cover) cfg._shadowMaxZ = cover;
   }
 
@@ -2595,10 +2676,14 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
 
   onBeforeRender(scene, (deltaMs) => {
+    if (xrEye()) {
+      poseXrShadowCamera();
+      scene.camera = xrFit;
+    } else if (scene.camera !== camera) scene.camera = camera;
     // Celestial spin demo (no-op unless toggled). Uses wall-clock delta so the
     // sun keeps sweeping even when the sim is paused.
     celestial.update(deltaMs);
-    terrain?.update?.(camera, deltaMs);
+    terrain?.update?.(viewCamera(), deltaMs);
     // Freeze FX aging while sim is paused so bolts/trails don't burn out.
     const fxDt = fxPaused ? 0 : deltaMs;
     buildingProps.update?.(fxDt);
@@ -2632,7 +2717,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       particles.update(fxDt);
       unitAuras.update(fxDt);
     }
-    agoraProps.update?.(camera);
+    agoraProps.update?.(viewCamera());
     monkLobFx.update(fxDt);
     sporeBloomFx.update(fxDt, fxSimTick);
     locustFx.update(fxDt);
@@ -2998,7 +3083,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const bSize = (0.32 + Math.random() * 0.22) * s;
       particles.emit({
         ...puffSprite(0.6),
-        cull: false,
         // Sunk by a fraction of the disc's own width, so only the top of the
         // pool shows and discs surface into the flame instead of appearing in
         // mid-air. Tied to bSize so resizing cannot bury or float the pool.
@@ -3052,7 +3136,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const size = (0.11 + Math.random() * 0.12) * s;
       particles.emit({
         ...puffSprite(),
-        cull: false,
         position: [x + cs * rad, y + Math.random() * 0.06 * s, z + sn * rad],
         // Mostly tangential with a little outward drift — drag bleeds the
         // swirl off early, leaving a curved kick rather than an orbit.
@@ -3081,7 +3164,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const eAng = Math.random() * Math.PI * 2;
       const kick = (0.2 + Math.random() * 0.4) * s;
       particles.emit({
-        cull: false,
         position: [x, y + 0.04 * s, z],
         velocity: [
           Math.cos(eAng) * kick,
@@ -3513,14 +3595,14 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       sceneConfirm.clear?.();
     } else {
       if (buildingRadial.isOpen()) {
-        buildingRadial.update?.(camera);
+        buildingRadial.update?.(viewCamera());
       }
       if (actionRadial.isOpen()) {
-        actionRadial.update?.(camera);
+        actionRadial.update?.(viewCamera());
       }
-      selectionHud.update?.(camera);
-      controlGroupHud.update?.(camera);
-      sceneConfirm.update?.(camera);
+      selectionHud.update?.(viewCamera());
+      controlGroupHud.update?.(viewCamera());
+      sceneConfirm.update?.(viewCamera());
     }
     syncGamepadCursor();
     syncSelectionBoxOverlay();
@@ -4048,6 +4130,14 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     scene,
     camera,
     cameraController,
+
+    groundHeight(x, z) {
+      return groundYAt(x, z);
+    },
+
+    releaseHeadsetCamera() {
+      if (scene.camera !== camera) scene.camera = camera;
+    },
 
     /** Resolves when boot asset work is done and input should feel smooth. */
     whenInteractive() {

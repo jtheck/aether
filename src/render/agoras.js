@@ -44,6 +44,11 @@ const FLAG_BASE_SCALE = 2.15;
 const FLAG_DIST_REF = 110;
 const FLAG_SCALE_MIN = 1.35;
 const FLAG_SCALE_MAX = 3.4;
+/**
+ * 1 would hold screen size (scale ∝ distance) and reads as a zoom pop.
+ * Sublinear keeps far banners readable without racing the caps.
+ */
+const FLAG_SCALE_EXP = 0.7;
 /** Dashed rally stroke (world units). */
 const RALLY_DASH = 1.55;
 const RALLY_GAP = 1.05;
@@ -385,9 +390,14 @@ function writeOwnerColor(colors, slot, owner, alpha = 1) {
   writeTint(colors, slot, ownerTint(owner), alpha);
 }
 
-function flagScaleForDist(dist) {
-  const t = dist / FLAG_DIST_REF;
-  return Math.max(FLAG_SCALE_MIN, Math.min(FLAG_SCALE_MAX, FLAG_BASE_SCALE * t));
+/** Reference distance stays on FLAG_BASE_SCALE; closer and farther ease off the linear ramp. */
+export function flagScaleForDist(dist) {
+  const t = Math.max(0, dist) / FLAG_DIST_REF;
+  const ratio = t > 0 ? t ** FLAG_SCALE_EXP : 0;
+  const scale = FLAG_BASE_SCALE * ratio;
+  if (scale < FLAG_SCALE_MIN) return FLAG_SCALE_MIN;
+  if (scale > FLAG_SCALE_MAX) return FLAG_SCALE_MAX;
+  return scale;
 }
 
 function cameraEye(camera) {

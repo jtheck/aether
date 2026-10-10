@@ -2,7 +2,7 @@
 // Grove mushrooms are derived from tree stock. Forge stamps persist on
 // field.doodadType and round-trip in .garden (`dd`).
 
-import { TERRAIN, TILE_SIZE_F, worldHalfFFromField } from './field.js';
+import { TERRAIN, TILE_SIZE_F, worldHalfFFromField, worldHalfZFFromField } from './field.js';
 import { SCENERY, rockFootprintRadius, sceneryTileHash } from './scenery.js';
 import { TREE_STOCK_NATURAL_MAX, treeScaleForStage, treeStageFromStock } from './trees.js';
 
@@ -246,10 +246,9 @@ export function paintDoodadBrush(field, tx, tz, kind, radius = 0) {
 }
 
 function tileWorldCenter(field, tx, tz) {
-  const half = worldHalfFFromField(field);
   return {
-    x: (tx + 0.5) * TILE_SIZE_F - half,
-    z: (tz + 0.5) * TILE_SIZE_F - half,
+    x: (tx + 0.5) * TILE_SIZE_F - worldHalfFFromField(field),
+    z: (tz + 0.5) * TILE_SIZE_F - worldHalfZFFromField(field),
   };
 }
 
@@ -275,13 +274,14 @@ function nearbySkirtCircles(field, tx, tz, ignoreTile) {
   if (!stock) return [];
   const width = field.width | 0;
   const height = field.height | 0;
-  const half = worldHalfFFromField(field);
+  const halfX = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
   const reach = TREE_SKIRT_REACH_TILES;
   const out = [];
   for (let z0 = tz - reach; z0 <= tz + reach; z0++) {
     if (z0 < 0 || z0 >= height) continue;
     const row = z0 * width;
-    const cz = (z0 + 0.5) * TILE_SIZE_F - half;
+    const cz = (z0 + 0.5) * TILE_SIZE_F - halfZ;
     for (let x0 = tx - reach; x0 <= tx + reach; x0++) {
       if (x0 < 0 || x0 >= width) continue;
       const nti = row + x0;
@@ -289,7 +289,7 @@ function nearbySkirtCircles(field, tx, tz, ignoreTile) {
       const skirt = mushroomHostSkirtRadius(stock[nti]);
       if (skirt <= 0) continue;
       out.push({
-        x: (x0 + 0.5) * TILE_SIZE_F - half,
+        x: (x0 + 0.5) * TILE_SIZE_F - halfX,
         z: cz,
         r: skirt + MUSHROOM_SKIRT_PAD,
       });

@@ -15,7 +15,7 @@ import {
   setThinInstanceColors,
 } from '../vendor/lite/liteVendor.js';
 import { SCENERY, rockScaleForStage, rockStageFromStock } from '../sim/scenery.js';
-import { TILE_SIZE_F, worldHalfFFromField } from '../sim/field.js';
+import { TILE_SIZE_F, worldHalfFFromField, worldHalfZFFromField } from '../sim/field.js';
 import {
   TREE_BURN_DAMAGE,
   TREE_BURN_DAMAGE_INTERVAL,
@@ -26,8 +26,10 @@ import {
   treeStageFromStock,
 } from '../sim/trees.js';
 import { capacityFor } from '../sim/capacity.js';
-import { LOD_ENABLED, SCENERY_LOD_ROCK, SCENERY_LOD_TREE } from './lodDistances.js';
+import { SCENERY_LOD_ROCK, SCENERY_LOD_TREE } from './lodDistances.js';
 import { hasBakedMesh } from './bakedAssets.js';
+import { boundsOfPositions } from './bakeMerge.js';
+import { nearestMeshInstanceHit, pickPartsFromMeshes } from './meshPick.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
 import { softDetachMesh } from './meshLifecycle.js';
 import { SCALE_BOUNCE_MS, stageDropScale } from './scaleBounce.js';
@@ -247,7 +249,7 @@ const VARIANTS = [
     modelScale: 0.9,
     billboardScale: 2.4,
     billboardYOffset: -0.6,
-    lodDistance: LOD_ENABLED ? SCENERY_LOD_TREE : Infinity,
+    lodDistance: SCENERY_LOD_TREE,
   },
   {
     kind: SCENERY.ROCK_PLAIN,
@@ -257,7 +259,7 @@ const VARIANTS = [
     modelScale: 3,
     billboardScale: 3,
     billboardYOffset: -0.8,
-    lodDistance: LOD_ENABLED ? SCENERY_LOD_ROCK : Infinity,
+    lodDistance: SCENERY_LOD_ROCK,
   },
   {
     kind: SCENERY.ROCK_MOSS,
@@ -267,7 +269,7 @@ const VARIANTS = [
     modelScale: 7.5,
     billboardScale: 5.9,
     billboardYOffset: -0.8,
-    lodDistance: LOD_ENABLED ? SCENERY_LOD_ROCK : Infinity,
+    lodDistance: SCENERY_LOD_ROCK,
   },
   {
     kind: SCENERY.ROCK_SNOW,
@@ -277,7 +279,7 @@ const VARIANTS = [
     modelScale: 11.5,
     billboardScale: 7.5,
     billboardYOffset: -0.8,
-    lodDistance: LOD_ENABLED ? SCENERY_LOD_ROCK : Infinity,
+    lodDistance: SCENERY_LOD_ROCK,
   },
 ];
 
@@ -359,6 +361,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
             // terrain.meshes is a snapshot unless it listens — notify so CSM can catch up.
             opts.onModelMesh?.(part.mesh);
           }
+          batch.pickParts = pickPartsFromMeshes(batch.modelParts.map((part) => part.mesh));
           if (!disposed) batch.dirty = true;
         })
         .catch((err) => {
@@ -511,7 +514,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     const tx = tileIndex - tz * width;
     const placement = deterministicPlacement(tx, tz, field.seed, kind);
     const x = (tx + 0.5) * TILE_SIZE_F - worldHalfFFromField(field) + placement.offsetX;
-    const z = (tz + 0.5) * TILE_SIZE_F - worldHalfFFromField(field) + placement.offsetZ;
+    const z = (tz + 0.5) * TILE_SIZE_F - worldHalfZFFromField(field) + placement.offsetZ;
     const groundY = surfaceHeightAt(field, x, z);
     const stockScale = kind === SCENERY.TREE
       ? treeScaleForStage(treeStageFromStock(stock))
@@ -690,7 +693,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     const tx = tileIndex - tz * width;
     const placement = deterministicPlacement(tx, tz, field.seed, SCENERY.TREE);
     const x = (tx + 0.5) * TILE_SIZE_F - worldHalfFFromField(field) + placement.offsetX;
-    const z = (tz + 0.5) * TILE_SIZE_F - worldHalfFFromField(field) + placement.offsetZ;
+    const z = (tz + 0.5) * TILE_SIZE_F - worldHalfZFFromField(field) + placement.offsetZ;
     const groundY = surfaceHeightAt(field, x, z);
     const stage = treeStageFromStock(stock);
     const targetScale = treeScaleForStage(stage);
@@ -772,20 +775,17 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     }
 
     const cameraPos = cameraPosition(activeCamera);
-    // With LOD off every instance stays on the model path — camera moves and the
-    // 120ms timer must NOT full-flush thin instances (that was the mobile FPS bleed).
+    // Refresh the mesh/billboard split when the camera moves. A full thin-instance
+    // flush is the expensive part, so it waits for 120ms or a few world units.
     let anyDirty = false;
     for (let b = 0; b < batches.length; b++) {
       if (batches[b].dirty) { anyDirty = true; break; }
     }
-    let lodDue = force;
-    if (LOD_ENABLED) {
-      const movedSq =
-        (cameraPos.x - lastCameraX) ** 2 +
-        (cameraPos.y - lastCameraY) ** 2 +
-        (cameraPos.z - lastCameraZ) ** 2;
-      lodDue = force || elapsed >= LOD_UPDATE_MS || movedSq >= LOD_MOVE_THRESHOLD_SQ;
-    }
+    const movedSq =
+      (cameraPos.x - lastCameraX) ** 2 +
+      (cameraPos.y - lastCameraY) ** 2 +
+      (cameraPos.z - lastCameraZ) ** 2;
+    const lodDue = force || elapsed >= LOD_UPDATE_MS || movedSq >= LOD_MOVE_THRESHOLD_SQ;
     if (lodDue || anyDirty) {
       if (lodDue) {
         elapsed = 0;
@@ -991,6 +991,37 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     for (const batch of flushed) flushBatchColors(batch);
   }
 
+  /**
+   * Nearest tree or rock whose drawn mesh the ray hits.
+   * Null when the models are not loaded yet. -1 is a real miss.
+   * @param {object | null} ray
+   * @param {number} [maxT]
+   * @returns {number | null}
+   */
+  function pickGatherOnRay(ray, maxT = Infinity) {
+    if (!ray) return null;
+    let tested = false;
+    let bestTile = -1;
+    let limit = maxT;
+    for (let b = 0; b < batches.length; b++) {
+      const batch = batches[b];
+      const parts = batch.pickParts;
+      const matrices = batch.modelParts[0]?.matrices;
+      const count = batch.modelParts[0]?.mesh?.thinInstances?.count ?? 0;
+      if (!parts?.length || !matrices || count <= 0) continue;
+      tested = true;
+      const hit = nearestMeshInstanceHit(ray, parts, matrices, count, (slot) => {
+        const inst = batch.instances[slot];
+        return !!inst && inst.tileIndex >= 0 && (inst.stock | 0) > 0;
+      }, limit);
+      if (!hit) continue;
+      bestTile = batch.instances[hit.slot].tileIndex;
+      limit = hit.t;
+    }
+    if (!tested) return null;
+    return bestTile;
+  }
+
   function pingHarvest(tile) {
     const t = tile | 0;
     if (t < 0) return false;
@@ -1086,6 +1117,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     applyFogDim,
     applyFogTiles,
     pingHarvest,
+    pickGatherOnRay,
     dispose,
   };
 }
@@ -1223,6 +1255,11 @@ function bakeModelMesh(engine, source, world, name) {
   );
   mesh.material = prepareSceneryMaterial(source.material);
   mesh.pickable = false;
+  mesh.pickPositions = positions;
+  mesh.pickIndices = indices;
+  const b = boundsOfPositions(positions);
+  mesh.boundMin = b.min;
+  mesh.boundMax = b.max;
   // Recomputed normals assume CW fronts (Lite LH); show CW faces.
   mesh._reverseWinding = true;
   return mesh;
@@ -1337,7 +1374,7 @@ function collectInstances(field, variant, surfaceHeightAt) {
       if (stock <= 0) continue;
       const placement = deterministicPlacement(tx, tz, seed, variant.kind);
       const x = (tx + 0.5) * TILE_SIZE_F - worldHalfFFromField(field) + placement.offsetX;
-      const z = (tz + 0.5) * TILE_SIZE_F - worldHalfFFromField(field) + placement.offsetZ;
+      const z = (tz + 0.5) * TILE_SIZE_F - worldHalfZFFromField(field) + placement.offsetZ;
       const groundY = surfaceHeightAt(field, x, z);
       const stockScale = variant.kind === SCENERY.TREE
         ? treeScaleForStage(treeStageFromStock(stock))

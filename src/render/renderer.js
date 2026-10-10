@@ -38,8 +38,8 @@ import { getUnitDef } from '../sim/unitTypes.js';
 import { GATHER_ACT } from '../sim/gather.js';
 import { MAX_PROJECTILES, PROJECTILE_DESPAWN } from '../sim/projectiles.js';
 import { PROJECTILE, PROJECTILE_MESH } from '../sim/projectileTypes.js';
-import { HEIGHT_AMPLITUDE, TILE_SIZE_F, WORLD_HALF_F, worldHalfFFromField } from '../sim/field.js';
-import { cameraZoomNormalized, createCameraController, resolveCameraHalfF, unitZoomScale, unitZoomScaleMaxForDef } from './cameraController.js';
+import { HEIGHT_AMPLITUDE, TILE_SIZE_F, WORLD_HALF_F, worldHalfFFromField, worldHalfZFFromField } from '../sim/field.js';
+import { cameraZoomNormalized, createCameraController, resolveCameraExtents, unitZoomScale, unitZoomScaleMaxForDef } from './cameraController.js';
 import { MODEL_BASE_SCALE } from './modelScale.js';
 import { capacityFor } from '../sim/capacity.js';
 import {
@@ -79,6 +79,7 @@ import { createProjectileRenderer } from './projectiles.js';
 import { createPickHitboxRenderer } from './pickHitboxes.js';
 import { createHolyShieldMaterial, createHolyShieldMesh } from './holyShields.js';
 import { createWorkRadiusRings } from './workRadiusRings.js';
+import { createXrLassoOverlay } from './xrLasso.js';
 import { createFrogRenderer } from './frogs.js';
 import { createArrowTrails } from './arrowTrails.js';
 import { createLightningBolts } from './lightningBolts.js';
@@ -88,8 +89,9 @@ import { createMonkLobFx } from './monkLobFx.js';
 import { createSporeBloomFx } from './sporeBloomFx.js';
 import { createLocustFx } from './locustFx.js';
 import { createBuildingFire } from './buildingFire.js';
-import { forEachTreeFireAnchor, treeCrownCenterY } from './treeFire.js';
-import { createFireballFx } from './fireballFx.js';
+import { forEachTreeFireAnchor, treeCrownCenterY, treeFireAnchorIndices } from './treeFire.js';
+import { groundFireDetail, treeFireDetail } from './fireBudget.js';
+import { FIREBALL_TRAIL_CULL, createFireballFx } from './fireballFx.js';
 import { createMushroomPreviews } from './mushrooms.js';
 import { createCarryLoads } from './carryLoads.js';
 import { createAgoraProps } from './agoras.js';
@@ -210,7 +212,7 @@ function rayHitGround(ray) {
   if (Math.abs(ray.dy) < 1e-8) return null;
   const t = -ray.oy / ray.dy;
   if (t < 0) return null;
-  return { x: ray.ox + ray.dx * t, y: 0, z: ray.oz + ray.dz * t };
+  return { x: ray.ox + ray.dx * t, y: 0, z: ray.oz + ray.dz * t, t };
 }
 
 /**
@@ -218,10 +220,10 @@ function rayHitGround(ray) {
  * markers must share this hit or the ping won't sit under the cursor.
  * @param {(x: number, z: number) => number} heightAt
  */
-function rayHitTerrain(ray, heightAt) {
-  if (!heightAt) return rayHitGround(ray);
-  const maxH = HEIGHT_AMPLITUDE + 1 + AGORA_DECK_Y;
-  const minH = -0.5;
+function rayCrossHeightfield(ray, heightAt) {
+  // Sculpt can sit above the old 0–1 felt band and below a dug pad.
+  const maxH = HEIGHT_AMPLITUDE * 2.5 + AGORA_DECK_Y;
+  const minH = -HEIGHT_AMPLITUDE * 1.25;
   // Looking down: march from sky band to below min surface.
   let t0 = 0;
   let t1 = 8000;
@@ -231,7 +233,7 @@ function rayHitTerrain(ray, heightAt) {
     t0 = Math.max(0, Math.min(tTop, tBot));
     t1 = Math.max(tTop, tBot);
   }
-  if (!(t1 > t0)) return rayHitGround(ray);
+  if (!(t1 > t0)) return null;
 
   const steps = 56;
   let prevT = t0;
@@ -256,13 +258,18 @@ function rayHitTerrain(ray, heightAt) {
       const ht = (lo + hi) * 0.5;
       const hx = ray.ox + ray.dx * ht;
       const hz = ray.oz + ray.dz * ht;
-      return { x: hx, y: heightAt(hx, hz), z: hz };
+      return { x: hx, y: heightAt(hx, hz), z: hz, t: ht };
     }
     prevAbove = above;
     prevT = t;
   }
+  return null;
+}
+
+function rayHitTerrain(ray, heightAt) {
+  if (!heightAt) return rayHitGround(ray);
   // Fallback: still return a plane hit so orders aren't dropped.
-  return rayHitGround(ray);
+  return rayCrossHeightfield(ray, heightAt) ?? rayHitGround(ray);
 }
 
 function initThinInstances(mesh, activeCount, gpuCapacity) {
@@ -814,9 +821,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     return null;
   });
   const tableHalfF = opts.field ? worldHalfFFromField(opts.field) : WORLD_HALF_F;
-  const cameraHalfF = resolveCameraHalfF(tableHalfF, opts.field?.cameraHalfF);
+  const tableHalfZF = opts.field ? worldHalfZFFromField(opts.field) : tableHalfF;
+  const cameraExt = resolveCameraExtents(tableHalfF, tableHalfZF, opts.field?.cameraHalfF);
+  const cameraSpan = Math.max(cameraExt.x, cameraExt.z);
 
-  const camera = createArcRotateCamera(-Math.PI / 2.1, Math.PI / 3.2, cameraHalfF * 1.55, {
+  const camera = createArcRotateCamera(-Math.PI / 2.1, Math.PI / 3.2, cameraSpan * 1.55, {
     x: 0,
     y: 0,
     z: 0,
@@ -863,7 +872,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (xrFit.fov !== fov) xrFit.fov = fov;
     xrFit.farPlane = camera.farPlane;
     const height = xrViewRadius(xr);
-    const half = fieldSnap ? worldHalfFFromField(fieldSnap) : tableHalfF;
+    const half = fieldSnap
+      ? Math.max(worldHalfFFromField(fieldSnap), worldHalfZFFromField(fieldSnap))
+      : Math.max(tableHalfF, tableHalfZF);
     xrFit._cover = xrShadowCover(
       height,
       Math.max(half * 2.75, 80),
@@ -876,9 +887,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
   // Camera input is owned by cameraController (v1 mouse/keyboard). Do not attachControl —
   // Lite would still register wheel/touch handlers that fight our hub.
-  const cameraController = createCameraController(camera, canvas, { worldHalfF: cameraHalfF });
+  const cameraController = createCameraController(camera, canvas, {
+    worldHalfF: cameraExt.x,
+    worldHalfZF: cameraExt.z,
+  });
 
-  const celestial = createCelestialRig(scene, { worldHalfF: tableHalfF });
+  const celestial = createCelestialRig(scene, { worldHalfF: Math.max(tableHalfF, tableHalfZF) });
   const sun = celestial.shadowLight;
   const sky = celestial.fillLight;
   const skyBaseIntensity = celestial.fillBaseIntensity;
@@ -899,7 +913,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     lambda: 0.5,
     cascadeBlendPercentage: 0.08,
     stabilizeCascades: true,
-    shadowMaxZ: tableHalfF * 2.75,
+    shadowMaxZ: Math.max(tableHalfF, tableHalfZF) * 2.75,
     // Far plane stays on the camera frustum. Lite otherwise clamps it to the
     // caster bounds, which clips the cast shadow on the ground (build-lite).
     worldSpaceBias: 0.02,
@@ -1539,6 +1553,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   const workRadiusRings = createWorkRadiusRings(engine, scene, groundYAt);
   const objectiveRings = createWorkRadiusRings(engine, scene, groundYAt);
   let lastObjectiveRingSpec = null;
+  /** @type {Map<string, ReturnType<typeof createXrLassoOverlay>>} one per hand */
+  const xrLassos = new Map([
+    ['left', createXrLassoOverlay(engine, scene, groundYAt)],
+    ['right', createXrLassoOverlay(engine, scene, groundYAt)],
+  ]);
   const carryLoads = createCarryLoads(engine, scene);
 
   // +64 headroom so agora/building debug spheres fit on top of unit caps.
@@ -1725,6 +1744,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         const roll = Math.random();
         particles.emit({
           ...puffSprite(),
+          cullMin: FIREBALL_TRAIL_CULL,
           position: [x, y + Math.random() * 0.55, z],
           velocity: [
             Math.cos(ang) * speed,
@@ -1749,6 +1769,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         const ang = Math.random() * Math.PI * 2;
         const speed = 3.5 + Math.random() * 7;
         particles.emit({
+          cullMin: FIREBALL_TRAIL_CULL,
           position: [x, y, z],
           velocity: [
             Math.cos(ang) * speed,
@@ -1766,6 +1787,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       // Soft bloom at the impact point.
       particles.emit({
         ...puffSprite(0.4),
+        cullMin: FIREBALL_TRAIL_CULL,
         position: [x, y + 0.4, z],
         velocity: [0, 3.5, 0],
         gravity: [0, 1.2, 0],
@@ -2231,6 +2253,18 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     });
   }
 
+  /** Buried mesh past this still counts as a ground click, not a building. */
+  const MESH_GROUND_SLACK = 0.05;
+
+  function visibleMeshClipT(ray) {
+    if (!ray) return Infinity;
+    const hit = fieldSnap
+      ? rayCrossHeightfield(ray, (x, z) => groundYAt(x, z))
+      : rayHitGround(ray);
+    if (!hit || !(hit.t > 0)) return Infinity;
+    return hit.t + MESH_GROUND_SLACK;
+  }
+
   function resolveViewCenterHit(extraOx = 0, extraOy = 0) {
     const { width, height } = canvasCoords(0, 0);
     if (!(width > 8) || !(height > 8)) return null;
@@ -2596,7 +2630,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   function syncShadowCoverage() {
     const cfg = shadowGen?._config;
     if (!cfg) return;
-    const half = fieldSnap ? worldHalfFFromField(fieldSnap) : tableHalfF;
+    const half = fieldSnap
+      ? Math.max(worldHalfFFromField(fieldSnap), worldHalfZFFromField(fieldSnap))
+      : Math.max(tableHalfF, tableHalfZF);
     const radius = camera?.radius;
     const look = Number.isFinite(radius) ? radius * 1.45 : 0;
     // Headset: the range follows head height in coarse steps (xrShadowCover),
@@ -2769,6 +2805,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   /** First-sight bursts so new tree / ground fires don't trickle in. */
   const groundFirePrimed = new Set();
   const treeFirePrimed = new Set();
+  /** Reused so a burning grove does not allocate a list every frame. */
+  const treeFireVisible = [];
+  const groundFireVisible = [];
 
   function nearCamera(x, y, z) {
     const eye = cameraEyePos();
@@ -2779,38 +2818,63 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     return dx * dx + dy * dy + dz * dz <= fxDistanceSq;
   }
 
-  /** Burning trees: overlapping tongues through the trunk and inner canopy. */
+  /** Burning trees: a few tongues through the trunk and inner canopy. */
   function emitBurningTreeFires(dtMs) {
     if (!socketFireEnabled) return;
     const period = SOCKET_FX_CADENCE.fire * Math.max(0.5, (unitFxIntervalMs || 80) / 80);
     const smokePeriod = SOCKET_FX_CADENCE.smoke * Math.max(0.5, (unitFxIntervalMs || 80) / 80);
-    const seen = new Set();
+    const eye = cameraEyePos();
+    const visible = treeFireVisible;
+    visible.length = 0;
     terrain?.forEachBurningTree?.((tree) => {
       const cy = treeCrownCenterY(tree.y, tree.stockScale);
       if (!nearCamera(tree.x, cy, tree.z)) return;
+      let dist = 0;
+      if (eye) {
+        const dx = eye.x - tree.x;
+        const dy = eye.y - cy;
+        const dz = eye.z - tree.z;
+        dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      }
+      tree.dist = dist;
+      visible.push(tree);
+    });
+    const burning = visible.length;
+    if (!burning) {
+      treeFirePrimed.clear();
+      return;
+    }
+    const seen = new Set();
+    for (let t = 0; t < burning; t++) {
+      const tree = visible[t];
       const key = `${(tree.x * 2) | 0}:${(tree.z * 2) | 0}`;
       seen.add(key);
       const prime = !treeFirePrimed.has(key);
       treeFirePrimed.add(key);
+      const detail = treeFireDetail(tree.dist, burning);
       const slot = ((tree.x * 2) | 0) * 17 + ((tree.z * 2) | 0);
       const salt = tree.x * 0.013 + tree.z * 0.021;
+      const tongue = {
+        density: detail.density,
+        wisps: detail.wisps,
+        size: detail.size,
+        embers: detail.embers,
+      };
+      // A grove igniting on one frame used to dump 4–6 full campfires per tongue.
+      const burst = burning > 8 ? 1 : 2;
       forEachTreeFireAnchor(tree, (site) => {
         const hits = prime
-          ? site.kind === 'trunk' ? 4 : 6
+          ? burst
           : socketPhaseHits(slot, site.index, period, dtMs, salt);
         for (let h = 0; h < hits; h++) {
-          emitSocketFlame(site.x, site.y, site.z, site.scale, 'torch');
+          emitSocketFlame(site.x, site.y, site.z, site.scale, 'torch', tongue);
         }
-        if (!site.smoke || prime) return;
+        if (!detail.smoke || !site.smoke || prime) return;
         const puffs = socketPhaseHits(slot, site.index + 40, smokePeriod, dtMs, salt + 0.4);
         for (let h = 0; h < puffs; h++) {
-          emitSocketFlame(site.x, site.y, site.z, site.scale, 'smoke');
+          emitSocketFlame(site.x, site.y, site.z, site.scale, 'smoke', tongue);
         }
-      });
-    });
-    if (!seen.size) {
-      treeFirePrimed.clear();
-      return;
+      }, treeFireAnchorIndices(detail.anchorCount));
     }
     for (const key of treeFirePrimed) {
       if (!seen.has(key)) treeFirePrimed.delete(key);
@@ -2825,7 +2889,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (!socketFireEnabled) return;
     const period = Math.max(24, groundFireIntervalMs || SOCKET_FX_CADENCE.fire);
     const s = SOCKET_FX_INHERENT * MODEL_BASE_SCALE;
-    const seen = new Set();
+    const eye = cameraEyePos();
+    const visible = groundFireVisible;
+    visible.length = 0;
     for (const [slot, fire] of groundFires) {
       const remain = fire.endsAtMs - particleClockMs;
       if (remain <= 0) {
@@ -2834,9 +2900,29 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       }
       const gy = groundYAt(fire.x, fire.z) + 0.15;
       if (!nearCamera(fire.x, gy, fire.z)) continue;
+      let dist = 0;
+      if (eye) {
+        const dx = eye.x - fire.x;
+        const dy = eye.y - gy;
+        const dz = eye.z - fire.z;
+        dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      }
+      visible.push({ slot, fire, gy, remain, dist });
+    }
+    const patches = visible.length;
+    if (!patches) {
+      groundFirePrimed.clear();
+      return;
+    }
+    const seen = new Set();
+    for (let p = 0; p < patches; p++) {
+      const item = visible[p];
+      const { slot, fire, gy, remain, dist } = item;
       const fade = Math.max(0, Math.min(1, remain / (FIRE_ZONE_VISUAL_MS * 0.85)));
-      const sites = fade < 0.15 ? 1 : 5;
+      const detail = groundFireDetail(dist, patches);
+      const sites = fade < 0.15 ? 1 : detail.sites;
       const rad = Math.min(2.4, Math.max(1.5, (fire.radius || 4) * 0.48));
+      const burst = patches > 4 ? 2 : 4;
       for (let i = 0; i < sites; i++) {
         const key = `${slot}:${i}`;
         seen.add(key);
@@ -2846,10 +2932,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         const x = i === 0 ? fire.x : fire.x + Math.cos(ang) * rad;
         const z = i === 0 ? fire.z : fire.z + Math.sin(ang) * rad;
         const hits = prime
-          ? 10
+          ? burst
           : socketPhaseHits(slot, i, period, dtMs, 0.31);
         if (!hits) continue;
-        for (let h = 0; h < hits; h++) emitSocketFlame(x, gy, z, s, 'torch');
+        for (let h = 0; h < hits; h++) {
+          emitSocketFlame(x, gy, z, s, 'torch', { density: detail.density });
+        }
       }
     }
     if (!seen.size) {
@@ -3033,7 +3121,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       if (dx * dx + dy * dy + dz * dz > distSq) return;
     }
     if (!allowContinuousFx()) return;
-    emitSocketFlame(p.x, y, p.z, p.scale, 'torch');
+    // Perimeter flames are little torches, not a second camp hearth.
+    emitSocketFlame(p.x, y, p.z, p.scale, 'torch', { density: 0.8, wisps: 2, embers: false });
   }
 
   /** Perimeter campfires on wounded buildings (no baked fire_anchor). */
@@ -3050,17 +3139,21 @@ export async function createRenderer(canvas, capacity, opts = {}) {
    * hot core + rising flame tongues + ember sparks; smoke is separate soft puffs.
    * Density scales with fxEmitChance so low FX settings stay cheap.
    */
-  function emitSocketFlame(x, y, z, scale, style) {
+  /**
+   * @param {{ density?: number, wisps?: number, size?: number, embers?: boolean }} [opts]
+   *   density multiplies the quality-tier keep chance. Camp sockets omit it.
+   */
+  function emitSocketFlame(x, y, z, scale, style, opts) {
     const s = Math.max(0.12, scale);
     if (style === 'smoke') {
-      emitSocketSmoke(x, y, z, s);
+      emitSocketSmoke(x, y, z, s, opts);
       return;
     }
     if (style === 'sparkle') {
       emitSocketSparkle(x, y, z, s);
       return;
     }
-    emitSocketFire(x, y, z, s, style === 'hex');
+    emitSocketFire(x, y, z, s, style === 'hex', opts);
   }
 
   /** Wisps per fire tick — density is what separates a body of flame from a streamer. */
@@ -3093,9 +3186,16 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     );
   }
 
-  /** @param {boolean} hex Arcane white-blue with ink beads, vs orange hearth. */
-  function emitSocketFire(x, y, z, s, hex) {
-    const dens = Math.min(1, fxEmitChance);
+  /**
+   * @param {boolean} hex Arcane white-blue with ink beads, vs orange hearth.
+   * @param {{ density?: number, wisps?: number, size?: number, embers?: boolean }} [opts]
+   */
+  function emitSocketFire(x, y, z, s, hex, opts) {
+    const densityMul = opts && opts.density != null ? opts.density : 1;
+    const dens = Math.min(1, fxEmitChance * densityMul);
+    if (!(dens > 0)) return;
+    const wispCount = opts?.wisps ?? FIRE_WISPS_PER_TICK;
+    const sizeMul = opts?.size ?? 1;
     if (Math.random() < FIRE_BASE_CHANCE * dens) {
       const bSize = (0.32 + Math.random() * 0.22) * s;
       particles.emit({
@@ -3126,7 +3226,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     // Wisps land in a band around the sweeping spoke and curl as they climb,
     // so the column reads as arcs of fire built from plain round particles.
     const spoke = fireSpokeAngle(x, z);
-    for (let i = 0; i < FIRE_WISPS_PER_TICK; i++) {
+    for (let i = 0; i < wispCount; i++) {
       if (Math.random() > dens) continue;
       const ang = spoke + (Math.random() - 0.5) * 0.85;
       const cs = Math.cos(ang);
@@ -3150,7 +3250,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
             : [0.9, 0.14, 0.02, 0.18];
       // Wisps are deliberately small against the column they build: structure
       // is only visible while the flame stands several diameters tall.
-      const size = (0.11 + Math.random() * 0.12) * s;
+      const size = (0.11 + Math.random() * 0.12) * s * sizeMul;
       particles.emit({
         ...puffSprite(),
         position: [x + cs * rad, y + Math.random() * 0.06 * s, z + sn * rad],
@@ -3176,6 +3276,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     // Embers — small, drift sideways more than up. Rolled per tick rather than
     // per wisp, so wisp density changes do not multiply the sparks. Two rolls
     // rather than a single higher chance: pairs read as a spit of sparks.
+    if (opts?.embers === false) return;
     for (let i = 0; i < FIRE_EMBERS_PER_TICK; i++) {
       if (Math.random() > 0.22 * dens) continue;
       const eAng = Math.random() * Math.PI * 2;
@@ -3238,8 +3339,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   /** Puff rolls per chimney tick; later rolls are coin flips, see the loop. */
   const SMOKE_PUFFS_PER_TICK = 3;
 
-  function emitSocketSmoke(x, y, z, s) {
-    const dens = Math.min(1, fxEmitChance);
+  function emitSocketSmoke(x, y, z, s, opts) {
+    const dens = Math.min(1, fxEmitChance * (opts?.density ?? 1));
     // Slow chimney rhythm: a puff every ~240ms tick, often doubled or
     // tripled. Thickness comes from puffs overlapping each other, not from
     // raising their alpha, which would only darken the column rather than
@@ -4152,7 +4253,32 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       return groundYAt(x, z);
     },
 
+    /** World ray (unit direction) onto the field, or null when it points at the sky. */
+    rayToGround(ray) {
+      if (!ray) return null;
+      return fieldSnap ? rayHitTerrain(ray, (x, z) => groundYAt(x, z)) : rayHitGround(ray);
+    },
+
+    /**
+     * Headset select beam + field lasso for one hand. Null hides that hand's.
+     * @param {string} hand
+     * @param {Parameters<ReturnType<typeof createXrLassoOverlay>['show']>[0] | null} state
+     */
+    setXrSelect(hand, state) {
+      let overlay = xrLassos.get(hand);
+      if (!state) {
+        overlay?.hide();
+        return;
+      }
+      if (!overlay) {
+        overlay = createXrLassoOverlay(engine, scene, groundYAt);
+        xrLassos.set(hand, overlay);
+      }
+      overlay.show(state);
+    },
+
     releaseHeadsetCamera() {
+      for (const overlay of xrLassos.values()) overlay.hide();
       xrFit._cover = 0;
       if (scene.camera !== camera) scene.camera = camera;
       syncShadowCoverage();
@@ -4295,8 +4421,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         const tz = Math.floor(t / w);
         const tx = t - tz * w;
         const half = worldHalfFFromField(fieldSnap);
+        const halfZ = worldHalfZFFromField(fieldSnap);
         const x = (tx + 0.5) * TILE_SIZE_F - half;
-        const z = (tz + 0.5) * TILE_SIZE_F - half;
+        const z = (tz + 0.5) * TILE_SIZE_F - halfZ;
         buildingProps.pingHarvestAt?.(x, z);
         return true;
       }
@@ -4304,9 +4431,53 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /**
+     * Tree / rock mesh under the ray. Null when those models are not loaded.
+     * -1 is a miss. `maxT` cuts off anything past the ground.
+     * @param {object | null} ray
+     * @param {number} [maxT]
+     * @returns {number | null}
+     */
+    pickGatherOnRay(ray, maxT) {
+      if (!terrain?.pickGatherOnRay) return null;
+      return terrain.pickGatherOnRay(ray, maxT);
+    },
+
+    /**
+     * CPU ray vs the placed agora / building meshes. `allow` drops fogged,
+     * dead, or collapsing instances before their triangles are tested.
+     * A hit past the ground is the buried part of the mesh — that click is ground.
+     * @param {object | null} ray
+     * @param {(hit: { kind: string, index: number }) => boolean} [allow]
+     * @returns {{ kind: 'agora' | 'building', index: number } | null}
+     */
+    pickStructureOnRay(ray, allow) {
+      if (!ray) return null;
+      const clip = visibleMeshClipT(ray);
+      let best = null;
+      const consider = (hit) => {
+        if (!hit || !(hit.t < (best?.t ?? Infinity))) return;
+        best = hit;
+      };
+      const limit = () => Math.min(best?.t ?? Infinity, clip);
+      consider(agoraProps.pickOnRay?.(ray, allow, limit()));
+      consider(buildingProps.pickOnRay?.(ray, allow, limit()));
+      if (!best) return null;
+      return { kind: best.kind, index: best.index };
+    },
+
+    /**
+     * Placement ghost mesh. Null when the ghost is not drawn yet.
+     * @param {object | null} ray
+     * @returns {boolean | null}
+     */
+    ghostHitOnRay(ray) {
+      const hit = buildingProps.ghostHitOnRay?.(ray, visibleMeshClipT(ray));
+      return typeof hit === 'boolean' ? hit : null;
+    },
+
+    /**
      * GPU mesh pick → own agora / placeable under the cursor, or null.
-     * Hits the actual building mesh (thin instance), not a ground radius.
-     * Gated by USE_GPU_PICK — live path is rayPickSpheres / rayHitSpheresNearest.
+     * Gated by USE_GPU_PICK — live path is pickStructureOnRay.
      * @param {number} clientX
      * @param {number} clientY
      * @returns {Promise<{ kind: 'agora' | 'building', index: number } | null>}
@@ -4617,8 +4788,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         terrain = null;
         fieldSnap = snap ?? null;
         const tableHalf = snap ? worldHalfFFromField(snap) : WORLD_HALF_F;
-        cameraController.setWorldHalfF?.(resolveCameraHalfF(tableHalf, snap?.cameraHalfF));
-        celestial.setWorldHalfF?.(tableHalf);
+        const tableHalfZ = snap ? worldHalfZFFromField(snap) : tableHalf;
+        const ext = resolveCameraExtents(tableHalf, tableHalfZ, snap?.cameraHalfF);
+        cameraController.setWorldHalfF?.(ext.x, ext.z);
+        celestial.setWorldHalfF?.(Math.max(tableHalf, tableHalfZ));
         fogApi?.reset?.(snap ?? null);
         fogApi?.detachOverlay?.();
         applyShadowState();

@@ -7,6 +7,8 @@ import {
   TERRAIN,
   inBounds,
   worldToTile,
+  worldToTileZ,
+  activeWorldHalfZF,
   isPassable,
   isTerrainSlowTile,
   activeWorldHalfF,
@@ -42,10 +44,57 @@ export const TREE_BURN_TICKS = 900;
 /** While burning, lose one stage on this cadence (~2.5s at 20Hz). */
 export const TREE_BURN_DAMAGE_INTERVAL = 50;
 export const TREE_BURN_DAMAGE = TREE_WOOD_PER_STAGE;
+/**
+ * Canopy stage that can light a neighbor. Splash chips two stages, so a full
+ * natural tree (6) still qualifies after the hit; saplings never do.
+ */
+export const TREE_SPREAD_MIN_STAGE = 4;
+
+const TREE_SPREAD_DIRS = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+  [1, 1],
+  [1, -1],
+  [-1, 1],
+  [-1, -1],
+];
 
 export function treeStageFromStock(stock) {
   if (stock <= 0) return 0;
   return Math.ceil(stock / TREE_WOOD_PER_STAGE);
+}
+
+/** Of 16 deterministic rolls, how many catch a neighbor. 0 below the size gate. */
+export function treeSpreadWeight(stage) {
+  const s = stage | 0;
+  if (s < TREE_SPREAD_MIN_STAGE) return 0;
+  if (s < 6) return 10;
+  if (s < 8) return 14;
+  return 16;
+}
+
+/** Full canopies reach diagonals; smaller ones only the four orthogonal tiles. */
+export function treeSpreadReach(stage) {
+  return (stage | 0) >= 6 ? 8 : 4;
+}
+
+/** A full canopy can light two neighbors; a just-big tree lights one. */
+export function treeSpreadCount(stage) {
+  return (stage | 0) >= 6 ? 2 : 1;
+}
+
+/** Stable mix of tile and remaining burn. Same on every peer, no world rng. */
+export function treeSpreadHash(tileIndex, burn) {
+  let h = Math.imul((tileIndex + 1) ^ Math.imul(burn | 0, 0x9e3779b1), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  return h >>> 0;
+}
+
+/** Water tiles do not burn — shore trees and ground-fire both check this. */
+export function tileIsWater(field, tileIndex) {
+  return field?.terrainTypes?.[tileIndex] === TERRAIN.WATER;
 }
 
 /** Visual scale multiplier for a stage (1..12). Stage 0 → hidden. */
@@ -118,10 +167,11 @@ export function damageTree(field, tileIndex, amount) {
   return removed;
 }
 
-/** Light a living tree (refreshes burn timer). */
+/** Light a living tree that is not standing in water (refreshes burn timer). */
 export function igniteTree(field, tileIndex) {
   ensureTreeArrays(field);
   if (field.treeStock[tileIndex] <= 0) return false;
+  if (tileIsWater(field, tileIndex)) return false;
   if (field.treeBurn[tileIndex] === 0) {
     field.burningTrees.push(tileIndex);
   }
@@ -205,7 +255,7 @@ export function applyTreeSplash(field, impactX, impactY, radius) {
   ensureTreeArrays(field);
   const radius2 = fx.mul(radius, radius);
   const cx = worldToTile(impactX);
-  const cz = worldToTile(impactY);
+  const cz = worldToTileZ(impactY);
   const rTiles = Math.ceil(fx.toFloat(radius) / TILE_SIZE_F) + 1;
   let hit = false;
 
@@ -214,9 +264,11 @@ export function applyTreeSplash(field, impactX, impactY, radius) {
       if (!inBounds(tx, tz)) continue;
       const i = tz * field.width + tx;
       if (field.treeStock[i] <= 0) continue;
+      if (tileIsWater(field, i)) continue;
       const half = activeWorldHalfF();
+      const halfZ = activeWorldHalfZF();
       const wx = fx.fromFloat((tx + 0.5) * TILE_SIZE_F - half);
-      const wz = fx.fromFloat((tz + 0.5) * TILE_SIZE_F - half);
+      const wz = fx.fromFloat((tz + 0.5) * TILE_SIZE_F - halfZ);
       if (fx.dist2(impactX, impactY, wx, wz) > radius2) continue;
       if (igniteTree(field, i)) hit = true;
       if (damageTree(field, i, TREE_IGNITE_DAMAGE) > 0) hit = true;
@@ -235,6 +287,38 @@ export function treeBurnsToDeath(stock, burn) {
   return hits * TREE_BURN_DAMAGE >= stock;
 }
 
+/**
+ * Light cold neighbors. Already-burning trees are left alone so two canopies
+ * cannot refresh each other. Water tiles never catch.
+ * @returns {number} trees newly lit
+ */
+export function spreadTreeFire(field, tileIndex) {
+  const stage = treeStageFromStock(field.treeStock[tileIndex]);
+  const weight = treeSpreadWeight(stage);
+  if (weight <= 0) return 0;
+  const roll = treeSpreadHash(tileIndex, field.treeBurn[tileIndex]);
+  if ((roll & 15) >= weight) return 0;
+  const want = treeSpreadCount(stage);
+  const reach = treeSpreadReach(stage);
+  const width = field.width | 0;
+  const height = field.height | 0;
+  const tz = (tileIndex / width) | 0;
+  const tx = tileIndex - tz * width;
+  const start = (roll >>> 4) & (reach - 1);
+  let lit = 0;
+  for (let k = 0; k < reach && lit < want; k++) {
+    const dir = TREE_SPREAD_DIRS[(start + k) & (reach - 1)];
+    const nx = tx + dir[0];
+    const nz = tz + dir[1];
+    if (nx < 0 || nz < 0 || nx >= width || nz >= height) continue;
+    const ni = nz * width + nx;
+    if (tileIsWater(field, ni)) continue;
+    if (field.treeStock[ni] <= 0 || field.treeBurn[ni] !== 0) continue;
+    if (igniteTree(field, ni)) lit++;
+  }
+  return lit;
+}
+
 /** Advance burning trees; depletes stock on a fixed cadence. */
 export function treeBurnSystem(field) {
   ensureTreeArrays(field);
@@ -251,8 +335,9 @@ export function treeBurnSystem(field) {
     }
     burn -= 1;
     field.treeBurn[ti] = burn;
-    // Damage on the interval boundary; publish only on stock/ignite/extinguish.
+    // Spread on the size it held this interval, then chip.
     if (burn % TREE_BURN_DAMAGE_INTERVAL === 0) {
+      spreadTreeFire(field, ti);
       damageTree(field, ti, TREE_BURN_DAMAGE);
     }
     if (field.treeStock[ti] === 0 || burn === 0) {

@@ -17,7 +17,7 @@ import {
   setStandardOpacityTexture,
 } from '../vendor/lite/liteVendor.js';
 import * as fx from '../sim/fixed.js';
-import { TILE_SIZE_F, worldHalfFFromField } from '../sim/field.js';
+import { TILE_SIZE_F, worldHalfFFromField, worldHalfZFFromField } from '../sim/field.js';
 import { BUILDING_FOOTPRINTS } from '../sim/buildings.js';
 import { isAlly } from '../sim/teams.js';
 import { UNIT_DEFS, getUnitDef } from '../sim/unitTypes.js';
@@ -131,10 +131,11 @@ export function structureKey(b) {
  * @returns {{ tx: number, tz: number }}
  */
 export function worldToTileF(field, x, z) {
-  const half = worldHalfFFromField(field);
+  const halfX = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
   return {
-    tx: Math.floor((x + half) / TILE_SIZE_F),
-    tz: Math.floor((z + half) / TILE_SIZE_F),
+    tx: Math.floor((x + halfX) / TILE_SIZE_F),
+    tz: Math.floor((z + halfZ) / TILE_SIZE_F),
   };
 }
 
@@ -346,6 +347,7 @@ export function createFogOfWar() {
   let width = 0;
   let height = 0;
   let half = 0;
+  let halfZ = 0;
   /** Occupancy count — hard vision circle. */
   /** @type {Uint32Array | null} */
   let visible = null;
@@ -475,6 +477,7 @@ export function createFogOfWar() {
     width = field?.width | 0;
     height = field?.height | 0;
     half = field ? worldHalfFFromField(field) : 0;
+    halfZ = field ? worldHalfZFFromField(field) : 0;
     const n = width * height;
     if (!visible || visible.length !== n) visible = n ? new Uint32Array(n) : null;
     else visible.fill(0);
@@ -581,6 +584,7 @@ export function createFogOfWar() {
     field = nextField;
     if (same) {
       half = worldHalfFFromField(field);
+      halfZ = worldHalfZFFromField(field);
       return;
     }
     forgetKnown();
@@ -604,7 +608,7 @@ export function createFogOfWar() {
     if (!enabled) return true;
     if (!visible || !field) return true;
     const tx = Math.floor((x + half) / TILE_SIZE_F);
-    const tz = Math.floor((z + half) / TILE_SIZE_F);
+    const tz = Math.floor((z + halfZ) / TILE_SIZE_F);
     if (tx < 0 || tz < 0 || tx >= width || tz >= height) return false;
     return visible[tz * width + tx] > 0;
   }
@@ -613,7 +617,7 @@ export function createFogOfWar() {
     if (!enabled) return true;
     if (!explored || !field) return true;
     const tx = Math.floor((x + half) / TILE_SIZE_F);
-    const tz = Math.floor((z + half) / TILE_SIZE_F);
+    const tz = Math.floor((z + halfZ) / TILE_SIZE_F);
     if (tx < 0 || tz < 0 || tx >= width || tz >= height) return false;
     return explored[tz * width + tx] !== 0;
   }
@@ -622,7 +626,7 @@ export function createFogOfWar() {
     if (!enabled) return true;
     if (!sight || !field) return true;
     const tx = Math.floor((x + half) / TILE_SIZE_F);
-    const tz = Math.floor((z + half) / TILE_SIZE_F);
+    const tz = Math.floor((z + halfZ) / TILE_SIZE_F);
     if (tx < 0 || tz < 0 || tx >= width || tz >= height) return false;
     return sight[tz * width + tx] > 0;
   }
@@ -631,7 +635,7 @@ export function createFogOfWar() {
   function trailOpen(x, z) {
     if (!cover || !field) return false;
     const tx = Math.floor((x + half) / TILE_SIZE_F);
-    const tz = Math.floor((z + half) / TILE_SIZE_F);
+    const tz = Math.floor((z + halfZ) / TILE_SIZE_F);
     if (tx < 0 || tz < 0 || tx >= width || tz >= height) return false;
     const i = tz * width + tx;
     const floor = explored && explored[i] ? VISITED_COVER : 0;
@@ -705,7 +709,7 @@ export function createFogOfWar() {
 
   function addSource(x, z, radiusTiles) {
     const cx = Math.floor((x + half) / TILE_SIZE_F);
-    const cz = Math.floor((z + half) / TILE_SIZE_F);
+    const cz = Math.floor((z + halfZ) / TILE_SIZE_F);
     if (cx < 0 || cz < 0 || cx >= width || cz >= height) return;
     let r = radiusTiles | 0;
     if (r > EDT_MAX_R) r = EDT_MAX_R;
@@ -1100,7 +1104,7 @@ export function createFogOfWar() {
   function overlayAlphaAt(x, z) {
     if (!enabled || !cover || !field) return 0;
     const fx = (x + half) / TILE_SIZE_F - 0.5;
-    const fz = (z + half) / TILE_SIZE_F - 0.5;
+    const fz = (z + halfZ) / TILE_SIZE_F - 0.5;
     return 255 - sampleCover(fx, fz);
   }
 
@@ -1325,8 +1329,8 @@ export function createFogOfWar() {
         if (!active(tx, tz)) continue;
         const x1 = tx * TILE_SIZE_F - half;
         const x2 = (tx + 1) * TILE_SIZE_F - half;
-        const z1 = tz * TILE_SIZE_F - half;
-        const z2 = (tz + 1) * TILE_SIZE_F - half;
+        const z1 = tz * TILE_SIZE_F - halfZ;
+        const z2 = (tz + 1) * TILE_SIZE_F - halfZ;
         const y00 = surfaceHeightAt(field, x1, z1) + OVERLAY_LIFT;
         const y10 = surfaceHeightAt(field, x2, z1) + OVERLAY_LIFT;
         const y11 = surfaceHeightAt(field, x2, z2) + OVERLAY_LIFT;

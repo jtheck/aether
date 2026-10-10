@@ -2,7 +2,7 @@
 // Sim owns the layout because rocks affect passability and trees affect speed.
 
 import * as fx from './fixed.js';
-import { TERRAIN, worldToTile, applyTerrainSlow, isTerrainSlowTile, tableRimDistAt } from './field.js';
+import { TERRAIN, worldToTile, worldToTileZ, applyTerrainSlow, isTerrainSlowTile, tableRimDistAt } from './field.js';
 import { DEFAULT_SLOW_MUL } from './unitTypes.js';
 import { applyTableEdgeOccupancy, refreshTableTerrain } from './tableShape.js';
 import {
@@ -516,12 +516,12 @@ function isEligible(field, i, reserved, applyReserved = true) {
 function buildReservedMask(field, world, reservedWorldPoints) {
   const mask = new Uint8Array(field.width * field.height);
   for (const point of reservedWorldPoints) {
-    markReservedCircle(field, mask, worldToTile(fx.fromFloat(point[0])), worldToTile(fx.fromFloat(point[1])));
+    markReservedCircle(field, mask, worldToTile(fx.fromFloat(point[0])), worldToTileZ(fx.fromFloat(point[1])));
   }
   if (world) {
     for (let i = 0; i < world.count; i++) {
       if (!world.alive[i]) continue;
-      markReservedCircle(field, mask, worldToTile(world.px[i]), worldToTile(world.py[i]));
+      markReservedCircle(field, mask, worldToTile(world.px[i]), worldToTileZ(world.py[i]));
     }
   }
   return mask;

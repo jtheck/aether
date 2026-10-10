@@ -53,9 +53,28 @@ export const SKIRMISH_MAP_H = SKIRMISH_MAP_W;
 export const STRESS_MAP_CHUNKS = 31;
 export const STRESS_MAP_W = tilesForOddChunks(STRESS_MAP_CHUNKS);
 export const STRESS_MAP_H = STRESS_MAP_W;
-/** Forge size picker — 5 / 9 / 13 chunks. */
+/** Forge presets — 5 / 9 / 13 chunks. The editor also accepts any odd count in range. */
 export const FORGE_MAP_SIZES = [TINY_MAP_CHUNKS, SKIRMISH_MAP_CHUNKS, DEFAULT_MAP_CHUNKS]
   .map((chunks) => tilesForOddChunks(chunks));
+/** Smallest Forge board. Largest is past stress; A* scratch grows to fit. */
+export const FORGE_MIN_CHUNKS = TINY_MAP_CHUNKS;
+/** 63×16 = 1008 tiles on a side. Odd, and about twice the stress board. */
+export const FORGE_MAX_CHUNKS = 63;
+
+/** Odd chunk count inside the Forge range. Even input steps up to the next odd count. */
+export function clampForgeChunks(chunks) {
+  let n = Math.round(Number(chunks));
+  if (!Number.isFinite(n)) n = SKIRMISH_MAP_CHUNKS;
+  if ((n & 1) === 0) n += 1;
+  if (n < FORGE_MIN_CHUNKS) n = FORGE_MIN_CHUNKS;
+  if (n > FORGE_MAX_CHUNKS) n = FORGE_MAX_CHUNKS;
+  return n;
+}
+
+/** Tile count for a Forge chunk count after clamping. */
+export function forgeTilesForChunks(chunks) {
+  return tilesForOddChunks(clampForgeChunks(chunks));
+}
 
 /** Default playable board in tiles (aliases for callers that want the normal size). */
 export const MAP_W = DEFAULT_MAP_W;
@@ -69,9 +88,15 @@ let _mapW = MAP_W;
 let _mapH = MAP_H;
 let _worldHalfF = WORLD_HALF_F;
 let _worldHalf = WORLD_HALF;
+let _worldHalfZF = WORLD_HALF_F;
+let _worldHalfZ = WORLD_HALF;
 
 export function worldHalfFFromMap(mapW) {
   return (mapW * TILE_SIZE_F) / 2;
+}
+
+export function worldHalfZFFromMap(mapH) {
+  return (mapH * TILE_SIZE_F) / 2;
 }
 
 /**
@@ -83,6 +108,10 @@ export const STRESS_CAMERA_HALF_F = worldHalfFFromMap(tilesForOddChunks(STRESS_C
 
 export function worldHalfFFromField(field) {
   return worldHalfFFromMap(field.width);
+}
+
+export function worldHalfZFFromField(field) {
+  return worldHalfZFFromMap(field?.height ?? _mapH);
 }
 
 export function activeMapW() {
@@ -101,6 +130,14 @@ export function activeWorldHalf() {
   return _worldHalf;
 }
 
+export function activeWorldHalfZF() {
+  return _worldHalfZF;
+}
+
+export function activeWorldHalfZ() {
+  return _worldHalfZ;
+}
+
 /** Switch session map size (A*, world↔tile, spatial). Call before createWorld for that session. */
 export function setActiveMapSize(mapW = DEFAULT_MAP_W, mapH = DEFAULT_MAP_H) {
   const w = Math.max(1, mapW | 0);
@@ -109,6 +146,9 @@ export function setActiveMapSize(mapW = DEFAULT_MAP_W, mapH = DEFAULT_MAP_H) {
   _mapH = h;
   _worldHalfF = worldHalfFFromMap(w);
   _worldHalf = fx.fromInt(_worldHalfF);
+  _worldHalfZF = worldHalfZFFromMap(h);
+  _worldHalfZ = fx.fromInt(_worldHalfZF);
+  ensureAstarCapacity(w * h);
 }
 
 /** Map tile counts for boot config — large board under stress / oversized armies. */
@@ -130,18 +170,43 @@ export const TERRAIN = {
   GRASS: 3,
 };
 
-/** Which 4×4 atlas PNG a tile samples. */
+/** Which 4×4 atlas PNG a tile's shore comes from. */
 export const ATLAS = {
   GRASS_DIRT: 0,
   GRASS_WATER: 1,
+  DIRT_WATER: 2,
 };
 
 /** World-Y scale for heightMap (0–1) — tile ripples plus edge-locked region lift. */
 export const HEIGHT_AMPLITUDE = 14;
-/** Shallow dish under water — follows the local felt instead of a 0.35× cliff. */
+/**
+ * Shallow dish under the water surface.
+ * A constant offset, so a lake stays at its own elevation instead of scaling toward y = 0.
+ */
 export const WATER_RECESS = 0.45;
-/** Tiles from the table rim before painted / chunk lift is allowed to reach full height. */
+/**
+ * Bank tiles may slide toward their pond's waterline, but only this far (world Y).
+ * Enough to take the roll out of a normal shore. A steep bank stays a bank.
+ */
+const WATER_SHORE_SLIDE = 1.5;
+/** Open water keeps a little of the felt so it is not a hard plane. */
+const WATER_FLAT = 0.94;
+/** Tiles from the table rim before seeded chunk lift is allowed to reach full height. */
 export const EDGE_LOCK_TILES = 8;
+/**
+ * Raise / lower brush, added after the rim lock. Negative lowers.
+ * Wide enough for the extra height allowed inland of the table edge.
+ */
+export const PAINTED_LIFT_MIN = -3.6;
+export const PAINTED_LIFT_MAX = 2.5;
+/** Table-edge felt stays under the wooden rim, and this far down. */
+const SCULPT_HI_Y = 9.5;
+const SCULPT_LO_Y = -6.5;
+/** Inland of the edge the felt may rise and sink further. */
+const SCULPT_INNER_HI_Y = 20;
+const SCULPT_INNER_LO_Y = -15;
+/** Steepest felt step, world Y per tile. Keeps shores and brush edges from going vertical. */
+const MAX_SLOPE_Y = 2.8;
 const DETAIL_WEIGHT = 0.4;
 const LIFT_WEIGHT = 0.6;
 export const REGION_LIFT_STEP = 0.07;
@@ -211,8 +276,10 @@ export function createField(seed = 0, dims = {}) {
     heightMap: new Float32Array(n),
     /** Natural per-tile ripples (0–1). Region lift is composed on top. */
     detailHeight: new Float32Array(n),
-    /** Paintable / seeded lift (0–1). Multiplied by the edge lock at compose. */
+    /** Seeded chunk lift (0–1). Fades out at the rails. */
     regionLift: new Float32Array(n),
+    /** Raise / lower brush. Not faded at the rails. */
+    paintedLift: new Float32Array(n),
     terrainTypes: new Uint8Array(n),
     tileType: new Uint8Array(n),
     atlasId: new Uint8Array(n),
@@ -304,18 +371,240 @@ export function fieldSnapshot(field) {
   return snapshot;
 }
 
+function waterTouchesBank(water, width, height, x, z) {
+  for (let dz = -1; dz <= 1; dz++) {
+    const nz = z + dz;
+    if (nz < 0 || nz >= height) return true;
+    const row = nz * width;
+    for (let dx = -1; dx <= 1; dx++) {
+      if (dx === 0 && dz === 0) continue;
+      const nx = x + dx;
+      if (nx < 0 || nx >= width || water[row + nx] === 0) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Flatten each connected body of water toward its own shoreline.
+ * The bank stays on the felt. Open water levels off at that pond's elevation,
+ * not at the lowest point on the map.
+ */
+export function rebuildWaterSurface(field) {
+  const { width, height, heightMap, terrainTypes } = field;
+  const n = width * height;
+  let level = field.waterLevel;
+  const prev = level && level.length === n ? level.slice() : null;
+  if (!level || level.length !== n) {
+    level = new Float32Array(n);
+    field.waterLevel = level;
+  }
+  const water = new Uint8Array(n);
+  let waterCount = 0;
+  for (let i = 0; i < n; i++) {
+    level[i] = heightMap[i];
+    if (terrainTypes[i] === TERRAIN.WATER) {
+      water[i] = 1;
+      waterCount++;
+    }
+  }
+  field.waterSurfaceReady = true;
+  if (waterCount === 0) return level;
+
+  const comp = new Int32Array(n);
+  comp.fill(-1);
+  const dist = new Uint16Array(n);
+  dist.fill(0xffff);
+  const queue = new Int32Array(waterCount);
+  let compId = 0;
+  let qt = 0;
+  for (let i = 0; i < n; i++) {
+    if (water[i] === 0 || comp[i] !== -1) continue;
+    let qh = qt;
+    queue[qt++] = i;
+    comp[i] = compId;
+    while (qh < qt) {
+      const cur = queue[qh++];
+      const x = cur % width;
+      const z = (cur / width) | 0;
+      for (let dz = -1; dz <= 1; dz++) {
+        const nz = z + dz;
+        if (nz < 0 || nz >= height) continue;
+        const row = nz * width;
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dz === 0) continue;
+          const nx = x + dx;
+          if (nx < 0 || nx >= width) continue;
+          const j = row + nx;
+          if (water[j] === 0 || comp[j] !== -1) continue;
+          comp[j] = compId;
+          queue[qt++] = j;
+        }
+      }
+    }
+    compId++;
+  }
+
+  qt = 0;
+  for (let z = 0; z < height; z++) {
+    for (let x = 0; x < width; x++) {
+      const i = z * width + x;
+      if (water[i] === 0 || !waterTouchesBank(water, width, height, x, z)) continue;
+      dist[i] = 0;
+      queue[qt++] = i;
+    }
+  }
+  let qh = 0;
+  while (qh < qt) {
+    const cur = queue[qh++];
+    const x = cur % width;
+    const z = (cur / width) | 0;
+    const nd = dist[cur] + 1;
+    if (x > 0 && water[cur - 1] && dist[cur - 1] > nd) {
+      dist[cur - 1] = nd;
+      queue[qt++] = cur - 1;
+    }
+    if (x + 1 < width && water[cur + 1] && dist[cur + 1] > nd) {
+      dist[cur + 1] = nd;
+      queue[qt++] = cur + 1;
+    }
+    if (z > 0 && water[cur - width] && dist[cur - width] > nd) {
+      dist[cur - width] = nd;
+      queue[qt++] = cur - width;
+    }
+    if (z + 1 < height && water[cur + width] && dist[cur + width] > nd) {
+      dist[cur + width] = nd;
+      queue[qt++] = cur + width;
+    }
+  }
+
+  const shoreSum = new Float64Array(compId);
+  const shoreCnt = new Uint32Array(compId);
+  const allSum = new Float64Array(compId);
+  const allCnt = new Uint32Array(compId);
+  for (let i = 0; i < n; i++) {
+    if (water[i] === 0) continue;
+    const id = comp[i];
+    allSum[id] += heightMap[i];
+    allCnt[id]++;
+    if (dist[i] === 0) {
+      shoreSum[id] += heightMap[i];
+      shoreCnt[id]++;
+    }
+  }
+  const plane = new Float64Array(compId);
+  for (let id = 0; id < compId; id++) {
+    plane[id] = shoreCnt[id] ? shoreSum[id] / shoreCnt[id] : allSum[id] / allCnt[id];
+  }
+
+  const shoreCap = WATER_SHORE_SLIDE / HEIGHT_AMPLITUDE;
+  for (let i = 0; i < n; i++) {
+    if (water[i] === 0) continue;
+    const orig = heightMap[i];
+    const delta = (plane[comp[i]] - orig) * WATER_FLAT;
+    const d = dist[i];
+    if (d === 0) {
+      const slide = delta > shoreCap ? shoreCap : delta < -shoreCap ? -shoreCap : delta;
+      level[i] = orig + slide;
+    } else if (d === 1) {
+      const slide = delta > shoreCap ? shoreCap : delta < -shoreCap ? -shoreCap : delta;
+      level[i] = orig + slide + (delta - slide) * 0.65;
+    } else {
+      level[i] = orig + delta;
+    }
+    // Rails and plinths are locked to the felt. Fade the pond flatness out
+    // so the water meets that wood instead of pulling a gap open.
+    const e = edgeLockAt(field, i);
+    if (e < 1) level[i] = orig + (level[i] - orig) * e;
+  }
+  relaxWaterSlope(field, level);
+  if (prev) {
+    const dirty = [];
+    for (let i = 0; i < n; i++) {
+      if (terrainTypes[i] !== TERRAIN.WATER) continue;
+      if (Math.abs(prev[i] - level[i]) > 1e-4) dirty.push({ x: i % width, z: (i / width) | 0 });
+    }
+    field.waterDirty = dirty;
+  }
+  return level;
+}
+
+/** Tiles whose flat water level moved on the last rebuild. Clears the list. */
+export function consumeWaterDirty(field) {
+  const dirty = field?.waterDirty || [];
+  if (field) field.waterDirty = null;
+  return dirty;
+}
+
+/** Pull a flat pond into a ramp where it meets higher or lower ground. */
+function relaxWaterSlope(field, level) {
+  const maxDh = MAX_SLOPE_Y / HEIGHT_AMPLITUDE;
+  const { width, height, terrainTypes, heightMap } = field;
+  const n = width * height;
+  if (!heightMap || heightMap.length !== n) return;
+  const visAt = (i) => {
+    if (terrainTypes[i] !== TERRAIN.WATER) return heightMap[i];
+    const e = edgeLockAt(field, i);
+    return level[i] - (WATER_RECESS * e) / HEIGHT_AMPLITUDE;
+  };
+  const ortho = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  for (let iter = 0; iter < 24; iter++) {
+    let moved = false;
+    for (let i = 0; i < n; i++) {
+      if (terrainTypes[i] !== TERRAIN.WATER) continue;
+      const x = i % width;
+      const z = (i / width) | 0;
+      let lo = -Infinity;
+      let hi = Infinity;
+      for (let s = 0; s < 4; s++) {
+        const nx = x + ortho[s][0];
+        const nz = z + ortho[s][1];
+        if (nx < 0 || nz < 0 || nx >= width || nz >= height) continue;
+        const nv = visAt(nz * width + nx);
+        if (nv - maxDh > lo) lo = nv - maxDh;
+        if (nv + maxDh < hi) hi = nv + maxDh;
+      }
+      const e = edgeLockAt(field, i);
+      let vis = level[i] - (WATER_RECESS * e) / HEIGHT_AMPLITUDE;
+      let next = vis;
+      if (lo > hi) next = (lo + hi) * 0.5;
+      else if (vis < lo) next = lo;
+      else if (vis > hi) next = hi;
+      if (next === vis) continue;
+      level[i] = next + (WATER_RECESS * e) / HEIGHT_AMPLITUDE;
+      moved = true;
+    }
+    if (!moved) break;
+  }
+}
+
+function edgeLockAt(field, i) {
+  const lock = field.edgeLock;
+  if (!lock || lock.length !== field.width * field.height) return 1;
+  const e = lock[i];
+  return e < 0 ? 0 : e > 1 ? 1 : e;
+}
+
+export function ensureWaterSurface(field) {
+  const n = field.width * field.height;
+  if (field.waterSurfaceReady && field.waterLevel?.length === n) return field.waterLevel;
+  return rebuildWaterSurface(field);
+}
+
 /** World Y at a grid corner (cx, cz in 0…MAP inclusive). */
 export function cornerHeightWorld(field, cx, cz) {
   return tileHeightWorld(field, cx, cz);
 }
 
-/** World Y for a tile, matching render `sampleHeight` (water is a small recess). */
+/** World Y for a tile. Water sits in a shallow dish on a smoothed local surface. */
 export function tileHeightWorld(field, tx, tz) {
   const x = tx < 0 ? 0 : tx >= field.width ? field.width - 1 : tx;
   const z = tz < 0 ? 0 : tz >= field.height ? field.height - 1 : tz;
   const i = z * field.width + x;
-  const y = field.heightMap[i] * HEIGHT_AMPLITUDE;
-  if (field.terrainTypes[i] === TERRAIN.WATER) return y - WATER_RECESS;
+  ensureWaterSurface(field);
+  const h = field.terrainTypes[i] === TERRAIN.WATER ? field.waterLevel[i] : field.heightMap[i];
+  const y = h * HEIGHT_AMPLITUDE;
+  if (field.terrainTypes[i] === TERRAIN.WATER) return y - WATER_RECESS * edgeLockAt(field, i);
   return y;
 }
 
@@ -352,9 +641,9 @@ export function isTreeTile(field, tx, tz) {
 /** Count living-tree tiles on a Bresenham walk (same grid walk as lineClear). */
 export function countTreesAlongLine(field, x0, z0, x1, z1) {
   let tx0 = worldToTile(x0);
-  let tz0 = worldToTile(z0);
+  let tz0 = worldToTileZ(z0);
   const tx1 = worldToTile(x1);
-  const tz1 = worldToTile(z1);
+  const tz1 = worldToTileZ(z1);
   let dx = Math.abs(tx1 - tx0);
   let dz = Math.abs(tz1 - tz0);
   const sx = tx0 < tx1 ? 1 : -1;
@@ -393,8 +682,14 @@ export function applyChunkMask(field, chunkMask, chunkSize = 16) {
   updatePassFromWater(field);
 }
 
+/** World X → tile column. Square boards share this half with Z. */
 export function worldToTile(x) {
   return fx.toInt(fx.div(x + _worldHalf, TILE));
+}
+
+/** World Z → tile row. Matches `worldToTile` when the board is square. */
+export function worldToTileZ(z) {
+  return fx.toInt(fx.div(z + _worldHalfZ, TILE));
 }
 
 export function tileCenterX(tx) {
@@ -402,7 +697,7 @@ export function tileCenterX(tx) {
 }
 
 export function tileCenterY(tz) {
-  return fx.mul(fx.fromInt(tz), TILE) + HALF_TILE - _worldHalf;
+  return fx.mul(fx.fromInt(tz), TILE) + HALF_TILE - _worldHalfZ;
 }
 
 /**
@@ -413,9 +708,9 @@ export function tileCenterY(tz) {
 export function lineClear(field, x0, z0, x1, z1, opts = null) {
   const avoidSlow = !!opts?.avoidSlow;
   let tx0 = worldToTile(x0);
-  let tz0 = worldToTile(z0);
+  let tz0 = worldToTileZ(z0);
   const tx1 = worldToTile(x1);
-  const tz1 = worldToTile(z1);
+  const tz1 = worldToTileZ(z1);
 
   let dx = Math.abs(tx1 - tx0);
   let dz = Math.abs(tz1 - tz0);
@@ -448,13 +743,31 @@ export function lineClear(field, x0, z0, x1, z1, opts = null) {
  * @param {boolean} [opts.slowAware] — charge extra to enter slowMask tiles (rally / Drayage / monk).
  * @param {boolean} [opts.treeSeek] — charge extra to enter non-tree tiles (myco wander).
  */
-// Reused A* scratch — sized for the largest supported board (stress), not default MAP_*.
-const ASTAR_CELLS = STRESS_MAP_W * STRESS_MAP_H;
-const _gScore = new Int32Array(ASTAR_CELLS);
-const _cameFrom = new Int32Array(ASTAR_CELLS);
-const _closed = new Uint8Array(ASTAR_CELLS);
-const _visitGen = new Uint32Array(ASTAR_CELLS);
+// Reused A* scratch. Starts at the stress board and grows when a larger map is activated.
+const ASTAR_STRESS_CELLS = STRESS_MAP_W * STRESS_MAP_H;
+/** Search budget on stress-sized boards. A larger board may scan every tile. */
+const ASTAR_STRESS_EXPANSIONS = 200000;
+let _astarCells = ASTAR_STRESS_CELLS;
+let _gScore = new Int32Array(_astarCells);
+let _cameFrom = new Int32Array(_astarCells);
+let _closed = new Uint8Array(_astarCells);
+let _visitGen = new Uint32Array(_astarCells);
+let _tilePath = new Int32Array(_astarCells);
+let _tileScratch = new Int32Array(_astarCells);
 let _astarGen = 1;
+
+function ensureAstarCapacity(cells) {
+  const n = Math.max(1, cells | 0);
+  if (n <= _astarCells) return;
+  _astarCells = n;
+  _gScore = new Int32Array(n);
+  _cameFrom = new Int32Array(n);
+  _closed = new Uint8Array(n);
+  _visitGen = new Uint32Array(n);
+  _tilePath = new Int32Array(n);
+  _tileScratch = new Int32Array(n);
+  _astarGen = 1;
+}
 
 function beginAstar() {
   _astarGen++;
@@ -477,9 +790,9 @@ export function findPath(field, sx, sy, ex, ey, wx, wy, maxWp = 32, opts = null)
   const slowAware = !!opts?.slowAware;
   const treeSeek = !!opts?.treeSeek && !slowAware;
   let stx = worldToTile(sx);
-  let stz = worldToTile(sy);
+  let stz = worldToTileZ(sy);
   let etx = worldToTile(ex);
-  let etz = worldToTile(ey);
+  let etz = worldToTileZ(ey);
 
   if (!isPassable(field, stx, stz)) {
     const snapped = nearestPassable(field, stx, stz, 8);
@@ -499,7 +812,7 @@ export function findPath(field, sx, sy, ex, ey, wx, wy, maxWp = 32, opts = null)
 
   const startX = tileCenterX(stx);
   const startY = tileCenterY(stz);
-  if (worldToTile(ex) !== etx || worldToTile(ey) !== etz || !isPassable(field, etx, etz)) {
+  if (worldToTile(ex) !== etx || worldToTileZ(ey) !== etz || !isPassable(field, etx, etz)) {
     ex = tileCenterX(etx);
     ey = tileCenterY(etz);
   }
@@ -518,6 +831,8 @@ export function findPath(field, sx, sy, ex, ey, wx, wy, maxWp = 32, opts = null)
   }
 
   const W = field.width;
+  const boardCells = W * (field.height | 0);
+  ensureAstarCapacity(boardCells);
   const toKey = (x, z) => z * W + x;
   const startKey = toKey(stx, stz);
   const endKey = toKey(etx, etz);
@@ -542,7 +857,7 @@ export function findPath(field, sx, sy, ex, ey, wx, wy, maxWp = 32, opts = null)
   ];
 
   let expansions = 0;
-  const maxExpansions = 200000;
+  const maxExpansions = boardCells > ASTAR_STRESS_CELLS ? boardCells : ASTAR_STRESS_EXPANSIONS;
   let bestKey = startKey;
   let bestH = startH;
   let reachedGoal = false;
@@ -736,13 +1051,10 @@ function buildWaypoints(
   return out;
 }
 
-const _tilePath = new Int32Array(ASTAR_CELLS);
-const _tileScratch = new Int32Array(ASTAR_CELLS);
-
 /** Snap a world point onto the nearest passable tile center (or null). */
 export function snapToPassable(field, x, y, radius = 8) {
   const tx = worldToTile(x);
-  const tz = worldToTile(y);
+  const tz = worldToTileZ(y);
   if (isPassable(field, tx, tz)) return { x, y };
   const snapped = nearestPassable(field, tx, tz, radius);
   if (!snapped) return null;
@@ -799,6 +1111,7 @@ function ensureHeightLayers(field) {
   const n = field.width * field.height;
   if (!field.detailHeight || field.detailHeight.length !== n) field.detailHeight = new Float32Array(n);
   if (!field.regionLift || field.regionLift.length !== n) field.regionLift = new Float32Array(n);
+  if (!field.paintedLift || field.paintedLift.length !== n) field.paintedLift = new Float32Array(n);
 }
 
 /** Tile-ripple height (0–1). Terrain bands read this; region lift is composed after. */
@@ -959,30 +1272,122 @@ export function tableRimDistAt(field, tx, tz) {
   return dist[tz * width + tx];
 }
 
-/**
- * Bake display height: tile ripples everywhere, extra lift only away from the rails.
- * Does not re-normalize, so water/land keep their relative dish.
- */
-export function composeHeightMap(field) {
-  ensureHeightLayers(field);
-  const lock = computeEdgeLock(field);
-  const { heightMap, detailHeight, regionLift } = field;
-  for (let i = 0; i < heightMap.length; i++) {
-    const detail = detailHeight[i];
-    const e = lock[i];
-    const h = detail * DETAIL_WEIGHT
-      + regionLift[i] * e * LIFT_WEIGHT
-      + detail * (1 - DETAIL_WEIGHT) * (1 - e);
-    heightMap[i] = h < 0 ? 0 : h > 1 ? 1 : h;
+/** How far each water tile sits from the felt. Lift adds this back so the dish travels with the ground. */
+function waterDishOffsets(field) {
+  ensureWaterSurface(field);
+  const n = field.width * field.height;
+  const offset = new Float32Array(n);
+  const { terrainTypes, waterLevel, heightMap } = field;
+  for (let i = 0; i < n; i++) {
+    if (terrainTypes[i] === TERRAIN.WATER) offset[i] = waterLevel[i] - heightMap[i];
   }
+  return offset;
 }
 
-/** Raise / lower the felt as-is. Terrain types stay put; rim lock is reapplied. */
+function applyWaterDish(field, offset) {
+  const n = field.width * field.height;
+  if (!field.waterLevel || field.waterLevel.length !== n) field.waterLevel = new Float32Array(n);
+  const { terrainTypes, waterLevel, heightMap } = field;
+  for (let i = 0; i < n; i++) {
+    waterLevel[i] = terrainTypes[i] === TERRAIN.WATER ? heightMap[i] + offset[i] : heightMap[i];
+  }
+  field.waterSurfaceReady = true;
+}
+
+/**
+ * Bake display height: tile ripples everywhere, seeded lift only away from the rails.
+ * The raise/lower brush is added on top, including at the rim.
+ * Does not re-normalize, so water/land keep their relative dish.
+ * @param {{ preserveWaterDish?: boolean }} [opts] Keep the current water-to-felt offset (raise / lower).
+ */
+function unpaintedFelt(detail, region, edge) {
+  return detail * DETAIL_WEIGHT
+    + region * edge * LIFT_WEIGHT
+    + detail * (1 - DETAIL_WEIGHT) * (1 - edge);
+}
+
+/** Height band for a tile. `edge` is 0 on the table rim and 1 inland. */
+function sculptBand(edge) {
+  const e = edge < 0 ? 0 : edge > 1 ? 1 : edge;
+  return {
+    hi: (SCULPT_HI_Y + (SCULPT_INNER_HI_Y - SCULPT_HI_Y) * e) / HEIGHT_AMPLITUDE,
+    lo: (SCULPT_LO_Y + (SCULPT_INNER_LO_Y - SCULPT_LO_Y) * e) / HEIGHT_AMPLITUDE,
+  };
+}
+
+export function composeHeightMap(field, opts = {}) {
+  ensureHeightLayers(field);
+  const dish = opts.preserveWaterDish ? waterDishOffsets(field) : null;
+  const lock = computeEdgeLock(field);
+  const { heightMap, detailHeight, regionLift, paintedLift } = field;
+  for (let i = 0; i < heightMap.length; i++) {
+    let h = unpaintedFelt(detailHeight[i], regionLift[i], lock[i])
+      + paintedLift[i] * LIFT_WEIGHT;
+    const band = sculptBand(lock[i]);
+    if (h > band.hi) h = band.hi;
+    else if (h < band.lo) h = band.lo;
+    heightMap[i] = h;
+  }
+  if (dish) applyWaterDish(field, dish);
+  else rebuildWaterSurface(field);
+}
+
+/**
+ * Land painted over water keeps the height you were looking at.
+ * Open water is flattened up off the basin; without this, dirt falls back into that hole
+ * and a raise/lower of the lake is lost.
+ * `indices` must still have the pre-change water plane in `waterLevel`.
+ * @param {number[]} indices
+ */
+export function adoptDisplayedWaterHeight(field, indices) {
+  if (!indices?.length) return false;
+  ensureHeightLayers(field);
+  const n = field.width * field.height;
+  if (!field.waterLevel || field.waterLevel.length !== n) return false;
+  computeEdgeLock(field);
+  const { paintedLift, detailHeight, regionLift, waterLevel, edgeLock } = field;
+  for (let k = 0; k < indices.length; k++) {
+    const i = indices[k];
+    const e = edgeLock[i];
+    const target = waterLevel[i] - (WATER_RECESS * e) / HEIGHT_AMPLITUDE;
+    let next = (target - unpaintedFelt(detailHeight[i], regionLift[i], e)) / LIFT_WEIGHT;
+    if (next < PAINTED_LIFT_MIN) next = PAINTED_LIFT_MIN;
+    if (next > PAINTED_LIFT_MAX) next = PAINTED_LIFT_MAX;
+    paintedLift[i] = next;
+  }
+  composeHeightMap(field);
+  return true;
+}
+
+function visibleHeight01(field, i) {
+  if (field.terrainTypes[i] === TERRAIN.WATER) {
+    return field.waterLevel[i] - (WATER_RECESS * edgeLockAt(field, i)) / HEIGHT_AMPLITUDE;
+  }
+  return field.heightMap[i];
+}
+
+/** 1 at the brush center, easing toward the rim so the bank is not a wall. */
+function liftFalloff(dist, radius) {
+  if (!(radius > 0)) return 1;
+  const t = dist / radius;
+  const u = t < 0 ? 0 : t > 1 ? 1 : t;
+  const s = u * u * (3 - 2 * u);
+  return 1 - s * 0.65;
+}
+
+/**
+ * Raise / lower levels toward the high or low side of the brush.
+ * The center arrives first; the rim eases in so the edge is a slope.
+ */
 export function paintRegionLift(field, tx, tz, delta, radius = 0) {
   ensureHeightLayers(field);
+  ensureWaterSurface(field);
+  computeEdgeLock(field);
   const r = Math.max(0, radius | 0);
   const dirty = [];
-  const { width, height, regionLift, activeMask } = field;
+  const ids = [];
+  const dist = [];
+  const { width, height, paintedLift, activeMask } = field;
   for (let dz = -r; dz <= r; dz++) {
     for (let dx = -r; dx <= r; dx++) {
       const d2 = dx * dx + dz * dz;
@@ -992,16 +1397,93 @@ export function paintRegionLift(field, tx, tz, delta, radius = 0) {
       if (x < 0 || z < 0 || x >= width || z >= height) continue;
       const i = z * width + x;
       if (activeMask && activeMask[i] === 0) continue;
-      const falloff = r === 0 ? 1 : 1 - Math.sqrt(d2) / (r + 0.001);
-      let next = regionLift[i] + delta * falloff;
-      if (next < REGION_LIFT_MIN) next = REGION_LIFT_MIN;
-      if (next > REGION_LIFT_MAX) next = REGION_LIFT_MAX;
-      if (next === regionLift[i]) continue;
-      regionLift[i] = next;
-      dirty.push({ x, z });
+      ids.push(i);
+      dist.push(Math.sqrt(d2));
     }
   }
-  if (dirty.length) composeHeightMap(field);
+  if (!ids.length) return dirty;
+  const inner = sculptBand(1);
+  let extreme = delta >= 0 ? -Infinity : Infinity;
+  const vis = new Float32Array(ids.length);
+  const { detailHeight, regionLift, edgeLock, heightMap, waterLevel, terrainTypes } = field;
+  for (let k = 0; k < ids.length; k++) {
+    const h = visibleHeight01(field, ids[k]);
+    vis[k] = h;
+    if (delta >= 0) {
+      if (h > extreme) extreme = h;
+    } else if (h < extreme) extreme = h;
+  }
+  const desiredHold = new Float32Array(ids.length);
+  let plane = extreme + delta * LIFT_WEIGHT;
+  if (delta >= 0) {
+    if (plane > inner.hi) plane = inner.hi;
+  } else if (plane < inner.lo) plane = inner.lo;
+  for (let k = 0; k < ids.length; k++) {
+    const i = ids[k];
+    const e = edgeLock[i];
+    const band = sculptBand(e);
+    let desired = vis[k] + (plane - vis[k]) * liftFalloff(dist[k], r);
+    if (desired > band.hi) desired = band.hi;
+    else if (desired < band.lo) desired = band.lo;
+    desiredHold[k] = desired;
+  }
+  const maxDh = MAX_SLOPE_Y / HEIGHT_AMPLITUDE;
+  const ortho = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const slot = new Int32Array(width * height);
+  slot.fill(-1);
+  for (let k = 0; k < ids.length; k++) slot[ids[k]] = k;
+  for (let iter = 0; iter < 8; iter++) {
+    for (let k = 0; k < ids.length; k++) {
+      const i = ids[k];
+      const x = i % width;
+      const z = (i / width) | 0;
+      let lo = -Infinity;
+      let hi = Infinity;
+      for (let n = 0; n < 4; n++) {
+        const nx = x + ortho[n][0];
+        const nz = z + ortho[n][1];
+        if (nx < 0 || nz < 0 || nx >= width || nz >= height) continue;
+        const j = nz * width + nx;
+        const nk = slot[j];
+        const nv = nk >= 0 ? desiredHold[nk] : visibleHeight01(field, j);
+        if (nv - maxDh > lo) lo = nv - maxDh;
+        if (nv + maxDh < hi) hi = nv + maxDh;
+      }
+      let d = desiredHold[k];
+      const start = vis[k];
+      if (lo > hi) d = (lo + hi) * 0.5;
+      else if (delta >= 0) {
+        const cap = Math.max(start, hi);
+        if (d > cap) d = cap;
+        if (d < start) d = start;
+      } else {
+        const floor = Math.min(start, lo);
+        if (d < floor) d = floor;
+        if (d > start) d = start;
+      }
+      const band = sculptBand(edgeLock[i]);
+      if (d > band.hi) d = band.hi;
+      else if (d < band.lo) d = band.lo;
+      desiredHold[k] = d;
+    }
+  }
+  for (let k = 0; k < ids.length; k++) {
+    const i = ids[k];
+    const e = edgeLock[i];
+    const desired = desiredHold[k];
+    let targetH = desired;
+    if (terrainTypes[i] === TERRAIN.WATER) {
+      const offset = waterLevel[i] - heightMap[i];
+      targetH = desired - offset + (WATER_RECESS * e) / HEIGHT_AMPLITUDE;
+    }
+    let next = (targetH - unpaintedFelt(detailHeight[i], regionLift[i], e)) / LIFT_WEIGHT;
+    if (next < PAINTED_LIFT_MIN) next = PAINTED_LIFT_MIN;
+    if (next > PAINTED_LIFT_MAX) next = PAINTED_LIFT_MAX;
+    if (next === paintedLift[i]) continue;
+    paintedLift[i] = next;
+    dirty.push({ x: i % width, z: (i / width) | 0 });
+  }
+  if (dirty.length) composeHeightMap(field, { preserveWaterDish: true });
   return dirty;
 }
 
@@ -1024,7 +1506,8 @@ function assignTerrainByElevation(field) {
     else terrainTypes[i] = TERRAIN.DIRT;
   }
 
-  // No water–dirt atlas: force a grass shoreline buffer.
+  // Steep height steps can skip grass. Keep a generated grass bank so those
+  // shores stay in the mid band. Painted water–dirt is not rewritten.
   for (let z = 0; z < height; z++) {
     for (let x = 0; x < width; x++) {
       const i = z * width + x;
@@ -1043,62 +1526,65 @@ function assignTerrainByElevation(field) {
   }
 }
 
+/**
+ * Layering is grass over dirt over water: each tile shows the blobs of
+ * higher terrain touching its corners. Water stores the land case so deep
+ * water (12) is exactly where no land touches a corner.
+ */
 function applyTerrainTransitions(field) {
   const { width, height, terrainTypes, tileType, atlasId } = field;
   const n = width * height;
-  const grassVsDirt = new Uint8Array(n);
-  const grassVsWater = new Uint8Array(n);
+  const grass = new Uint8Array(n);
+  const dirt = new Uint8Array(n);
+  const land = new Uint8Array(n);
   for (let i = 0; i < n; i++) {
-    grassVsDirt[i] = terrainTypes[i] === TERRAIN.GRASS ? 1 : 0;
-    grassVsWater[i] = terrainTypes[i] !== TERRAIN.WATER ? 1 : 0;
+    const t = terrainTypes[i];
+    grass[i] = t === TERRAIN.GRASS ? 1 : 0;
+    dirt[i] = t === TERRAIN.DIRT ? 1 : 0;
+    land[i] = t !== TERRAIN.WATER ? 1 : 0;
   }
 
   for (let z = 0; z < height; z++) {
     for (let x = 0; x < width; x++) {
       const i = z * width + x;
       const terrain = terrainTypes[i];
-      let hasWater = false;
-      let hasDirt = false;
-      let hasGrass = false;
-      for (let dz = -1; dz <= 1; dz++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if (dx === 0 && dz === 0) continue;
-          const nx = x + dx;
-          const nz = z + dz;
-          if (nx < 0 || nz < 0 || nx >= width || nz >= height) continue;
-          const t = terrainTypes[nz * width + nx];
-          if (t === TERRAIN.WATER) hasWater = true;
-          else if (t === TERRAIN.DIRT) hasDirt = true;
-          else if (t === TERRAIN.GRASS) hasGrass = true;
-        }
-      }
-
       if (terrain === TERRAIN.WATER) {
-        atlasId[i] = ATLAS.GRASS_WATER;
-        tileType[i] = hasGrass ? marchingCase(x, z, grassVsWater, width, height) : 12;
-      } else if (terrain === TERRAIN.GRASS) {
-        if (hasWater) {
-          atlasId[i] = ATLAS.GRASS_WATER;
-          tileType[i] = marchingCase(x, z, grassVsWater, width, height);
-        } else if (hasDirt) {
-          atlasId[i] = ATLAS.GRASS_DIRT;
-          tileType[i] = marchingCase(x, z, grassVsDirt, width, height);
-        } else {
-          atlasId[i] = ATLAS.GRASS_DIRT;
-          tileType[i] = 6;
-        }
+        tileType[i] = marchingCase(x, z, land, width, height);
+        const grassShore = marchingCase(x, z, grass, width, height) !== 12;
+        const dirtShore = marchingCase(x, z, dirt, width, height) !== 12;
+        atlasId[i] = dirtShore && !grassShore ? ATLAS.DIRT_WATER : ATLAS.GRASS_WATER;
+      } else if (terrain === TERRAIN.DIRT) {
+        atlasId[i] = ATLAS.GRASS_DIRT;
+        tileType[i] = marchingCase(x, z, grass, width, height);
       } else {
-        // dirt
-        if (hasGrass) {
-          atlasId[i] = ATLAS.GRASS_DIRT;
-          tileType[i] = marchingCase(x, z, grassVsDirt, width, height);
-        } else {
-          atlasId[i] = ATLAS.GRASS_DIRT;
-          tileType[i] = 12;
-        }
+        atlasId[i] = ATLAS.GRASS_DIRT;
+        tileType[i] = 6;
       }
     }
   }
+}
+
+/** Atlas cell covering every corner of tile (x, z) that `terrain` touches. 12 = none. */
+export function terrainCornerCell(types, width, height, x, z, terrain) {
+  let caseNum = 0;
+  if (cornerTouches(types, width, height, x, z, terrain)) caseNum += 1;
+  if (cornerTouches(types, width, height, x, z + 1, terrain)) caseNum += 2;
+  if (cornerTouches(types, width, height, x + 1, z, terrain)) caseNum += 4;
+  if (cornerTouches(types, width, height, x + 1, z + 1, terrain)) caseNum += 8;
+  return CASE_TO_ATLAS[caseNum];
+}
+
+function cornerTouches(types, width, height, cx, cz, terrain) {
+  for (let dz = -1; dz <= 0; dz++) {
+    const tz = cz + dz;
+    if (tz < 0 || tz >= height) continue;
+    for (let dx = -1; dx <= 0; dx++) {
+      const tx = cx + dx;
+      if (tx < 0 || tx >= width) continue;
+      if (types[tz * width + tx] === terrain) return true;
+    }
+  }
+  return false;
 }
 
 function marchingCase(x, z, density, width, height) {
@@ -1134,6 +1620,7 @@ export function refreshTerrainDerived(field) {
   applyTerrainTransitions(field);
   updatePassFromWater(field);
   applyTerrainSlow(field);
+  rebuildWaterSurface(field);
   return field;
 }
 

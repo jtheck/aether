@@ -10,10 +10,10 @@ import {
   scaleFarmHazardDamage,
 } from './buildingCombat.js';
 import { isBuildingAlive } from './buildings.js';
-import { lineClear } from './field.js';
+import { lineClear, worldToTile, worldToTileZ } from './field.js';
 import { getProjectileDef, PROJECTILE } from './projectileTypes.js';
 import { isHostile } from './teams.js';
-import { applyTreeSplash } from './trees.js';
+import { applyTreeSplash, tileIsWater } from './trees.js';
 import { spawnFireZone } from './fireZones.js';
 import { fireballBlastLob } from './monkKick.js';
 import { rngFrac } from './rng.js';
@@ -271,6 +271,14 @@ function hitEntity(w, store, slot, def, entity, field) {
   }
 }
 
+function impactOnWater(field, x, y) {
+  if (!field?.terrainTypes) return false;
+  const tx = worldToTile(x);
+  const tz = worldToTileZ(y);
+  if (tx < 0 || tz < 0 || tx >= field.width || tz >= field.height) return false;
+  return tileIsWater(field, tz * field.width + tx);
+}
+
 /** Splash at impact point; hostiles take full damage, friendlies use multiplier. */
 function projectileSpeed(store, slot, def) {
   const stored = store.speed?.[slot];
@@ -316,7 +324,7 @@ function applySplash(w, slot, impactX, impactY, def, field) {
   if (def.ignitesTrees && field && applyTreeSplash(field, impactX, impactY, radius)) {
     hit = true;
   }
-  if (def.leavesGroundFire) {
+  if (def.leavesGroundFire && !impactOnWater(field, impactX, impactY)) {
     // Slightly tighter than splash so walking the rim isn't a free DoT.
     const zoneRadius = fx.mul(radius, fx.fromFloat(0.85));
     spawnFireZone(w, {

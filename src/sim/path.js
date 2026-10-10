@@ -1,7 +1,7 @@
 // Per-entity path storage + following helpers.
 
 import * as fx from './fixed.js';
-import { findPath, lineClear, worldToTile, TILE } from './field.js';
+import { findPath, lineClear, worldToTile, worldToTileZ, TILE } from './field.js';
 import { getUnitDef, isFlyer, unitAvoidsSlow } from './unitTypes.js';
 import { ORDER } from './world.js';
 import { effectiveAttackRange, engagementPoint } from './engagement.js';
@@ -296,7 +296,7 @@ export function waypointReached(w, i) {
   const base = wpBase(i) + w.navWpIndex[i];
   const wx = w.navWx[base];
   const wy = w.navWy[base];
-  if (worldToTile(w.px[i]) === worldToTile(wx) && worldToTile(w.py[i]) === worldToTile(wy)) {
+  if (worldToTile(w.px[i]) === worldToTile(wx) && worldToTileZ(w.py[i]) === worldToTileZ(wy)) {
     return true;
   }
   return fx.dist2(w.px[i], w.py[i], wx, wy) <= WAYPOINT_RADIUS_SQ;

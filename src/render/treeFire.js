@@ -72,6 +72,20 @@ export function treeFireTongueScale(kind, stockScale) {
 }
 
 /**
+ * Column first, then crown, then side licks. Far LOD keeps the front of this
+ * list so a distant tree is still a flame, not a random subset of leaves.
+ */
+export const TREE_FIRE_ANCHOR_ORDER = [0, 1, 4, 3, 6, 5, 2, 9, 7, 8];
+
+/** @param {number} count */
+export function treeFireAnchorIndices(count) {
+  const n = Math.max(0, Math.min(TREE_FIRE_ANCHORS.length, count | 0));
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(TREE_FIRE_ANCHOR_ORDER[i]);
+  return out;
+}
+
+/**
  * @param {{
  *   x: number, y: number, z: number,
  *   stockScale?: number,
@@ -85,13 +99,17 @@ export function treeFireTongueScale(kind, stockScale) {
  *   index: number,
  *   smoke: boolean,
  * }) => void} fn
+ * @param {number[] | null} [indices] anchor indices; omit to visit every site
  */
-export function forEachTreeFireAnchor(tree, fn) {
+export function forEachTreeFireAnchor(tree, fn, indices = null) {
   const stockScale = tree.stockScale;
   const yaw = tree.yaw || 0;
   const lean = tree.lean || 0;
-  for (let i = 0; i < TREE_FIRE_ANCHORS.length; i++) {
+  const n = indices ? indices.length : TREE_FIRE_ANCHORS.length;
+  for (let k = 0; k < n; k++) {
+    const i = indices ? indices[k] : k;
     const a = TREE_FIRE_ANCHORS[i];
+    if (!a) continue;
     const w = treeMeshToWorld(tree.x, tree.y, tree.z, a.x, a.y, a.z, stockScale, yaw, lean);
     fn({
       x: w.x,

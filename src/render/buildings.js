@@ -22,6 +22,7 @@ import { capacityFor } from '../sim/capacity.js';
 import { USE_GPU_PICK } from './pickMode.js';
 import { ownerTint } from './ownerTints.js';
 import { isTeamColorMaterial, prepareTeamColorMaterial, sceneTeamRgb } from './teamColor.js';
+import { nearestMeshInstanceHit, pickPartsFromMeshes } from './meshPick.js';
 
 /** Start small; grow by powers of two when place() needs more. */
 const INITIAL_CAPACITY = 32;
@@ -315,7 +316,12 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
           z: s.z,
           scale: Number.isFinite(s.scale) && s.scale > 1e-6 ? s.scale : 1,
         }));
-        templates.set(typeId, { parts, fxSockets, roofY: meshRoofY(parts) });
+        templates.set(typeId, {
+          parts,
+          fxSockets,
+          roofY: meshRoofY(parts),
+          pickParts: pickPartsFromMeshes(parts),
+        });
         return true;
       } catch (err) {
         console.warn(`[buildings] ${typeId} failed`, err);
@@ -819,6 +825,51 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
   }
 
   /**
+   * Nearest live placeable whose mesh the ray hits.
+   * @param {object | null} ray
+   * @param {(hit: { kind: 'building', index: number }) => boolean} [allow]
+   * @param {number} [maxT]
+   * @returns {{ kind: 'building', index: number, t: number } | null}
+   */
+  function pickOnRay(ray, allow, maxT = Infinity) {
+    if (!ray) return null;
+    let best = null;
+    let limit = maxT;
+    for (const batch of byType.values()) {
+      const parts = templates.get(batch.typeId)?.pickParts;
+      const layer = batch.layers[0];
+      if (!parts?.length || !layer) continue;
+      const slots = slotToIndex.get(batch.typeId);
+      const count = layer.mesh?.thinInstances?.count ?? 0;
+      const hit = nearestMeshInstanceHit(ray, parts, layer.matrices, count, (slot) => {
+        const index = slots?.[slot];
+        if (index == null || index < 0) return false;
+        return !allow || allow({ kind: 'building', index });
+      }, limit);
+      if (!hit) continue;
+      best = { kind: 'building', index: slots[hit.slot], t: hit.t };
+      limit = hit.t;
+    }
+    return best;
+  }
+
+  /**
+   * Touch-rotate test against the placement ghost mesh.
+   * Null means the ghost mesh is not ready — caller keeps the footprint box.
+   * @param {object | null} ray
+   * @param {number} [maxT] ground clip — hits past this are buried
+   * @returns {boolean | null}
+   */
+  function ghostHitOnRay(ray, maxT = Infinity) {
+    if (!ray || !ghostVisible || !ghostType) return null;
+    const parts = templates.get(ghostType)?.pickParts;
+    const layer = ghostByType.get(ghostType)?.layers[0];
+    const count = layer?.mesh?.thinInstances?.count ?? 0;
+    if (!parts?.length || !layer || count <= 0) return null;
+    return nearestMeshInstanceHit(ray, parts, layer.matrices, count, undefined, maxT) != null;
+  }
+
+  /**
    * @param {object} mesh
    * @param {number} thinInstanceIndex
    * @returns {{ kind: 'building', index: number } | null}
@@ -1001,6 +1052,8 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
     clear,
     isPickMesh,
     resolvePick,
+    pickOnRay,
+    ghostHitOnRay,
     forEachFxInstance,
     forEachShadowMesh,
     chipHeight,

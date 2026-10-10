@@ -5,9 +5,14 @@
 
 import {
   TILE_SIZE_F,
+  TERRAIN,
   worldHalfFFromField,
+  worldHalfZFFromField,
   refreshTerrainDerived,
+  adoptDisplayedWaterHeight,
   composeHeightMap,
+  ensureWaterSurface,
+  rebuildWaterSurface,
 } from './field.js';
 
 export const DEFAULT_CELL_SIZE = 16;
@@ -129,45 +134,50 @@ export function tileCellCoords(tx, tz, cellSize) {
 }
 
 export function worldToCell(field, x, z, cellSize) {
-  const half = worldHalfFFromField(field);
-  const tx = Math.floor((x + half) / TILE_SIZE_F);
-  const tz = Math.floor((z + half) / TILE_SIZE_F);
+  const halfX = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
+  const tx = Math.floor((x + halfX) / TILE_SIZE_F);
+  const tz = Math.floor((z + halfZ) / TILE_SIZE_F);
   return tileCellCoords(tx, tz, cellSize);
 }
 
 export function tileWorldQuad(field, tx, tz) {
-  const half = worldHalfFFromField(field);
+  const halfX = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
   return {
-    x0: tx * TILE_SIZE_F - half,
-    z0: tz * TILE_SIZE_F - half,
-    x1: (tx + 1) * TILE_SIZE_F - half,
-    z1: (tz + 1) * TILE_SIZE_F - half,
+    x0: tx * TILE_SIZE_F - halfX,
+    z0: tz * TILE_SIZE_F - halfZ,
+    x1: (tx + 1) * TILE_SIZE_F - halfX,
+    z1: (tz + 1) * TILE_SIZE_F - halfZ,
   };
 }
 
 export function tileCenterWorld(field, tx, tz) {
-  const half = worldHalfFFromField(field);
+  const halfX = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
   return {
-    x: (tx + 0.5) * TILE_SIZE_F - half,
-    z: (tz + 0.5) * TILE_SIZE_F - half,
+    x: (tx + 0.5) * TILE_SIZE_F - halfX,
+    z: (tz + 0.5) * TILE_SIZE_F - halfZ,
   };
 }
 
 export function cellWorldBox(field, cx, cz, cellSize) {
-  const half = worldHalfFFromField(field);
+  const halfX = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
   const span = cellSize * TILE_SIZE_F;
   return {
-    x0: cx * span - half,
-    z0: cz * span - half,
-    x1: (cx + 1) * span - half,
-    z1: (cz + 1) * span - half,
+    x0: cx * span - halfX,
+    z0: cz * span - halfZ,
+    x1: (cx + 1) * span - halfX,
+    z1: (cz + 1) * span - halfZ,
   };
 }
 
 function vertexWorld(field, gx, gz, cellSize) {
-  const half = worldHalfFFromField(field);
+  const halfX = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
   const span = cellSize * TILE_SIZE_F;
-  return { x: gx * span - half, z: gz * span - half };
+  return { x: gx * span - halfX, z: gz * span - halfZ };
 }
 
 function ownerFromInward(gx, gz, inward) {
@@ -349,10 +359,11 @@ function pointInTableForCell(field, shape, x, z, cx, cz, corners) {
 
 /** World-space felt test after per-chunk inside/outside fillets. */
 export function pointInTable(field, shape, x, z, corners) {
-  const half = worldHalfFFromField(field);
+  const halfX = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
   const span = shape.cellSize * TILE_SIZE_F;
-  const cx = Math.floor((x + half) / span);
-  const cz = Math.floor((z + half) / span);
+  const cx = Math.floor((x + halfX) / span);
+  const cz = Math.floor((z + halfZ) / span);
   return pointInTableForCell(field, shape, x, z, cx, cz, corners);
 }
 
@@ -398,12 +409,13 @@ export function tileInSharpTable(field, shape, tx, tz) {
 
 /** Tile-grid vertex at the board origin (dead center on odd-chunk maps). */
 export function tableCenterVertex(field) {
-  const half = worldHalfFFromField(field);
+  const halfX = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
   const vx = Math.round(field.width / 2);
   const vz = Math.round(field.height / 2);
   return {
-    x: vx * TILE_SIZE_F - half,
-    z: vz * TILE_SIZE_F - half,
+    x: vx * TILE_SIZE_F - halfX,
+    z: vz * TILE_SIZE_F - halfZ,
     vx,
     vz,
   };
@@ -428,17 +440,18 @@ function pointInRoundedRect(px, pz, x, z, half, cornerR) {
 }
 
 function stampRoundedRectFootprint(field, edge, x, z, half, cornerR) {
-  const worldHalf = worldHalfFFromField(field);
-  const tx0 = Math.max(0, Math.floor((x - half + worldHalf) / TILE_SIZE_F));
-  const tz0 = Math.max(0, Math.floor((z - half + worldHalf) / TILE_SIZE_F));
-  const tx1 = Math.min(field.width - 1, Math.floor((x + half - EPS + worldHalf) / TILE_SIZE_F));
-  const tz1 = Math.min(field.height - 1, Math.floor((z + half - EPS + worldHalf) / TILE_SIZE_F));
+  const worldHalfX = worldHalfFFromField(field);
+  const worldHalfZ = worldHalfZFFromField(field);
+  const tx0 = Math.max(0, Math.floor((x - half + worldHalfX) / TILE_SIZE_F));
+  const tz0 = Math.max(0, Math.floor((z - half + worldHalfZ) / TILE_SIZE_F));
+  const tx1 = Math.min(field.width - 1, Math.floor((x + half - EPS + worldHalfX) / TILE_SIZE_F));
+  const tz1 = Math.min(field.height - 1, Math.floor((z + half - EPS + worldHalfZ) / TILE_SIZE_F));
   for (let tz = tz0; tz <= tz1; tz++) {
     for (let tx = tx0; tx <= tx1; tx++) {
       const i = tz * field.width + tx;
       if (!field.activeMask[i]) continue;
-      const cx = (tx + 0.5) * TILE_SIZE_F - worldHalf;
-      const cz = (tz + 0.5) * TILE_SIZE_F - worldHalf;
+      const cx = (tx + 0.5) * TILE_SIZE_F - worldHalfX;
+      const cz = (tz + 0.5) * TILE_SIZE_F - worldHalfZ;
       if (pointInRoundedRect(cx, cz, x, z, half, cornerR)) edge[i] = 1;
     }
   }
@@ -825,6 +838,9 @@ export function paintTerrainBrush(field, tx, tz, terrainType, radius = 0) {
   const r = Math.max(0, radius | 0);
   const r2 = r * r;
   const dirty = [];
+  const leavingWater = [];
+  const toLand = terrainType !== TERRAIN.WATER;
+  if (toLand) ensureWaterSurface(field);
   for (let dz = -r; dz <= r; dz++) {
     for (let dx = -r; dx <= r; dx++) {
       if (dx * dx + dz * dz > r2) continue;
@@ -834,10 +850,13 @@ export function paintTerrainBrush(field, tx, tz, terrainType, radius = 0) {
       const i = z * field.width + x;
       if (field.activeMask[i] === 0) continue;
       if (field.terrainTypes[i] !== terrainType) {
+        if (toLand && field.terrainTypes[i] === TERRAIN.WATER) leavingWater.push(i);
         field.terrainTypes[i] = terrainType;
         dirty.push({ x, z });
       }
     }
   }
+  if (leavingWater.length) adoptDisplayedWaterHeight(field, leavingWater);
+  else if (dirty.length) rebuildWaterSurface(field);
   return dirty;
 }

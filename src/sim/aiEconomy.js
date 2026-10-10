@@ -15,6 +15,7 @@ import { canAffordBank, getResource, RESOURCE_KINDS } from './resources.js';
 import { SCENERY } from './scenery.js';
 import {
   worldToTile,
+  worldToTileZ,
   tileCenterX,
   tileCenterY,
   TILE_SIZE_F,
@@ -277,7 +278,7 @@ function nearestNode(field, kind, px, py) {
   const width = field.width | 0;
   const height = field.height | 0;
   const ctx = worldToTile(px);
-  const ctz = worldToTile(py);
+  const ctz = worldToTileZ(py);
   let best = -1;
   let bestD = 0x7fffffffffff;
   const z0 = Math.max(0, ctz - SCAN_TILES);

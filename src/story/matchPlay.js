@@ -1,9 +1,9 @@
 // In-match intro playback — same reel/player as Forge, no sheet.
 
-import { TILE_SIZE_F, worldHalfFFromField } from '../sim/field.js';
+import { TILE_SIZE_F, worldHalfFFromField, worldHalfZFFromField } from '../sim/field.js';
 import { createStoryHud } from './hud.js';
 import { createStoryPlayer } from './player.js';
-import { createStorySpeech, narratorLines } from './speech.js';
+import { createStorySpeech, LINE_STYLE_LOOK, narratorLines } from './speech.js';
 import { createStoryTransport } from './transport.js';
 import { activeReel, normalizeStory } from './timeline.js';
 
@@ -15,9 +15,10 @@ function reelForWhen(story, when = 'start') {
 
 function worldFromTile(field, tx, tz) {
   const half = field.worldHalfF ?? worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
   return {
     x: (tx + 0.5) * TILE_SIZE_F - half,
-    z: (tz + 0.5) * TILE_SIZE_F - half,
+    z: (tz + 0.5) * TILE_SIZE_F - halfZ,
   };
 }
 
@@ -37,13 +38,14 @@ function skipTarget(el) {
  *   worldToScreen?: (x: number, y: number, z: number) => { x: number, y: number } | null,
  *   host?: HTMLElement | null,
  *   onCinematic?: (playing: boolean) => void,
+ *   onSpeak?: (lines: { id: string, name: string, text: string, color: string }[]) => void,
  * }} [opts]
  */
 export function createMatchStory(opts = {}) {
   const hud = typeof document !== 'undefined'
     ? createStoryHud(opts.host ?? document.body)
     : { show() {}, hide() {}, setInset() {}, dispose() {} };
-  hud.setInset?.({ left: 24, right: 24, bottom: 96, zIndex: 20 });
+  hud.setInset?.({ zIndex: 20 });
   const speech = typeof document !== 'undefined'
     ? createStorySpeech({
       host: opts.host ?? document.body,
@@ -56,6 +58,27 @@ export function createMatchStory(opts = {}) {
   let player = null;
   let playing = false;
   let lastShot = null;
+  /** Clip ids already copied into chat for this reel. */
+  const spokenSeen = new Set();
+
+  function publishSpoken(lines) {
+    const fresh = [];
+    for (const line of lines) {
+      const name = String(line?.speaker || '').trim();
+      const text = String(line?.text || '').trim();
+      if (!text) continue;
+      const id = String(line.id || `${name}\0${text}`);
+      if (spokenSeen.has(id)) continue;
+      spokenSeen.add(id);
+      if (!name) {
+        fresh.push({ id, name: '', text, narration: true, color: '' });
+        continue;
+      }
+      const look = LINE_STYLE_LOOK[line.style] || LINE_STYLE_LOOK.normal;
+      fresh.push({ id, name, text, color: look.color });
+    }
+    if (fresh.length) opts.onSpeak?.(fresh);
+  }
 
   function applySample(s) {
     const cam = opts.getCamera?.();
@@ -82,6 +105,7 @@ export function createMatchStory(opts = {}) {
     if (narrated.length) hud.show(narrated);
     else hud.hide();
     speech.show(lines);
+    publishSpoken(lines);
   }
 
   function unbindSkip() {
@@ -133,6 +157,7 @@ export function createMatchStory(opts = {}) {
     if (!story) return false;
     const reel = reelForWhen(story, when);
     if (!reel?.clips?.length || !(reel.duration > 0)) return false;
+    spokenSeen.clear();
     player = createStoryPlayer({
       reel,
       onSample: (s) => {

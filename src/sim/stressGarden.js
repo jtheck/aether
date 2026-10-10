@@ -10,6 +10,7 @@ import {
   createField,
   setActiveMapSize,
   worldToTile,
+  worldToTileZ,
 } from './field.js';
 import { applyTableSilhouette } from './tableShape.js';
 import { encodeGarden } from './garden.js';
@@ -61,7 +62,7 @@ function buildStressGardenInner() {
       owner: world.owner[i] | 0,
       type: world.type[i] | 0,
       tx: worldToTile(world.px[i]),
-      tz: worldToTile(world.py[i]),
+      tz: worldToTileZ(world.py[i]),
       x,
       z,
     });

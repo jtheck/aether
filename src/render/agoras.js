@@ -19,6 +19,7 @@ import { ownerTint } from './ownerTints.js';
 import { isTeamColorMaterial, prepareTeamColorMaterial, sceneTeamRgb } from './teamColor.js';
 import { forEachRallyDash } from './rallyDash.js';
 import { MODEL_BASE_SCALE } from './modelScale.js';
+import { nearestMeshInstanceHit, pickPartsFromMeshes } from './meshPick.js';
 
 const AGORA_MODEL_URL = '/assets/models/agora.glb';
 const FLAG_MODEL_URL = '/assets/models/flag.glb';
@@ -472,8 +473,11 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
   };
 
   let agoraRoofY = 0;
+  let pickParts = [];
+  let flagPickParts = [];
   try {
     const parts = await loadBakedUnitMeshParts(engine, AGORA_MODEL_URL);
+    pickParts = pickPartsFromMeshes(parts);
     agoraRoofY = meshRoofY(parts);
     for (let p = 0; p < parts.length; p++) {
       const mesh = parts[p];
@@ -496,9 +500,10 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
     return emptyApi;
   }
 
-  async function loadFlagLayers(cap, pickable, into) {
+  async function loadFlagLayers(cap, pickable, into, forPick = false) {
     try {
       const parts = await loadBakedUnitMeshParts(engine, FLAG_MODEL_URL);
+      if (forPick) flagPickParts = pickPartsFromMeshes(parts);
       for (let p = 0; p < parts.length; p++) {
         const mesh = parts[p];
         mesh.pickable = pickable;
@@ -519,7 +524,7 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
     }
   }
 
-  await loadFlagLayers(MAX_AGORAS, USE_GPU_PICK, agoraFlagLayers);
+  await loadFlagLayers(MAX_AGORAS, USE_GPU_PICK, agoraFlagLayers, true);
   await loadFlagLayers(MAX_RALLY_FLAGS, false, rallyFlagLayers);
   await loadFlagLayers(1, false, ghostFlagLayers);
 
@@ -1047,6 +1052,37 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
   }
 
   /**
+   * Nearest placed agora whose body or ownership flag the ray hits.
+   * Rally and ghost flags stay out of this test.
+   * @param {object | null} ray
+   * @param {(hit: { kind: 'agora', index: number }) => boolean} [allow]
+   * @param {number} [maxT]
+   * @returns {{ kind: 'agora', index: number, t: number } | null}
+   */
+  function pickOnRay(ray, allow, maxT = Infinity) {
+    if (!ray || placedCount <= 0) return null;
+    const allowSlot = (slot) => {
+      if (slot < 0 || slot >= placedCount) return false;
+      return !allow || allow({ kind: 'agora', index: slot });
+    };
+    let best = null;
+    let limit = maxT;
+    const take = (parts, matrices, count) => {
+      if (!parts?.length || !matrices || count <= 0) return;
+      const hit = nearestMeshInstanceHit(ray, parts, matrices, count, allowSlot, limit);
+      if (!hit || !(hit.t < limit)) return;
+      best = hit;
+      limit = hit.t;
+    };
+    take(pickParts, layers[0]?.matrices, placedCount);
+    const flag = agoraFlagLayers[0];
+    const flagCount = Math.min(placedCount, flag?.mesh?.thinInstances?.count ?? 0);
+    take(flagPickParts, flag?.matrices, flagCount);
+    if (!best) return null;
+    return { kind: 'agora', index: best.slot, t: best.t };
+  }
+
+  /**
    * @param {object} mesh
    * @param {number} thinInstanceIndex
    * @returns {{ kind: 'agora', index: number } | null}
@@ -1096,6 +1132,7 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
     clear,
     isPickMesh,
     resolvePick,
+    pickOnRay,
     forEachShadowMesh,
     pingAt,
     chipHeight() {

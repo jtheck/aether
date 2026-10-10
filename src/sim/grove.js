@@ -2,7 +2,7 @@
 // Closer trees grow past the natural size/stock cap; the bonus fades at the rim
 // so the stand reads as a mound. Existing trees only — no new plantings.
 
-import { worldToTile } from './field.js';
+import { worldToTile, worldToTileZ } from './field.js';
 import { buildingIsFinished, isBuildingAlive } from './buildings.js';
 import {
   TREE_STOCK_GROVE_MAX,
@@ -61,7 +61,7 @@ export function groveGrowthSystem(w, field) {
     const b = buildings[bi];
     if (b.type !== 'grove' || !buildingIsFinished(b) || !isBuildingAlive(b)) continue;
     const gx = worldToTile(b.x);
-    const gz = worldToTile(b.z);
+    const gz = worldToTileZ(b.z);
 
     for (let tz = gz - RADIUS; tz <= gz + RADIUS; tz++) {
       if (tz < 0 || tz >= height) continue;

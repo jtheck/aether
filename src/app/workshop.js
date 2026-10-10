@@ -2,6 +2,7 @@
 // Host still embeds the JSON for web guests; this only loads a local subscribe.
 
 import { GARDEN_SESSION_KEY } from '../sim/garden.js';
+import { readSessionGarden } from './gardenSession.js';
 
 export const WORKSHOP_SCHEME = 'workshop:';
 export const STEAM_APP_ID = 5043860;
@@ -148,15 +149,20 @@ export function resolveNextGardenRef(next, currentRef = '') {
  *   loadWorkshopGarden?: (id: string, file: string) => Promise<object | null> | object | null,
  *   fetchGarden?: (url: string) => Promise<object>,
  *   sessionText?: () => string | null,
+ *   sessionFallback?: () => Promise<string | null> | string | null,
  * }} [opts]
  */
 export async function loadGardenRef(raw, opts = {}) {
   const text = String(raw || '').trim();
   if (!text) return null;
   if (text === 'session' || text === 'local') {
-    const stored = opts.sessionText
-      ? opts.sessionText()
-      : (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(GARDEN_SESSION_KEY) : null);
+    let stored = null;
+    if (typeof opts.sessionText === 'function') stored = opts.sessionText();
+    else if (typeof sessionStorage !== 'undefined') {
+      try { stored = sessionStorage.getItem(GARDEN_SESSION_KEY); } catch { stored = null; }
+    }
+    if (!stored && typeof opts.sessionFallback === 'function') stored = await opts.sessionFallback();
+    else if (!stored && typeof opts.sessionText !== 'function') stored = await readSessionGarden();
     if (!stored) throw new Error('no session garden');
     return JSON.parse(stored);
   }

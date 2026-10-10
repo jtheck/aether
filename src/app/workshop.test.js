@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { stashSessionGarden } from './gardenSession.js';
 import {
   formatWorkshopRef,
   isWorkshopRef,
@@ -107,5 +108,47 @@ describe('loadGardenRef', () => {
       () => loadGardenRef('workshop:1', { loadWorkshopGarden: async () => null }),
       /workshop garden missing/,
     );
+  });
+
+  it('reads a session garden that did not fit in sessionStorage', async () => {
+    const session = await loadGardenRef('session', {
+      sessionText: () => null,
+      sessionFallback: async () => '{"v":4,"n":"overflow","w":8,"h":8}',
+    });
+    assert.equal(session.n, 'overflow');
+  });
+});
+
+describe('stashSessionGarden', () => {
+  it('keeps a small garden in session storage', async () => {
+    const saved = new Map();
+    let overflow = null;
+    await stashSessionGarden('{"v":4}', {
+      storage: {
+        setItem: (k, v) => saved.set(k, v),
+        removeItem: (k) => saved.delete(k),
+      },
+      writeOverflow: async (json) => { overflow = json; },
+    });
+    assert.equal(saved.get('aeg.garden'), '{"v":4}');
+    assert.equal(overflow, null);
+  });
+
+  it('drops the session key and stores the garden when the quota is full', async () => {
+    let removed = false;
+    let overflow = null;
+    await stashSessionGarden('{"v":4,"n":"big"}', {
+      storage: {
+        setItem() {
+          const err = new Error('quota');
+          err.name = 'QuotaExceededError';
+          throw err;
+        },
+        removeItem() { removed = true; },
+      },
+      writeOverflow: async (json) => { overflow = json; },
+    });
+    assert.equal(removed, true);
+    assert.equal(overflow, '{"v":4,"n":"big"}');
   });
 });

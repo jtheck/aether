@@ -573,6 +573,25 @@ describe('garden codec', () => {
     assert.equal(encodeGarden(field).nr, undefined);
   });
 
+  it('roundtrips procedural curtain walls and omits an empty list', () => {
+    const field = buildField(3, { width: 32, height: 32 });
+    const walls = {
+      style: { height: 7.5, thickness: 1.2, merlonHeight: 1, merlonWidth: 0.8, merlonGap: 0.6, footing: 0.2, pier: 0.5 },
+      runs: [{ closed: true, points: [{ x: -8, z: -8 }, { x: 8, z: -8 }, { x: 8, z: 8 }, { x: -8, z: 8 }] }],
+    };
+    const json = encodeGarden(field, { walls });
+    assert.equal(json.wl.s[0], 7.5);
+    assert.equal(json.wl.r.length, 1);
+    assert.equal(json.wl.r[0][0], 1);
+    const g = decodeGarden(json);
+    assert.equal(g.walls.runs.length, 1);
+    assert.equal(g.walls.runs[0].closed, true);
+    assert.deepEqual(g.walls.runs[0].points[2], { x: 8, z: 8 });
+    assert.equal(g.walls.style.thickness, 1.2);
+    assert.equal(encodeGarden(field).wl, undefined);
+    assert.equal(decodeGarden(encodeGarden(field)).walls.runs.length, 0);
+  });
+
   it('roundtrips a custom camera bound and omits a full-table one', () => {
     const field = buildField(3, { width: 32, height: 32 });
     applyTableSilhouette(field, {

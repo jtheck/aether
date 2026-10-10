@@ -6,6 +6,8 @@ import {
   activeWorldHalfF,
   inBounds,
   worldToTile,
+  worldToTileZ,
+  activeWorldHalfZF,
 } from './field.js';
 import { ensureTreeArrays, igniteTree } from './trees.js';
 import { rngFrac, rngRange } from './rng.js';
@@ -163,7 +165,7 @@ export function collectTreesInRadius(field, cx, cy, radius, out = treeCandidates
   ensureTreeArrays(field);
   const radius2 = fx.mul(radius, radius);
   const tx0 = worldToTile(cx);
-  const tz0 = worldToTile(cy);
+  const tz0 = worldToTileZ(cy);
   const rTiles = Math.ceil(fx.toFloat(radius) / TILE_SIZE_F) + 1;
   let n = 0;
   for (let tz = tz0 - rTiles; tz <= tz0 + rTiles; tz++) {
@@ -172,8 +174,9 @@ export function collectTreesInRadius(field, cx, cy, radius, out = treeCandidates
       const ti = tz * field.width + tx;
       if (field.treeStock[ti] <= 0) continue;
       const half = activeWorldHalfF();
+      const halfZ = activeWorldHalfZF();
       const wx = fx.fromFloat((tx + 0.5) * TILE_SIZE_F - half);
-      const wz = fx.fromFloat((tz + 0.5) * TILE_SIZE_F - half);
+      const wz = fx.fromFloat((tz + 0.5) * TILE_SIZE_F - halfZ);
       if (fx.dist2(cx, cy, wx, wz) > radius2) continue;
       if (n < out.length) out[n++] = ti;
     }
@@ -216,8 +219,9 @@ export function resolveLightningStrike(w, field, owner, aimX, aimY, radius = LIG
     const tz = Math.floor(ti / field.width);
     const tx = ti - tz * field.width;
     const half = activeWorldHalfF();
+    const halfZ = activeWorldHalfZF();
     const x = fx.fromFloat((tx + 0.5) * TILE_SIZE_F - half);
-    const y = fx.fromFloat((tz + 0.5) * TILE_SIZE_F - half);
+    const y = fx.fromFloat((tz + 0.5) * TILE_SIZE_F - halfZ);
     igniteTree(field, ti);
     const landed = scatterImpact(w.rng, x, y);
     return {

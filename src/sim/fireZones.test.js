@@ -7,7 +7,7 @@ import { spawnProjectile, projectileSystem } from './projectiles.js';
 import { step } from './step.js';
 import { createBuilding } from './buildings.js';
 import { FARM_FIRE_DAMAGE_MUL, pulseFireZoneBuildings } from './buildingCombat.js';
-import { createField } from './field.js';
+import { createField, TERRAIN, worldToTile } from './field.js';
 import {
   FIRE_ZONE_DAMAGE,
   FIRE_ZONE_DAMAGE_INTERVAL,
@@ -112,6 +112,31 @@ function fireballSplashLeavesZone() {
   assert.ok(w.fireZones.activeCount > 0, 'fireball impact spawns ground fire');
 }
 
+function fireballOnWaterLeavesNoZone() {
+  const { w, field } = makeArena();
+  const aimX = fx.fromFloat(8);
+  const aimY = fx.fromFloat(0);
+  const tx = worldToTile(aimX);
+  const tz = worldToTile(aimY);
+  field.terrainTypes[tz * field.width + tx] = TERRAIN.WATER;
+  const caster = spawn(w, { type: UNIT.WARLOCK, owner: 0, x: 0, y: 0 });
+  spawnProjectile(w, {
+    type: PROJECTILE.FIREBALL,
+    owner: 0,
+    source: caster,
+    target: -1,
+    x: fx.fromFloat(0),
+    y: fx.fromFloat(0),
+    aimX,
+    aimY,
+    aimScatter: 0,
+    damage: 12,
+  });
+  for (let t = 0; t < 120 && w.projectiles.activeCount; t++) projectileSystem(w, field);
+  assert.equal(w.projectiles.activeCount, 0);
+  assert.equal(w.fireZones.activeCount, 0, 'water does not keep a ground fire');
+}
+
 function stepWalkThroughDamages() {
   const { w, field } = makeArena();
   const foe = spawn(w, { type: UNIT.WARRIOR, owner: 1, x: 0, y: 0 });
@@ -156,6 +181,7 @@ spawnDamagesUnitsInRadius();
 friendlyFireUsesMultiplier();
 expiresAndPublishes();
 fireballSplashLeavesZone();
+fireballOnWaterLeavesNoZone();
 stepWalkThroughDamages();
 burnsFarmsHarderThanOtherBuildings();
 console.log('fireZones.test.js: ok');

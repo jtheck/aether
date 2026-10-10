@@ -244,18 +244,30 @@ export function resolveCameraHalfF(tableHalfF, authoredHalfF) {
   return Math.min(table, Math.max(TILE_SIZE_F * 2, authored));
 }
 
+/** Camera box for a board. A single authored half scales both axes by the same fraction. */
+export function resolveCameraExtents(tableHalfX, tableHalfZ, authoredHalfF) {
+  const tx = Math.max(1, Number(tableHalfX) || 0);
+  const tz = Math.max(1, Number(tableHalfZ) || tx);
+  const authored = Number(authoredHalfF);
+  if (!Number.isFinite(authored) || authored <= 0) return { x: tx, z: tz };
+  const x = Math.min(tx, Math.max(TILE_SIZE_F * 2, authored));
+  const z = Math.min(tz, Math.max(TILE_SIZE_F * 2, tz * (x / tx)));
+  return { x, z };
+}
+
 /**
  * @param {object} camera Lite ArcRotateCamera
  * @param {HTMLCanvasElement} canvas
- * @param {{ worldHalfF?: number }} [opts]
+ * @param {{ worldHalfF?: number, worldHalfZF?: number }} [opts]
  */
 export function createCameraController(camera, canvas, opts = {}) {
   let worldHalfF = opts.worldHalfF ?? WORLD_HALF_F;
-  // Zoom / pan clamp tracks the active board half-extent.
-  let DEFAULT_RADIUS = worldHalfF * 1.55;
-  let RESET_RADIUS = worldHalfF * 1.8;
+  let worldHalfZF = opts.worldHalfZF ?? worldHalfF;
+  // Zoom follows the longer axis so a rectangle still fits. Pan clamps per axis.
+  let DEFAULT_RADIUS = Math.max(worldHalfF, worldHalfZF) * 1.55;
+  let RESET_RADIUS = Math.max(worldHalfF, worldHalfZF) * 1.8;
   /** Max zoom-out — keep the look-up view near the table, not a wide pullback. */
-  let UPPER_RADIUS = worldHalfF * 2.15;
+  let UPPER_RADIUS = Math.max(worldHalfF, worldHalfZF) * 2.15;
   const velocity = { alpha: 0, radius: 0, panX: 0, panZ: 0 };
   const keyStates = Object.create(null);
   let nudged = false;
@@ -289,19 +301,22 @@ export function createCameraController(camera, canvas, opts = {}) {
   camera.lowerBetaLimit ??= 0.1;
   camera.upperBetaLimit ??= 1.5;
 
-  function applyWorldHalf(next) {
+  function applyWorldHalf(next, nextZ) {
     const half = Number(next);
     if (!Number.isFinite(half) || half <= 0) return;
+    const z = Number(nextZ);
     worldHalfF = half;
-    DEFAULT_RADIUS = worldHalfF * 1.55;
-    RESET_RADIUS = worldHalfF * 1.8;
-    UPPER_RADIUS = worldHalfF * 2.15;
+    worldHalfZF = Number.isFinite(z) && z > 0 ? z : half;
+    const span = Math.max(worldHalfF, worldHalfZF);
+    DEFAULT_RADIUS = span * 1.55;
+    RESET_RADIUS = span * 1.8;
+    UPPER_RADIUS = span * 2.15;
     camera.upperRadiusLimit = UPPER_RADIUS;
   }
 
   /** Live board swap (skirmish → stress, etc.) — pan + zoom limits follow the table. */
-  function setWorldHalfF(next) {
-    applyWorldHalf(next);
+  function setWorldHalfF(next, nextZ) {
+    applyWorldHalf(next, nextZ);
     const { minR, maxR } = radiusLimits();
     if (Number.isFinite(camera.radius)) {
       camera.radius = Math.max(minR, Math.min(maxR, camera.radius));
@@ -309,11 +324,9 @@ export function createCameraController(camera, canvas, opts = {}) {
     snapFov();
     const t = getTarget();
     const margin = 2 * TILE_SIZE_F;
-    const lo = -worldHalfF + margin;
-    const hi = worldHalfF - margin;
     setTargetXZ(
-      Math.max(lo, Math.min(hi, t.x)),
-      Math.max(lo, Math.min(hi, t.z)),
+      Math.max(-worldHalfF + margin, Math.min(worldHalfF - margin, t.x)),
+      Math.max(-worldHalfZF + margin, Math.min(worldHalfZF - margin, t.z)),
     );
   }
 
@@ -376,16 +389,18 @@ export function createCameraController(camera, canvas, opts = {}) {
 
   function clampTargetPan(nx, nz) {
     const margin = 2 * TILE_SIZE_F;
-    const min = -worldHalfF + margin;
-    const max = worldHalfF - margin;
+    const minX = -worldHalfF + margin;
+    const maxX = worldHalfF - margin;
+    const minZ = -worldHalfZF + margin;
+    const maxZ = worldHalfZF - margin;
     let px = velocity.panX;
     let pz = velocity.panZ;
     const t = getTarget();
     let x = t.x;
     let z = t.z;
-    if (nx >= min && nx <= max) x = nx;
+    if (nx >= minX && nx <= maxX) x = nx;
     else px = 0;
-    if (nz >= min && nz <= max) z = nz;
+    if (nz >= minZ && nz <= maxZ) z = nz;
     else pz = 0;
     velocity.panX = px;
     velocity.panZ = pz;

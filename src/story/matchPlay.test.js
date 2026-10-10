@@ -119,4 +119,43 @@ describe('createMatchStory', () => {
     story.skip();
     assert.deepEqual(cine, [true, false]);
   });
+
+  it('copies spoken lines and narration into chat once', () => {
+    const spoken = [];
+    const story = createMatchStory({
+      getCamera: () => null,
+      getField: () => ({ worldHalfF: 160, width: 80 }),
+      onSpeak: (lines) => spoken.push(...lines),
+    });
+    const reel = {
+      reels: [{
+        id: 'intro',
+        when: 'start',
+        clips: [
+          { id: 'n', kind: CLIP_LINE, t: 0, dur: 3, text: 'The wood is quiet.' },
+          { id: 'l', kind: CLIP_LINE, t: 0, dur: 3, speaker: 'Doc', text: 'Go.', style: 'command' },
+          { id: 'l2', kind: CLIP_LINE, t: 0.2, dur: 2, speaker: 'Lady', text: 'Wait.' },
+        ],
+      }],
+    };
+    story.playIntro(reel);
+    const narr = spoken.find((line) => line.id === 'n');
+    const doc = spoken.find((line) => line.id === 'l');
+    assert.equal(narr.narration, true);
+    assert.equal(narr.name, '');
+    assert.equal(narr.text, 'The wood is quiet.');
+    assert.equal(doc.name, 'Doc');
+    assert.equal(doc.text, 'Go.');
+    assert.equal(doc.color, '#ffd933');
+    story.tick(50);
+    story.tick(50);
+    story.tick(50);
+    story.tick(50);
+    assert.deepEqual(spoken.map((line) => line.id), ['l', 'n', 'l2']);
+    story.tick(50);
+    assert.equal(spoken.length, 3);
+    story.skip();
+    story.playIntro(reel);
+    assert.deepEqual(spoken.map((line) => line.id), ['l', 'n', 'l2', 'l', 'n']);
+  });
 });

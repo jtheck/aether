@@ -13,7 +13,7 @@
 import * as fx from './fixed.js';
 import { ORDER, spawn, MAX_ENTITIES } from './world.js';
 import { queuePath } from './path.js';
-import { snapToPassable, TILE_SIZE_F } from './field.js';
+import { snapToPassable, TILE_SIZE_F, worldHalfZFFromField } from './field.js';
 import { rngFrac, rngRange } from './rng.js';
 import { UNIT } from './unitTypes.js';
 
@@ -60,20 +60,22 @@ function worldHalfF(field) {
 
 function objectiveCenterF(obj, field) {
   const half = worldHalfF(field);
+  const halfZ = worldHalfZFFromField(field);
   return {
     cx: fx.fromFloat(((obj.tx | 0) + 0.5) * TILE_SIZE_F - half),
-    cz: fx.fromFloat(((obj.tz | 0) + 0.5) * TILE_SIZE_F - half),
+    cz: fx.fromFloat(((obj.tz | 0) + 0.5) * TILE_SIZE_F - halfZ),
   };
 }
 
 /** Fractional board coord (0..1) → Q16.16 world point. */
 function worldFromFrac(fxFrac, fzFrac, field) {
   const half = worldHalfF(field);
+  const halfZ = worldHalfZFFromField(field);
   const tx = Math.max(0, Math.min(field.width - 1, Math.round((Number(fxFrac) || 0) * (field.width - 1))));
   const tz = Math.max(0, Math.min(field.height - 1, Math.round((Number(fzFrac) || 0) * (field.height - 1))));
   return {
     x: fx.fromFloat((tx + 0.5) * TILE_SIZE_F - half),
-    z: fx.fromFloat((tz + 0.5) * TILE_SIZE_F - half),
+    z: fx.fromFloat((tz + 0.5) * TILE_SIZE_F - halfZ),
   };
 }
 

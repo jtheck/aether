@@ -37,7 +37,7 @@ import { isHostile } from '../../sim/teams.js';
 import { canRideTransport, passengerCount, assignNearestRidersToTransport, listPassengers, transportCapacityOf } from '../../sim/transport.js';
 import { playVillagerMove } from '../audio.js';
 import { TILE_SIZE_F } from '../../sim/field.js';
-import { SCENERY } from '../../sim/scenery.js';
+import { SCENERY, rockFootprintRadiusForStock } from '../../sim/scenery.js';
 import { USE_GPU_PICK } from '../../render/pickMode.js';
 import {
   boxSelectWinner,
@@ -406,6 +406,10 @@ export function createGameInput(opts) {
     if (!type) return false;
     const ray = renderer.clientPickingRay?.(clientX, clientY) ?? null;
     if (!ray) return false;
+    if (renderer.ghostHitOnRay) {
+      const meshHit = renderer.ghostHitOnRay(ray);
+      if (typeof meshHit === 'boolean') return meshHit;
+    }
     const { halfW, halfD } = buildingFootHalf(type);
     const gy = renderer.groundYAt?.(placeAnchor.x, placeAnchor.z) ?? 0;
     return rayHitYawBox(
@@ -910,14 +914,26 @@ export function createGameInput(opts) {
     return hit;
   }
 
+  function acceptStructureHit(hit) {
+    if (!hit || (hit.index | 0) < 0) return false;
+    if (hit.kind === 'agora') {
+      const a = getAgoras?.()?.[hit.index];
+      return !!a && structurePickable(a.owner, a.x, a.z);
+    }
+    const b = getBuildings?.()?.[hit.index];
+    if (!b || (b.hp != null && (b.hp | 0) <= 0)) return false;
+    return structurePickable(b.owner, b.x, b.z);
+  }
+
   /**
-   * CPU ray vs footprint box → visible agora / placeable, or null.
-   * Buildings are few; no need for the unit bounding-sphere path.
+   * CPU ray vs the building mesh. Harnesses without mesh geometry still
+   * use the footprint box.
    * @param {object | null} ray
    * @returns {{ kind: 'agora' | 'building', index: number } | null}
    */
   function pickBuildingAtRay(ray) {
     if (!ray) return null;
+    if (renderer.pickStructureOnRay) return renderer.pickStructureOnRay(ray, acceptStructureHit);
     const best = { t: Infinity, kind: '', index: -1 };
     const agoras = getAgoras?.() ?? [];
     for (let i = 0; i < agoras.length; i++) {
@@ -1492,6 +1508,119 @@ export function createGameInput(opts) {
   }
 
   /**
+   * Headset lasso: a closed loop on the field in world XZ. Same owner and fog
+   * rules as polySelect, tested on the ground instead of the screen.
+   * @param {{ x: number, z: number }[]} loop
+   * @param {boolean} [add]
+   */
+  function groundLoopSelect(loop, add = false) {
+    if (!canUseInput() || !loop || loop.length < 3) return false;
+    abandonPlacement();
+    const pts = [];
+    let minX = Infinity;
+    let minZ = Infinity;
+    let maxX = -Infinity;
+    let maxZ = -Infinity;
+    for (let i = 0; i < loop.length; i++) {
+      const x = loop[i].x;
+      const z = loop[i].z;
+      pts.push({ x, y: z });
+      if (x < minX) minX = x;
+      if (z < minZ) minZ = z;
+      if (x > maxX) maxX = x;
+      if (z > maxZ) maxZ = z;
+    }
+    const hit = (x, z) => {
+      screenScratch.x = x;
+      screenScratch.y = z;
+      return screenPosInRect(screenScratch, minX, maxX, minZ, maxZ) && screenPosInPoly(screenScratch, pts);
+    };
+    const ownerFilter = inspectingAnyOwner() ? null : localPlayerId;
+    if (!add) clearUnitSelectionBits();
+    else if (ownerFilter != null) dropUnitsNotOwnedBy(ownerFilter);
+    const world = getWorld();
+    let unitHits = 0;
+    for (let i = 0; i < world.count; i++) {
+      if (!world.alive[i]) continue;
+      if (ownerFilter != null && world.owner[i] !== ownerFilter) continue;
+      if (world.carriedBy && world.carriedBy[i] >= 0) continue;
+      if ((ownerFilter == null || ownerFilter !== localPlayerId) && isUnitVisible && !isUnitVisible(i)) continue;
+      getUnitWorldPos(i, posScratch);
+      if (!hit(posScratch.x, posScratch.z)) continue;
+      selectEntity(i, false);
+      unitHits++;
+    }
+    /** @type {{ kind: 'agora' | 'building', index: number }[]} */
+    const buildings = [];
+    if (unitHits === 0) {
+      const n = fillBuildingPickCenters();
+      for (let i = 0; i < n; i++) {
+        const sp = buildingPickPool[i];
+        if (hit(sp.x, sp.z)) buildings.push({ kind: sp.id.kind, index: sp.id.index });
+      }
+    }
+    finishMarqueeSelect(unitHits, buildings, add);
+    return true;
+  }
+
+  /**
+   * Headset trigger tap along a world ray. Select-only: never issues orders.
+   * A foreign unit only inspects when we hold no orderable troops (same as LMB).
+   * A ray that misses every unit and building falls back to the nearest
+   * selectable unit within `assist.slop` of the ground hit (hand aim is coarse).
+   * An empty miss clears unless `add`.
+   * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null} ray
+   * @param {boolean} [add]
+   * @param {{ x: number, z: number, slop: number } | null} [assist]
+   */
+  function selectAtRay(ray, add = false, assist = null) {
+    if (!canUseInput() || !ray) return false;
+    worldClickEpoch++;
+    lastTap = null;
+    const world = getWorld();
+    const hits = pickUnitsAtRay(ray);
+    const inspect = inspectForeignOnClick(hasOrderableSelection(), canIssueOrders());
+    if (hits.length > 0) {
+      const owner = world.owner[hits[0]];
+      if (owner !== localPlayerId && !inspect) return false;
+      applyUnitHits(hits, owner, add);
+      return true;
+    }
+    const bld = pickBuildingAtRay(ray);
+    if (bld) {
+      if (buildingOwnerOf(bld) !== localPlayerId && !inspect) return false;
+      clearUnitSelection();
+      setBuildingSelection([bld], add, bld);
+      return true;
+    }
+    const near = assist && assist.slop > 0 ? nearestUnitOnGround(assist.x, assist.z, assist.slop, inspect) : -1;
+    if (near >= 0) {
+      applyUnitHits([near], world.owner[near], add);
+      return true;
+    }
+    if (!add) clearSelection();
+    return true;
+  }
+
+  /** Closest pickable unit whose pick disk comes within `slop` of (x, z), or -1. */
+  function nearestUnitOnGround(x, z, slop, allowForeign) {
+    const world = getWorld();
+    const n = fillUnitPickSpheres();
+    let best = -1;
+    let bestD = slop;
+    for (let i = 0; i < n; i++) {
+      const sp = unitSpherePool[i];
+      if (!allowForeign && world.owner[sp.id] !== localPlayerId) continue;
+      const d = Math.hypot(sp.x - x, sp.z - z) - sp.r;
+      if (d <= bestD) {
+        bestD = d;
+        best = sp.id;
+      }
+    }
+    return best;
+  }
+
+  /**
    * Everyone goes to the click. Units already inside the group's soft gather
    * disk stay put; the rest path in. Standing soft-sep blooms piles after
    * arrival — no parade grid, no centroid slide.
@@ -1640,7 +1769,9 @@ export function createGameInput(opts) {
     // Soldiers never mine — leftover army still gets the ground order.
     if (cmdType === CMD.ATTACK_MOVE) {
       const node = resolveGatherClick(clientX, clientY);
-      if (node && issueGatherAtNode(moveIds, node, cmdType, epoch)) return;
+      // Left-click starts the job immediately. An attack-move onto the pad
+      // never "arrives" when the tile is blocked, so they walk up and idle.
+      if (node && issueGatherAtNode(moveIds, node, cmdType, epoch, true)) return;
     }
 
     const g = renderer.screenToGround(clientX, clientY);
@@ -2371,9 +2502,39 @@ export function createGameInput(opts) {
     return true;
   }
 
+  function gatherNodeFromTile(field, tile, heightAt) {
+    if (tile < 0) return null;
+    const w = field.width | 0;
+    const half = field.worldHalfF ?? (w * TILE_SIZE_F) / 2;
+    const halfZ = ((field.height | 0) * TILE_SIZE_F) / 2 || half;
+    const x = ((tile % w) + 0.5) * TILE_SIZE_F - half;
+    const z = (((tile / w) | 0) + 0.5) * TILE_SIZE_F - halfZ;
+    return { tile, x, z, y: heightAt(x, z) };
+  }
+
+  /** Built farm mesh → its food tile. -1 when the ray misses the barn. */
+  function farmGatherTile(field, ray) {
+    if (!ray || !renderer.pickStructureOnRay) return -1;
+    const hit = renderer.pickStructureOnRay(ray, (h) => {
+      if (h.kind !== 'building') return false;
+      const b = getBuildings?.()?.[h.index];
+      return b?.type === 'farm' && isBuildingAlive(b);
+    });
+    if (!hit) return -1;
+    const b = getBuildings?.()?.[hit.index];
+    if (!b) return -1;
+    const half = field.worldHalfF ?? (field.width * TILE_SIZE_F) / 2;
+    const tx = Math.floor((b.x + half) / TILE_SIZE_F);
+    const tz = Math.floor((b.z + half) / TILE_SIZE_F);
+    if (tx < 0 || tz < 0 || tx >= field.width || tz >= field.height) return -1;
+    const tile = tz * field.width + tx;
+    if (!field.foodNode?.[tile]) return -1;
+    return tile;
+  }
+
   /**
-   * Harvestable node under the cursor: tree/rock/farm volume along the click
-   * ray, else the ground tile. CPU AABBs — not GPU mesh pick.
+   * Harvestable under the cursor. Trees and rocks use their mesh; a farm uses
+   * the barn mesh. A click that reaches the ground first is not a gather.
    * @returns {{ tile: number, x: number, z: number, y: number } | null}
    */
   function resolveGatherClick(clientX, clientY) {
@@ -2383,8 +2544,19 @@ export function createGameInput(opts) {
     const g = renderer.screenToGround?.(clientX, clientY);
     const half = field.worldHalfF ?? (field.width * TILE_SIZE_F) / 2;
     const heightAt = (x, z) => renderer.groundYAt?.(x, z) ?? 0;
-    const maxT = ray && g ? Math.max(8, rayTToPoint(ray, g.x, g.y, g.z) + 2) : 400;
-    let tile = pickGatherNodeOnRay(field, ray, { maxT, heightAt });
+    const groundT = ray && g ? rayTToPoint(ray, g.x, g.y, g.z) : null;
+    const clip = groundT != null && groundT > 0 ? groundT + 0.05 : 400;
+    let tile = -1;
+    const meshTile = renderer.pickGatherOnRay?.(ray, clip);
+    if (typeof meshTile === 'number' && meshTile >= 0) tile = meshTile;
+    if (tile < 0) tile = farmGatherTile(field, ray);
+    // Models not up yet — the shorter column is only a stand-in.
+    if (tile < 0 && typeof meshTile !== 'number') {
+      tile = pickGatherNodeOnRay(field, ray, { maxT: clip, heightAt });
+    }
+    // Ray missed the triangles (gap, or the click is the blocked pad under
+    // the mesh). The node's own footprint still starts a gather; empty
+    // ground beside it does not.
     if (tile < 0 && g) {
       const tx = Math.floor((g.x + half) / TILE_SIZE_F);
       const tz = Math.floor((g.z + half) / TILE_SIZE_F);
@@ -2392,11 +2564,7 @@ export function createGameInput(opts) {
         tile = gatherNodeTileAt(field, tx, tz);
       }
     }
-    if (tile < 0) return null;
-    const w = field.width | 0;
-    const x = ((tile % w) + 0.5) * TILE_SIZE_F - half;
-    const z = (((tile / w) | 0) + 0.5) * TILE_SIZE_F - half;
-    return { tile, x, z, y: heightAt(x, z) };
+    return gatherNodeFromTile(field, tile, heightAt);
   }
 
   /**
@@ -2430,11 +2598,16 @@ export function createGameInput(opts) {
    * the node (mixed RMB used to return after gather and drop the army move).
    * @returns {boolean} true when a command was issued
    */
-  function issueGatherAtNode(ids, node, cmdType, epoch) {
+  function issueGatherAtNode(ids, node, cmdType, epoch, defensive = false) {
     const { villagers, rest } = splitGatherSelection(ids);
     if (villagers.length === 0) return false;
     if (epoch !== undefined && !clickCurrent(epoch)) return true;
-    enqueueCommand({ type: CMD.GATHER, entities: villagers, tile: node.tile });
+    enqueueCommand({
+      type: CMD.GATHER,
+      entities: villagers,
+      tile: node.tile,
+      defensive: defensive ? 1 : 0,
+    });
     pingGatherOrder(node, cmdType);
     if (rest.length > 0) {
       const { tx, ty } = moveDestinations(rest, node.x, node.z);
@@ -2454,15 +2627,15 @@ export function createGameInput(opts) {
   }
 
   /**
-   * Harvestable tile under a click: the tile itself for a tree, or the nearest
-   * rock CENTER (within a big rock's footprint) for a rock. -1 if neither.
+   * Harvestable tile under a ground click, used before scenery meshes load.
+   * A tree or food pad must be the tile itself (farms: the 3×3 pad). A rock
+   * only counts when the click is inside that rock's footprint.
    */
   function gatherNodeTileAt(field, tx, tz) {
     const w = field.width;
     const inTile = tz * w + tx;
     if (inTile < 0 || inTile >= field.treeStock.length) return -1;
     if ((field.treeStock[inTile] | 0) > 0) return inTile;
-    // Farm food node (may be a neighbor tile if the click landed off-center).
     const foodNode = field.foodNode;
     if (foodNode) {
       for (let dz = -1; dz <= 1; dz++) {
@@ -2477,7 +2650,6 @@ export function createGameInput(opts) {
     const rockStock = field.rockStock;
     const sceneryType = field.sceneryType;
     if (!rockStock || !sceneryType) return -1;
-    // Clicking a large rock hits a footprint tile — search out to max radius (2).
     let best = -1;
     let bestD = Infinity;
     for (let dz = -2; dz <= 2; dz++) {
@@ -2486,8 +2658,12 @@ export function createGameInput(opts) {
         const z = tz + dz;
         if (x < 0 || z < 0 || x >= w || z >= field.height) continue;
         const t = z * w + x;
-        if ((sceneryType[t] | 0) < SCENERY.ROCK_PLAIN) continue;
-        if ((rockStock[t] | 0) <= 0) continue;
+        const kind = sceneryType[t] | 0;
+        if (kind < SCENERY.ROCK_PLAIN) continue;
+        const stock = rockStock[t] | 0;
+        if (stock <= 0) continue;
+        const foot = rockFootprintRadiusForStock(kind, stock);
+        if (foot < 0 || dx * dx + dz * dz > (foot + 0.5) * (foot + 0.5)) continue;
         const d = dx * dx + dz * dz;
         if (d < bestD) {
           bestD = d;
@@ -2664,6 +2840,8 @@ export function createGameInput(opts) {
     updateSelectDrag,
     endSelectDrag,
     cancelSelectDrag,
+    groundLoopSelect,
+    selectAtRay,
     castAbilityAt,
     cancelDrag,
     clearSelection,

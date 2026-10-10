@@ -1,6 +1,6 @@
 // Web Worker — deterministic sim authority (one commitTick = one lockstep step).
 
-import { buildField, fieldSnapshot, mapSizeForConfig, STRESS_CAMERA_HALF_F, TILE_SIZE_F } from '../sim/field.js';
+import { buildField, fieldSnapshot, mapSizeForConfig, STRESS_CAMERA_HALF_F, TILE_SIZE_F, worldHalfZFFromField } from '../sim/field.js';
 import { applyTableSilhouette } from '../sim/tableShape.js';
 import { populateScenery } from '../sim/scenery.js';
 import { applyGardenPlacements, decodeGarden, fieldFromGarden } from '../sim/garden.js';
@@ -136,6 +136,7 @@ self.onmessage = (e) => {
           reserved.push(...spawnBases(field.worldHalfF, {
             laneBases: !!msg.config.laneBases,
             mapW: field.width,
+            worldHalfZF: worldHalfZFFromField(field),
           }));
         }
         if ((msg.config.stressPerSide | 0) > 0) {
@@ -143,10 +144,11 @@ self.onmessage = (e) => {
         }
         if (garden) {
           const half = field.worldHalfF;
+          const halfZ = worldHalfZFFromField(field);
           for (const u of garden.units) {
             reserved.push([
               (u.tx + 0.5) * TILE_SIZE_F - half,
-              (u.tz + 0.5) * TILE_SIZE_F - half,
+              (u.tz + 0.5) * TILE_SIZE_F - halfZ,
             ]);
           }
         }

@@ -16,13 +16,18 @@ import {
 } from '../vendor/lite/liteVendor.js';
 import {
   buildField,
-  FORGE_MAP_SIZES,
+  FORGE_MAX_CHUNKS,
+  FORGE_MIN_CHUNKS,
+  SKIRMISH_MAP_CHUNKS,
+  forgeTilesForChunks,
+  consumeWaterDirty,
   paintRegionLift,
   REGION_LIFT_STEP,
-  snapTilesToOddChunks,
   TABLE_CHUNK_TILES,
   TILE_SIZE_F,
+  tileHeightWorld,
   worldHalfFFromField,
+  worldHalfZFFromField,
 } from '../sim/field.js';
 import * as fx from '../sim/fixed.js';
 import {
@@ -55,8 +60,21 @@ import { applyAuthoredScenery, populateScenery, paintSceneryBrush, SCENERY } fro
 import { DOODAD, paintDoodadBrush } from '../sim/doodads.js';
 import { UNIT_DEFS } from '../sim/unitTypes.js';
 import { PLACEABLE_BUILDINGS, snapBuildingWorld } from '../sim/buildings.js';
+import {
+  OPENING_REACH,
+  applyWallOccupancy,
+  emptyWalls,
+  placeWallOpening,
+  previewWallOpening,
+  previewWallSection,
+  removeNearestOpening,
+  removeWallSection,
+  sameWallCorner,
+  snapWallCorner,
+  wallKindOf,
+} from '../sim/walls.js';
 import { defaultMatchAgoras } from '../sim/worldSetup.js';
-import { createCameraController, resolveCameraHalfF } from '../render/cameraController.js';
+import { createCameraController, resolveCameraExtents, resolveCameraHalfF } from '../render/cameraController.js';
 import {
   CLIP_CAMERA,
   CLIP_LINE,
@@ -92,12 +110,23 @@ import {
   defaultCelestialState,
 } from '../render/celestial.js';
 import { createTerrainFromField, createTileGridOverlay, surfaceHeightAt } from '../render/terrain.js';
+import { buildWallGeometry } from '../render/wallGeom.js';
+import { createWallMaterials, createWallMesh } from '../render/walls.js';
 import { softDetachMesh } from '../render/meshLifecycle.js';
 import { aetherSteam } from '../app/steam.js';
 
-const SIZES = FORGE_MAP_SIZES;
-const DEFAULT_SIZE = SIZES[1];
+const DEFAULT_CHUNKS = SKIRMISH_MAP_CHUNKS;
+const DEFAULT_SIZE = forgeTilesForChunks(DEFAULT_CHUNKS);
 const DEFAULT_SEED = 12345;
+const WALL_FIELDS = [
+  { key: 'height', id: 'wall-height', label: 'Height', min: 2.5, max: 14, step: 0.05 },
+  { key: 'thickness', id: 'wall-thickness', label: 'Thickness', min: 0.45, max: 2.8, step: 0.05 },
+  { key: 'merlonHeight', id: 'wall-merlon-h', label: 'Merlon height', min: 0, max: 2.4, step: 0.05 },
+  { key: 'merlonWidth', id: 'wall-merlon-w', label: 'Merlon width', min: 0.35, max: 2.4, step: 0.05 },
+  { key: 'merlonGap', id: 'wall-merlon-gap', label: 'Merlon gap', min: 0.15, max: 2.2, step: 0.05 },
+  { key: 'footing', id: 'wall-footing', label: 'Footing', min: 0, max: 1.1, step: 0.01 },
+  { key: 'pier', id: 'wall-pier', label: 'Corner pier', min: 0, max: 1.8, step: 0.01 },
+];
 
 const state = {
   layer: 'table',
@@ -110,13 +139,22 @@ const state = {
   placeType: 1,
   owner: 0,
   brush: 1,
+  /** 1–10. 10 matches the old full raise/lower step. */
+  liftStrength: 6,
   showGrid: false,
+  showChunks: true,
+  showTiles: false,
   mapName: '',
   painting: false,
   selected: [],
   units: [],
   buildings: [],
   agoras: [],
+  walls: emptyWalls(),
+  wallDraft: [],
+  wallDraftOpenings: [],
+  wallKind: 'castle',
+  wallTool: 'lay',
   objectives: [],
   /** Fractional hops for the next zone (consumed when a wave zone is placed). */
   waveRoute: [],
@@ -139,12 +177,27 @@ let terrain = null;
 let grid = null;
 let selectMesh = null;
 let chunkGridMesh = null;
+let tileWireMesh = null;
+let tileWireTimer = 0;
+let tileWireStamp = 0;
+let overlayFreeze = 0;
 let cameraBoundMesh = null;
 let brushMesh = null;
 let brushKey = '';
 let lastBrushWorld = null;
 let lastPaintKey = '';
 let placeMeshes = [];
+let wallParts = { castle: null, dungeon: null, wood: null, iron: null };
+let wallGhostMesh = null;
+let wallGhostWood = null;
+let wallGhostIron = null;
+let wallMats = null;
+let wallCursor = null;
+let openingHover = null;
+let openingKey = '';
+let sectionMarker = null;
+let sectionKey = '';
+let passGridLatched = false;
 let fieldGen = 0;
 let rebuildTimer = 0;
 let sceneRegistered = false;
@@ -191,13 +244,75 @@ function pickGround(clientX, clientY) {
   };
 }
 
-function newField(width, seed, extras = {}) {
-  const size = snapTilesToOddChunks(width);
-  const next = buildField(seed, { width: size, height: size });
+function viewRay(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const w = rect.width || 1;
+  const h = rect.height || 1;
+  const vp = getViewProjectionMatrix(camera, w / h);
+  const inv = invertMat4(vp);
+  if (!inv) return null;
+  const ndcX = (2 * (clientX - rect.left)) / w - 1;
+  const ndcY = 1 - (2 * (clientY - rect.top)) / h;
+  const near = matVecUnproject(inv, ndcX, ndcY, 1);
+  const far = matVecUnproject(inv, ndcX, ndcY, 0);
+  return {
+    x: near[0], y: near[1], z: near[2],
+    dx: far[0] - near[0], dy: far[1] - near[1], dz: far[2] - near[2],
+  };
+}
+
+/** Ray through the cursor against the wall face, so a click on the wall is that wall. */
+function pickWallAim(clientX, clientY) {
+  const ground = pickGround(clientX, clientY);
+  const ray = viewRay(clientX, clientY);
+  if (!ray || !state.walls.runs.length) return ground;
+  const reachY = (state.walls.style.height || 6) + 4;
+  let bestT = Infinity;
+  let best = null;
+  for (const run of state.walls.runs) {
+    const pts = run.points;
+    if (!pts || pts.length < 2) continue;
+    const count = run.closed ? pts.length : pts.length - 1;
+    for (let i = 0; i < count; i++) {
+      const a = pts[i];
+      const b = pts[(i + 1) % pts.length];
+      const sx = b.x - a.x;
+      const sz = b.z - a.z;
+      const sl = Math.hypot(sx, sz);
+      if (sl < 1e-4) continue;
+      const nx = -sz / sl;
+      const nz = sx / sl;
+      const denom = ray.dx * nx + ray.dz * nz;
+      if (Math.abs(denom) < 1e-6) continue;
+      const t = ((a.x - ray.x) * nx + (a.z - ray.z) * nz) / denom;
+      if (t < 0 || t >= bestT) continue;
+      const hy = ray.y + ray.dy * t;
+      const y0 = surfaceHeightAt(field, (a.x + b.x) * 0.5, (a.z + b.z) * 0.5) - 1;
+      if (hy < y0 || hy > y0 + reachY) continue;
+      const hx = ray.x + ray.dx * t;
+      const hz = ray.z + ray.dz * t;
+      const along = ((hx - a.x) * sx + (hz - a.z) * sz) / (sl * sl);
+      if (along < -0.02 || along > 1.02) continue;
+      const u = along < 0 ? 0 : along > 1 ? 1 : along;
+      bestT = t;
+      best = { x: a.x + sx * u, z: a.z + sz * u };
+    }
+  }
+  return best || ground;
+}
+
+function chunksOfTiles(tiles) {
+  return Math.max(1, Math.round((tiles | 0) / TABLE_CHUNK_TILES));
+}
+
+function newField(width, height, seed, extras = {}) {
+  const w = forgeTilesForChunks(chunksOfTiles(width));
+  const h = forgeTilesForChunks(chunksOfTiles(height ?? width));
+  const next = buildField(seed, { width: w, height: h });
   applyTableSilhouette(next, {
     cellSize: TABLE_CHUNK_TILES,
-    cellMask: extras.cellMask ?? createFullCellMask(size, size, TABLE_CHUNK_TILES),
-    cellRadius: extras.cellRadius ?? createFullCellRadius(size, size, TABLE_CHUNK_TILES, extras.radius ?? DEFAULT_CELL_RADIUS),
+    cellMask: extras.cellMask ?? createFullCellMask(w, h, TABLE_CHUNK_TILES),
+    cellRadius: extras.cellRadius ?? createFullCellRadius(w, h, TABLE_CHUNK_TILES, extras.radius ?? DEFAULT_CELL_RADIUS),
     suppressCenterBlock: extras.suppressCenterBlock === true,
   });
   return next;
@@ -271,6 +386,7 @@ async function flushSceneryPaint() {
   sceneryFullRebuild = false;
   const tiles = pendingSceneryTiles.splice(0);
   applyAuthoredScenery(field);
+  restampWallPass();
   try {
     if (!terrain?.rebuildScenery) {
       scheduleRebuild();
@@ -291,12 +407,13 @@ async function flushSceneryPaint() {
 
 function reservedFromPlacements() {
   const half = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
   const pts = [];
   for (const u of state.units) {
-    pts.push([(u.tx + 0.5) * TILE_SIZE_F - half, (u.tz + 0.5) * TILE_SIZE_F - half]);
+    pts.push([(u.tx + 0.5) * TILE_SIZE_F - half, (u.tz + 0.5) * TILE_SIZE_F - halfZ]);
   }
   for (const o of state.objectives) {
-    pts.push([(o.tx + 0.5) * TILE_SIZE_F - half, (o.tz + 0.5) * TILE_SIZE_F - half]);
+    pts.push([(o.tx + 0.5) * TILE_SIZE_F - half, (o.tz + 0.5) * TILE_SIZE_F - halfZ]);
   }
   for (const b of state.buildings) pts.push([b.x, b.z]);
   for (const g of state.agoras) pts.push([g.x, g.z]);
@@ -365,8 +482,9 @@ function applyPlace(pos, { remove = false } = {}) {
     return;
   }
   const half = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
   const tx = Math.floor((pos.x + half) / TILE_SIZE_F);
-  const tz = Math.floor((pos.z + half) / TILE_SIZE_F);
+  const tz = Math.floor((pos.z + halfZ) / TILE_SIZE_F);
   if (tx < 0 || tz < 0 || tx >= field.width || tz >= field.height) return;
   if (field.activeMask?.[tz * field.width + tx] === 0) return;
   if (state.placeKind === 'unit') {
@@ -428,17 +546,18 @@ function removeNearestPlacement(pos) {
     if (best >= 0) list.splice(best, 1);
   };
   const half = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
   if (state.placeKind === 'unit') {
     pickNear(state.units, (u) => ({
       x: (u.tx + 0.5) * TILE_SIZE_F - half,
-      z: (u.tz + 0.5) * TILE_SIZE_F - half,
+      z: (u.tz + 0.5) * TILE_SIZE_F - halfZ,
     }));
   } else if (state.placeKind === 'wavehop') {
     undoWaveHop();
   } else if (state.placeKind === 'objective') {
     pickNear(state.objectives, (o) => ({
       x: (o.tx + 0.5) * TILE_SIZE_F - half,
-      z: (o.tz + 0.5) * TILE_SIZE_F - half,
+      z: (o.tz + 0.5) * TILE_SIZE_F - halfZ,
     }));
   } else if (state.placeKind === 'agora') {
     pickNear(state.agoras, (g) => ({ x: g.x, z: g.z }));
@@ -473,6 +592,7 @@ function updatePlaceMarkers() {
   placeMeshes = [];
   if (!engine || !scene) return;
   const half = field ? worldHalfFFromField(field) : 0;
+  const halfZ = field ? worldHalfZFFromField(field) : 0;
   const ownerColor = (owner) => [
     [0.25, 0.55, 1],
     [1, 0.32, 0.25],
@@ -504,7 +624,7 @@ function updatePlaceMarkers() {
     if (!byOwner.has(key)) byOwner.set(key, { pos: [], idx: [] });
     const b = byOwner.get(key);
     const wx = (u.tx + 0.5) * TILE_SIZE_F - half;
-    const wz = (u.tz + 0.5) * TILE_SIZE_F - half;
+    const wz = (u.tz + 0.5) * TILE_SIZE_F - halfZ;
     pushBoxMarker(b.pos, b.idx, wx, groundY(wx, wz, 1.2), wz, 3.2, 6, 3.2);
   }
   for (const [owner, b] of byOwner) addMarker(`forge-units-${owner}`, b.pos, b.idx, ownerColor(owner));
@@ -526,7 +646,7 @@ function updatePlaceMarkers() {
   const oIdx = [];
   for (const obj of state.objectives) {
     const wx = (obj.tx + 0.5) * TILE_SIZE_F - half;
-    const wz = (obj.tz + 0.5) * TILE_SIZE_F - half;
+    const wz = (obj.tz + 0.5) * TILE_SIZE_F - halfZ;
     const span = Math.max(4, (obj.r || 4) * TILE_SIZE_F * 2);
     pushBoxMarker(oPos, oIdx, wx, groundY(wx, wz, 0.2), wz, span, 1.2, span);
   }
@@ -537,7 +657,7 @@ function updatePlaceMarkers() {
     for (const wp of listWaveHops(state.objectives, state.waveRoute)) {
       const tile = waveFracToTile(wp[0], wp[1], field.width, field.height);
       const wx = (tile.tx + 0.5) * TILE_SIZE_F - half;
-      const wz = (tile.tz + 0.5) * TILE_SIZE_F - half;
+      const wz = (tile.tz + 0.5) * TILE_SIZE_F - halfZ;
       pushBoxMarker(hopPos, hopIdx, wx, groundY(wx, wz, 1.6), wz, 4.2, 5, 4.2);
     }
     addMarker('forge-wave-hops', hopPos, hopIdx, [1, 0.55, 0.18]);
@@ -550,9 +670,17 @@ function flushTerrainPaint() {
   const tiles = pendingPaintTiles.splice(0);
   if (!tiles.length || !field) return;
   applyAuthoredScenery(field);
+  restampWallPass();
+  drawWallBodies();
+  updateWallGhost(false);
+  // Flattening a pond moves water outside the brush. Those chunks have to
+  // rebuild too, or the sheet splits along the last updated edge.
+  const waterMoved = consumeWaterDirty(field);
+  for (let i = 0; i < waterMoved.length; i++) tiles.push(waterMoved[i]);
   const keys = dirtyAtlasChunks(field, tiles);
   if (terrain?.rebuildAtlasChunks?.(field, keys)) {
     grid?.refreshOccupancy(field);
+    refreshDrapeOverlays();
     if (sceneRegistered) invalidateRenderBundles(engine);
     return;
   }
@@ -619,30 +747,105 @@ function isSelected(cx, cz) {
   return state.selected.some((s) => s.cx === cx && s.cz === cz);
 }
 
-function updateSelectIndicator() {
+function updateSelectIndicator({ invalidate = true, ui = true } = {}) {
   selectMesh = dropOverlay(selectMesh);
   chunkGridMesh = dropOverlay(chunkGridMesh);
   const shape = field?.tableShape;
-  if (state.layer !== 'table' || !shape || !engine || !scene) {
-    updateSelectUi();
+  const wantSelect = state.layer === 'table' && state.selected.length > 0;
+  const wantChunks = state.showChunks;
+  if (shape && engine && scene && (wantChunks || wantSelect)) {
+    const gridPos = [];
+    const gridIdx = [];
+    const selPos = [];
+    const selIdx = [];
+    for (let cz = 0; cz < shape.chunksZ; cz++) {
+      for (let cx = 0; cx < shape.chunksX; cx++) {
+        const box = cellWorldBox(field, cx, cz, shape.cellSize);
+        const on = isCellEnabled(shape, cx, cz);
+        if (wantSelect && isSelected(cx, cz)) pushCellRim(selPos, selIdx, box, 5.5, 5.2);
+        else if (wantChunks) pushCellRim(gridPos, gridIdx, box, on ? 3.2 : 2.4, on ? 1.6 : 1.1);
+      }
+    }
+    chunkGridMesh = makeOverlayMesh('chunk-grid', gridPos, gridIdx, [0.95, 0.82, 0.22]);
+    selectMesh = makeOverlayMesh('chunk-select', selPos, selIdx, [0.15, 1, 1]);
+  }
+  if (invalidate && sceneRegistered) invalidateRenderBundles(engine);
+  if (ui) updateSelectUi();
+}
+
+const TILE_WIRE_LIFT = 0.18;
+const TILE_WIRE_HALF = 0.02;
+
+function clearTileWireTimer() {
+  if (!tileWireTimer) return;
+  clearTimeout(tileWireTimer);
+  tileWireTimer = 0;
+}
+
+function updateTileWire({ invalidate = true } = {}) {
+  clearTileWireTimer();
+  const had = !!tileWireMesh;
+  tileWireMesh = dropOverlay(tileWireMesh);
+  if (!state.showTiles || !field || !engine || !scene) {
+    if (invalidate && had && sceneRegistered) invalidateRenderBundles(engine);
     return;
   }
-  const gridPos = [];
-  const gridIdx = [];
-  const selPos = [];
-  const selIdx = [];
-  for (let cz = 0; cz < shape.chunksZ; cz++) {
-    for (let cx = 0; cx < shape.chunksX; cx++) {
-      const box = cellWorldBox(field, cx, cz, shape.cellSize);
-      const on = isCellEnabled(shape, cx, cz);
-      if (isSelected(cx, cz)) pushCellRim(selPos, selIdx, box, 5.5, 5.2);
-      else pushCellRim(gridPos, gridIdx, box, on ? 3.2 : 2.4, on ? 1.6 : 1.1);
+  const { width, height } = field;
+  const half = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
+  const mask = field.activeMask;
+  const tileOn = (tx, tz) => (
+    tx >= 0 && tz >= 0 && tx < width && tz < height
+    && !(mask && mask[tz * width + tx] === 0)
+  );
+  const yAt = (tx, tz) => tileHeightWorld(field, tx, tz) + TILE_WIRE_LIFT;
+  const pos = [];
+  const idx = [];
+  for (let tz = 0; tz < height; tz++) {
+    for (let tx = 0; tx < width; tx++) {
+      if (!tileOn(tx, tz)) continue;
+      const x0 = tx * TILE_SIZE_F - half;
+      const x1 = (tx + 1) * TILE_SIZE_F - half;
+      const z0 = tz * TILE_SIZE_F - halfZ;
+      const z1 = (tz + 1) * TILE_SIZE_F - halfZ;
+      const y00 = yAt(tx, tz);
+      const y10 = yAt(tx + 1, tz);
+      const y11 = yAt(tx + 1, tz + 1);
+      const y01 = yAt(tx, tz + 1);
+      pushSelectEdge(pos, idx, x0, y00, z0, x1, y10, z0, TILE_WIRE_HALF);
+      pushSelectEdge(pos, idx, x0, y00, z0, x0, y01, z1, TILE_WIRE_HALF);
+      if (!tileOn(tx + 1, tz)) pushSelectEdge(pos, idx, x1, y10, z0, x1, y11, z1, TILE_WIRE_HALF);
+      if (!tileOn(tx, tz + 1)) pushSelectEdge(pos, idx, x0, y01, z1, x1, y11, z1, TILE_WIRE_HALF);
+      // Same diagonal as the terrain quad, so the fold of the slope shows.
+      pushSelectEdge(pos, idx, x0, y00, z0, x1, y11, z1, TILE_WIRE_HALF);
     }
   }
-  chunkGridMesh = makeOverlayMesh('chunk-grid', gridPos, gridIdx, [0.95, 0.82, 0.22]);
-  selectMesh = makeOverlayMesh('chunk-select', selPos, selIdx, [0.15, 1, 1]);
-  if (sceneRegistered) invalidateRenderBundles(engine);
-  updateSelectUi();
+  tileWireMesh = makeOverlayMesh('tile-wire', pos, idx, [0.55, 0.9, 1]);
+  if (invalidate && sceneRegistered) invalidateRenderBundles(engine);
+}
+
+function scheduleTileWire() {
+  if (overlayFreeze || !state.showTiles) return;
+  const now = performance.now();
+  if (now >= tileWireStamp) {
+    tileWireStamp = now + 140;
+    updateTileWire();
+    return;
+  }
+  if (tileWireTimer) return;
+  tileWireTimer = setTimeout(() => {
+    tileWireTimer = 0;
+    tileWireStamp = performance.now() + 140;
+    if (!overlayFreeze && state.showTiles) updateTileWire();
+  }, tileWireStamp - now);
+}
+
+function refreshDrapeOverlays() {
+  if (overlayFreeze) return;
+  if (state.showChunks || (state.layer === 'table' && state.selected.length > 0)) {
+    updateSelectIndicator({ invalidate: false, ui: false });
+  }
+  if (state.showTiles) scheduleTileWire();
 }
 
 function brushColor() {
@@ -693,8 +896,9 @@ function updateBrushCursor(pos) {
     return;
   }
   const half = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
   const tx = Math.floor((pos.x + half) / TILE_SIZE_F);
-  const tz = Math.floor((pos.z + half) / TILE_SIZE_F);
+  const tz = Math.floor((pos.z + halfZ) / TILE_SIZE_F);
   const key = `${tx},${tz},${state.brush},${state.layer},${state.lift},${state.terrain},${state.stamp},${state.scenery},${state.doodad}`;
   if (key === brushKey && brushMesh) return;
   brushKey = key;
@@ -724,8 +928,8 @@ function updateBrushCursor(pos) {
       if (field.activeMask?.[z * field.width + x] === 0) continue;
       const x0 = x * TILE_SIZE_F - half + pad;
       const x1 = (x + 1) * TILE_SIZE_F - half - pad;
-      const z0 = z * TILE_SIZE_F - half + pad;
-      const z1 = (z + 1) * TILE_SIZE_F - half - pad;
+      const z0 = z * TILE_SIZE_F - halfZ + pad;
+      const z1 = (z + 1) * TILE_SIZE_F - halfZ - pad;
       const y00 = surfaceHeightAt(field, x0, z0) + lift;
       const y10 = surfaceHeightAt(field, x1, z0) + lift;
       const y11 = surfaceHeightAt(field, x1, z1) + lift;
@@ -735,7 +939,7 @@ function updateBrushCursor(pos) {
       idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
       const wx0 = x * TILE_SIZE_F - half;
       const wx1 = wx0 + TILE_SIZE_F;
-      const wz0 = z * TILE_SIZE_F - half;
+      const wz0 = z * TILE_SIZE_F - halfZ;
       const wz1 = wz0 + TILE_SIZE_F;
       const yMid = (y00 + y11) * 0.5;
       if (!inBrush(x, z - 1)) pushSelectEdge(posArr, idx, wx0, wz0, wx1, wz0, yMid, edgeHalf);
@@ -764,8 +968,386 @@ function updateBrushCursor(pos) {
   if (sceneRegistered) invalidateRenderBundles(engine);
 }
 
+function sampleWallHeight(x, z) {
+  return surfaceHeightAt(field, x, z);
+}
+
+function wallStatusText() {
+  const n = state.walls.runs.length;
+  const draft = state.wallDraft.length;
+  let doors = 0;
+  let openDoors = 0;
+  let gates = 0;
+  let openGates = 0;
+  for (const run of state.walls.runs) {
+    for (const opening of run.openings || []) {
+      if (opening.gate) {
+        if (opening.open) openGates += 1;
+        else gates += 1;
+      } else if (opening.open) openDoors += 1;
+      else doors += 1;
+    }
+  }
+  const bits = [n === 1 ? '1 run' : `${n} runs`];
+  if (doors) bits.push(doors === 1 ? '1 door' : `${doors} doors`);
+  if (openDoors) bits.push(openDoors === 1 ? '1 open door' : `${openDoors} open doors`);
+  if (gates) bits.push(gates === 1 ? '1 gate' : `${gates} gates`);
+  if (openGates) bits.push(openGates === 1 ? '1 open gate' : `${openGates} open gates`);
+  if (draft) bits.push(`draft ${draft} corner${draft === 1 ? '' : 's'}`);
+  return bits.join(' · ');
+}
+
+function syncWallStatus() {
+  const status = document.getElementById('wall-status');
+  if (status) status.textContent = wallStatusText();
+}
+
+function syncWallTools() {
+  document.querySelectorAll('[data-wall-kind]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.wallKind === state.wallKind);
+  });
+  document.querySelectorAll('[data-wall-tool]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.wallTool === state.wallTool);
+  });
+}
+
+function syncWallUi() {
+  const style = state.walls?.style;
+  if (!style) return;
+  for (const spec of WALL_FIELDS) {
+    const el = document.getElementById(spec.id);
+    if (!el) return;
+    el.value = String(style[spec.key]);
+    const label = document.getElementById(`${spec.id}-label`);
+    if (label) label.textContent = Number(style[spec.key]).toFixed(2);
+  }
+  syncWallStatus();
+  syncWallTools();
+}
+
+function previewWallRun() {
+  if (state.layer !== 'walls' || state.wallTool !== 'lay') return null;
+  const pts = state.wallDraft.map((p) => ({ x: p.x, z: p.z }));
+  if (!pts.length) return null;
+  let closed = false;
+  if (wallCursor && !sameWallCorner(wallCursor, pts[pts.length - 1])) {
+    if (pts.length >= 3 && sameWallCorner(wallCursor, pts[0])) closed = true;
+    else pts.push({ x: wallCursor.x, z: wallCursor.z });
+  }
+  return {
+    points: pts,
+    closed,
+    kind: state.wallKind,
+    openings: state.wallDraftOpenings || [],
+  };
+}
+
+function ensureWallMaterials() {
+  if (!wallMats && engine) wallMats = createWallMaterials(engine);
+  return wallMats;
+}
+
+function swapWallMesh(current, name, geometry, material, shadows) {
+  if (current) softDetachMesh(scene, current);
+  const mesh = createWallMesh(engine, name, geometry, material, { shadows });
+  if (mesh) addToScene(scene, mesh);
+  return mesh;
+}
+
+function restampWallPass() {
+  if (!field) return;
+  applyWallOccupancy(field, wallsForGarden());
+  let blocked = false;
+  const mask = field.wallBlock;
+  if (mask) {
+    for (let i = 0; i < mask.length; i++) {
+      if (mask[i]) {
+        blocked = true;
+        break;
+      }
+    }
+  }
+  if (blocked && !passGridLatched && !state.showGrid) {
+    state.showGrid = true;
+    grid?.setVisible(true);
+    const box = document.getElementById('show-grid');
+    if (box) box.checked = true;
+  }
+  if (blocked) passGridLatched = true;
+  grid?.refreshOccupancy(field);
+}
+
+function updateWallGhost(invalidate = true) {
+  if (!engine || !scene || !field) return;
+  const mats = ensureWallMaterials();
+  if (!mats) return;
+  const preview = previewWallRun();
+  const ghost = buildWallGeometry(preview ? [preview] : [], state.walls.style, sampleWallHeight);
+  const dungeon = state.wallKind === 'dungeon';
+  const part = dungeon ? ghost.dungeon : ghost.castle;
+  const ghostMat = dungeon ? mats.dungeonGhost : mats.castleGhost;
+  wallGhostMesh = swapWallMesh(wallGhostMesh, 'forge-walls-draft', part, ghostMat, false);
+  wallGhostWood = swapWallMesh(wallGhostWood, 'forge-walls-draft-wood', ghost.wood, mats.wood, false);
+  wallGhostIron = swapWallMesh(wallGhostIron, 'forge-walls-draft-iron', ghost.iron, mats.iron, false);
+  if (invalidate && sceneRegistered) invalidateRenderBundles(engine);
+  syncWallStatus();
+}
+
+function updateWallMeshes() {
+  if (!engine || !scene || !field) return;
+  const mats = ensureWallMaterials();
+  if (!mats) return;
+  restampWallPass();
+  drawWallBodies();
+  updateWallGhost(false);
+  syncWallStatus();
+}
+
+function commitWallDraft(closed) {
+  state.walls.runs.push({
+    points: state.wallDraft.map((q) => ({ x: q.x, z: q.z })),
+    closed,
+    kind: state.wallKind,
+    openings: (state.wallDraftOpenings || []).map((o) => ({ ...o })),
+  });
+  state.wallDraft = [];
+  state.wallDraftOpenings = [];
+}
+
+function addWallPoint(pos) {
+  if (!pos || !field) return;
+  const p = snapWallCorner(field, pos.x, pos.z);
+  const draft = state.wallDraft;
+  if (draft.length >= 3 && sameWallCorner(p, draft[0])) {
+    commitWallDraft(true);
+    updateWallMeshes();
+    return;
+  }
+  if (draft.length && sameWallCorner(p, draft[draft.length - 1])) return;
+  draft.push(p);
+  updateWallMeshes();
+}
+
+function deleteWallAt(pos) {
+  if (!pos) return;
+  const removed = removeWallSection(state.walls.runs, pos.x, pos.z);
+  clearSectionMarker();
+  updateWallMeshes();
+  if (state.wallTool === 'erase') updateSectionMarker(pos);
+  else if (!removed) setWallAim('Shift-click a wall section to remove it.');
+}
+
+function finishWallRun() {
+  const had = state.wallDraft.length;
+  wallCursor = null;
+  if (had >= 2) commitWallDraft(false);
+  else if (had) {
+    state.wallDraft = [];
+    state.wallDraftOpenings = [];
+  } else return;
+  updateWallMeshes();
+}
+
+function undoWallPoint() {
+  if (state.wallDraft.length) state.wallDraft.pop();
+  else if (state.walls.runs.length) {
+    const run = state.walls.runs.pop();
+    state.wallDraft = run.points.map((p) => ({ x: p.x, z: p.z }));
+    state.wallKind = wallKindOf(run);
+    state.wallDraftOpenings = (run.openings || []).map((o) => ({ ...o }));
+    syncWallTools();
+  } else return;
+  updateWallMeshes();
+}
+
+function cancelWallDraft() {
+  if (!state.wallDraft.length && !(state.wallDraftOpenings || []).length) return;
+  state.wallDraft = [];
+  state.wallDraftOpenings = [];
+  updateWallMeshes();
+}
+
+function clearOpeningMarker() {
+  const had = openingHover;
+  openingKey = '';
+  openingHover = null;
+  if (had) drawWallBodies();
+}
+
+function runsForDraw() {
+  if (!openingHover) return state.walls.runs;
+  return state.walls.runs.map((run) => {
+    if (run !== openingHover.run) return run;
+    return {
+      ...run,
+      openings: [...(run.openings || []), {
+        d: openingHover.d,
+        span: openingHover.span,
+        gate: openingHover.gate,
+        open: openingHover.open,
+      }],
+    };
+  });
+}
+
+function drawWallBodies() {
+  const mats = ensureWallMaterials();
+  if (!mats || !engine || !scene || !field) return;
+  const geom = buildWallGeometry(runsForDraw(), state.walls.style, sampleWallHeight);
+  wallParts.castle = swapWallMesh(wallParts.castle, 'forge-walls-castle', geom.castle, mats.castle, true);
+  wallParts.dungeon = swapWallMesh(wallParts.dungeon, 'forge-walls-dungeon', geom.dungeon, mats.dungeon, true);
+  wallParts.wood = swapWallMesh(wallParts.wood, 'forge-walls-wood', geom.wood, mats.wood, true);
+  wallParts.iron = swapWallMesh(wallParts.iron, 'forge-walls-iron', geom.iron, mats.iron, true);
+  if (sceneRegistered) invalidateRenderBundles(engine);
+}
+
+function setWallAim(text) {
+  const aim = document.getElementById('wall-aim');
+  if (aim) aim.textContent = text || '';
+}
+
+function clearSectionMarker() {
+  sectionKey = '';
+  if (!sectionMarker) return;
+  softDetachMesh(scene, sectionMarker);
+  sectionMarker = null;
+  if (sceneRegistered) invalidateRenderBundles(engine);
+}
+
+function layAimText() {
+  return 'Wall: click corners. Right-click finishes the run. Erase takes out one section.';
+}
+
+function updateSectionMarker(pos) {
+  const hit = pos ? previewWallSection(state.walls.runs, pos.x, pos.z) : { ok: false };
+  const key = hit.ok ? `${hit.a.x},${hit.a.z},${hit.b.x},${hit.b.z}` : '';
+  setWallAim(hit.ok
+    ? (state.wallTool === 'erase'
+      ? 'Click removes this section. Right-click returns to walls.'
+      : 'Shift-click removes this section.')
+    : (state.wallTool === 'erase'
+      ? 'Click a wall section to remove it. Right-click returns to walls.'
+      : 'Shift-click a wall section to remove it. Clear wipes every wall.'));
+  if (key === sectionKey) return;
+  sectionKey = key;
+  if (sectionMarker) {
+    softDetachMesh(scene, sectionMarker);
+    sectionMarker = null;
+  }
+  if (hit.ok && engine && scene && field) {
+    const ya = surfaceHeightAt(field, hit.a.x, hit.a.z);
+    const yb = surfaceHeightAt(field, hit.b.x, hit.b.z);
+    const rise = state.walls.style.height || 6;
+    const positions = new Float32Array([
+      hit.a.x, ya, hit.a.z, hit.b.x, yb, hit.b.z, hit.b.x, yb + rise, hit.b.z, hit.a.x, ya + rise, hit.a.z,
+      hit.a.x, ya, hit.a.z, hit.a.x, ya + rise, hit.a.z, hit.b.x, yb + rise, hit.b.z, hit.b.x, yb, hit.b.z,
+    ]);
+    const normals = new Float32Array(positions.length);
+    for (let i = 1; i < normals.length; i += 3) normals[i] = 1;
+    const mesh = createMeshFromData(
+      engine,
+      'forge-wall-section',
+      positions,
+      normals,
+      new Uint32Array([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]),
+      new Float32Array(16),
+    );
+    const mat = createStandardMaterial();
+    mat.diffuseColor = [0.95, 0.28, 0.22];
+    mat.emissiveColor = [0.85, 0.2, 0.16];
+    mat.ambientColor = [0.6, 0.15, 0.12];
+    mat.specularColor = [0, 0, 0];
+    mat.disableLighting = true;
+    mat.backFaceCulling = false;
+    mat.alpha = 0.55;
+    mesh.material = mat;
+    mesh.pickable = false;
+    addToScene(scene, mesh);
+    sectionMarker = mesh;
+  }
+  if (sceneRegistered) invalidateRenderBundles(engine);
+}
+
+function setWallTool(tool) {
+  state.wallTool = tool || 'lay';
+  syncWallTools();
+  clearOpeningMarker();
+  if (state.wallTool === 'lay') {
+    clearSectionMarker();
+    setWallAim(layAimText());
+    updateWallGhost();
+  } else if (state.wallTool === 'erase') {
+    updateSectionMarker(lastBrushWorld);
+  } else {
+    clearSectionMarker();
+    updateOpeningMarker(lastBrushWorld);
+  }
+}
+
+function wallOpeningMode() {
+  switch (state.wallTool) {
+    case 'door': return { gate: false, open: false, name: 'door' };
+    case 'door-open': return { gate: false, open: true, name: 'open door' };
+    case 'gate': return { gate: true, open: false, name: 'gate' };
+    case 'gate-open': return { gate: true, open: true, name: 'open gate' };
+    default: return null;
+  }
+}
+function updateOpeningMarker(pos) {
+  const mode = wallOpeningMode();
+  const phrase = mode ? `${/^[aeiou]/.test(mode.name) ? 'an' : 'a'} ${mode.name}` : '';
+  const idle = mode ? `Click a finished wall to cut ${phrase}. Right-click returns to walls.` : layAimText();
+  const hit = pos && mode
+    ? previewWallOpening(state.walls.runs, pos.x, pos.z, mode.gate)
+    : { ok: false, reason: idle };
+  const key = hit.ok
+    ? `${mode.name}:${hit.d.toFixed(2)}:${hit.x.toFixed(2)}:${hit.z.toFixed(2)}`
+    : `x:${hit.reason || ''}`;
+  setWallAim(hit.ok ? `Click to cut ${phrase} here. Right-click returns to walls.` : hit.reason);
+  if (key === openingKey) return;
+  openingKey = key;
+  openingHover = hit.ok ? {
+    run: hit.run,
+    d: hit.d,
+    span: hit.span,
+    gate: hit.gate,
+    open: mode.open ? 1 : 0,
+  } : null;
+  drawWallBodies();
+}
+
+function updateWallCursor(pos, shift = false) {
+  if (state.layer !== 'walls' || !pos || !field) {
+    if (wallCursor || openingHover || sectionMarker) {
+      wallCursor = null;
+      clearOpeningMarker();
+      clearSectionMarker();
+      setWallAim(state.layer === 'walls' ? layAimText() : '');
+      updateWallGhost();
+    }
+    return;
+  }
+  if (wallOpeningMode()) {
+    clearSectionMarker();
+    updateOpeningMarker(pos);
+    return;
+  }
+  if (shift || state.wallTool === 'erase') {
+    updateSectionMarker(pos);
+    return;
+  }
+  if (sectionMarker) clearSectionMarker();
+  setWallAim(layAimText());
+  const p = snapWallCorner(field, pos.x, pos.z);
+  if (wallCursor && sameWallCorner(wallCursor, p)) return;
+  wallCursor = p;
+  updateWallGhost();
+}
+
 async function rebuildTerrain() {
   cancelPendingPaint();
+  overlayFreeze++;
+  clearTileWireTimer();
   const gen = ++fieldGen;
   const snap = field;
   const prev = terrain;
@@ -774,28 +1356,35 @@ async function rebuildTerrain() {
   grid = null;
   prev?.dispose?.();
   prevGrid?.dispose?.();
-  const next = await createTerrainFromField(engine, scene, snap, camera, {
-    skipScenery: false,
-    chunkedAtlas: true,
-  });
-  if (gen !== fieldGen) {
-    next.dispose?.();
-    return;
+  tileWireMesh = dropOverlay(tileWireMesh);
+  try {
+    const next = await createTerrainFromField(engine, scene, snap, camera, {
+      skipScenery: false,
+      chunkedAtlas: true,
+    });
+    if (gen !== fieldGen) {
+      next.dispose?.();
+      return;
+    }
+    terrain = next;
+    grid = createTileGridOverlay(engine, scene, snap, { edges: false });
+    grid.setVisible(state.showGrid);
+    if (!sceneRegistered) {
+      await registerScene(scene);
+      sceneRegistered = true;
+    } else {
+      invalidateRenderBundles(engine);
+    }
+    updateSelectIndicator();
+    updateTileWire();
+    updatePlaceMarkers();
+    updateCameraBoundMesh();
+    refreshBrushCursor();
+    updateWallMeshes();
+    updateStats();
+  } finally {
+    overlayFreeze = Math.max(0, overlayFreeze - 1);
   }
-  terrain = next;
-  grid = createTileGridOverlay(engine, scene, snap, { edges: false });
-  grid.setVisible(state.showGrid);
-  if (!sceneRegistered) {
-    await registerScene(scene);
-    sceneRegistered = true;
-  } else {
-    invalidateRenderBundles(engine);
-  }
-  updateSelectIndicator();
-  updatePlaceMarkers();
-  updateCameraBoundMesh();
-  refreshBrushCursor();
-  updateStats();
 }
 
 function selectChunk(cx, cz, { add = false } = {}) {
@@ -839,13 +1428,20 @@ function applyAt(pos, { add = false } = {}) {
   }
   if (state.layer === 'terrain') {
     const half = worldHalfFFromField(field);
+    const halfZ = worldHalfZFFromField(field);
     const tx = Math.floor((pos.x + half) / TILE_SIZE_F);
-    const tz = Math.floor((pos.z + half) / TILE_SIZE_F);
-    const key = `terrain:${tx}:${tz}:${state.brush}:${state.lift}:${state.terrain}:${add ? 1 : 0}`;
+    const tz = Math.floor((pos.z + halfZ) / TILE_SIZE_F);
+    const key = `terrain:${tx}:${tz}:${state.brush}:${state.lift}:${state.liftStrength}:${state.terrain}:${add ? 1 : 0}`;
     if (key === lastPaintKey) return;
     lastPaintKey = key;
     const dirty = state.lift
-      ? paintRegionLift(field, tx, tz, (add ? -state.lift : state.lift) * REGION_LIFT_STEP, state.brush)
+      ? paintRegionLift(
+        field,
+        tx,
+        tz,
+        (add ? -state.lift : state.lift) * REGION_LIFT_STEP * (state.liftStrength / 10),
+        state.brush,
+      )
       : paintTerrainBrush(field, tx, tz, state.terrain, state.brush);
     if (dirty.length) {
       queueTerrainPaint(dirty);
@@ -855,8 +1451,9 @@ function applyAt(pos, { add = false } = {}) {
   }
   if (state.layer === 'scenery') {
     const half = worldHalfFFromField(field);
+    const halfZ = worldHalfZFFromField(field);
     const tx = Math.floor((pos.x + half) / TILE_SIZE_F);
-    const tz = Math.floor((pos.z + half) / TILE_SIZE_F);
+    const tz = Math.floor((pos.z + halfZ) / TILE_SIZE_F);
     const stamp = state.stamp === 'doodad' ? state.doodad : state.scenery;
     const key = `scenery:${tx}:${tz}:${state.brush}:${state.stamp}:${stamp}`;
     if (key === lastPaintKey) return;
@@ -884,6 +1481,14 @@ function applyAt(pos, { add = false } = {}) {
 
 function tableHalfF() {
   return field ? worldHalfFFromField(field) : 0;
+}
+
+function tableHalfZF() {
+  return field ? worldHalfZFFromField(field) : 0;
+}
+
+function cameraExtents() {
+  return resolveCameraExtents(tableHalfF(), tableHalfZF(), state.cameraHalfF);
 }
 
 function syncCenterPlinthUi() {
@@ -914,7 +1519,8 @@ function cameraBoundPct() {
 }
 
 function applyCameraBound() {
-  cam?.setWorldHalfF?.(authoredCameraHalfF());
+  const ext = cameraExtents();
+  cam?.setWorldHalfF?.(ext.x, ext.z);
   updateCameraBoundMesh();
   syncCameraBoundUi();
 }
@@ -940,17 +1546,17 @@ function updateCameraBoundMesh() {
     cameraBoundMesh = null;
   }
   if (!engine || !scene || !field) return;
-  const table = tableHalfF();
-  const half = authoredCameraHalfF();
-  if (!(half > 0) || half >= table - 0.5) return;
+  const ext = cameraExtents();
+  const full = ext.x >= tableHalfF() - 0.5 && ext.z >= tableHalfZF() - 0.5;
+  if (!(ext.x > 0) || full) return;
   const y = 5;
   const rim = 1.8;
   const pos = [];
   const idx = [];
-  pushSelectEdge(pos, idx, -half, -half, half, -half, y, rim);
-  pushSelectEdge(pos, idx, half, -half, half, half, y, rim);
-  pushSelectEdge(pos, idx, half, half, -half, half, y, rim);
-  pushSelectEdge(pos, idx, -half, half, -half, -half, y, rim);
+  pushSelectEdge(pos, idx, -ext.x, -ext.z, ext.x, -ext.z, y, rim);
+  pushSelectEdge(pos, idx, ext.x, -ext.z, ext.x, ext.z, y, rim);
+  pushSelectEdge(pos, idx, ext.x, ext.z, -ext.x, ext.z, y, rim);
+  pushSelectEdge(pos, idx, -ext.x, ext.z, -ext.x, -ext.z, y, rim);
   const positions = new Float32Array(pos);
   const normals = new Float32Array(positions.length);
   for (let i = 0; i < normals.length; i += 3) normals[i + 1] = 1;
@@ -969,6 +1575,23 @@ function updateCameraBoundMesh() {
   if (sceneRegistered) invalidateRenderBundles(engine);
 }
 
+function wallsForGarden() {
+  const runs = state.walls.runs.map((run) => ({
+    ...run,
+    points: run.points.map((p) => ({ x: p.x, z: p.z })),
+    openings: (run.openings || []).map((o) => ({ ...o })),
+  }));
+  if (state.wallDraft.length >= 2) {
+    runs.push({
+      points: state.wallDraft.map((p) => ({ x: p.x, z: p.z })),
+      closed: false,
+      kind: state.wallKind,
+      openings: (state.wallDraftOpenings || []).map((o) => ({ ...o })),
+    });
+  }
+  return { style: state.walls.style, runs };
+}
+
 function gardenExtras() {
   return {
     name: state.mapName,
@@ -979,6 +1602,7 @@ function gardenExtras() {
     startingResources: state.startingResources,
     story: state.story,
     cameraHalfF: state.cameraHalfF,
+    walls: wallsForGarden(),
   };
 }
 
@@ -992,17 +1616,19 @@ function currentReel() {
 
 function worldFromTile(tx, tz) {
   const half = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
   return {
     x: (tx + 0.5) * TILE_SIZE_F - half,
-    z: (tz + 0.5) * TILE_SIZE_F - half,
+    z: (tz + 0.5) * TILE_SIZE_F - halfZ,
   };
 }
 
 function tileFromWorld(x, z) {
   const half = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
   return {
     tx: Math.floor((x + half) / TILE_SIZE_F),
-    tz: Math.floor((z + half) / TILE_SIZE_F),
+    tz: Math.floor((z + halfZ) / TILE_SIZE_F),
   };
 }
 
@@ -1361,9 +1987,13 @@ function applyGardenJson(json) {
   state.story = g.story || emptyStory();
   state.storyClipId = null;
   state.cameraHalfF = g.cameraHalfF || 0;
+  state.walls = g.walls || emptyWalls();
+  state.wallDraft = [];
+  state.wallDraftOpenings = [];
+  wallCursor = null;
   storyPlayer?.setReel(currentReel());
   state.selected = [];
-  celestial?.setWorldHalfF(worldHalfFFromField(field));
+  celestial?.setWorldHalfF(Math.max(worldHalfFFromField(field), worldHalfZFFromField(field)));
   applyCameraBound();
   syncFormFromField();
   syncStoryEditor();
@@ -1704,19 +2334,12 @@ function updateSelectUi() {
 }
 
 function syncFormFromField() {
-  const sizeEl = document.getElementById('map-size');
   const seedEl = document.getElementById('map-seed');
   const nameEl = document.getElementById('map-name');
-  if (sizeEl) {
-    const w = String(field.width);
-    if (![...sizeEl.options].some((o) => o.value === w)) {
-      const opt = document.createElement('option');
-      opt.value = w;
-      opt.textContent = `${field.width}×${field.height}`;
-      sizeEl.appendChild(opt);
-    }
-    sizeEl.value = w;
-  }
+  const chunksX = document.getElementById('map-chunks-x');
+  const chunksY = document.getElementById('map-chunks-y');
+  if (chunksX) chunksX.value = String(chunksOfTiles(field.width));
+  if (chunksY) chunksY.value = String(chunksOfTiles(field.height));
   if (seedEl) seedEl.value = String(field.seed);
   if (nameEl) nameEl.value = state.mapName;
   syncCenterPlinthUi();
@@ -1727,6 +2350,7 @@ function syncFormFromField() {
   }
   updateStats();
   updateSelectUi();
+  syncWallUi();
 }
 
 function setLayer(layer) {
@@ -1742,6 +2366,7 @@ function setLayer(layer) {
   document.getElementById('panel-table').style.display = layer === 'table' ? 'block' : 'none';
   document.getElementById('panel-terrain').style.display = layer === 'terrain' ? 'block' : 'none';
   document.getElementById('panel-scenery').style.display = layer === 'scenery' ? 'block' : 'none';
+  document.getElementById('panel-walls').style.display = layer === 'walls' ? 'block' : 'none';
   document.getElementById('panel-place').style.display = layer === 'place' ? 'block' : 'none';
   document.getElementById('panel-light').style.display = layer === 'light' ? 'block' : 'none';
   const storyPanel = document.getElementById('panel-story');
@@ -1759,7 +2384,9 @@ function setLayer(layer) {
   }
   holdStoryCamera = false;
   lastPaintKey = '';
+  if (layer !== 'walls') wallCursor = null;
   refreshBrushCursor();
+  updateWallGhost();
   updateSelectIndicator();
 }
 
@@ -1792,6 +2419,7 @@ function mountUi() {
       <button data-layer="table" class="active">Table</button>
       <button data-layer="terrain">Terrain</button>
       <button data-layer="scenery">Scenery</button>
+      <button data-layer="walls">Walls</button>
       <button data-layer="place">Place</button>
       <button data-layer="story">Story</button>
       <button data-layer="light">Light</button>
@@ -1808,8 +2436,11 @@ function mountUi() {
       <input id="start-mineral" type="number" min="0" value="${STARTING_RESOURCES.mineral}">
       <label>Starting food</label>
       <input id="start-food" type="number" min="0" value="${STARTING_RESOURCES.food}">
-      <label>Size</label>
-      <select id="map-size">${SIZES.map((s) => `<option value="${s}"${s === DEFAULT_SIZE ? ' selected' : ''}>${s}×${s}</option>`).join('')}</select>
+      <label>Width</label>
+      <input id="map-chunks-x" type="number" min="${FORGE_MIN_CHUNKS}" max="${FORGE_MAX_CHUNKS}" step="2" value="${DEFAULT_CHUNKS}">
+      <label>Depth</label>
+      <input id="map-chunks-y" type="number" min="${FORGE_MIN_CHUNKS}" max="${FORGE_MAX_CHUNKS}" step="2" value="${DEFAULT_CHUNKS}">
+      <p class="hint">Odd chunks, ${FORGE_MIN_CHUNKS}–${FORGE_MAX_CHUNKS} (${forgeTilesForChunks(FORGE_MIN_CHUNKS)}–${forgeTilesForChunks(FORGE_MAX_CHUNKS)} tiles). Width and depth can differ. Generate rebuilds the board.</p>
       <label>Seed</label>
       <input id="map-seed" type="number" value="${DEFAULT_SEED}">
       <div class="row">
@@ -1856,7 +2487,6 @@ function mountUi() {
       <div class="row">
         <button id="btn-enable-all">Enable all chunks</button>
       </div>
-      <label><input id="show-grid" type="checkbox"> Show pass grid (dev red / yellow)</label>
     </div>
     <div id="panel-terrain" class="panel" style="display:none">
       <div class="row">
@@ -1868,7 +2498,9 @@ function mountUi() {
       </div>
       <label>Brush <span id="brush-label">1</span></label>
       <input id="brush-size" type="range" min="0" max="6" value="1">
-      <p class="hint">Raise / lower moves the felt as-is. The table rim stays locked so hills cannot spill off the rails.</p>
+      <label>Strength <span id="lift-strength-label">6</span></label>
+      <input id="lift-strength" type="range" min="1" max="10" value="6">
+      <p class="hint">Raise and lower ease across the brush. Strength is how hard each stroke pushes. The table edge stays between the rail and the floor; the middle can go further.</p>
     </div>
     <div id="panel-scenery" class="panel" style="display:none">
       <div class="row">
@@ -1891,6 +2523,32 @@ function mountUi() {
         <button id="btn-clear-doodads">Clear doodads</button>
       </div>
       <p class="hint">Trees and rocks gather / block. Doodads are paint-only — they do not path or harvest. Grove mushrooms still sprout on their own when a stand matures. Generate fills around painted trees. Clear wipes that row only.</p>
+    </div>
+    <div id="panel-walls" class="panel" style="display:none">
+      <p class="hint" id="wall-aim">Wall: click corners. Right-click finishes the run. Erase takes out one section.</p>
+      <div class="row">
+        <button data-wall-kind="castle" class="active" type="button">Castle</button>
+        <button data-wall-kind="dungeon" type="button">Dungeon</button>
+      </div>
+      <div class="row">
+        <button data-wall-tool="lay" class="active" type="button">Wall</button>
+        <button data-wall-tool="erase" type="button">Erase</button>
+        <button data-wall-tool="door" type="button">Door</button>
+        <button data-wall-tool="door-open" type="button">Open door</button>
+        <button data-wall-tool="gate" type="button">Gate</button>
+        <button data-wall-tool="gate-open" type="button">Open gate</button>
+      </div>
+      ${WALL_FIELDS.map((spec) => `
+        <label>${spec.label} <span id="${spec.id}-label">${Number(state.walls.style[spec.key]).toFixed(2)}</span></label>
+        <input id="${spec.id}" type="range" min="${spec.min}" max="${spec.max}" step="${spec.step}" value="${state.walls.style[spec.key]}">
+      `).join('')}
+      <div class="row">
+        <button id="wall-finish" type="button">Finish run</button>
+        <button id="wall-undo" type="button">Undo</button>
+        <button id="wall-clear" type="button">Clear</button>
+      </div>
+      <p class="hint" id="wall-status">0 runs</p>
+      <p class="hint">Castle is large pale ashlar. Dungeon is the same wall in smaller grey stone. The choice sticks to the run you finish.</p>
     </div>
     <div id="panel-place" class="panel" style="display:none">
       <label>Owner</label>
@@ -2010,6 +2668,14 @@ function mountUi() {
     </div>
   `;
   document.body.appendChild(ui);
+  const view = document.createElement('div');
+  view.id = 'forge-view';
+  view.innerHTML = `
+    <label title="Red is blocked, yellow is slow"><input id="show-grid" type="checkbox"> Collision</label>
+    <label title="Chunk outlines"><input id="show-chunks" type="checkbox" checked> Chunk borders</label>
+    <label title="Tile corners, plus the slope diagonal"><input id="show-tiles" type="checkbox"> Tile wireframe</label>
+  `;
+  document.body.appendChild(view);
   ui.addEventListener('pointerdown', (e) => e.stopPropagation());
   ui.addEventListener('pointermove', (e) => e.stopPropagation());
   ui.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
@@ -2122,12 +2788,56 @@ function mountUi() {
   document.getElementById('brush-size').addEventListener('input', (e) => {
     setBrush(Number(e.target.value) || 0);
   });
+  document.getElementById('lift-strength').addEventListener('input', (e) => {
+    const n = Math.max(1, Math.min(10, Number(e.target.value) || 1));
+    state.liftStrength = n;
+    const label = document.getElementById('lift-strength-label');
+    if (label) label.textContent = String(n);
+  });
   document.getElementById('scenery-brush-size').addEventListener('input', (e) => {
     setBrush(Number(e.target.value) || 0);
+  });
+  for (const spec of WALL_FIELDS) {
+    const el = document.getElementById(spec.id);
+    el.addEventListener('input', () => {
+      state.walls.style[spec.key] = Number(el.value);
+      const label = document.getElementById(`${spec.id}-label`);
+      if (label) label.textContent = Number(el.value).toFixed(2);
+      updateWallMeshes();
+    });
+  }
+  document.getElementById('wall-finish').addEventListener('click', finishWallRun);
+  document.getElementById('wall-undo').addEventListener('click', undoWallPoint);
+  document.getElementById('wall-clear').addEventListener('click', () => {
+    state.walls.runs = [];
+    state.wallDraft = [];
+    state.wallDraftOpenings = [];
+    wallCursor = null;
+    updateWallMeshes();
+  });
+  document.querySelectorAll('[data-wall-kind]').forEach((b) => {
+    b.addEventListener('click', () => {
+      state.wallKind = b.dataset.wallKind === 'dungeon' ? 'dungeon' : 'castle';
+      syncWallTools();
+      updateWallGhost();
+    });
+  });
+  document.querySelectorAll('[data-wall-tool]').forEach((b) => {
+    b.addEventListener('click', () => setWallTool(b.dataset.wallTool || 'lay'));
   });
   document.getElementById('show-grid').addEventListener('change', (e) => {
     state.showGrid = e.target.checked;
     grid?.setVisible(state.showGrid);
+    if (sceneRegistered) invalidateRenderBundles(engine);
+  });
+  document.getElementById('show-chunks').addEventListener('change', (e) => {
+    state.showChunks = e.target.checked;
+    updateSelectIndicator();
+  });
+  document.getElementById('show-tiles').addEventListener('change', (e) => {
+    state.showTiles = e.target.checked;
+    tileWireStamp = 0;
+    updateTileWire();
   });
   document.getElementById('camera-bound').addEventListener('input', (e) => {
     setCameraBoundPct(Number(e.target.value) || 100);
@@ -2141,20 +2851,26 @@ function mountUi() {
     updateSelectUi();
   });
   document.getElementById('btn-generate').addEventListener('click', () => {
-    const size = snapTilesToOddChunks(Number(document.getElementById('map-size').value) || DEFAULT_SIZE);
+    const width = forgeTilesForChunks(Number(document.getElementById('map-chunks-x').value));
+    const height = forgeTilesForChunks(Number(document.getElementById('map-chunks-y').value));
     const seed = Number(document.getElementById('map-seed').value) || 0;
-    field = newField(size, seed, { suppressCenterBlock: field?.suppressCenterBlock === true });
+    field = newField(width, height, seed, { suppressCenterBlock: field?.suppressCenterBlock === true });
     state.selected = [];
     state.units = [];
     state.buildings = [];
     state.objectives = [];
     state.waveRoute = [];
+    state.walls.runs = [];
+    state.wallDraft = [];
+    state.wallDraftOpenings = [];
+    wallCursor = null;
     state.cameraHalfF = 0;
-    state.agoras = defaultMatchAgoras(worldHalfFFromField(field), field.width);
-    celestial?.setWorldHalfF(worldHalfFFromField(field));
+    state.agoras = defaultMatchAgoras(worldHalfFFromField(field), field.width, 2, worldHalfZFFromField(field));
+    celestial?.setWorldHalfF(Math.max(worldHalfFFromField(field), worldHalfZFFromField(field)));
     applyCameraBound();
     syncCenterPlinthUi();
     syncWaveRouteHint();
+    syncFormFromField();
     rebuildTerrain();
   });
   document.getElementById('btn-export').addEventListener('click', exportMap);
@@ -2287,15 +3003,16 @@ async function main() {
   engine = await createEngine(canvas, { msaaSamples: 1 });
   scene = createSceneContext(engine);
 
-  field = newField(DEFAULT_SIZE, DEFAULT_SEED);
-  state.agoras = defaultMatchAgoras(worldHalfFFromField(field), field.width);
+  field = newField(DEFAULT_SIZE, DEFAULT_SIZE, DEFAULT_SEED);
+  state.agoras = defaultMatchAgoras(worldHalfFFromField(field), field.width, 2, worldHalfZFFromField(field));
   const worldHalfF = worldHalfFFromField(field);
-  camera = createArcRotateCamera(-Math.PI / 2.1, Math.PI / 3.2, worldHalfF * 1.55, {
+  const worldHalfZF = worldHalfZFFromField(field);
+  camera = createArcRotateCamera(-Math.PI / 2.1, Math.PI / 3.2, Math.max(worldHalfF, worldHalfZF) * 1.55, {
     x: 0, y: 0, z: 0,
   });
   camera.farPlane = 40000;
   scene.camera = camera;
-  cam = createCameraController(camera, canvas, { worldHalfF });
+  cam = createCameraController(camera, canvas, { worldHalfF, worldHalfZF });
 
   storyHud = createStoryHud(document.body);
   storySpeech = createStorySpeech({
@@ -2343,7 +3060,29 @@ async function main() {
     if (!storyDriving()) cam.handlePointerDown(e);
     if (e.button === 0 && !cam.isRmbPanning()) {
       state.painting = true;
-      applyAt(pickGround(e.clientX, e.clientY), { add: e.shiftKey });
+      const mode = wallOpeningMode();
+      const erase = state.layer === 'walls' && (state.wallTool === 'erase' || (!mode && e.shiftKey));
+      const pos = (state.layer === 'walls' && (mode || erase))
+        ? pickWallAim(e.clientX, e.clientY)
+        : pickGround(e.clientX, e.clientY);
+      if (state.layer === 'walls') {
+        if (document.activeElement?.tagName === 'BUTTON') document.activeElement.blur();
+        if ((e.detail | 0) < 2) {
+          if (mode) {
+            if (e.shiftKey) removeNearestOpening(state.walls.runs, pos.x, pos.z, OPENING_REACH);
+            else if (!placeWallOpening(state.walls.runs, pos.x, pos.z, mode.gate, OPENING_REACH, mode.open)) {
+              const hit = previewWallOpening(state.walls.runs, pos.x, pos.z, mode.gate);
+              setWallAim(hit.reason || 'Click a finished wall.');
+            }
+            clearOpeningMarker();
+            updateWallMeshes();
+            if (pos) updateOpeningMarker(pos);
+          } else if (erase) deleteWallAt(pos);
+          else addWallPoint(pos);
+        }
+      } else {
+        applyAt(pos, { add: e.shiftKey });
+      }
     }
   });
   canvas.addEventListener('dblclick', (e) => {
@@ -2361,10 +3100,17 @@ async function main() {
     if (state.painting && (state.layer === 'terrain' || state.layer === 'scenery') && e.buttons & 1) {
       applyAt(pos);
     }
+    const aiming = state.layer === 'walls' && (wallOpeningMode() || state.wallTool === 'erase' || e.shiftKey);
+    const wallPos = aiming ? pickWallAim(e.clientX, e.clientY) : pos;
+    if (state.layer === 'walls') updateWallCursor(wallPos, (state.wallTool === 'erase' || e.shiftKey) && !wallOpeningMode());
     updateBrushCursor(pos);
   });
   canvas.addEventListener('pointerup', (e) => {
-    cam.handlePointerUp(e);
+    const panned = cam.handlePointerUp(e);
+    if (e.button === 2 && !panned && state.layer === 'walls' && !storyDriving()) {
+      if (wallOpeningMode() || state.wallTool === 'erase') setWallTool('lay');
+      else finishWallRun();
+    }
   });
   window.addEventListener('pointerup', () => {
     if (!state.painting && !sceneryPending) return;
@@ -2375,6 +3121,13 @@ async function main() {
   canvas.addEventListener('pointerleave', () => {
     lastBrushWorld = null;
     hideBrushCursor();
+    if (wallCursor || openingHover || sectionMarker) {
+      wallCursor = null;
+      clearOpeningMarker();
+      clearSectionMarker();
+      setWallAim('');
+      updateWallGhost();
+    }
   });
   window.addEventListener('keydown', (e) => {
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName);
@@ -2382,6 +3135,25 @@ async function main() {
       e.preventDefault();
       storyPlayer?.toggle();
       return;
+    }
+    const slider = e.target?.tagName === 'INPUT' && e.target.type === 'range';
+    if (state.layer === 'walls' && e.key === 'Escape') {
+      e.preventDefault();
+      if (wallOpeningMode() || state.wallTool === 'erase') setWallTool('lay');
+      else cancelWallDraft();
+      return;
+    }
+    if (state.layer === 'walls' && (!typing || slider) && e.target?.tagName !== 'BUTTON') {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        finishWallRun();
+        return;
+      }
+      if (e.key === 'Backspace') {
+        e.preventDefault();
+        undoWallPoint();
+        return;
+      }
     }
     if (storyDriving()) return;
     cam.handleKeyDown(e);

@@ -1,5 +1,17 @@
 import { isCameraFollowTypingTarget } from './cameraFollow.js';
 
+/** Playfield chrome. Right-click pans the camera; it is not a browser menu. */
+const RMB_PASSTHROUGH_SELECTOR = '#chat-hud, #replay-watch, #story-transport, #menu_b, #graffiti_b';
+
+/**
+ * @param {EventTarget | null | undefined} target
+ */
+export function isRmbPassthroughTarget(target) {
+  const el = /** @type {{ closest?: Function, parentElement?: EventTarget | null }} */ (target);
+  const node = typeof el?.closest === 'function' ? el : el?.parentElement;
+  return !!node?.closest?.(RMB_PASSTHROUGH_SELECTOR);
+}
+
 // Sole pointer/wheel surface for mouse and touch.
 // Document-level move/up like v1 — no pointer capture.
 // Touch is fully owned by the touch adapter (its own multi-finger bookkeeping);
@@ -123,13 +135,19 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
     return { active: on, justUnlocked };
   }
 
+  function onCanvas(e) {
+    return e.target === canvas || canvas.contains(/** @type {Node} */ (e.target));
+  }
+
   function onPointerDown(e) {
     // Track even over the splash overlay so unlock can re-base from the real hold.
     noteHeldDown(e);
     const { active: on, justUnlocked } = syncActive();
     // Unlock already synthesized downs from `held` (includes this pointer).
     if (!on || justUnlocked) return;
-    if (e.target !== canvas && !canvas.contains(/** @type {Node} */ (e.target))) return;
+    // Right-click on chat, replay, scene transport, and the menu button is a
+    // pan / force-move, same as the canvas under them.
+    if (!onCanvas(e) && !(e.button === 2 && isRmbPassthroughTarget(e.target))) return;
 
     if (e.pointerType === 'touch') {
       touch?.handlePointerDown(e);
@@ -193,11 +211,21 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
     camera.handleWheel(e);
   }
 
+  /** Capture so a control's own pointerdown cannot swallow the right button. */
+  function onRmbChromeCapture(e) {
+    if (e.button !== 2 || !isRmbPassthroughTarget(e.target)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onPointerDown(e);
+  }
+
   function onContextMenu(e) {
-    if (!isActive()) return;
-    if (e.target === canvas || canvas.contains(/** @type {Node} */ (e.target))) {
+    if (isRmbPassthroughTarget(e.target)) {
       e.preventDefault();
+      return;
     }
+    if (!isActive()) return;
+    if (onCanvas(e)) e.preventDefault();
   }
 
   function onKeyDown(e) {
@@ -247,12 +275,13 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
   }
   raf = requestAnimationFrame(pollActive);
 
+  document.addEventListener('pointerdown', onRmbChromeCapture, true);
   document.addEventListener('pointerdown', onPointerDown);
   document.addEventListener('pointermove', onPointerMove);
   document.addEventListener('pointerup', onPointerUp);
   document.addEventListener('pointercancel', onPointerUp);
   canvas.addEventListener('wheel', onWheel, { passive: false });
-  document.addEventListener('contextmenu', onContextMenu);
+  document.addEventListener('contextmenu', onContextMenu, true);
   window.addEventListener('keydown', onKeyDown);
   // Capture so menu/lobby field stopPropagation cannot swallow a release.
   window.addEventListener('keyup', onKeyUp, true);
@@ -263,12 +292,13 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
   return {
     dispose() {
       cancelAnimationFrame(raf);
+      document.removeEventListener('pointerdown', onRmbChromeCapture, true);
       document.removeEventListener('pointerdown', onPointerDown);
       document.removeEventListener('pointermove', onPointerMove);
       document.removeEventListener('pointerup', onPointerUp);
       document.removeEventListener('pointercancel', onPointerUp);
       canvas.removeEventListener('wheel', onWheel);
-      document.removeEventListener('contextmenu', onContextMenu);
+      document.removeEventListener('contextmenu', onContextMenu, true);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp, true);
       document.removeEventListener('focusin', onFocusIn);

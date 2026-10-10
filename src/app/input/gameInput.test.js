@@ -869,3 +869,133 @@ describe('gamepad placement', () => {
   });
 });
 
+describe('headset select', () => {
+  function makeXrHarness() {
+    const selected = new Uint8Array(4);
+    const pos = [[0, 0], [50, 50], [1, 1]];
+    let rayHits = [];
+    const world = {
+      count: 3,
+      alive: [1, 1, 1],
+      owner: [0, 0, 1],
+      type: [1, 1, 1],
+      carriedBy: [-1, -1, -1],
+    };
+    const input = createGameInput({
+      canvas: {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      },
+      renderer: {
+        pickSelectionHud: () => null,
+        pickControlGroupHud: () => null,
+        groundYAt: () => 0,
+        setSelectionBox: () => {},
+        rayHitSpheresAllInto: (_ray, _spheres, _n, outIds) => {
+          rayHits.forEach((id, k) => { outIds[k] = id; });
+          return rayHits.length;
+        },
+      },
+      world,
+      selected,
+      localPlayerId: 0,
+      getUnitWorldPos: (i, out) => {
+        out.x = pos[i][0];
+        out.y = 0;
+        out.z = pos[i][1];
+        return out;
+      },
+      enqueueCommand: () => {},
+      getAgoras: () => [],
+      getBuildings: () => [],
+    });
+    return { input, selected, setRayHits: (ids) => { rayHits = ids; } };
+  }
+
+  const ray = { ox: 0, oy: 50, oz: 0, dx: 0, dy: -1, dz: 0 };
+
+  it('lasso on the field selects own units inside the loop only', () => {
+    const { input, selected } = makeXrHarness();
+    const loop = [{ x: -5, z: -5 }, { x: 5, z: -5 }, { x: 5, z: 5 }, { x: -5, z: 5 }];
+    assert.equal(input.groundLoopSelect(loop), true);
+    assert.deepEqual([...selected.subarray(0, 3)], [1, 0, 0]);
+  });
+
+  it('additive lasso keeps the earlier pick', () => {
+    const { input, selected } = makeXrHarness();
+    input.groundLoopSelect([{ x: -5, z: -5 }, { x: 5, z: -5 }, { x: 0, z: 5 }]);
+    input.groundLoopSelect([{ x: 45, z: 45 }, { x: 55, z: 45 }, { x: 50, z: 55 }], true);
+    assert.deepEqual([...selected.subarray(0, 3)], [1, 1, 0]);
+  });
+
+  it('trigger tap selects the unit on the ray and an empty tap clears', () => {
+    const { input, selected, setRayHits } = makeXrHarness();
+    setRayHits([1]);
+    assert.equal(input.selectAtRay(ray), true);
+    assert.deepEqual([...selected.subarray(0, 3)], [0, 1, 0]);
+    setRayHits([]);
+    input.selectAtRay(ray);
+    assert.deepEqual([...selected.subarray(0, 3)], [0, 0, 0]);
+  });
+
+  it('a tap that misses lands on the nearest selectable unit within the slop', () => {
+    const { input, selected, setRayHits } = makeXrHarness();
+    setRayHits([]);
+    input.selectAtRay(ray, false, { x: 50, z: 50, slop: 2 });
+    assert.deepEqual([...selected.subarray(0, 3)], [0, 1, 0]);
+    // Enemy 2 is nearer the hit, but with own troops up it is skipped.
+    input.selectAtRay(ray, false, { x: 1.5, z: 1.5, slop: 6 });
+    assert.deepEqual([...selected.subarray(0, 3)], [1, 0, 0]);
+    input.selectAtRay(ray, false, { x: 25, z: 25, slop: 2 });
+    assert.deepEqual([...selected.subarray(0, 3)], [0, 0, 0]);
+    // Nothing selected: the nearest unit wins even if it is foreign (inspect).
+    input.selectAtRay(ray, false, { x: 1.5, z: 1.5, slop: 6 });
+    assert.deepEqual([...selected.subarray(0, 3)], [0, 0, 1]);
+  });
+
+  it('a building tap follows the mesh and ignores the footprint when the mesh misses', () => {
+    let sel = null;
+    let meshHit = false;
+    const input = createGameInput({
+      canvas: {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      },
+      renderer: {
+        pickSelectionHud: () => null,
+        pickControlGroupHud: () => null,
+        groundYAt: () => 0,
+        setSelectionBox: () => {},
+        rayHitSpheresAllInto: () => 0,
+        pickStructureOnRay: (_ray, allow) => {
+          const hit = { kind: 'agora', index: 0 };
+          if (!allow(hit)) return null;
+          return meshHit ? hit : null;
+        },
+      },
+      world: { count: 0, alive: [], owner: [], type: [], carriedBy: [] },
+      selected: new Uint8Array(4),
+      localPlayerId: 0,
+      getUnitWorldPos: () => ({ x: 0, y: 0, z: 0 }),
+      enqueueCommand: () => {},
+      getAgoras: () => [{ owner: 0, x: 0, z: 0, yaw: 0 }],
+      getBuildings: () => [],
+      onBuildingSelected: (s) => { sel = s; },
+    });
+    const ray = { ox: 0, oy: 50, oz: 0, dx: 0, dy: -1, dz: 0 };
+    meshHit = true;
+    assert.equal(input.selectAtRay(ray), true);
+    assert.deepEqual(sel, { kind: 'agora', index: 0 });
+    meshHit = false;
+    input.selectAtRay(ray);
+    assert.equal(sel, null);
+  });
+
+  it('a tap on an enemy keeps own troops selected', () => {
+    const { input, selected, setRayHits } = makeXrHarness();
+    setRayHits([0]);
+    input.selectAtRay(ray);
+    setRayHits([2]);
+    assert.equal(input.selectAtRay(ray), false);
+    assert.deepEqual([...selected.subarray(0, 3)], [1, 0, 0]);
+  });
+});
+

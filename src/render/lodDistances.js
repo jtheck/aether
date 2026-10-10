@@ -1,7 +1,8 @@
 // Shared camera-distance bands for render LOD / FX gates (3D eye → point).
-// When LOD_ENABLED is false, all gates are skipped (Infinity).
+// LOD_ENABLED gates unit animation and distant FX only. Scenery mesh→billboard
+// uses SCENERY_LOD_* on its own.
 
-/** Master kill switch — leave false to run without distance LOD. */
+/** Master kill switch for unit VAT freeze and distant FX. Scenery LOD is separate. */
 export const LOD_ENABLED = false;
 
 /** Socket fire, aura sparkles, health chips. */

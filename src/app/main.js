@@ -62,7 +62,7 @@ import {
   isBuildingAlive,
 } from '../sim/buildings.js';
 import { menuGateState } from '../sim/menuGate.js';
-import { TILE_SIZE_F, worldToTile, setActiveMapSize, SKIRMISH_MAP_W, SKIRMISH_MAP_H } from '../sim/field.js';
+import { TILE_SIZE_F, worldToTile, worldToTileZ, worldHalfZFFromField, setActiveMapSize, SKIRMISH_MAP_W, SKIRMISH_MAP_H } from '../sim/field.js';
 import { agoraOverlayActive } from '../sim/agora.js';
 import { ownerResourcesFrom } from '../sim/resources.js';
 import { formatGameNumber } from '../sim/formatGameNumber.js';
@@ -81,9 +81,9 @@ import {
   enterXr,
   exitXr,
   isXrSessionSupported,
-  pointerSelection,
 } from '../vendor/lite/liteVendor.js';
 import { createXrRig, stepXrRig } from './xrRig.js';
+import { createXrSelect } from './xrSelect.js';
 import { clearXrEye } from '../render/xrEye.js';
 import { rimKeyForBuildingType, sharedRimKey } from '../render/workRadiusRings.js';
 import { createFogOfWar } from '../render/fogOfWar.js';
@@ -542,10 +542,15 @@ function paintXrButton(on) {
   button.setAttribute('aria-label', on ? 'Exit XR' : 'Enter XR');
 }
 
-async function toggleMatchXr(renderer) {
+/**
+ * @param {object} renderer
+ * @param {() => ({ groundLoopSelect?: Function, selectAtRay?: Function } | null | undefined)} getInput
+ */
+async function toggleMatchXr(renderer, getInput) {
   if (matchXr) {
     const ctx = matchXr;
     matchXr = null;
+    ctx.xrSelect?.dispose();
     clearXrEye();
     renderer.releaseHeadsetCamera?.();
     paintXrButton(false);
@@ -554,7 +559,7 @@ async function toggleMatchXr(renderer) {
   }
   const cam = renderer.camera.worldMatrix;
   const eye = [cam[12], cam[13], cam[14]];
-  const reach = Math.max(120, Math.hypot(eye[0], eye[1], eye[2]));
+  const select = createXrSelect({ renderer, getInput });
   const rig = createXrRig(eye, {
     floor: (x, z) => renderer.groundHeight(x, z),
     clearance: 6,
@@ -565,20 +570,19 @@ async function toggleMatchXr(renderer) {
     depthNear: 0.08,
     // Sky dome radius is 24000. A short far plane clips it to flat clear color.
     depthFar: renderer.camera.farPlane || 40000,
-    features: [pointerSelection({
-      maxLength: reach,
-      laserThickness: 0.08,
-      cursorSize: 0.45,
-      enableOnAllControllers: true,
-    })],
-    onFrame: (ctx, frame, time) => stepXrRig(rig, ctx, frame, time),
+    onFrame: (ctx, frame, time) => {
+      stepXrRig(rig, ctx, frame, time);
+      select.step(ctx);
+    },
     onEnd: () => {
       matchXr = null;
+      select.dispose();
       clearXrEye();
       renderer.releaseHeadsetCamera?.();
       paintXrButton(false);
     },
   });
+  matchXr.xrSelect = select;
   paintXrButton(true);
 }
 
@@ -587,7 +591,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   const skirmish = bootCfg.mode === 'skirmish';
   let kothLobbyUi = { refresh() {} };
   let lobbyUi = { refresh() {} };
-  let chatHud = { refresh() {} };
+  const queuedStory = [];
+  let chatHud = {
+    refresh() {},
+    noteStory(lines) { if (Array.isArray(lines)) queuedStory.push(...lines); },
+    clearStory() { queuedStory.length = 0; },
+  };
   // GPU capacity is sized like a full KOTH match so the shard can still stomp us
   // into a live match. The skirmish backdrop otherwise boots like staging.
   const useNet = bootCfg.mode === 'koth' || bootCfg.mode === 'staging' || bootCfg.mode === 'sandbox' || skirmish;
@@ -961,7 +970,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     getHudLocked: () => screenshotHudRef.current?.isLocked() ?? false,
     setHudLocked: (on) => screenshotHudRef.current?.setLocked(on),
     xrSupported,
-    onToggleXr: () => toggleMatchXr(renderer),
+    onToggleXr: () => toggleMatchXr(renderer, () => inputApi),
   });
   const liteExplorer = createLiteExplorerToggle({
     engine: renderer.engine,
@@ -1732,7 +1741,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   function setRallyGhostAt(b, x, z) {
     const tx = worldToTile(fx.fromFloat(x));
-    const tz = worldToTile(fx.fromFloat(z));
+    const tz = worldToTileZ(fx.fromFloat(z));
     const key = ((tz & 0xffff) << 16) | (tx & 0xffff);
     const pathOpts = rallyPathOptsForOwner(b.owner);
     if (key !== ghostPathTileKey || !ghostPathPoints) {
@@ -2193,10 +2202,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     const field = session.field;
     if (field && Number.isFinite(entry.tx)) {
       const half = field.worldHalfF ?? (field.width * TILE_SIZE_F) / 2;
+      const halfZ = worldHalfZFFromField(field);
       return {
         x: (entry.tx + 0.5) * TILE_SIZE_F - half,
         y: SPEECH_LIFT,
-        z: (entry.tz + 0.5) * TILE_SIZE_F - half,
+        z: (entry.tz + 0.5) * TILE_SIZE_F - halfZ,
       };
     }
     return null;
@@ -2206,6 +2216,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     getField: () => session.field,
     getSpeakerPos: getStorySpeakerPos,
     worldToScreen: (x, y, z) => renderer.worldToScreen?.(x, y, z) ?? null,
+    onSpeak: (lines) => chatHud.noteStory?.(lines),
     onReveal: (spec) => setCinematicReveal(spec),
     onCinematic: (on) => {
       if (session.role !== 'player') return;
@@ -2408,6 +2419,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     chapterLost = false;
     partySeen = false;
     matchStory.stop();
+    chatHud.clearStory?.();
     storyCast = [];
     objectiveHud.hide();
     exitMarks.hide();
@@ -3207,31 +3219,34 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       getUserId: () => kothShard.getUserId(),
       onCloseMenu: () => sideMenu.close(),
     });
-    chatHud = setupChatHud({
-      getUserId: () => kothShard.getUserId(),
-      // Prefer a custom 1v1/teams/adventure room; otherwise the KOTH shard.
-      resolveChat: () => {
-        if (matchLobby.isActive()) {
-          return {
-            active: true,
-            send: (text) => matchLobby.sendChat(text),
-            log: () => matchLobby.getChatLog(),
-          };
-        }
-        if (kothShard.isChatActive?.()) {
-          return {
-            active: true,
-            send: (text) => kothShard.sendChat(text),
-            log: () => kothShard.getChatLog(),
-          };
-        }
-        return null;
-      },
-    });
-    kothShard.subscribeChat(() => chatHud.refresh());
   } else {
     kothLobbyUi = setupKothLobby(kothLobbyOpts);
   }
+
+  chatHud = setupChatHud({
+    getUserId: () => kothShard?.getUserId?.() ?? null,
+    // Prefer a custom 1v1/teams/adventure room; otherwise the KOTH shard.
+    // Story lines are local and do not require either.
+    resolveChat: () => {
+      if (observerLobby?.isActive?.()) {
+        return {
+          active: true,
+          send: (text) => observerLobby.sendChat(text),
+          log: () => observerLobby.getChatLog(),
+        };
+      }
+      if (kothShard?.isChatActive?.()) {
+        return {
+          active: true,
+          send: (text) => kothShard.sendChat(text),
+          log: () => kothShard.getChatLog(),
+        };
+      }
+      return null;
+    },
+  });
+  if (queuedStory.length) chatHud.noteStory(queuedStory.splice(0));
+  kothShard?.subscribeChat(() => chatHud.refresh());
 
   replayCtl = createReplayController({
     getCtx: () => ctxRef.current,
@@ -4102,23 +4117,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           r: (def.pickRadius ?? 1.8) * zoomFor(def),
         });
       }
-      // Match gameInput collectBuildingPickSpheres (own structures only).
-      const buildingPickRadius = (typeKey) => {
-        const fp = BUILDING_FOOTPRINTS[typeKey];
-        if (!fp) return 3;
-        return 0.5 * Math.hypot(fp.w, fp.h) * TILE_SIZE_F;
-      };
-      const BUILDING_PICK_MIN_Y = 2.5;
-      for (const a of session.agoras ?? []) {
-        if ((a.owner | 0) !== localPlayerId) continue;
-        const r = buildingPickRadius('agora');
-        spheres.push({ x: a.x, y: Math.max(BUILDING_PICK_MIN_Y, r * 0.6), z: a.z, r });
-      }
-      for (const b of session.buildings ?? []) {
-        if ((b.owner | 0) !== localPlayerId) continue;
-        const r = buildingPickRadius(b.type);
-        spheres.push({ x: b.x, y: Math.max(BUILDING_PICK_MIN_Y, r * 0.6), z: b.z, r });
-      }
+      // Buildings pick against their mesh, so H only draws unit spheres.
       renderer.syncPickHitboxes?.(spheres);
     }
     const projectileSnapshots = session.displayProjectileSnapshots();

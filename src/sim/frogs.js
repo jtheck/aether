@@ -17,6 +17,7 @@ import {
   tileCenterX,
   tileCenterY,
   worldToTile,
+  worldToTileZ,
 } from './field.js';
 import { capacityFor } from './capacity.js';
 
@@ -222,7 +223,7 @@ function setHop(store, slot, ox, oy, dx, dy, speed = HOP_SPEED) {
 export function findNearestWater(field, wx, wy, maxTiles = WATER_SEARCH_TILES) {
   if (!field?.terrainTypes) return null;
   const tx0 = worldToTile(wx);
-  const tz0 = worldToTile(wy);
+  const tz0 = worldToTileZ(wy);
   const w = field.width;
   const h = field.height;
   const types = field.terrainTypes;

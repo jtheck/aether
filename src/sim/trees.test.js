@@ -28,6 +28,8 @@ import {
   treeStageFromStock,
   treeBurnsToDeath,
   treeBurnSystem,
+  treeSpreadWeight,
+  treeSpreadCount,
 } from './trees.js';
 import { TERRAIN } from './field.js';
 
@@ -87,6 +89,63 @@ function destinedTreesBurnDown() {
   assert.equal(treeBurnsToDeath(42, TREE_BURN_TICKS), true, 'fresh ignite always consumes a living tree');
   assert.equal(treeBurnsToDeath(7, 40), false, 'no interval left');
   assert.equal(treeBurnsToDeath(7, 51), true, 'one remaining chip fells a stage');
+}
+
+function plantTree(field, tx, tz, stock) {
+  const i = tz * field.width + tx;
+  field.sceneryType[i] = SCENERY.TREE;
+  field.slowMask[i] = 1;
+  field.pass[i] = 1;
+  field.treeStock[i] = stock;
+  return i;
+}
+
+function smallTreeDoesNotSpread() {
+  const { field, tx, tz, i } = fieldWithTree(30, 30, TREE_WOOD_PER_STAGE * 2);
+  const neighbor = plantTree(field, tx + 1, tz, TREE_WOOD_PER_STAGE * 2);
+  igniteTree(field, i);
+  for (let t = 0; t < TREE_BURN_DAMAGE_INTERVAL * 4; t++) treeBurnSystem(field);
+  assert.equal(field.treeBurn[neighbor], 0, 'a sapling does not catch the next tree');
+  assert.equal(treeSpreadWeight(3), 0);
+  assert.equal(treeSpreadWeight(treeStageFromStock(TREE_WOOD_PER_STAGE * 2)), 0);
+}
+
+function bigTreeCatchesNeighbor() {
+  const stock = TREE_WOOD_PER_STAGE * 10;
+  const { field, tx, tz, i } = fieldWithTree(32, 32, stock);
+  const neighbor = plantTree(field, tx + 1, tz, stock);
+  igniteTree(field, i);
+  for (let t = 0; t < TREE_BURN_DAMAGE_INTERVAL; t++) treeBurnSystem(field);
+  assert.ok(field.treeBurn[neighbor] > 0, 'a grove canopy lights the neighbor');
+  assert.equal(field.treeStock[neighbor], stock, 'catching fire does not splash-chip');
+  assert.equal(treeSpreadWeight(10), 16);
+  assert.equal(treeSpreadCount(10), 2);
+  assert.equal(treeSpreadCount(6), 2);
+  assert.equal(treeSpreadCount(5), 1);
+  const caughtAt = field.treeBurn[neighbor];
+  for (let t = 0; t < 10; t++) treeBurnSystem(field);
+  assert.equal(field.treeBurn[neighbor], caughtAt - 10, 'a burning neighbor is not re-lit');
+}
+
+function waterDoesNotCatchFire() {
+  const stock = TREE_WOOD_PER_STAGE * 10;
+  const { field, tx, tz, i } = fieldWithTree(36, 36, stock);
+  const wet = plantTree(field, tx + 1, tz, stock);
+  const dry = plantTree(field, tx, tz + 1, stock);
+  field.terrainTypes[wet] = TERRAIN.WATER;
+  igniteTree(field, i);
+  for (let t = 0; t < TREE_BURN_DAMAGE_INTERVAL; t++) treeBurnSystem(field);
+  assert.equal(field.treeBurn[wet], 0, 'a tree in water does not catch');
+  assert.equal(field.treeStock[wet], stock);
+  assert.ok(field.treeBurn[dry] > 0, 'the dry neighbor still catches');
+
+  const shore = plantTree(field, tx + 2, tz, stock);
+  field.terrainTypes[shore] = TERRAIN.WATER;
+  const { x, y } = tileWorld(tx + 2, tz);
+  const before = field.treeStock[shore];
+  applyTreeSplash(field, x, y, fx.fromFloat(5));
+  assert.equal(field.treeBurn[shore], 0, 'splash does not light water');
+  assert.equal(field.treeStock[shore], before, 'splash does not chip a tree in water');
 }
 
 function burnConsumesStages() {
@@ -251,6 +310,9 @@ stagesAndScales();
 addStockGrowsExistingOnly();
 damageShrinksThenFells();
 destinedTreesBurnDown();
+smallTreeDoesNotSpread();
+bigTreeCatchesNeighbor();
+waterDoesNotCatchFire();
 burnConsumesStages();
 fireballSplashIgnitesNearbyTree();
 fireballProjectileBurnsTreesThroughStep();

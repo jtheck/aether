@@ -5,23 +5,21 @@ import {
   createMeshFromData,
   createTexture2DFromPixels,
   getOrCreateSampler,
-  loadTexture2D as loadLiteTexture2D,
   createStandardMaterial,
   createShaderMaterial,
   addToScene,
   setSubtreeVisible,
-  setStandardSpecularTexture,
   setShaderTexture,
   setShaderUniform,
-  markMaterialUboDirty,
 } from '../vendor/lite/liteVendor.js';
 import {
   ATLAS,
-  HEIGHT_AMPLITUDE,
-  WATER_RECESS,
+  DEFAULT_MAP_CHUNKS,
   TERRAIN,
   TILE_SIZE_F,
+  tileHeightWorld,
   worldHalfFFromField,
+  worldHalfZFFromField,
 } from '../sim/field.js';
 import {
   CORNER_BLOCK_SIZE,
@@ -41,64 +39,16 @@ import { createBackdropsFromField } from './backdrops.js';
 import { EXPOSURE, SKY_HORIZON, SKY_HORIZON_SUN, SKY_ZENITH } from './celestial.js';
 import { softDetachMesh } from './meshLifecycle.js';
 import { classifyGridTile, placementFillKind, placementGridWindow } from './placementGrid.js';
+import { ATLAS_GRID, SHEET_JUNCTION, TERRAIN_LOOK, tileLayer } from './terrainLayers.js';
+import { PAGE_BUCKET_BASE, createTerrainMaterials, loadTerrainAtlas } from './terrainAtlas.js';
 import * as fx from '../sim/fixed.js';
 
-const ATLAS_URLS = {
-  [ATLAS.GRASS_DIRT]: '/assets/textures/atlas-grass-dirt.png',
-  [ATLAS.GRASS_WATER]: '/assets/textures/atlas-grass-water.png',
-};
-
-const ATLAS_GRID = 4;
 const UV_SCALE = 1 / ATLAS_GRID;
 const UV_INSET = 0.01;
 /** Same upsample + bilinear as fog — spec fades across tile borders. */
 const SPEC_TEX_SCALE = 2;
 const SPEC_TEXEL_ALIGN = 64;
 const SPEC_OVERLAY_LIFT = 0.14;
-/** Atlas + terrain pairs that actually appear on the board. */
-const ATLAS_TERRAIN_PAIRS = [
-  [ATLAS.GRASS_DIRT, TERRAIN.GRASS],
-  [ATLAS.GRASS_DIRT, TERRAIN.DIRT],
-  [ATLAS.GRASS_WATER, TERRAIN.GRASS],
-  [ATLAS.GRASS_WATER, TERRAIN.WATER],
-];
-/**
- * Per-ground look. Spec RGB is painted into a world-space map (UV2) so pond
- * and grass/dirt edges fade; the atlas on UV1 stays sharp.
- */
-const TERRAIN_LOOK = {
-  [TERRAIN.DIRT]: {
-    diffuseColor: [1.42, 1.14, 0.86],
-    ambientColor: [0.28, 0.20, 0.14],
-    specularColor: [0.008, 0.006, 0.004],
-    specularPower: 4,
-  },
-  [TERRAIN.GRASS]: {
-    diffuseColor: [1.12, 1.38, 1.08],
-    ambientColor: [0.16, 0.24, 0.14],
-    // Soft sheen only — shore atlas cells already look tiled; spec must not flash
-    // them. Short of the sun-mirror value.
-    specularColor: [0.027, 0.039, 0.018],
-    specularPower: 10,
-  },
-  [TERRAIN.WATER]: {
-    diffuseColor: [1.02, 1.16, 1.36],
-    ambientColor: [0.26, 0.32, 0.36],
-    // Glint is the additive welded sheet — tile spec makes pond squares.
-    specularColor: [0, 0, 0],
-    specularPower: 1,
-  },
-};
-
-function terrainBucketKey(atlasId, terrain) {
-  return (atlasId << 4) | terrain;
-}
-
-function terrainKind(type) {
-  if (type === TERRAIN.WATER) return TERRAIN.WATER;
-  if (type === TERRAIN.DIRT) return TERRAIN.DIRT;
-  return TERRAIN.GRASS;
-}
 
 function specRgb8(terrain) {
   const c = TERRAIN_LOOK[terrain]?.specularColor ?? [0, 0, 0];
@@ -126,8 +76,158 @@ const FRAME_ARC_MATCH = 0.9;
 const woodTextures = new WeakMap();
 /** @type {WeakMap<object, object>} */
 const endgrainTextures = new WeakMap();
-/** @type {WeakMap<object, Map<number, object>>} */
-const atlasTextureCache = new WeakMap();
+
+const TERRAIN_LOD_MS = 120;
+const TERRAIN_LOD_MOVE_SQ = 16;
+/** v1 kept about six chunks of tiles around the view. The rest is the table. */
+const TERRAIN_KEEP_CHUNKS = 6;
+/** Dark green felt, just under the tiles. Matches v1's table floor. */
+const TABLE_FLOOR_Y = -0.75;
+
+function lodCameraPosition(camera) {
+  if (
+    Number.isFinite(camera?.worldMatrix?.[12]) &&
+    Number.isFinite(camera?.worldMatrix?.[13]) &&
+    Number.isFinite(camera?.worldMatrix?.[14])
+  ) {
+    return {
+      x: camera.worldMatrix[12],
+      y: camera.worldMatrix[13],
+      z: camera.worldMatrix[14],
+    };
+  }
+  if (
+    Number.isFinite(camera?.position?.x) &&
+    Number.isFinite(camera?.position?.y) &&
+    Number.isFinite(camera?.position?.z)
+  ) {
+    return { x: camera.position.x, y: camera.position.y, z: camera.position.z };
+  }
+  const target = camera?.target ?? { x: 0, z: 0 };
+  const alpha = camera?.alpha ?? 0;
+  const beta = camera?.beta ?? Math.PI / 3;
+  const radius = camera?.radius ?? 600;
+  const horizontal = radius * Math.sin(beta);
+  return {
+    x: (target.x ?? 0) + Math.cos(alpha) * horizontal,
+    y: (target.y ?? 0) + radius * Math.cos(beta),
+    z: (target.z ?? 0) + Math.sin(alpha) * horizontal,
+  };
+}
+
+function lodLookAt(camera) {
+  const t = camera?.target;
+  if (t && Number.isFinite(t.x) && Number.isFinite(t.z)) return { x: t.x, z: t.z };
+  const eye = lodCameraPosition(camera);
+  return { x: eye.x, z: eye.z };
+}
+
+/**
+ * Boards larger than the normal map keep a ring of real tiles around the
+ * camera and show the dark table under the rest. Small matches stay one draw.
+ */
+function createTerrainChunkLod(engine, scene, field, chunkSize, atlasByChunk) {
+  const halfX = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
+  const span = chunkSize * TILE_SIZE_F;
+  const chunks = [];
+  const byKey = new Map();
+  for (const [key, meshes] of atlasByChunk) {
+    const [cx, cz] = key.split(',').map(Number);
+    const chunk = {
+      cx,
+      cz,
+      meshes,
+      x: (cx + 0.5) * span - halfX,
+      z: (cz + 0.5) * span - halfZ,
+      far: false,
+    };
+    chunks.push(chunk);
+    byKey.set(key, chunk);
+  }
+  let floor = null;
+  let elapsed = TERRAIN_LOD_MS;
+  let lastX = Infinity;
+  let lastZ = Infinity;
+  const keep = TERRAIN_KEEP_CHUNKS * span;
+  const keepSq = keep * keep;
+
+  function showChunk(chunk, on) {
+    for (let m = 0; m < chunk.meshes.length; m++) {
+      const mesh = chunk.meshes[m];
+      mesh.visible = on;
+      setSubtreeVisible(mesh, on);
+    }
+  }
+
+  function buildFloor() {
+    const y = TABLE_FLOOR_Y;
+    const positions = new Float32Array([
+      -halfX, y, -halfZ,
+      halfX, y, -halfZ,
+      halfX, y, halfZ,
+      -halfX, y, halfZ,
+    ]);
+    const mesh = createMeshFromData(
+      engine,
+      'table-floor',
+      positions,
+      flatUpNormals(4),
+      new Uint32Array([0, 1, 2, 0, 2, 3]),
+    );
+    const mat = createStandardMaterial();
+    mat.diffuseColor = [0.1, 0.3, 0.1];
+    mat.ambientColor = [0.04, 0.1, 0.04];
+    mat.emissiveColor = [0.012, 0.03, 0.012];
+    mat.specularColor = [0.02, 0.02, 0.02];
+    mat.backFaceCulling = false;
+    mesh.material = mat;
+    mesh.pickable = false;
+    mesh.receiveShadows = false;
+    addToScene(scene, mesh);
+    floor = mesh;
+  }
+
+  function apply(camera) {
+    const look = lodLookAt(camera);
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const dx = look.x - chunk.x;
+      const dz = look.z - chunk.z;
+      const far = dx * dx + dz * dz > keepSq;
+      if (far === chunk.far) continue;
+      chunk.far = far;
+      showChunk(chunk, !far);
+    }
+  }
+
+  buildFloor();
+
+  return {
+    noteChunkMeshes(key, meshes) {
+      const chunk = byKey.get(key);
+      if (!chunk) return;
+      chunk.meshes = meshes;
+      showChunk(chunk, !chunk.far);
+    },
+    update(camera, deltaMs = TERRAIN_LOD_MS) {
+      if (!camera) return;
+      elapsed += deltaMs;
+      const look = lodLookAt(camera);
+      const moved = (look.x - lastX) ** 2 + (look.z - lastZ) ** 2;
+      if (elapsed < TERRAIN_LOD_MS && moved < TERRAIN_LOD_MOVE_SQ) return;
+      elapsed = 0;
+      lastX = look.x;
+      lastZ = look.z;
+      apply(camera);
+    },
+    dispose() {
+      if (floor) softDetachMesh(scene, floor);
+      floor = null;
+      for (let i = 0; i < chunks.length; i++) showChunk(chunks[i], true);
+    },
+  };
+}
 
 /**
  * @param {import('@babylonjs/lite').EngineContext} engine
@@ -137,22 +237,46 @@ const atlasTextureCache = new WeakMap();
  * @returns {Promise<{ meshes: object[], update: (camera: object, deltaMs: number) => void, dispose: () => void }>}
  */
 export async function createTerrainFromField(engine, scene, field, camera, opts = {}) {
-  const textures = await loadAtlasTextures(engine);
+  const atlas = await loadTerrainAtlas(engine);
   const active = createActiveCellLookup(field);
-  const chunkSize = opts.chunkedAtlas
-    ? Math.max(1, field.tableShape?.cellSize || field.chunkSize || 16)
-    : 0;
+  const cell = Math.max(1, field.tableShape?.cellSize || field.chunkSize || 16);
+  const chunksAcross = Math.max(
+    Math.ceil(field.width / cell),
+    Math.ceil(field.height / cell),
+  );
+  // Normal matches stay one draw. Larger boards split so far chunks can drop out.
+  const chunkSize = (opts.chunkedAtlas || chunksAcross > DEFAULT_MAP_CHUNKS) ? cell : 0;
+  const terrainLodOn = chunkSize > 0 && chunksAcross > DEFAULT_MAP_CHUNKS;
+  // Chunk repaints composite junction cells synchronously, so keep pixels resident.
+  let holdsAtlasSource = false;
+  try {
+    if (chunkSize) {
+      await atlas.retainSource();
+      holdsAtlasSource = true;
+    }
+    await atlas.prepareJunctions(junctionKeysOf(field, active));
+  } catch (err) {
+    console.warn('[terrain] junction cells unavailable', err);
+  }
+  const releaseAtlasSource = () => {
+    if (!holdsAtlasSource) return;
+    holdsAtlasSource = false;
+    atlas.releaseSource();
+  };
   /** @type {Map<string, object[]>} */
   const atlasByChunk = new Map();
   const specMap = createGroundSpecMap(engine);
   specMap.rebuild(field);
-  const atlasMaterials = createAtlasMaterials(textures, specMap.texture);
+  const atlasLook = { atlas, materials: createTerrainMaterials(atlas, specMap.texture) };
   const specGlint = createGroundSpecGlint(engine, scene);
   specGlint.rebuild(field, active, specMap.texture, specMap.uv, { addToScene: false });
   let atlasRev = 0;
   const atlasMeshes = chunkSize
-    ? buildChunkedAtlasMeshes(engine, field, atlasMaterials, active, chunkSize, atlasByChunk, atlasRev, specMap.uv)
-    : buildAtlasMeshes(engine, field, atlasMaterials, active, specMap.uv);
+    ? buildChunkedAtlasMeshes(engine, field, atlasLook, active, chunkSize, atlasByChunk, atlasRev, specMap.uv)
+    : buildAtlasMeshes(engine, field, atlasLook, active, specMap.uv);
+  const terrainLod = terrainLodOn
+    ? createTerrainChunkLod(engine, scene, field, chunkSize, atlasByChunk)
+    : null;
   const backdrop = buildEnvironmentMeshes(engine, scene, field);
   const built = [
     ...backdrop.meshes,
@@ -232,9 +356,11 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     );
   if (opts.signal?.aborted) {
     disposed = true;
+    releaseAtlasSource();
     specGlint.dispose();
     specMap.dispose();
     scenery.dispose?.();
+    terrainLod?.dispose();
     for (const mesh of built) softDetachMesh(scene, mesh);
     built.length = 0;
     doodads.dispose();
@@ -250,6 +376,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       applyFogDim() {},
       applyFogTiles() {},
       pingHarvest() { return false; },
+      pickGatherOnRay() { return null; },
       dispose() {},
     };
   }
@@ -270,6 +397,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       specGlint.update();
       backdrop.update();
       scenery.update(activeCamera, deltaMs);
+      terrainLod?.update(activeCamera, deltaMs);
       doodads.update(deltaMs);
     },
     forEachBurningTree(fn) {
@@ -293,6 +421,10 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       if (disposed) return false;
       return scenery.pingHarvest?.(tile) ?? false;
     },
+    pickGatherOnRay(ray, maxT) {
+      if (disposed) return null;
+      return scenery.pickGatherOnRay?.(ray, maxT) ?? null;
+    },
     applyFogDim(isVisible) {
       if (disposed) return;
       fogFactor = typeof isVisible === 'function' ? isVisible : null;
@@ -309,7 +441,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       const keys = chunkKeys instanceof Set ? chunkKeys : new Set(chunkKeys ?? []);
       if (!keys.size) return false;
       specMap.rebuild(nextField);
-      bindSpecMap(atlasMaterials, specMap.texture);
+      atlasLook.materials.bindSpecMap(specMap.texture);
       const prevGlint = specGlint.mesh;
       if (prevGlint) {
         const gidx = built.indexOf(prevGlint);
@@ -328,7 +460,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
         const next = buildAtlasMeshesInRect(
           engine,
           nextField,
-          atlasMaterials,
+          atlasLook,
           nextActive,
           cx * chunkSize,
           cz * chunkSize,
@@ -342,6 +474,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
           built.push(mesh);
         }
         atlasByChunk.set(key, next);
+        terrainLod?.noteChunkMeshes(key, next);
       }
       specGlint.rebuild(nextField, nextActive, specMap.texture, specMap.uv, { addToScene: true });
       if (specGlint.mesh) built.push(specGlint.mesh);
@@ -385,6 +518,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     dispose() {
       if (disposed) return;
       disposed = true;
+      releaseAtlasSource();
       specGlint.dispose();
       specMap.dispose();
       // Scenery owns its meshes (and late model jobs); don't double-detach.
@@ -392,6 +526,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       const doodadSet = new Set(doodads.meshes ?? []);
       const backdropSet = new Set(backdrops.meshes ?? []);
       scenery.dispose?.();
+      terrainLod?.dispose();
       doodads.dispose();
       backdrops.dispose();
       for (const mesh of built) {
@@ -401,52 +536,6 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       built.length = 0;
     },
   };
-}
-
-async function loadAtlasTextures(engine) {
-  const cached = atlasTextureCache.get(engine);
-  if (cached) return cached;
-  /** @type {Map<number, object>} */
-  const out = new Map();
-  await Promise.all(
-    Object.entries(ATLAS_URLS).map(async ([id, url]) => {
-      out.set(Number(id), await loadTexture2D(engine, url));
-    }),
-  );
-  atlasTextureCache.set(engine, out);
-  return out;
-}
-
-function bindSpecMap(materials, texture) {
-  if (!texture || !materials) return;
-  for (const mat of materials.values()) {
-    mat.specularCoordIndex = 1;
-    setStandardSpecularTexture(mat, texture);
-    markMaterialUboDirty?.(mat);
-  }
-}
-
-function createAtlasMaterials(textures, specTexture) {
-  /** @type {Map<number, object>} */
-  const materials = new Map();
-  for (const [atlasId, terrain] of ATLAS_TERRAIN_PAIRS) {
-    const look = TERRAIN_LOOK[terrain];
-    const mat = createStandardMaterial();
-    mat.diffuseColor = look.diffuseColor;
-    mat.ambientColor = look.ambientColor;
-    // Kept small. Emissive is unshadowed, so it fills cast shadows on the grass.
-    mat.emissiveColor = [0.016, 0.018, 0.012];
-    mat.specularColor = look.specularColor;
-    mat.specularPower = look.specularPower;
-    mat.specularCoordIndex = 1;
-    mat.diffuseTexture = textures.get(atlasId) ?? null;
-    // Atlas only. Rails and haul props leave this unset and stay at full grade.
-    mat.diffuseLevel = 0.963;
-    mat.backFaceCulling = true;
-    materials.set(terrainBucketKey(atlasId, terrain), mat);
-  }
-  bindSpecMap(materials, specTexture);
-  return materials;
 }
 
 export function specLookAt(types, width, height, tx, tz) {
@@ -667,6 +756,7 @@ function createGroundSpecGlint(engine, scene) {
     if (!field || !texture) return;
     const { width, height, terrainTypes } = field;
     const half = worldHalfFFromField(field);
+    const halfZ = worldHalfZFFromField(field);
     const positions = [];
     const uvs = [];
     const indices = [];
@@ -676,7 +766,7 @@ function createGroundSpecGlint(engine, scene) {
       let i = cornerAt.get(key);
       if (i != null) return i;
       const x = tx * TILE_SIZE_F - half;
-      const z = tz * TILE_SIZE_F - half;
+      const z = tz * TILE_SIZE_F - halfZ;
       i = positions.length / 3;
       positions.push(x, surfaceHeightAt(field, x, z) + SPEC_OVERLAY_LIFT, z);
       uvs.push(tx * SPEC_TEX_SCALE * (specUv?.invW ?? 0), tz * SPEC_TEX_SCALE * (specUv?.invH ?? 0));
@@ -775,34 +865,25 @@ function createGroundSpecGlint(engine, scene) {
   };
 }
 
-async function loadTexture2D(engine, url) {
-  // Mipmaps remove minification shimmer; anisotropy keeps oblique terrain sharp.
-  // UVs use image-space V, so preserve the PNG's top-to-bottom orientation.
-  const texture = await loadLiteTexture2D(engine, url, {
-    srgb: true,
-    mipMaps: true,
-    invertY: false,
-    addressModeU: 'clamp-to-edge',
-    addressModeV: 'clamp-to-edge',
-    minFilter: 'linear',
-    magFilter: 'linear',
-  });
-  texture.sampler = getOrCreateSampler(engine, {
-    addressModeU: 'clamp-to-edge',
-    addressModeV: 'clamp-to-edge',
-    minFilter: 'linear',
-    magFilter: 'linear',
-    mipmapFilter: 'linear',
-    maxAnisotropy: 8,
-  });
-  return texture;
+/** Junction composites a field needs, so they can be built before meshing. */
+function junctionKeysOf(field, active) {
+  const { width, height, terrainTypes } = field;
+  const keys = new Set();
+  for (let tz = 0; tz < height; tz++) {
+    for (let tx = 0; tx < width; tx++) {
+      if (!active(tx, tz)) continue;
+      const layer = tileLayer(terrainTypes, width, height, tx, tz);
+      if (layer >> 8 === SHEET_JUNCTION) keys.add(layer & 255);
+    }
+  }
+  return keys;
 }
 
-function buildAtlasMeshes(engine, field, materials, active, specUv) {
+function buildAtlasMeshes(engine, field, look, active, specUv) {
   return buildAtlasMeshesInRect(
     engine,
     field,
-    materials,
+    look,
     active,
     0,
     0,
@@ -813,7 +894,7 @@ function buildAtlasMeshes(engine, field, materials, active, specUv) {
   );
 }
 
-function buildChunkedAtlasMeshes(engine, field, materials, active, chunkSize, atlasByChunk, atlasRev, specUv) {
+function buildChunkedAtlasMeshes(engine, field, look, active, chunkSize, atlasByChunk, atlasRev, specUv) {
   const meshes = [];
   const chunksX = Math.ceil(field.width / chunkSize);
   const chunksZ = Math.ceil(field.height / chunkSize);
@@ -823,7 +904,7 @@ function buildChunkedAtlasMeshes(engine, field, materials, active, chunkSize, at
       const chunkMeshes = buildAtlasMeshesInRect(
         engine,
         field,
-        materials,
+        look,
         active,
         cx * chunkSize,
         cz * chunkSize,
@@ -839,8 +920,9 @@ function buildChunkedAtlasMeshes(engine, field, materials, active, chunkSize, at
   return meshes;
 }
 
-function buildAtlasMeshesInRect(engine, field, materials, active, tx0, tz0, tx1, tz1, nameSuffix, specUv) {
-  const { width, height, heightMap, terrainTypes, tileType, atlasId } = field;
+function buildAtlasMeshesInRect(engine, field, look, active, tx0, tz0, tx1, tz1, nameSuffix, specUv) {
+  const { width, height, terrainTypes } = field;
+  const { atlas, materials } = look;
   /** @type {Map<number, ReturnType<typeof emptyBucket>>} */
   const buckets = new Map();
   const half = worldHalfFFromField(field);
@@ -848,18 +930,25 @@ function buildAtlasMeshesInRect(engine, field, materials, active, tx0, tz0, tx1,
   for (let tz = tz0; tz < tz1; tz++) {
     for (let tx = tx0; tx < tx1; tx++) {
       if (!active(tx, tz)) continue;
-      const i = tz * width + tx;
-      const kind = terrainKind(terrainTypes[i]);
-      const aid = kind === TERRAIN.WATER
-        ? ATLAS.GRASS_WATER
-        : (atlasId[i] === ATLAS.GRASS_WATER ? ATLAS.GRASS_WATER : ATLAS.GRASS_DIRT);
-      const key = terrainBucketKey(aid, kind);
-      let bucket = buckets.get(key);
-      if (!bucket) {
-        bucket = emptyBucket();
-        buckets.set(key, bucket);
+      const layer = tileLayer(terrainTypes, width, height, tx, tz);
+      let bucketId = layer >> 8;
+      let cell = layer & 255;
+      if (bucketId === SHEET_JUNCTION) {
+        const slot = atlas.junctionSlot(cell);
+        if (slot) {
+          bucketId = PAGE_BUCKET_BASE + slot.page;
+          cell = slot.cell;
+        } else {
+          // No composite yet: grass shore only, dirt blob missing.
+          bucketId = ATLAS.GRASS_WATER;
+          cell &= 15;
+        }
       }
-      pushTileQuad(bucket, tx, tz, tileType[i], heightMap, terrainTypes, width, height, half, specUv);
+      pushTileQuad(
+        bucketFor(buckets, bucketId),
+        tx, tz, cell,
+        field, half, specUv,
+      );
     }
   }
 
@@ -880,7 +969,7 @@ function buildAtlasMeshesInRect(engine, field, materials, active, tx0, tz0, tx1,
       uvs,
       specUvs,
     );
-    mesh.material = materials.get(key) ?? materials.get(terrainBucketKey(ATLAS.GRASS_DIRT, TERRAIN.GRASS));
+    mesh.material = materials.get(key);
     mesh.pickable = false;
     mesh.receiveShadows = true;
     meshes.push(mesh);
@@ -932,16 +1021,17 @@ function buildSilhouetteFrameMeshes(engine, field) {
   const endgrainNormals = [];
   const endgrainUvs = [];
   const endgrainIndices = [];
-  const { heightMap, terrainTypes, width, height } = field;
+  const { width, height } = field;
   let highestBoundary = 0;
   for (const pts of loops) {
     for (let i = 0; i < pts.length; i++) {
-      const half = worldHalfFFromField(field);
-      const tx = Math.max(0, Math.min(width, Math.round((pts[i].x + half) / TILE_SIZE_F)));
-      const tz = Math.max(0, Math.min(height, Math.round((pts[i].z + half) / TILE_SIZE_F)));
+      const halfX = worldHalfFFromField(field);
+      const halfZ = worldHalfZFFromField(field);
+      const tx = Math.max(0, Math.min(width, Math.round((pts[i].x + halfX) / TILE_SIZE_F)));
+      const tz = Math.max(0, Math.min(height, Math.round((pts[i].z + halfZ) / TILE_SIZE_F)));
       highestBoundary = Math.max(
         highestBoundary,
-        sampleHeight(heightMap, terrainTypes, width, height, tx, tz),
+        tileHeightWorld(field, tx, tz),
       );
     }
   }
@@ -1036,7 +1126,7 @@ function buildSilhouetteFrameMeshes(engine, field) {
 
 function buildTableFrameMeshes(engine, field, active) {
   if (field.tableShape?.cellMask) return buildSilhouetteFrameMeshes(engine, field);
-  const { width, height, heightMap, terrainTypes } = field;
+  const { width, height } = field;
   const positions = [];
   const normals = [];
   const uvs = [];
@@ -1053,30 +1143,30 @@ function buildTableFrameMeshes(engine, field, active) {
       if (!active(tx, tz)) continue;
       const x0 = tx * TILE_SIZE_F - worldHalfFFromField(field);
       const x1 = x0 + TILE_SIZE_F;
-      const z0 = tz * TILE_SIZE_F - worldHalfFFromField(field);
+      const z0 = tz * TILE_SIZE_F - worldHalfZFFromField(field);
       const z1 = z0 + TILE_SIZE_F;
 
       if (!active(tx, tz - 1)) {
-        const ah = sampleHeight(heightMap, terrainTypes, width, height, tx, tz);
-        const bh = sampleHeight(heightMap, terrainTypes, width, height, tx + 1, tz);
+        const ah = tileHeightWorld(field, tx, tz);
+        const bh = tileHeightWorld(field, tx + 1, tz);
         boundaryEdges.push([x0, z0, x1, z0, 0, -1]);
         highestBoundary = Math.max(highestBoundary, ah, bh);
       }
       if (!active(tx + 1, tz)) {
-        const ah = sampleHeight(heightMap, terrainTypes, width, height, tx + 1, tz);
-        const bh = sampleHeight(heightMap, terrainTypes, width, height, tx + 1, tz + 1);
+        const ah = tileHeightWorld(field, tx + 1, tz);
+        const bh = tileHeightWorld(field, tx + 1, tz + 1);
         boundaryEdges.push([x1, z0, x1, z1, 1, 0]);
         highestBoundary = Math.max(highestBoundary, ah, bh);
       }
       if (!active(tx, tz + 1)) {
-        const ah = sampleHeight(heightMap, terrainTypes, width, height, tx + 1, tz + 1);
-        const bh = sampleHeight(heightMap, terrainTypes, width, height, tx, tz + 1);
+        const ah = tileHeightWorld(field, tx + 1, tz + 1);
+        const bh = tileHeightWorld(field, tx, tz + 1);
         boundaryEdges.push([x1, z1, x0, z1, 0, 1]);
         highestBoundary = Math.max(highestBoundary, ah, bh);
       }
       if (!active(tx - 1, tz)) {
-        const ah = sampleHeight(heightMap, terrainTypes, width, height, tx, tz + 1);
-        const bh = sampleHeight(heightMap, terrainTypes, width, height, tx, tz);
+        const ah = tileHeightWorld(field, tx, tz + 1);
+        const bh = tileHeightWorld(field, tx, tz);
         boundaryEdges.push([x0, z1, x0, z0, -1, 0]);
         highestBoundary = Math.max(highestBoundary, ah, bh);
       }
@@ -1102,7 +1192,7 @@ function buildTableFrameMeshes(engine, field, active) {
       const count = Number(nw) + Number(ne) + Number(se) + Number(sw);
       if (count !== 1 && count !== 3) continue;
       const x = cx * TILE_SIZE_F - worldHalfFFromField(field);
-      const z = cz * TILE_SIZE_F - worldHalfFFromField(field);
+      const z = cz * TILE_SIZE_F - worldHalfZFFromField(field);
       const top = frameInnerY + FRAME_TOP_RISE * 1.35;
       pushBox(
         cornerPositions, cornerNormals, cornerUvs, cornerIndices,
@@ -1883,7 +1973,16 @@ function emptyBucket() {
   return { positions: [], uvs: [], specUvs: [], indices: [], count: 0 };
 }
 
-function pushTileQuad(bucket, tx, tz, atlasCell, heightMap, terrainTypes, width, height, worldHalfF, specUv) {
+function bucketFor(buckets, key) {
+  let bucket = buckets.get(key);
+  if (!bucket) {
+    bucket = emptyBucket();
+    buckets.set(key, bucket);
+  }
+  return bucket;
+}
+
+function pushTileQuad(bucket, tx, tz, atlasCell, field, _worldHalfF, specUv) {
   const col = atlasCell % ATLAS_GRID;
   const row = (atlasCell / ATLAS_GRID) | 0;
   // Image-space UVs: row 0 is top of PNG (V=0), matching pixel upload.
@@ -1892,17 +1991,19 @@ function pushTileQuad(bucket, tx, tz, atlasCell, heightMap, terrainTypes, width,
   const vTop = row * UV_SCALE + UV_INSET;
   const vBot = (row + 1) * UV_SCALE - UV_INSET;
 
-  const x1 = tx * TILE_SIZE_F - worldHalfF;
-  const x2 = (tx + 1) * TILE_SIZE_F - worldHalfF;
-  const z1 = tz * TILE_SIZE_F - worldHalfF;
-  const z2 = (tz + 1) * TILE_SIZE_F - worldHalfF;
+  const halfX = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
+  const x1 = tx * TILE_SIZE_F - halfX;
+  const x2 = (tx + 1) * TILE_SIZE_F - halfX;
+  const z1 = tz * TILE_SIZE_F - halfZ;
+  const z2 = (tz + 1) * TILE_SIZE_F - halfZ;
 
-  const y00 = sampleHeight(heightMap, terrainTypes, width, height, tx, tz);
-  const y10 = sampleHeight(heightMap, terrainTypes, width, height, tx + 1, tz);
-  const y11 = sampleHeight(heightMap, terrainTypes, width, height, tx + 1, tz + 1);
-  const y01 = sampleHeight(heightMap, terrainTypes, width, height, tx, tz + 1);
+  const y00 = tileHeightWorld(field, tx, tz);
+  const y10 = tileHeightWorld(field, tx + 1, tz);
+  const y11 = tileHeightWorld(field, tx + 1, tz + 1);
+  const y01 = tileHeightWorld(field, tx, tz + 1);
 
-  const base = bucket.count * 4;
+  const base = bucket.positions.length / 3;
   // BL, BR, TR, TL — CW from +Y (Lite left-handed front faces).
   bucket.positions.push(x1, y00, z1, x2, y10, z1, x2, y11, z2, x1, y01, z2);
   bucket.uvs.push(u1, vBot, u2, vBot, u2, vTop, u1, vTop);
@@ -1915,32 +2016,21 @@ function pushTileQuad(bucket, tx, tz, atlasCell, heightMap, terrainTypes, width,
   bucket.count++;
 }
 
-function sampleHeight(heightMap, terrainTypes, width, height, cx, cz) {
-  const tx = cx <= 0 ? 0 : cx >= width ? width - 1 : cx;
-  const tz = cz <= 0 ? 0 : cz >= height ? height - 1 : cz;
-  const i = tz * width + tx;
-  const y = heightMap[i] * HEIGHT_AMPLITUDE;
-  // Shallow dish — same regional lift as the shore, not a scaled-down cliff.
-  if (terrainTypes[i] === TERRAIN.WATER) return y - WATER_RECESS;
-  return y;
-}
-
 /** World-space surface Y matching terrain mesh corners (bilinear). */
 export function surfaceHeightAt(field, x, z) {
   if (!field?.heightMap) return 0;
-  const { width, height, heightMap, terrainTypes } = field;
   const fx = (x + worldHalfFFromField(field)) / TILE_SIZE_F;
-  const fz = (z + worldHalfFFromField(field)) / TILE_SIZE_F;
+  const fz = (z + worldHalfZFFromField(field)) / TILE_SIZE_F;
   const tx0 = Math.floor(fx);
   const tz0 = Math.floor(fz);
   const tx1 = tx0 + 1;
   const tz1 = tz0 + 1;
   const u = fx - tx0;
   const v = fz - tz0;
-  const h00 = sampleHeight(heightMap, terrainTypes, width, height, tx0, tz0);
-  const h10 = sampleHeight(heightMap, terrainTypes, width, height, tx1, tz0);
-  const h01 = sampleHeight(heightMap, terrainTypes, width, height, tx0, tz1);
-  const h11 = sampleHeight(heightMap, terrainTypes, width, height, tx1, tz1);
+  const h00 = tileHeightWorld(field, tx0, tz0);
+  const h10 = tileHeightWorld(field, tx1, tz0);
+  const h01 = tileHeightWorld(field, tx0, tz1);
+  const h11 = tileHeightWorld(field, tx1, tz1);
   return h00 * (1 - u) * (1 - v) + h10 * u * (1 - v) + h01 * (1 - u) * v + h11 * u * v;
 }
 
@@ -1979,7 +2069,7 @@ const GRID_INK = {
  * }}
  */
 export function createTileGridOverlay(engine, scene, field, opts = {}) {
-  const { width, height, heightMap, terrainTypes } = field;
+  const { width, height } = field;
   const showEdges = opts.edges !== false;
   const edgePos = [];
   const edgeIdx = [];
@@ -1994,11 +2084,11 @@ export function createTileGridOverlay(engine, scene, field, opts = {}) {
   let slowMesh = null;
 
   function heightAtCorner(cx, cz) {
-    return sampleHeight(heightMap, terrainTypes, width, height, cx, cz) + GRID_LIFT;
+    return tileHeightWorld(field, cx, cz) + GRID_LIFT;
   }
 
   function fillHeightAtCorner(cx, cz, lift) {
-    return sampleHeight(heightMap, terrainTypes, width, height, cx, cz) + lift;
+    return tileHeightWorld(field, cx, cz) + lift;
   }
 
   function pushEdge(ax, ay, az, bx, by, bz) {
@@ -2017,11 +2107,11 @@ export function createTileGridOverlay(engine, scene, field, opts = {}) {
     ev += 4;
   }
 
-  function pushFillQuad(tx, tz, lift, half, posOut, idxOut, base) {
-    const x0 = tx * TILE_SIZE_F - half + BLOCK_INSET;
-    const x1 = (tx + 1) * TILE_SIZE_F - half - BLOCK_INSET;
-    const z0 = tz * TILE_SIZE_F - half + BLOCK_INSET;
-    const z1 = (tz + 1) * TILE_SIZE_F - half - BLOCK_INSET;
+  function pushFillQuad(tx, tz, lift, halfX, halfZ, posOut, idxOut, base) {
+    const x0 = tx * TILE_SIZE_F - halfX + BLOCK_INSET;
+    const x1 = (tx + 1) * TILE_SIZE_F - halfX - BLOCK_INSET;
+    const z0 = tz * TILE_SIZE_F - halfZ + BLOCK_INSET;
+    const z1 = (tz + 1) * TILE_SIZE_F - halfZ - BLOCK_INSET;
     const y00 = fillHeightAtCorner(tx, tz, lift);
     const y10 = fillHeightAtCorner(tx + 1, tz, lift);
     const y11 = fillHeightAtCorner(tx + 1, tz + 1, lift);
@@ -2033,6 +2123,7 @@ export function createTileGridOverlay(engine, scene, field, opts = {}) {
   }
 
   const half = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
   const activeMask = field.activeMask;
   if (showEdges) {
     for (let tz = 0; tz < height; tz++) {
@@ -2040,8 +2131,8 @@ export function createTileGridOverlay(engine, scene, field, opts = {}) {
         if (activeMask && activeMask[tz * width + tx] === 0) continue;
         const x0 = tx * TILE_SIZE_F - half;
         const x1 = (tx + 1) * TILE_SIZE_F - half;
-        const z0 = tz * TILE_SIZE_F - half;
-        const z1 = (tz + 1) * TILE_SIZE_F - half;
+        const z0 = tz * TILE_SIZE_F - halfZ;
+        const z1 = (tz + 1) * TILE_SIZE_F - halfZ;
         const y00 = heightAtCorner(tx, tz);
         const y10 = heightAtCorner(tx + 1, tz);
         const y01 = heightAtCorner(tx, tz + 1);
@@ -2084,6 +2175,7 @@ export function createTileGridOverlay(engine, scene, field, opts = {}) {
     if (!snap?.pass) return;
     const { pass, slowMask, structureSlowMask } = snap;
     const fillHalf = worldHalfFFromField(snap);
+    const fillHalfZ = worldHalfZFFromField(snap);
     const w = snap.width | 0;
     const h = snap.height | 0;
     const blockPos = [];
@@ -2101,11 +2193,11 @@ export function createTileGridOverlay(engine, scene, field, opts = {}) {
         const i = tz * w + tx;
         if (snap.activeMask && snap.activeMask[i] === 0) continue;
         if (pass[i] === 0) {
-          bv = pushFillQuad(tx, tz, BLOCK_LIFT, fillHalf, blockPos, blockIdx, bv);
+          bv = pushFillQuad(tx, tz, BLOCK_LIFT, fillHalf, fillHalfZ, blockPos, blockIdx, bv);
         } else if (structureSlowMask?.[i]) {
-          uv = pushFillQuad(tx, tz, STRUCT_SLOW_LIFT, fillHalf, structPos, structIdx, uv);
+          uv = pushFillQuad(tx, tz, STRUCT_SLOW_LIFT, fillHalf, fillHalfZ, structPos, structIdx, uv);
         } else if (slowMask?.[i]) {
-          sv = pushFillQuad(tx, tz, SLOW_LIFT, fillHalf, slowPos, slowIdx, sv);
+          sv = pushFillQuad(tx, tz, SLOW_LIFT, fillHalf, fillHalfZ, slowPos, slowIdx, sv);
         }
       }
     }
@@ -2241,14 +2333,12 @@ export function createPlacementGridOverlay(engine, scene) {
 
   function heightAtCorner(field, cx, cz) {
     if (!field.heightMap || !field.terrainTypes) return GRID_LIFT;
-    return sampleHeight(field.heightMap, field.terrainTypes, field.width, field.height, cx, cz)
-      + GRID_LIFT;
+    return tileHeightWorld(field, cx, cz) + GRID_LIFT;
   }
 
   function fillHeightAtCorner(field, cx, cz, lift) {
     if (!field.heightMap || !field.terrainTypes) return lift;
-    return sampleHeight(field.heightMap, field.terrainTypes, field.width, field.height, cx, cz)
-      + lift;
+    return tileHeightWorld(field, cx, cz) + lift;
   }
 
   function pushLocalEdge(ax, ay, az, bx, by, bz, posOut, idxOut, base) {
@@ -2267,11 +2357,11 @@ export function createPlacementGridOverlay(engine, scene) {
     return base + 4;
   }
 
-  function pushLocalFill(field, tx, tz, lift, half, posOut, idxOut, base) {
-    const x0 = tx * TILE_SIZE_F - half + BLOCK_INSET;
-    const x1 = (tx + 1) * TILE_SIZE_F - half - BLOCK_INSET;
-    const z0 = tz * TILE_SIZE_F - half + BLOCK_INSET;
-    const z1 = (tz + 1) * TILE_SIZE_F - half - BLOCK_INSET;
+  function pushLocalFill(field, tx, tz, lift, halfX, halfZ, posOut, idxOut, base) {
+    const x0 = tx * TILE_SIZE_F - halfX + BLOCK_INSET;
+    const x1 = (tx + 1) * TILE_SIZE_F - halfX - BLOCK_INSET;
+    const z0 = tz * TILE_SIZE_F - halfZ + BLOCK_INSET;
+    const z1 = (tz + 1) * TILE_SIZE_F - halfZ - BLOCK_INSET;
     const y00 = fillHeightAtCorner(field, tx, tz, lift);
     const y10 = fillHeightAtCorner(field, tx + 1, tz, lift);
     const y11 = fillHeightAtCorner(field, tx + 1, tz + 1, lift);
@@ -2284,6 +2374,7 @@ export function createPlacementGridOverlay(engine, scene) {
   function rebuild(field, win) {
     clearMeshes();
     const half = worldHalfFFromField(field);
+    const halfZ = worldHalfZFFromField(field);
     const edgePos = [];
     const edgeIdx = [];
     let ev = 0;
@@ -2306,8 +2397,8 @@ export function createPlacementGridOverlay(engine, scene) {
         if (!kind) continue;
         const x0 = tx * TILE_SIZE_F - half;
         const x1 = (tx + 1) * TILE_SIZE_F - half;
-        const z0 = tz * TILE_SIZE_F - half;
-        const z1 = (tz + 1) * TILE_SIZE_F - half;
+        const z0 = tz * TILE_SIZE_F - halfZ;
+        const z1 = (tz + 1) * TILE_SIZE_F - halfZ;
         const y00 = heightAtCorner(field, tx, tz);
         const y10 = heightAtCorner(field, tx + 1, tz);
         const y01 = heightAtCorner(field, tx, tz + 1);
@@ -2318,13 +2409,13 @@ export function createPlacementGridOverlay(engine, scene) {
         if (tz === win.z1 - 1) ev = pushLocalEdge(x0, y01, z1, x1, y11, z1, edgePos, edgeIdx, ev);
         const fill = placementFillKind(kind, tx, tz, win);
         if (fill === 'blocked') {
-          bv = pushLocalFill(field, tx, tz, BLOCK_LIFT, half, blockPos, blockIdx, bv);
+          bv = pushLocalFill(field, tx, tz, BLOCK_LIFT, half, halfZ, blockPos, blockIdx, bv);
         } else if (fill === 'structure') {
-          uv = pushLocalFill(field, tx, tz, STRUCT_SLOW_LIFT, half, structPos, structIdx, uv);
+          uv = pushLocalFill(field, tx, tz, STRUCT_SLOW_LIFT, half, halfZ, structPos, structIdx, uv);
         } else if (fill === 'slow') {
-          sv = pushLocalFill(field, tx, tz, SLOW_LIFT, half, slowPos, slowIdx, sv);
+          sv = pushLocalFill(field, tx, tz, SLOW_LIFT, half, halfZ, slowPos, slowIdx, sv);
         } else if (fill === 'clear') {
-          cv = pushLocalFill(field, tx, tz, CLEAR_LIFT, half, clearPos, clearIdx, cv);
+          cv = pushLocalFill(field, tx, tz, CLEAR_LIFT, half, halfZ, clearPos, clearIdx, cv);
         }
       }
     }

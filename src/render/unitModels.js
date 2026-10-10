@@ -390,6 +390,8 @@ function meshesFromCpuPackage(engine, url, pkg) {
       : boundsOfPositions(part.positions);
     mesh.boundMin = b.min;
     mesh.boundMax = b.max;
+    mesh.pickPositions = part.positions;
+    mesh.pickIndices = part.indices;
     mesh.scaling.x = 1;
     mesh.scaling.y = 1;
     mesh.scaling.z = 1;
@@ -476,6 +478,8 @@ export async function loadBakedUnitMesh(engine, url) {
   const b = boundsOfPositions(positions);
   mesh.boundMin = b.min;
   mesh.boundMax = b.max;
+  mesh.pickPositions = positions;
+  mesh.pickIndices = indices;
   mesh.scaling.x = 1;
   mesh.scaling.y = 1;
   mesh.scaling.z = 1;

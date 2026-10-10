@@ -2,9 +2,11 @@
 // v3 files still decode (no scenery / doodads / backdrops / placements).
 // Optional `dd` is a doodadType RLE (visual-only stamps).
 // Optional `bd` is a list of off-board backdrop poses.
+// Optional `wl` is procedural curtain walls (style + corner runs). Forge draws them;
+// the match does not spawn or block on them yet.
 
 import { applyTableSilhouette, createFullCellMask, createFullCellRadius, normalizeTableShape } from './tableShape.js';
-import { applySeededHeight, buildField, composeHeightMap, createField, generateHeightMap, refreshTerrainDerived, TILE_SIZE_F, tileCenterX, tileCenterY, worldToTile } from './field.js';
+import { applySeededHeight, buildField, composeHeightMap, createField, generateHeightMap, PAINTED_LIFT_MAX, PAINTED_LIFT_MIN, refreshTerrainDerived, TILE_SIZE_F, tileCenterX, tileCenterY, worldToTile, worldToTileZ } from './field.js';
 import { applyAuthoredScenery, SCENERY } from './scenery.js';
 import { ensureDoodadArrays, hasAuthoredDoodads } from './doodads.js';
 import { cloneBackdrops, encodeBackdrops, normalizeBackdrops } from './backdrops.js';
@@ -16,6 +18,7 @@ import { encodeStory, normalizeStory } from '../story/timeline.js';
 import { encodeObjectives, normalizeObjectives } from '../story/objectives.js';
 import * as fx from './fixed.js';
 import { normalizeNeutralTeams } from './teams.js';
+import { decodeWalls, encodeWalls } from './walls.js';
 
 export const GARDEN_VERSION = 4;
 export const GARDEN_VERSION_MIN = 3;
@@ -92,7 +95,7 @@ function unitWorldCoords(x, z) {
 function tilesForWorld(x, z) {
   return {
     tx: worldToTile(fx.fromFloat(x)),
-    tz: worldToTile(fx.fromFloat(z)),
+    tz: worldToTileZ(fx.fromFloat(z)),
   };
 }
 
@@ -222,6 +225,36 @@ function decodeQuantized01(str, n) {
   return out;
 }
 
+function encodeSignedSpan(arr, span) {
+  const u8 = new Uint8Array(arr.length);
+  let any = false;
+  const s = span > 0 ? span : 1;
+  for (let i = 0; i < arr.length; i++) {
+    let v = arr[i];
+    if (v < -s) v = -s;
+    else if (v > s) v = s;
+    if (v !== 0) any = true;
+    u8[i] = Math.max(0, Math.min(255, Math.round((v / s + 1) * 0.5 * 255)));
+  }
+  return any ? encodeRle(u8) : null;
+}
+
+function decodeSignedSpan(str, n, span) {
+  const u8 = decodeRle(str, n);
+  const out = new Float32Array(n);
+  const s = span > 0 ? span : 1;
+  for (let i = 0; i < n; i++) out[i] = (((u8[i] || 0) / 255) * 2 - 1) * s;
+  return out;
+}
+
+function encodeSignedUnit(arr) {
+  return encodeSignedSpan(arr, 1);
+}
+
+function decodeSignedUnit(str, n) {
+  return decodeSignedSpan(str, n, 1);
+}
+
 function encodeStartingResources(raw) {
   const n = normalizeStartingResources(raw);
   if (!n) return null;
@@ -248,6 +281,20 @@ export function encodeGarden(field, extras = {}) {
     out.t = encodeRle(field.terrainTypes);
     if (field.regionLift?.length === field.width * field.height) {
       out.rl = encodeQuantized01(field.regionLift);
+    }
+    if (field.paintedLift?.length === field.width * field.height) {
+      let wide = false;
+      for (let i = 0; i < field.paintedLift.length; i++) {
+        const v = field.paintedLift[i];
+        if (v < -1 || v > 1) {
+          wide = true;
+          break;
+        }
+      }
+      const painted = wide
+        ? encodeSignedSpan(field.paintedLift, Math.max(PAINTED_LIFT_MAX, -PAINTED_LIFT_MIN))
+        : encodeSignedUnit(field.paintedLift);
+      if (painted) out[wide ? 'pw' : 'pl'] = painted;
     }
   }
   if (authored) {
@@ -278,6 +325,8 @@ export function encodeGarden(field, extras = {}) {
     out.ch = Math.round(cameraHalf * 100) / 100;
   }
   if (field.suppressCenterBlock) out.ncb = 1;
+  const packedWalls = encodeWalls(extras.walls);
+  if (packedWalls) out.wl = packedWalls;
   const neutrals = normalizeNeutralTeams(extras.neutralTeams);
   if (neutrals) out.nr = neutrals;
   return out;
@@ -343,11 +392,15 @@ export function decodeGarden(data) {
     startingResources: normalizeStartingResources(data.sr ?? data.startingResources),
     authoredScenery: !!data.sc,
     regionLift: data.rl ? decodeQuantized01(data.rl, n) : null,
+    paintedLift: data.pw
+      ? decodeSignedSpan(data.pw, n, Math.max(PAINTED_LIFT_MAX, -PAINTED_LIFT_MIN))
+      : data.pl ? decodeSignedUnit(data.pl, n) : null,
     suppressCenterBlock: !!data.ncb,
     story: data.story ? normalizeStory(data.story) : null,
     objectives: normalizeObjectives(data.obj),
     cameraHalfF: Number(data.ch) > 0 ? Number(data.ch) : 0,
     neutralTeams: normalizeNeutralTeams(data.nr),
+    walls: decodeWalls(data.wl),
   };
 }
 
@@ -367,6 +420,13 @@ export function fieldFromGarden(data) {
       applySeededHeight(field);
     }
     field.terrainTypes.set(g.terrainTypes);
+  }
+  if (g.paintedLift?.length === field.width * field.height) {
+    if (!field.paintedLift || field.paintedLift.length !== g.paintedLift.length) {
+      field.paintedLift = g.paintedLift;
+    } else {
+      field.paintedLift.set(g.paintedLift);
+    }
   }
   applyTableSilhouette(field, {
     cellSize: g.cellSize,

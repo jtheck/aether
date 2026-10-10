@@ -15,7 +15,7 @@ import { ORDER } from './world.js';
 import { queuePath, clearPath } from './path.js';
 import { clearEngagement } from './engagement.js';
 import { damageTree } from './trees.js';
-import { tileCenterX, tileCenterY, snapToPassable, worldToTile, TILE_SIZE_F, isPassable } from './field.js';
+import { tileCenterX, tileCenterY, snapToPassable, worldToTile, worldToTileZ, TILE_SIZE_F, isPassable } from './field.js';
 import { RESOURCE_KINDS, RESOURCE_INDEX } from './resources.js';
 import { addGatherIncome, siloIsAttached, silosAttachedTo } from './storage.js';
 import { UNIT } from './unitTypes.js';
@@ -214,12 +214,12 @@ export function beginGather(w, field, i, tile, defensive = 0) {
   return true;
 }
 
-/** @param {object} w @param {object} field @param {number[]} ids @param {number} tile */
-export function applyGather(w, field, ids, tile) {
+/** @param {object} w @param {object} field @param {number[]} ids @param {number} tile @param {number} [defensive] */
+export function applyGather(w, field, ids, tile, defensive = 0) {
   if (!ids || ids.length === 0 || tile == null || tile < 0) return;
   for (let k = 0; k < ids.length; k++) {
     revertBrigand(w, ids[k]);
-    beginGather(w, field, ids[k], tile);
+    beginGather(w, field, ids[k], tile, defensive);
   }
 }
 
@@ -317,7 +317,7 @@ function workFarm(w, field, i, tile, width) {
  */
 function snapToHarvestStand(field, cx, cy, fromX, fromY, rangeSq) {
   const ctx = worldToTile(cx);
-  const ctz = worldToTile(cy);
+  const ctz = worldToTileZ(cy);
   let bestX = 0;
   let bestY = 0;
   let bestFrom = 0x7fffffffffff;
@@ -495,7 +495,7 @@ export function gatherSystem(w, field) {
 function buildingCenterTile(field, b) {
   if (!field) return -1;
   const tx = worldToTile(b.x);
-  const tz = worldToTile(b.z);
+  const tz = worldToTileZ(b.z);
   if (tx < 0 || tz < 0 || tx >= field.width || tz >= field.height) return -1;
   return tz * (field.width | 0) + tx;
 }
@@ -712,7 +712,7 @@ function nearestNodeWithinRadius(field, b, radius, fromX, fromY, wantClass) {
   const radiusSq = fx.mul(radius, radius);
   const rt = Math.ceil(fx.toFloat(radius) / TILE_SIZE_F);
   const bxTile = worldToTile(b.x);
-  const bzTile = worldToTile(b.z);
+  const bzTile = worldToTileZ(b.z);
   let best = -1;
   let bestD = 0x7fffffffffff;
   const z0 = Math.max(0, bzTile - rt);
@@ -835,7 +835,7 @@ export function gatherNodeNear(field, px, py) {
   const width = field.width | 0;
   const height = field.height | 0;
   const cxTile = worldToTile(px);
-  const czTile = worldToTile(py);
+  const czTile = worldToTileZ(py);
   const center = czTile * width + cxTile;
   if (nodeAt(field, center)) return center;
   // Rocks are up to a 2-tile footprint; farms/trees are on their own tile.

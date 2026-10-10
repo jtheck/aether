@@ -1,7 +1,7 @@
 // Adventure zones on a garden. Reach is a checkpoint; escape / advance end the chapter.
 
 import { formatGameNumber } from '../sim/formatGameNumber.js';
-import { TILE_SIZE_F, worldHalfFFromField } from '../sim/field.js';
+import { TILE_SIZE_F, worldHalfFFromField, worldHalfZFFromField } from '../sim/field.js';
 
 // Core zone kinds with live triggers today.
 export const OBJ_REACH = 'reach';
@@ -52,15 +52,16 @@ export function isTerminalObjective(obj) {
   return obj?.terminal === true || TERMINAL_KINDS.includes(obj?.kind);
 }
 
-function fieldHalf(field) {
+function fieldHalfX(field) {
   return field?.worldHalfF ?? (field ? worldHalfFFromField(field) : 0);
 }
 
 export function objectiveWorldPos(obj, field) {
-  const half = fieldHalf(field);
+  const halfX = fieldHalfX(field);
+  const halfZ = field ? worldHalfZFFromField(field) : halfX;
   return {
-    x: ((obj.tx | 0) + 0.5) * TILE_SIZE_F - half,
-    z: ((obj.tz | 0) + 0.5) * TILE_SIZE_F - half,
+    x: ((obj.tx | 0) + 0.5) * TILE_SIZE_F - halfX,
+    z: ((obj.tz | 0) + 0.5) * TILE_SIZE_F - halfZ,
   };
 }
 

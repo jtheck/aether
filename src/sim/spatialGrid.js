@@ -5,6 +5,7 @@ import {
   WORLD_HALF_F,
   activeWorldHalf,
   activeWorldHalfF,
+  activeWorldHalfZF,
 } from './field.js';
 
 export const SPATIAL_CELL_WORLD = 8;
@@ -19,7 +20,7 @@ function colsForHalf(worldHalfF) {
   return Math.ceil((worldHalfF * 2) / SPATIAL_CELL_WORLD);
 }
 
-export function createSpatialGrid(capacity, worldHalfF = activeWorldHalfF()) {
+export function createSpatialGrid(capacity, worldHalfF = Math.max(activeWorldHalfF(), activeWorldHalfZF())) {
   const cols = colsForHalf(worldHalfF);
   const rows = cols;
   const cellCount = cols * rows;

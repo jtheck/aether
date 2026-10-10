@@ -8,6 +8,8 @@ import {
   TILE_SIZE_F,
   TERRAIN,
   worldToTile,
+  worldToTileZ,
+  activeWorldHalfZ,
   tileCenterX,
   tileCenterY,
   activeWorldHalf,
@@ -660,8 +662,9 @@ export function getBuildingFootprint(typeId) {
  * Nearest vertical/horizontal grid line index (tile corner), rounding half-up.
  * @param {number} vFixed
  */
-function nearestGridLineIndex(vFixed) {
-  return fx.toInt(fx.div(vFixed + activeWorldHalf() + HALF_TILE, TILE));
+function nearestGridLineIndex(vFixed, axis) {
+  const half = axis === 'z' ? activeWorldHalfZ() : activeWorldHalf();
+  return fx.toInt(fx.div(vFixed + half + HALF_TILE, TILE));
 }
 
 /**
@@ -671,12 +674,13 @@ function nearestGridLineIndex(vFixed) {
  * @param {'x' | 'z'} axis
  */
 function snapWorldAxis(vFixed, sizeTiles, axis) {
+  const half = axis === 'z' ? activeWorldHalfZ() : activeWorldHalf();
   if ((sizeTiles | 0) & 1) {
-    const t = worldToTile(vFixed);
+    const t = axis === 'z' ? worldToTileZ(vFixed) : worldToTile(vFixed);
     return axis === 'x' ? tileCenterX(t) : tileCenterY(t);
   }
-  const i = nearestGridLineIndex(vFixed);
-  return fx.mul(fx.fromInt(i), TILE) - activeWorldHalf();
+  const i = nearestGridLineIndex(vFixed, axis);
+  return fx.mul(fx.fromInt(i), TILE) - half;
 }
 
 /**
@@ -712,7 +716,7 @@ function footprintCoreOrigin(fp, xFixed, zFixed) {
     coreX0 = nearestGridLineIndex(xFixed) - (fp.w >> 1);
   }
   if (fp.h & 1) {
-    coreZ0 = worldToTile(zFixed) - ((fp.h - 1) >> 1);
+    coreZ0 = worldToTileZ(zFixed) - ((fp.h - 1) >> 1);
   } else {
     coreZ0 = nearestGridLineIndex(zFixed) - (fp.h >> 1);
   }
@@ -877,7 +881,7 @@ export function applyStructureOccupancyAt(field, typeId, xFixed, zFixed, built =
     const n = field.width * field.height;
     if (!field.foodNode || field.foodNode.length !== n) field.foodNode = new Uint8Array(n);
     const tx = worldToTile(xFixed);
-    const tz = worldToTile(zFixed);
+    const tz = worldToTileZ(zFixed);
     if (tx >= 0 && tz >= 0 && tx < field.width && tz < field.height) {
       field.foodNode[tz * field.width + tx] = 1;
     }
@@ -1304,7 +1308,7 @@ export function ejectUnitsFromFootprint(w, field, typeId, xFixed, zFixed) {
   for (let i = 0; i < w.count; i++) {
     if (!w.alive[i] || isFlyer(w.type[i]) || isCarried(w, i)) continue;
     const tx = worldToTile(w.px[i]);
-    const tz = worldToTile(w.py[i]);
+    const tz = worldToTileZ(w.py[i]);
     if (
       tx < b.coreX0 ||
       tx >= b.coreX0 + b.coreW ||
@@ -1322,7 +1326,7 @@ export function ejectUnitsFromFootprint(w, field, typeId, xFixed, zFixed) {
   for (let t = 0; t < trapped.length; t++) {
     const i = trapped[t];
     const fromTx = worldToTile(w.px[i]);
-    const fromTz = worldToTile(w.py[i]);
+    const fromTz = worldToTileZ(w.py[i]);
     const dest = nearestFreePassable(field, fromTx, fromTz, reserved);
     if (!dest) continue;
     reserved.add((dest.tz << 16) ^ (dest.tx & 0xffff));

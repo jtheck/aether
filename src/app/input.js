@@ -169,6 +169,8 @@ export function setupInput(opts) {
     handleControlGroupKeyUp: (e) => game.handleControlGroupKeyUp?.(e) ?? false,
     deselectEntity: (i) => game.deselectEntity?.(i),
     cancelPlacement: () => game.cancelPlacement?.(),
+    groundLoopSelect: (loop, add) => game.groundLoopSelect?.(loop, add) ?? false,
+    selectAtRay: (ray, add, assist) => game.selectAtRay?.(ray, add, assist) ?? false,
     getSelectedBuilding: () => game.getSelectedBuilding?.(),
     setSelectedBuilding: (sel) => game.setSelectedBuilding?.(sel),
     dispose: () => {

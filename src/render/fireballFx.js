@@ -1,11 +1,30 @@
-// Render-only warlock fireball: gather wind-up, then a dense puff-spiral body.
+// Render-only warlock fireball: gather wind-up, then a continuous puff streak.
+// Shells stay closer together than a puff is wide, so the path reads as one
+// trail. A volley drops to a single bead per shell instead of opening gaps.
 
 const GATHER_SEC = 0.8;
-const GATHER_GAP = 0.022;
-const FLY_GAP = 0.012;
-const ARMS = 3;
-const BEADS = 5;
-const HELIX_R = 1.15;
+const GATHER_GAP = 0.04;
+/** Seconds between streak samples. Short enough that a fast ball's steps overlap. */
+export const FLY_GAP = 0.014;
+/** Beads beside each other in one sample. One sample, not a stack of dots. */
+export const FLY_ARMS = 2;
+export const FLY_BEADS = 1;
+const HELIX_R = 0.38;
+/**
+ * Spark cull tops out at 200. Normal orbit on this map sits past that, so the
+ * mesh kept drawing and the puffs were dropped. Body sprites follow the ball
+ * out through a zoomed-out view.
+ */
+export const FIREBALL_TRAIL_CULL = 1600;
+
+/**
+ * Puffs per sample. The gap stays fixed so the streak does not break into dots.
+ * Past a few orbs, one bead still covers the path.
+ * @param {number} flyingCount
+ */
+export function fireballFlyArms(flyingCount) {
+  return (flyingCount | 0) > 4 ? 1 : FLY_ARMS;
+}
 /** Sim velocities are world-units per tick (20 Hz). Particles are per-second. */
 const TICK_HZ = 20;
 
@@ -70,6 +89,9 @@ function basis(vx, vy, vz) {
  * @param {(init: object) => unknown} emit
  */
 export function createFireballFx(emit) {
+  function emitBody(init) {
+    emit({ ...init, cullMin: FIREBALL_TRAIL_CULL });
+  }
   /** @type {Map<string, {
    *   cx: number, cy: number, cz: number,
    *   vx: number, vy: number, vz: number,
@@ -101,7 +123,7 @@ export function createFireballFx(emit) {
       const inv = (9 + gatherT * 10) / Math.max(0.8, r);
       const swirl = 2.4 + gatherT * 2.2;
       const c = tint();
-      emit({
+      emitBody({
         ...puff(),
         position: [ball.cx + ox, ball.cy + oy, ball.cz + oz],
         velocity: [
@@ -119,7 +141,7 @@ export function createFireballFx(emit) {
     }
     if (gatherT > 0.28) {
       const c = tint();
-      emit({
+      emitBody({
         ...puff(),
         position: [
           ball.cx + (Math.random() - 0.5) * 0.7,
@@ -137,40 +159,38 @@ export function createFireballFx(emit) {
     }
   }
 
-  function emitHelix(ball) {
+  function emitHelix(ball, arms) {
     const b = basis(ball.vx, ball.vy, ball.vz);
+    const count = arms > 0 ? arms : 1;
     const c0 = tint();
-    for (let arm = 0; arm < ARMS; arm++) {
-      for (let k = 0; k < BEADS; k++) {
-        const a = ball.phase + arm * ((Math.PI * 2) / ARMS) - k * 0.42;
-        const cs = Math.cos(a);
-        const sn = Math.sin(a);
-        const rad = HELIX_R * (1 - k * 0.08) + Math.sin(ball.phase * 1.6 + arm) * 0.12;
-        const back = k * 0.38;
-        const px = ball.cx + b.rx * cs * rad + b.ux * sn * rad - b.fx * back;
-        const py = ball.cy + b.ry * cs * rad + b.uy * sn * rad - b.fy * back;
-        const pz = ball.cz + b.rz * cs * rad + b.uz * sn * rad - b.fz * back;
-        const c = k === 0 ? c0 : tint();
-        const size = puffSize(2.05 - k * 0.28);
-        // Ride a little, then slip behind — full inherit made the swirl lift with the orb.
-        const ride = 0.22;
-        const swirl = 1.05;
-        emit({
-          ...puff(),
-          position: [px, py, pz],
-          velocity: [
-            ball.vx * TICK_HZ * ride + (-b.rx * sn + b.ux * cs) * swirl - b.fx * 3.4,
-            ball.vy * TICK_HZ * ride + (-b.ry * sn + b.uy * cs) * swirl - b.fy * 3.4,
-            ball.vz * TICK_HZ * ride + (-b.rz * sn + b.uz * cs) * swirl - b.fz * 3.4,
-          ],
-          gravity: [0, 0, 0],
-          color: [c[0], c[1], c[2], 0.82 - k * 0.1],
-          lifetime: 0.4 + Math.random() * 0.16,
-          startSize: size,
-          endSize: size * 0.16,
-          drag: 0.85,
-        });
-      }
+    for (let arm = 0; arm < count; arm++) {
+      const a = ball.phase + (count === 1 ? 0 : arm * Math.PI);
+      const cs = Math.cos(a);
+      const sn = Math.sin(a);
+      const rad = HELIX_R + Math.sin(ball.phase * 1.6 + arm) * 0.08;
+      const px = ball.cx + b.rx * cs * rad + b.ux * sn * rad;
+      const py = ball.cy + b.ry * cs * rad + b.uy * sn * rad;
+      const pz = ball.cz + b.rz * cs * rad + b.uz * sn * rad;
+      const c = arm === 0 ? c0 : tint();
+      const size = puffSize(3.1);
+      // Ride a little, then slip behind — full inherit made the swirl lift with the orb.
+      const ride = 0.22;
+      const swirl = 0.45;
+      emitBody({
+        ...puff(),
+        position: [px, py, pz],
+        velocity: [
+          ball.vx * TICK_HZ * ride + (-b.rx * sn + b.ux * cs) * swirl - b.fx * 1.6,
+          ball.vy * TICK_HZ * ride + (-b.ry * sn + b.uy * cs) * swirl - b.fy * 1.6,
+          ball.vz * TICK_HZ * ride + (-b.rz * sn + b.uz * cs) * swirl - b.fz * 1.6,
+        ],
+        gravity: [0, 0, 0],
+        color: [c[0], c[1], c[2], 0.84],
+        lifetime: 0.42 + Math.random() * 0.14,
+        startSize: size,
+        endSize: size * 0.42,
+        drag: 0.85,
+      });
     }
   }
 
@@ -178,7 +198,7 @@ export function createFireballFx(emit) {
     for (let i = 0; i < 10; i++) {
       const ang = (i / 10) * Math.PI * 2;
       const c = tint();
-      emit({
+      emitBody({
         ...puff(),
         position: [ball.cx, ball.cy, ball.cz],
         velocity: [
@@ -196,14 +216,14 @@ export function createFireballFx(emit) {
     }
   }
 
-  function pulse(ball, dt) {
+  function pulse(ball, dt, gap, arms) {
     const gatherT = Math.min(1, (clock - ball.bornAt) / GATHER_SEC);
     ball.acc += dt;
-    const gap = ball.winding ? GATHER_GAP : FLY_GAP;
-    if (ball.acc < gap) return;
+    const step = gap ?? (ball.winding ? GATHER_GAP : FLY_GAP);
+    if (ball.acc < step) return;
     ball.acc = 0;
     if (ball.winding) emitGather(ball, gatherT);
-    else emitHelix(ball);
+    else emitHelix(ball, arms);
   }
 
   function beginFrame() {
@@ -254,9 +274,14 @@ export function createFireballFx(emit) {
     const dt = Math.min(0.08, Math.max(0, deltaMs / 1000));
     if (dt <= 0) return;
     clock += dt;
+    let flying = 0;
+    for (const ball of live.values()) {
+      if (!ball.winding) flying++;
+    }
+    const arms = fireballFlyArms(flying);
     for (const ball of live.values()) {
       ball.phase += ball.spin * dt;
-      pulse(ball, dt);
+      pulse(ball, dt, ball.winding ? GATHER_GAP : FLY_GAP, arms);
     }
   }
 

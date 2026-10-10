@@ -7,6 +7,8 @@ import {
   TREE_MODEL_SCALE,
   forEachTreeFireAnchor,
   treeCrownCenterY,
+  treeFireAnchorIndices,
+  TREE_FIRE_ANCHOR_ORDER,
   treeFireHeight,
   treeFireTongueScale,
   treeLocalToWorld,
@@ -85,6 +87,16 @@ describe('tree fire anchors', () => {
     const upMean = up.reduce((a, s) => a + s.x, 0) / up.length;
     const leanMean = lean.reduce((a, s) => a + s.x, 0) / lean.length;
     assert.ok(leanMean < upMean - 0.15);
+  });
+
+  it('orders lod tongues from the trunk column outward', () => {
+    assert.deepEqual(treeFireAnchorIndices(3), TREE_FIRE_ANCHOR_ORDER.slice(0, 3));
+    const all = treeFireAnchorIndices(99);
+    assert.equal(all.length, TREE_FIRE_ANCHORS.length);
+    assert.equal(new Set(all).size, all.length);
+    const sites = [];
+    forEachTreeFireAnchor({ x: 0, y: 0, z: 0, stockScale: 1 }, (s) => sites.push(s.index), all.slice(0, 2));
+    assert.deepEqual(sites, all.slice(0, 2));
   });
 
   it('maps a mesh vert onto the instance', () => {

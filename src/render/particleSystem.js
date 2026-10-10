@@ -148,6 +148,7 @@ function makeParticle() {
     killY: -Infinity,
     startAlpha: 1,
     noCull: false,
+    cullMin: 0,
     cullSize: 1,
     rotation: 0,
     spin: 0,
@@ -172,10 +173,21 @@ async function atlasFromPuffSprite(engine) {
   });
 }
 
-function cullRange(size, scale = 1) {
+/**
+ * Camera distance at which a particle is dropped.
+ * Size stretches tiny sparks from MIN up to MAX. `minRange` is a floor for
+ * effects that are the readable body (fireball trail) — it also lifts the cap,
+ * so a 2-unit puff is not stuck at MAX while the camera sits further out.
+ * @param {number} size
+ * @param {number} [scale] quality-tier multiplier
+ * @param {number} [minRange]
+ */
+export function cullRange(size, scale = 1, minRange = 0) {
   const s = Math.max(0.05, scale);
-  const bySize = Math.max(PARTICLE_CULL_MIN_RANGE, size * PARTICLE_CULL_SIZE_K);
-  return Math.min(PARTICLE_CULL_MAX_RANGE, bySize) * s;
+  const floor = Math.max(0, minRange);
+  const bySize = Math.max(PARTICLE_CULL_MIN_RANGE, floor, size * PARTICLE_CULL_SIZE_K);
+  const cap = Math.max(PARTICLE_CULL_MAX_RANGE, floor);
+  return Math.min(cap, bySize) * s;
 }
 
 /**
@@ -264,11 +276,11 @@ export async function createParticleSystem(engine, scene, options = {}) {
   }
 
   /** @returns {boolean} true if too far from camera for this size */
-  function isTooFar(x, y, z, size) {
+  function isTooFar(x, y, z, size, minRange = 0) {
     if (!getEye) return false;
     const eye = getEye();
     if (!eye) return false;
-    const range = cullRange(size, cullRangeScale);
+    const range = cullRange(size, cullRangeScale, minRange);
     const dx = x - eye.x;
     const dy = y - eye.y;
     const dz = z - eye.z;
@@ -291,7 +303,8 @@ export async function createParticleSystem(engine, scene, options = {}) {
       endSize[1],
     );
     const noCull = init.cull === false || init.noCull === true;
-    if (!noCull && isTooFar(position[0], position[1], position[2], sizeHint)) {
+    const cullMin = Math.max(0, init.cullMin || 0);
+    if (!noCull && isTooFar(position[0], position[1], position[2], sizeHint, cullMin)) {
       culled++;
       return null;
     }
@@ -333,6 +346,7 @@ export async function createParticleSystem(engine, scene, options = {}) {
     particle.sizeWorld[0] = particle.startSizeW;
     particle.sizeWorld[1] = particle.startSizeH;
     particle.noCull = noCull;
+    particle.cullMin = cullMin;
     particle.cullSize = sizeHint;
     particle.rotation = init.rotation ?? 0;
     particle.spin = init.spin ?? 0;
@@ -448,7 +462,7 @@ export async function createParticleSystem(engine, scene, options = {}) {
           particle.sizeWorld[1],
           particle.cullSize || 0,
         );
-        const range = cullRange(size, cullRangeScale);
+        const range = cullRange(size, cullRangeScale, particle.cullMin || 0);
         const dx = particle.position[0] - eye.x;
         const dy = particle.position[1] - eye.y;
         const dz = particle.position[2] - eye.z;

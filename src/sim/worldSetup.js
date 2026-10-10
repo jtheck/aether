@@ -17,6 +17,7 @@ import {
   mapSizeForConfig,
   setActiveMapSize,
   worldHalfFFromMap,
+  worldHalfZFFromMap,
 } from './field.js';
 import { setTeamAssignments } from './teams.js';
 import { grantStartingResources } from './resources.js';
@@ -64,25 +65,27 @@ export const SPAWN_BASE_INSET = 0.6;
 export const KOTH_SPAWN_COUNT = 5;
 
 /** Cardinal side-midline pads — 1v1 / match agoras on larger boards. */
-export function sideBases(worldHalfF = activeWorldHalfF()) {
-  const m = worldHalfF * SPAWN_BASE_INSET;
+export function sideBases(worldHalfF = activeWorldHalfF(), worldHalfZF = worldHalfF) {
+  const mx = worldHalfF * SPAWN_BASE_INSET;
+  const mz = worldHalfZF * SPAWN_BASE_INSET;
   return [
-    [-m, 0],
-    [m, 0],
-    [0, -m],
-    [0, m],
+    [-mx, 0],
+    [mx, 0],
+    [0, -mz],
+    [0, mz],
   ];
 }
 
 /** Five even KOTH drop pads — west first, then CCW. */
-export function kothBases(worldHalfF = activeWorldHalfF()) {
-  const r = worldHalfF * SPAWN_BASE_INSET;
+export function kothBases(worldHalfF = activeWorldHalfF(), worldHalfZF = worldHalfF) {
+  const rx = worldHalfF * SPAWN_BASE_INSET;
+  const rz = worldHalfZF * SPAWN_BASE_INSET;
   const step = (Math.PI * 2) / KOTH_SPAWN_COUNT;
   const out = [];
   for (let i = 0; i < KOTH_SPAWN_COUNT; i++) {
     const a = Math.PI + i * step;
-    const x = Math.cos(a) * r;
-    const z = Math.sin(a) * r;
+    const x = Math.cos(a) * rx;
+    const z = Math.sin(a) * rz;
     out.push([
       Math.abs(x) < 1e-10 ? 0 : x,
       Math.abs(z) < 1e-10 ? 0 : z,
@@ -92,25 +95,27 @@ export function kothBases(worldHalfF = activeWorldHalfF()) {
 }
 
 /** Team lanes — south pair (A), north pair (B). */
-export function laneBases(worldHalfF = activeWorldHalfF()) {
-  const m = worldHalfF * SPAWN_BASE_INSET;
+export function laneBases(worldHalfF = activeWorldHalfF(), worldHalfZF = worldHalfF) {
+  const mx = worldHalfF * SPAWN_BASE_INSET;
+  const mz = worldHalfZF * SPAWN_BASE_INSET;
   return [
-    [-m, -m],
-    [m, -m],
-    [-m, m],
-    [m, m],
+    [-mx, -mz],
+    [mx, -mz],
+    [-mx, mz],
+    [mx, mz],
   ];
 }
 
 /** Opposite corners first (1v1), then the remaining pair. Same inset as the sides. */
-export function cornerBases(worldHalfF = activeWorldHalfF()) {
-  const m = worldHalfF * SPAWN_BASE_INSET;
+export function cornerBases(worldHalfF = activeWorldHalfF(), worldHalfZF = worldHalfF) {
+  const mx = worldHalfF * SPAWN_BASE_INSET;
+  const mz = worldHalfZF * SPAWN_BASE_INSET;
   return [
-    [-m, -m],
-    [m, m],
-    [-m, m],
-    [m, -m],
-    [0, -m],
+    [-mx, -mz],
+    [mx, mz],
+    [-mx, mz],
+    [mx, -mz],
+    [0, -mz],
   ];
 }
 
@@ -120,14 +125,15 @@ export function usesCornerSpawnBases(mapW) {
 
 /** Match / Forge spawn points — corners on the 5-chunk board, sides otherwise. */
 export function spawnBases(worldHalfF = activeWorldHalfF(), opts = {}) {
-  if (opts.laneBases) return laneBases(worldHalfF);
-  if (usesCornerSpawnBases(opts.mapW ?? activeMapW())) return cornerBases(worldHalfF);
-  return sideBases(worldHalfF);
+  const halfZ = opts.worldHalfZF ?? worldHalfF;
+  if (opts.laneBases) return laneBases(worldHalfF, halfZ);
+  if (usesCornerSpawnBases(opts.mapW ?? activeMapW())) return cornerBases(worldHalfF, halfZ);
+  return sideBases(worldHalfF, halfZ);
 }
 
 /** Default 1v1 agoras for a generated field (Forge + procedural matches). */
-export function defaultMatchAgoras(worldHalfF, mapW, count = 2) {
-  const bases = spawnBases(worldHalfF, { mapW });
+export function defaultMatchAgoras(worldHalfF, mapW, count = 2, worldHalfZF = worldHalfF) {
+  const bases = spawnBases(worldHalfF, { mapW, worldHalfZF });
   const n = Math.max(0, Math.min(count | 0, bases.length));
   const out = [];
   for (let i = 0; i < n; i++) {
@@ -382,7 +388,8 @@ function spawnConfiguredArmyAtAgora(w, owner, baseX, baseZ) {
 /** Spawn one KOTH army at a slot base (mid-game join). */
 export function spawnKothSlot(w, slot) {
   const half = w.worldHalfF ?? activeWorldHalfF();
-  const base = pickKothSpawnPoint(w, kothBases(half));
+  const halfZ = w.worldHalfZF ?? half;
+  const base = pickKothSpawnPoint(w, kothBases(half, halfZ));
   spawnConfiguredKothArmy(w, slot, base[0], base[1]);
   grantStartingResources(w, slot, KOTH_STARTING_RESOURCES);
 }
@@ -1008,7 +1015,8 @@ export function buildWorldFromConfig({
   const size = mapSizeForConfig({ stressPerSide, animStressPerSide, armyPerSide, mapW, mapH });
   setActiveMapSize(size.mapW, size.mapH);
   const half = worldHalfFFromMap(size.mapW);
-  const bases = spawnBases(half, { laneBases: useLaneBases, mapW: size.mapW });
+  const halfZ = worldHalfZFFromMap(size.mapH);
+  const bases = spawnBases(half, { laneBases: useLaneBases, mapW: size.mapW, worldHalfZF: halfZ });
 
   const w = createWorld(seed);
   w.kothMatchOver = 0;
@@ -1022,6 +1030,7 @@ export function buildWorldFromConfig({
   w.mapW = size.mapW;
   w.mapH = size.mapH;
   w.worldHalfF = half;
+  w.worldHalfZF = halfZ;
   w.armyPerSide = _armyPerSide;
 
   // Default FFA until a mode opts into alliances via setTeamAssignments.

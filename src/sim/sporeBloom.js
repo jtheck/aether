@@ -6,6 +6,8 @@ import {
   activeWorldHalfF,
   inBounds,
   worldToTile,
+  worldToTileZ,
+  activeWorldHalfZF,
 } from './field.js';
 import { UNIT } from './unitTypes.js';
 import { rngFrac } from './rng.js';
@@ -319,7 +321,7 @@ export function queueTreeSeedAt(w, field, x, y, {
   if (!store || !field) return -1;
   const pending = pendingTileSet(store);
   const tx0 = worldToTile(x);
-  const tz0 = worldToTile(y);
+  const tz0 = worldToTileZ(y);
   let best = -1;
   let bestD2 = 999;
   const R = 3;
@@ -349,7 +351,7 @@ export function queueTreeSeedAt(w, field, x, y, {
 function tileCenterFixed(tx, tz) {
   return {
     x: fx.fromFloat((tx + 0.5) * TILE_SIZE_F - activeWorldHalfF()),
-    y: fx.fromFloat((tz + 0.5) * TILE_SIZE_F - activeWorldHalfF()),
+    y: fx.fromFloat((tz + 0.5) * TILE_SIZE_F - activeWorldHalfZF()),
   };
 }
 
@@ -383,9 +385,10 @@ export function queueMycoDeathSeeds(w, field, cx, cy) {
   const cxF = fx.toFloat(cx);
   const cyF = fx.toFloat(cy);
   const tx0 = worldToTile(cx);
-  const tz0 = worldToTile(cy);
+  const tz0 = worldToTileZ(cy);
   const standTi = tz0 * field.width + tx0;
   const half = activeWorldHalfF();
+  const halfZ = activeWorldHalfZF();
   const rTiles = 2;
   const found = [];
   for (let tz = tz0 - rTiles; tz <= tz0 + rTiles; tz++) {
@@ -394,7 +397,7 @@ export function queueMycoDeathSeeds(w, field, cx, cy) {
       const ti = tz * field.width + tx;
       if (ti === standTi) continue;
       const wx = (tx + 0.5) * TILE_SIZE_F - half;
-      const wz = (tz + 0.5) * TILE_SIZE_F - half;
+      const wz = (tz + 0.5) * TILE_SIZE_F - halfZ;
       const dx = wx - cxF;
       const dz = wz - cyF;
       if (dx * dx + dz * dz > radius2) continue;
@@ -445,7 +448,7 @@ export function fellTreesInRadius(w, field, cx, cy, radius) {
   if (!field?.treeStock || !radius || radius <= 0) return 0;
   const radius2 = fx.mul(radius, radius);
   const tx0 = worldToTile(cx);
-  const tz0 = worldToTile(cy);
+  const tz0 = worldToTileZ(cy);
   const rTiles = Math.ceil(fx.toFloat(radius) / TILE_SIZE_F) + 1;
   let felled = 0;
   for (let tz = tz0 - rTiles; tz <= tz0 + rTiles; tz++) {
@@ -525,9 +528,10 @@ export function collectSporeSeedCandidates(
   const cxF = fx.toFloat(cx);
   const cyF = fx.toFloat(cy);
   const tx0 = worldToTile(cx);
-  const tz0 = worldToTile(cy);
+  const tz0 = worldToTileZ(cy);
   const rTiles = Math.ceil(ringMax / TILE_SIZE_F) + 1;
   const half = activeWorldHalfF();
+  const halfZ = activeWorldHalfZF();
 
   let n = 0;
   for (let tz = tz0 - rTiles; tz <= tz0 + rTiles; tz++) {
@@ -535,7 +539,7 @@ export function collectSporeSeedCandidates(
       if (!inBounds(tx, tz)) continue;
       if (!canGrowTreeAt(field, tx, tz, pendingTiles)) continue;
       const wx = (tx + 0.5) * TILE_SIZE_F - half;
-      const wz = (tz + 0.5) * TILE_SIZE_F - half;
+      const wz = (tz + 0.5) * TILE_SIZE_F - halfZ;
       const dx = wx - cxF;
       const dz = wz - cyF;
       const d2 = dx * dx + dz * dz;

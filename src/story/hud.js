@@ -34,25 +34,34 @@ function rowHtml(line, faded) {
   return (
     `<div style="opacity:${faded ? 0.55 : 1};margin-top:${faded ? '8px' : '10px'}">` +
     speaker +
-    `<div style="font-size:${size};color:${color};max-width:720px;margin:0 auto;line-height:1.45">${esc(line.text)}</div>` +
+    `<div style="font-size:${size};color:${color};line-height:1.45;text-shadow:0 1px 2px rgba(0,0,0,.95),0 0 14px rgba(0,0,0,.7)">${esc(line.text)}</div>` +
     `</div>`
   );
 }
 
-/** Bottom narration stack. Same player the game can reuse later. */
+const VEIL_STYLE = [
+  'background:radial-gradient(ellipse at center, rgba(0,0,0,.55) 0%, rgba(0,0,0,.2) 46%, rgba(0,0,0,0) 74%)',
+  'padding:48px 12px 40px',
+].join(';');
+
+/** Centered narration. Soft falloff, no hard plate edge. */
 export function createStoryHud(host = document.body) {
   let bar = host.querySelector('#story-narration-bar');
   if (!bar) {
     bar = document.createElement('div');
     bar.id = 'story-narration-bar';
     bar.style.cssText = [
-      'position:absolute',
-      'left:280px',
-      'right:16px',
-      'bottom:120px',
-      'z-index:6',
+      'position:fixed',
+      'left:50%',
+      'top:58%',
+      'transform:translate(-50%,-50%)',
+      'width:min(540px, 68vw)',
+      'z-index:20',
       'pointer-events:none',
       'display:none',
+      'text-align:center',
+      'user-select:none',
+      '-webkit-user-select:none',
     ].join(';');
     host.appendChild(bar);
   }
@@ -68,8 +77,7 @@ export function createStoryHud(host = document.body) {
         return;
       }
       const rows = visible.map((line, i) => rowHtml(line, i < visible.length - 1)).join('');
-      bar.innerHTML =
-        `<div style="background:linear-gradient(transparent,rgba(0,0,0,.82));padding:20px 16px 14px">${rows}</div>`;
+      bar.innerHTML = `<div style="${VEIL_STYLE}">${rows}</div>`;
       bar.style.display = 'block';
     },
     setOffset(bottomPx) {

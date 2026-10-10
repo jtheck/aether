@@ -18,7 +18,7 @@ import {
   groupArriveRadiusSq,
   FINAL_ARRIVE_SQ,
 } from './path.js';
-import { isPassable, snapToPassable, worldToTile } from './field.js';
+import { isPassable, snapToPassable, worldToTile, worldToTileZ } from './field.js';
 import { spawnKothSlot } from './worldSetup.js';
 import { kothRegisterJoin } from './kothMeta.js';
 import { kill } from './combat.js';
@@ -145,7 +145,7 @@ export function applyCommands(world, field, commands) {
         applySetRally(world, cmd);
         break;
       case CMD.GATHER:
-        applyGather(world, field, cmd.entities, cmd.tile);
+        applyGather(world, field, cmd.entities, cmd.tile, cmd.defensive ? 1 : 0);
         break;
       case CMD.RESEARCH:
         applyQueueResearch(world, cmd);
@@ -245,7 +245,7 @@ function applyMove(world, field, ids, tx, ty, order) {
     }
     if (!isFlyer(world.type[i])) {
       const destTileX = worldToTile(destX);
-      const destTileY = worldToTile(destY);
+      const destTileY = worldToTileZ(destY);
       if (!isPassable(field, destTileX, destTileY)) {
         const snapped = snapToPassable(field, destX, destY);
         if (snapped) {

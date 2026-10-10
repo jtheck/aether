@@ -34,7 +34,7 @@ import {
 import { getUnitDef, UNIT_DEFS, UNIT, unitFootprint, unitSteer, unitAccel, unitDecel, unitSlowMul, isFlyer } from './unitTypes.js';
 import { ORDER } from './world.js';
 import { continueRallyHop } from './buildings.js';
-import { worldToTile, isPassable, isSlowTile } from './field.js';
+import { worldToTile, worldToTileZ, isPassable, isSlowTile } from './field.js';
 import { kothMetaStep } from './kothMeta.js';
 import { matchWipeStep } from './matchEnd.js';
 import { agoraCaptureSystem } from './agora.js';
@@ -362,7 +362,7 @@ function movementSystem(w, field) {
     }
 
     const currentTx = worldToTile(w.px[i]);
-    const currentTz = worldToTile(w.py[i]);
+    const currentTz = worldToTileZ(w.py[i]);
     let speed = w.speed[i];
     // Trees / mud only snag ground units.
     if (!isFlyer(w.type[i]) && isSlowTile(field, currentTx, currentTz)) {
@@ -519,9 +519,9 @@ function applyMoveWithSlide(w, field, i, mx, my) {
   }
 
   const oldTx = worldToTile(oldX);
-  const oldTz = worldToTile(oldY);
+  const oldTz = worldToTileZ(oldY);
   const newTx = worldToTile(newX);
-  const newTz = worldToTile(newY);
+  const newTz = worldToTileZ(newY);
 
   const wasPassable = isPassable(field, oldTx, oldTz);
   const isNewPassable = isPassable(field, newTx, newTz);
@@ -535,7 +535,7 @@ function applyMoveWithSlide(w, field, i, mx, my) {
   }
 
   const xOnlyPassable = isPassable(field, worldToTile(newX), oldTz);
-  const yOnlyPassable = isPassable(field, oldTx, worldToTile(newY));
+  const yOnlyPassable = isPassable(field, oldTx, worldToTileZ(newY));
 
   if (!xOnlyPassable && !yOnlyPassable) {
     w.vx[i] = 0;
@@ -790,7 +790,7 @@ function applyPairPush(w, field, i, j, strength, asymmetric, slack = SEP_SLACK, 
 
 function revertIfBlocked(w, field, i, undoX, undoY) {
   if (isFlyer(w.type[i])) return;
-  if (!isPassable(field, worldToTile(w.px[i]), worldToTile(w.py[i]))) {
+  if (!isPassable(field, worldToTile(w.px[i]), worldToTileZ(w.py[i]))) {
     w.px[i] += undoX;
     w.py[i] += undoY;
   }

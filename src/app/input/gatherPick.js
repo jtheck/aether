@@ -2,12 +2,13 @@
 // GPU pick is off for units (~1000× slower on mobile); marching a few dozen
 // tiles along the click ray is cheap and lets canopy / boulder clicks work.
 
-import { TILE_SIZE_F } from '../../sim/field.js';
+import { TILE_SIZE_F, worldHalfZFFromField } from '../../sim/field.js';
 import { SCENERY, rockFootprintRadiusForStock, rockScaleForStage, rockStageFromStock } from '../../sim/scenery.js';
 import { treeScaleForStage, treeStageFromStock } from '../../sim/trees.js';
 
 const TREE_RADIUS = 2.4;
-const TREE_HEIGHT = 7.5;
+/** Mesh top is about 4.4× stage scale. The old 7.5 column caught ground clicks in the air above the canopy. */
+const TREE_HEIGHT = 4.45;
 const ROCK_HEIGHT = {
   [SCENERY.ROCK_PLAIN]: 3.4,
   [SCENERY.ROCK_MOSS]: 5.8,
@@ -22,10 +23,10 @@ function fieldHalf(field) {
   return field.worldHalfF ?? ((field.width | 0) * TILE_SIZE_F) / 2;
 }
 
-function tileCenter(tx, tz, half) {
+function tileCenter(tx, tz, half, halfZ) {
   return {
     x: (tx + 0.5) * TILE_SIZE_F - half,
-    z: (tz + 0.5) * TILE_SIZE_F - half,
+    z: (tz + 0.5) * TILE_SIZE_F - halfZ,
   };
 }
 
@@ -56,11 +57,11 @@ export function rayHitAabb(ray, minX, minY, minZ, maxX, maxY, maxZ) {
   return tEnter >= 0 ? tEnter : 0;
 }
 
-function nodeVolume(field, tile, half, heightAt) {
+function nodeVolume(field, tile, half, halfZ, heightAt) {
   const w = field.width | 0;
   const tx = tile % w;
   const tz = (tile / w) | 0;
-  const { x: cx, z: cz } = tileCenter(tx, tz, half);
+  const { x: cx, z: cz } = tileCenter(tx, tz, half, halfZ);
   const gy = heightAt(cx, cz);
   if ((field.treeStock?.[tile] | 0) > 0) {
     const stage = treeStageFromStock(field.treeStock[tile] | 0);
@@ -82,9 +83,9 @@ function nodeVolume(field, tile, half, heightAt) {
   return null;
 }
 
-function visitTilesOnRayXZ(ox, oz, dx, dz, maxT, half, width, height, visit) {
+function visitTilesOnRayXZ(ox, oz, dx, dz, maxT, half, halfZ, width, height, visit) {
   let tx = Math.floor((ox + half) / TILE_SIZE_F);
-  let tz = Math.floor((oz + half) / TILE_SIZE_F);
+  let tz = Math.floor((oz + halfZ) / TILE_SIZE_F);
   const stepX = dx > 1e-10 ? 1 : dx < -1e-10 ? -1 : 0;
   const stepZ = dz > 1e-10 ? 1 : dz < -1e-10 ? -1 : 0;
   const tDeltaX = stepX !== 0 ? Math.abs(TILE_SIZE_F / dx) : Infinity;
@@ -96,7 +97,7 @@ function visitTilesOnRayXZ(ox, oz, dx, dz, maxT, half, width, height, visit) {
     tMaxX = (next - ox) / dx;
   }
   if (stepZ !== 0) {
-    const next = stepZ > 0 ? (tz + 1) * TILE_SIZE_F - half : tz * TILE_SIZE_F - half;
+    const next = stepZ > 0 ? (tz + 1) * TILE_SIZE_F - halfZ : tz * TILE_SIZE_F - halfZ;
     tMaxZ = (next - oz) / dz;
   }
   let t = 0;
@@ -127,6 +128,7 @@ export function pickGatherNodeOnRay(field, ray, opts = {}) {
   const height = field.height | 0;
   if (width <= 0 || height <= 0) return -1;
   const half = fieldHalf(field);
+  const halfZ = worldHalfZFFromField(field);
   const heightAt = opts.heightAt ?? (() => 0);
   const maxT = Number.isFinite(opts.maxT) ? Math.max(1, opts.maxT) : 400;
 
@@ -137,7 +139,7 @@ export function pickGatherNodeOnRay(field, ray, opts = {}) {
   const consider = (tile) => {
     if (seen.has(tile)) return;
     seen.add(tile);
-    const vol = nodeVolume(field, tile, half, heightAt);
+    const vol = nodeVolume(field, tile, half, halfZ, heightAt);
     if (!vol) return;
     const t = rayHitAabb(
       ray,
@@ -154,7 +156,7 @@ export function pickGatherNodeOnRay(field, ray, opts = {}) {
     }
   };
 
-  visitTilesOnRayXZ(ray.ox, ray.oz, ray.dx, ray.dz, maxT, half, width, height, (tx, tz) => {
+  visitTilesOnRayXZ(ray.ox, ray.oz, ray.dx, ray.dz, maxT, half, halfZ, width, height, (tx, tz) => {
     for (let dz = -HALO; dz <= HALO; dz++) {
       for (let dx = -HALO; dx <= HALO; dx++) {
         const x = tx + dx;

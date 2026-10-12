@@ -3,6 +3,7 @@
 
 export const BACKDROP = {
   DISC: 'disc',
+  CASTLE: 'castle',
 };
 
 /** Icosphere in disc.glb sits ~3 units above authored origin. */
@@ -11,8 +12,18 @@ const DISC_ORIGIN_Y = 3.037;
 export const BACKDROP_DEFS = {
   [BACKDROP.DISC]: {
     url: '/assets/models/props/disc.glb',
+    label: 'Disc',
+    // Native mesh is ~9 units across. 80 wraps a small table.
     defaultScale: 80,
     originY: DISC_ORIGIN_Y,
+  },
+  [BACKDROP.CASTLE]: {
+    url: '/assets/models/props/castle.glb',
+    label: 'Castle',
+    // Native keep is about half a unit wide and already sits on y=0.
+    // 64 makes a keep roughly thirty tiles across, for a hole or a rim.
+    defaultScale: 64,
+    originY: 0,
   },
 };
 
@@ -25,7 +36,8 @@ export function isBackdropType(type) {
 }
 
 function q(n) {
-  return Math.round(Number(n) * 1000) / 1000;
+  const v = Math.round(Number(n) * 1000) / 1000;
+  return v === 0 ? 0 : v;
 }
 
 /**
@@ -35,6 +47,40 @@ function q(n) {
 export function defaultBackdropY(type, scale) {
   const originY = BACKDROP_DEFS[type]?.originY || 0;
   return q(-(originY * scale));
+}
+
+/** A new pose at a ground point, sunk so the mesh origin sits on y=0. */
+export function freshBackdrop(type, x, z) {
+  if (!isBackdropType(type)) return null;
+  const scale = BACKDROP_DEFS[type].defaultScale;
+  return {
+    type,
+    x: q(x),
+    z: q(z),
+    y: defaultBackdropY(type, scale),
+    yaw: 0,
+    scale,
+  };
+}
+
+/**
+ * Index of the prop under a ground point, or -1.
+ * Reach grows with scale so a keep is selectable out at its walls.
+ */
+export function nearestBackdrop(list, x, z) {
+  const poses = normalizeBackdrops(list);
+  let best = -1;
+  let bestD = Infinity;
+  for (let i = 0; i < poses.length; i++) {
+    const pose = poses[i];
+    const reach = Math.max(6, pose.scale * 0.45);
+    const d = Math.hypot(pose.x - x, pose.z - z);
+    if (d <= reach && d < bestD) {
+      best = i;
+      bestD = d;
+    }
+  }
+  return best;
 }
 
 /**

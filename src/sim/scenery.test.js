@@ -12,6 +12,8 @@ import {
   damageRock,
   defaultTreeStock,
   paintSceneryBrush,
+  clearAllScenery,
+  clearOffTableScenery,
   placeRockAt,
   populateScenery,
   SPAWN_CLEAR_RADIUS_TILES,
@@ -29,7 +31,7 @@ import {
   TREE_STOCK_NATURAL_MAX,
   TREE_WOOD_PER_STAGE,
 } from './trees.js';
-import { applyTableSilhouette } from './tableShape.js';
+import { applyTableSilhouette, setCellEnabled } from './tableShape.js';
 
 function tileAt(field, tx, tz) {
   return tz * field.width + tx;
@@ -121,14 +123,33 @@ function archerAndApcKeepMoreTreeSpeed() {
   assert.ok(fx.toFloat(unitSlowMul(UNIT.APC)) > 0.75, 'APC pushes through brush');
 }
 
+function clearEmptiesTheMap() {
+  const field = createField(1);
+  field.pass.fill(1);
+  field.activeMask.fill(1);
+  field.terrainTypes.fill(TERRAIN.GRASS);
+  const tx = 40;
+  const tz = 40;
+  const i = tileAt(field, tx, tz);
+  assert.ok(placeRockAt(field, tx, tz, SCENERY.ROCK_MOSS));
+  assert.equal(passAt(field, tx, tz), 0);
+  clearAllScenery(field);
+  assert.equal(field.sceneryAuthored, true);
+  assert.equal(field.sceneryType[i], SCENERY.NONE);
+  assert.equal(field.rockStock[i], 0);
+  assert.equal(passAt(field, tx, tz), 1, 'cleared rock stops blocking');
+}
+
 stagesMatchYield();
 stageFromRemainingStock();
 snowFootprintShrinksWithStock();
 damageRockPublishesAndShrinks();
+clearEmptiesTheMap();
 paintBrushRespectsFootprints();
 archerAndApcKeepMoreTreeSpeed();
 edgeTreeFadeMatchesGrove();
 reservedPadsCanKeepTrees();
+offTableSceneryIsCleared();
 console.log('scenery.test.js: ok (rock yield + stages + collision shrink + paint spacing + edge trees)');
 
 function blankLand() {
@@ -183,7 +204,25 @@ function paintBrushRespectsFootprints() {
   assert.ok(placeRockAt(snow, 40, 40, SCENERY.ROCK_SNOW));
   const erased = paintSceneryBrush(snow, 42, 40, SCENERY.NONE, 0);
   assert.ok(erased.length > 0, 'erase on a footprint tile clears the rock');
+  assert.ok(erased.some((t) => t.x === 40 && t.z === 40), 'erase dirties the rock center');
   assert.equal(snow.sceneryType[40 * snow.width + 40], SCENERY.NONE);
+
+  const skirt = blankLand();
+  assert.ok(placeRockAt(skirt, 40, 40, SCENERY.ROCK_SNOW));
+  const skirtErased = paintSceneryBrush(skirt, 44, 40, SCENERY.NONE, 0);
+  assert.ok(skirtErased.some((t) => t.x === 40 && t.z === 40), 'erase on the visible skirt clears the rock');
+  assert.equal(skirt.sceneryType[40 * skirt.width + 40], SCENERY.NONE);
+  const far = blankLand();
+  assert.ok(placeRockAt(far, 40, 40, SCENERY.ROCK_SNOW));
+  const missed = paintSceneryBrush(far, 48, 40, SCENERY.NONE, 0);
+  assert.equal(missed.length, 0, 'erase past the mesh leaves the rock');
+  assert.equal(far.sceneryType[40 * far.width + 40], SCENERY.ROCK_SNOW);
+
+  const plain = blankLand();
+  assert.ok(placeRockAt(plain, 40, 40, SCENERY.ROCK_PLAIN));
+  const plainErased = paintSceneryBrush(plain, 41, 40, SCENERY.NONE, 0);
+  assert.ok(plainErased.some((t) => t.x === 40 && t.z === 40), 'erase beside a small rock clears it');
+  assert.equal(plain.sceneryType[40 * plain.width + 40], SCENERY.NONE);
 
   const authored = blankLand();
   authored.terrainTypes[tileAt(authored, 41, 40)] = TERRAIN.DIRT;
@@ -278,4 +317,20 @@ function reservedPadsCanKeepTrees() {
   }
   assert.equal(clearedTrees, 0);
   assert.ok(keptTrees > 0, 'KOTH drops should keep trees on the pad');
+}
+
+function offTableSceneryIsCleared() {
+  const field = createField(1, { width: 32, height: 32 });
+  field.pass.fill(1);
+  field.terrainTypes.fill(TERRAIN.GRASS);
+  applyTableSilhouette(field, { suppressCenterBlock: true });
+  assert.ok(paintSceneryBrush(field, 4, 4, SCENERY.TREE, 0).length > 0);
+  assert.ok(placeRockAt(field, 20, 20, SCENERY.ROCK_PLAIN));
+  setCellEnabled(field.tableShape, 0, 0, false);
+  applyTableSilhouette(field, field.tableShape);
+  assert.equal(clearOffTableScenery(field), true);
+  assert.equal(field.sceneryType[4 * 32 + 4], SCENERY.NONE);
+  assert.equal(field.treeStock[4 * 32 + 4], 0);
+  assert.equal(field.sceneryType[20 * 32 + 20], SCENERY.ROCK_PLAIN);
+  assert.equal(clearOffTableScenery(field), false);
 }

@@ -21,8 +21,8 @@ import { TILE_SIZE_F, worldHalfFFromField, worldHalfZFFromField } from '../sim/f
 import { BUILDING_FOOTPRINTS } from '../sim/buildings.js';
 import { isAlly } from '../sim/teams.js';
 import { UNIT_DEFS, getUnitDef } from '../sim/unitTypes.js';
-import { surfaceHeightAt } from './terrain.js';
-import { softDetachMesh } from './meshLifecycle.js';
+import { surfaceHeightAt, tableFloorYForField, terrainChunkLodSpec, terrainLookXZ } from './terrain.js';
+import { resumeMeshes, softDetachMesh, suspendMeshes } from './meshLifecycle.js';
 
 const CIV_VISION_TILES = 8;
 const MIL_VISION_MIN = 10;
@@ -152,6 +152,7 @@ function cloneBuilding(b) {
     rallyOrder: b.rallyOrder ?? 0,
     prodPaused: b.prodPaused | 0,
     built: b.built != null ? b.built | 0 : 1,
+    simIndex: Number.isInteger(b.simIndex) ? b.simIndex : -1,
     buildProgress: b.buildProgress | 0,
     buildTime: b.buildTime | 0,
     tracks: (b.tracks ?? []).map((t) => ({ ...t })),
@@ -194,6 +195,41 @@ function disposeTexture(tex) {
 
 function padTexWidth(w) {
   return Math.max(TEXEL_ALIGN, Math.ceil(w / TEXEL_ALIGN) * TEXEL_ALIGN);
+}
+
+/**
+ * Copy the last real fog texel into the upload padding.
+ * The east edge of the board is that boundary; without the copy, bilinear
+ * filtering mixes the rim into an empty shroud.
+ * @param {Uint8Array | null | undefined} buf
+ * @param {number} texW
+ * @param {number} texH
+ * @param {number} contentW
+ * @param {number} contentH
+ */
+export function sealFogEdgePadding(buf, texW, texH, contentW, contentH) {
+  if (!buf || texW < 1 || texH < 1 || contentW < 1 || contentH < 1) return;
+  const cw = contentW < texW ? contentW | 0 : texW | 0;
+  const ch = contentH < texH ? contentH | 0 : texH | 0;
+  if (cw < texW) {
+    for (let z = 0; z < ch; z++) {
+      const src = (z * texW + (cw - 1)) * 4;
+      for (let x = cw; x < texW; x++) {
+        const dst = (z * texW + x) * 4;
+        buf[dst] = buf[src];
+        buf[dst + 1] = buf[src + 1];
+        buf[dst + 2] = buf[src + 2];
+        buf[dst + 3] = buf[src + 3];
+      }
+    }
+  }
+  if (ch < texH) {
+    const rowBytes = texW * 4;
+    const srcRow = (ch - 1) * rowBytes;
+    for (let z = ch; z < texH; z++) {
+      buf.set(buf.subarray(srcRow, srcRow + rowBytes), z * rowBytes);
+    }
+  }
 }
 
 const EDT_INF = 1 << 28;
@@ -383,6 +419,17 @@ export function createFogOfWar() {
   let visitedMesh = null;
   /** @type {object | null} */
   let visitedMaterial = null;
+  /** Height fog inside the tile ring. Far chunks drop with the tiles. */
+  /** @type {{ x: number, z: number, far: boolean, unseen: object, visited: object }[]} */
+  let fogChunks = [];
+  /** Flat unseen + visited sheet on the bare table, past the tile ring. */
+  /** @type {{ unseen: object, visited: object } | null} */
+  let tableFog = null;
+  /** @type {{ chunkSize: number, span: number, keepSq: number } | null} */
+  let fogLod = null;
+  let fogLodElapsed = 120;
+  let fogLodX = Infinity;
+  let fogLodZ = Infinity;
   /** @type {object | null} */
   let texture = null;
   /** @type {object | null} */
@@ -564,6 +611,7 @@ export function createFogOfWar() {
     texH = 0;
     if (mesh) mesh.visible = false;
     if (visitedMesh) visitedMesh.visible = false;
+    setTableFogShown(false);
   }
 
   function forgetKnown() {
@@ -986,6 +1034,7 @@ export function createFogOfWar() {
     if (!enabled || !field || !visible) {
       forgetOverlay();
       if (mesh) mesh.visible = false;
+      setTableFogShown(false);
       return;
     }
     const now = input.now ?? Date.now();
@@ -1122,14 +1171,22 @@ export function createFogOfWar() {
   }
 
   function sampleCover(fx, fz) {
-    const x0 = Math.floor(fx);
-    const z0 = Math.floor(fz);
-    const tx = fx - x0;
-    const tz = fz - z0;
+    // The west/south rim sits at -0.5 tile. Leaving that on the off-map zero
+    // mixed never-seen into the edge cards, and they lit brighter than the felt.
+    const sx = fx < 0 ? 0 : fx > width - 1e-4 ? width - 1e-4 : fx;
+    const sz = fz < 0 ? 0 : fz > height - 1e-4 ? height - 1e-4 : fz;
+    const x0 = Math.floor(sx);
+    const z0 = Math.floor(sz);
+    const tx = sx - x0;
+    const tz = sz - z0;
+    // Repeat the edge tile. Mixing in the off-map zero made a rim of trees
+    // read as never-seen and lit the table edge like a chrome line.
+    const x1 = x0 + 1 >= width ? x0 : x0 + 1;
+    const z1 = z0 + 1 >= height ? z0 : z0 + 1;
     const c00 = coverAt(x0, z0);
-    const c10 = coverAt(x0 + 1, z0);
-    const c01 = coverAt(x0, z0 + 1);
-    const c11 = coverAt(x0 + 1, z0 + 1);
+    const c10 = coverAt(x1, z0);
+    const c01 = coverAt(x0, z1);
+    const c11 = coverAt(x1, z1);
     return (c00 * (1 - tx) + c10 * tx) * (1 - tz) + (c01 * (1 - tx) + c11 * tx) * tz;
   }
 
@@ -1166,6 +1223,19 @@ export function createFogOfWar() {
     }
     writeLayer(pixels, o, unseen);
     writeLayer(visitedPixels, o, visitedA);
+  }
+
+  /**
+   * Width is padded to a 64-texel upload alignment. The east edge of the board
+   * is the boundary between the last real texel and that padding. Linear
+   * filter was blending the rim into a solid shroud, so cards on that edge
+   * stayed at the tile's real fog and looked unlit-against-the-veil.
+   */
+  function sealFogTextures() {
+    const contentW = width * FOG_TEX_SCALE;
+    const contentH = height * FOG_TEX_SCALE;
+    sealFogEdgePadding(pixels, texW, texH, contentW, contentH);
+    sealFogEdgePadding(visitedPixels, texW, texH, contentW, contentH);
   }
 
   /** Full unseen shroud — no per-tile cover walk. */
@@ -1293,6 +1363,7 @@ export function createFogOfWar() {
     if (!paintedOnce) {
       paintShroud();
       if (dirtyN > 0) paintPixels(true);
+      sealFogTextures();
       texture = writeOpacityTexture(texture, pixels, null);
       visitedTexture = writeOpacityTexture(visitedTexture, visitedPixels, null);
       paintedOnce = true;
@@ -1302,6 +1373,7 @@ export function createFogOfWar() {
       return;
     }
     paintPixels(true);
+    sealFogTextures();
     const rects = dirtyCellRects();
     if (!rects) {
       texture = writeOpacityTexture(texture, pixels, null);
@@ -1317,54 +1389,139 @@ export function createFogOfWar() {
     clearDirty();
   }
 
-  function buildOverlayMesh() {
-    if (!engine || !field) return;
-    const active = tileActiveLookup(field);
-    const positions = [];
-    const uvs = [];
-    const indices = [];
-    let count = 0;
-    for (let tz = 0; tz < height; tz++) {
-      for (let tx = 0; tx < width; tx++) {
-        if (!active(tx, tz)) continue;
-        const x1 = tx * TILE_SIZE_F - half;
-        const x2 = (tx + 1) * TILE_SIZE_F - half;
-        const z1 = tz * TILE_SIZE_F - halfZ;
-        const z2 = (tz + 1) * TILE_SIZE_F - halfZ;
-        const y00 = surfaceHeightAt(field, x1, z1) + OVERLAY_LIFT;
-        const y10 = surfaceHeightAt(field, x2, z1) + OVERLAY_LIFT;
-        const y11 = surfaceHeightAt(field, x2, z2) + OVERLAY_LIFT;
-        const y01 = surfaceHeightAt(field, x1, z2) + OVERLAY_LIFT;
-        const base = count * 4;
-        positions.push(x1, y00, z1, x2, y10, z1, x2, y11, z2, x1, y01, z2);
-        const u0 = (tx * FOG_TEX_SCALE) / texW;
-        const u1 = ((tx + 1) * FOG_TEX_SCALE) / texW;
-        const v0 = (tz * FOG_TEX_SCALE) / texH;
-        const v1 = ((tz + 1) * FOG_TEX_SCALE) / texH;
-        uvs.push(u0, v0, u1, v0, u1, v1, u0, v1);
-        indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
-        count++;
-      }
-    }
-    if (count === 0) return;
-    const pos = new Float32Array(positions);
+  function pushFogQuad(bucket, tx, tz) {
+    const x1 = tx * TILE_SIZE_F - half;
+    const x2 = (tx + 1) * TILE_SIZE_F - half;
+    const z1 = tz * TILE_SIZE_F - halfZ;
+    const z2 = (tz + 1) * TILE_SIZE_F - halfZ;
+    const y00 = surfaceHeightAt(field, x1, z1) + OVERLAY_LIFT;
+    const y10 = surfaceHeightAt(field, x2, z1) + OVERLAY_LIFT;
+    const y11 = surfaceHeightAt(field, x2, z2) + OVERLAY_LIFT;
+    const y01 = surfaceHeightAt(field, x1, z2) + OVERLAY_LIFT;
+    const base = bucket.count * 4;
+    bucket.positions.push(x1, y00, z1, x2, y10, z1, x2, y11, z2, x1, y01, z2);
+    const u0 = (tx * FOG_TEX_SCALE) / texW;
+    const u1 = ((tx + 1) * FOG_TEX_SCALE) / texW;
+    const v0 = (tz * FOG_TEX_SCALE) / texH;
+    const v1 = ((tz + 1) * FOG_TEX_SCALE) / texH;
+    bucket.uvs.push(u0, v0, u1, v0, u1, v1, u0, v1);
+    bucket.indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    bucket.count++;
+  }
+
+  function emitFogPair(name, bucket) {
+    if (!bucket.count) return null;
+    const pos = new Float32Array(bucket.positions);
     const normals = new Float32Array(pos.length);
     for (let i = 0; i < normals.length; i += 3) normals[i + 1] = 1;
-    const idx = new Uint32Array(indices);
-    const uv = new Float32Array(uvs);
-    material = createOverlayMaterial(UNSEEN_DIFFUSE, UNSEEN_MESH_ALPHA);
-    visitedMaterial = createOverlayMaterial(VISITED_DIFFUSE, VISITED_MESH_ALPHA);
-    mesh = addOverlayMesh('fog-of-war', pos, normals, idx, uv, material);
-    visitedMesh = addOverlayMesh(
-      'fog-visited',
+    const idx = new Uint32Array(bucket.indices);
+    const uv = new Float32Array(bucket.uvs);
+    const unseen = addOverlayMesh(`${name}-unseen`, pos, normals, idx, uv, material);
+    const visited = addOverlayMesh(
+      `${name}-visited`,
       pos.slice(),
       normals.slice(),
       idx.slice(),
       uv.slice(),
       visitedMaterial,
     );
-    if (visitedMesh.position) visitedMesh.position.y = 0.03;
+    if (visited.position) visited.position.y = 0.03;
+    return { unseen, visited };
+  }
+
+  function buildOverlayMesh() {
+    if (!engine || !field) return;
+    const active = tileActiveLookup(field);
+    fogLod = terrainChunkLodSpec(field);
+    fogChunks = [];
+    material = createOverlayMaterial(UNSEEN_DIFFUSE, UNSEEN_MESH_ALPHA);
+    visitedMaterial = createOverlayMaterial(VISITED_DIFFUSE, VISITED_MESH_ALPHA);
+    if (!fogLod) {
+      const bucket = { positions: [], uvs: [], indices: [], count: 0 };
+      for (let tz = 0; tz < height; tz++) {
+        for (let tx = 0; tx < width; tx++) {
+          if (!active(tx, tz)) continue;
+          pushFogQuad(bucket, tx, tz);
+        }
+      }
+      const pair = emitFogPair('fog-of-war', bucket);
+      if (!pair) return;
+      mesh = pair.unseen;
+      visitedMesh = pair.visited;
+      uploadTexture();
+      return;
+    }
+    /** @type {Map<string, { positions: number[], uvs: number[], indices: number[], count: number, cx: number, cz: number }>} */
+    const buckets = new Map();
+    const chunkSize = fogLod.chunkSize;
+    for (let tz = 0; tz < height; tz++) {
+      for (let tx = 0; tx < width; tx++) {
+        if (!active(tx, tz)) continue;
+        const cx = Math.floor(tx / chunkSize);
+        const cz = Math.floor(tz / chunkSize);
+        const key = `${cx},${cz}`;
+        let bucket = buckets.get(key);
+        if (!bucket) {
+          bucket = { positions: [], uvs: [], indices: [], count: 0, cx, cz };
+          buckets.set(key, bucket);
+        }
+        pushFogQuad(bucket, tx, tz);
+      }
+    }
+    for (const bucket of buckets.values()) {
+      const pair = emitFogPair(`fog-${bucket.cx}-${bucket.cz}`, bucket);
+      if (!pair) continue;
+      fogChunks.push({
+        x: (bucket.cx + 0.5) * fogLod.span - half,
+        z: (bucket.cz + 0.5) * fogLod.span - halfZ,
+        far: false,
+        unseen: pair.unseen,
+        visited: pair.visited,
+      });
+    }
+    if (!fogChunks.length) return;
+    buildTableFog();
     uploadTexture();
+  }
+
+  /** One flat veil for the felt past the tile ring. Same mask, no height. */
+  function buildTableFog() {
+    const y = tableFloorYForField(field) + OVERLAY_LIFT;
+    const positions = new Float32Array([
+      -half, y, -halfZ,
+      half, y, -halfZ,
+      half, y, halfZ,
+      -half, y, halfZ,
+    ]);
+    const normals = new Float32Array(12);
+    for (let i = 1; i < normals.length; i += 3) normals[i] = 1;
+    const indices = new Uint32Array([0, 1, 2, 0, 2, 3]);
+    const u1 = (width * FOG_TEX_SCALE) / texW;
+    const v1 = (height * FOG_TEX_SCALE) / texH;
+    const uvs = new Float32Array([0, 0, u1, 0, u1, v1, 0, v1]);
+    const unseen = addOverlayMesh('fog-table-unseen', positions, normals, indices, uvs, material);
+    const visited = addOverlayMesh(
+      'fog-table-visited',
+      positions.slice(),
+      normals.slice(),
+      indices.slice(),
+      uvs.slice(),
+      visitedMaterial,
+    );
+    if (visited.position) visited.position.y = 0.03;
+    const ymin = y - 1;
+    const ymax = y + 1;
+    unseen.boundMin = [-half, ymin, -halfZ];
+    unseen.boundMax = [half, ymax, halfZ];
+    visited.boundMin = [-half, ymin, -halfZ];
+    visited.boundMax = [half, ymax, halfZ];
+    tableFog = { unseen, visited };
+  }
+
+  function setTableFogShown(show) {
+    if (!tableFog) return;
+    tableFog.unseen.visible = !!show;
+    tableFog.visited.visible = !!show;
   }
 
   function createOverlayMaterial(color, alpha) {
@@ -1392,6 +1549,17 @@ export function createFogOfWar() {
   function detachOverlay() {
     if (mesh) softDetachMesh(scene, mesh);
     if (visitedMesh) softDetachMesh(scene, visitedMesh);
+    for (let i = 0; i < fogChunks.length; i++) {
+      softDetachMesh(scene, fogChunks[i].unseen);
+      softDetachMesh(scene, fogChunks[i].visited);
+    }
+    fogChunks = [];
+    fogLod = null;
+    if (tableFog) {
+      softDetachMesh(scene, tableFog.unseen);
+      softDetachMesh(scene, tableFog.visited);
+      tableFog = null;
+    }
     mesh = null;
     material = null;
     visitedMesh = null;
@@ -1423,13 +1591,63 @@ export function createFogOfWar() {
     buildOverlayMesh();
   }
 
+  function overlayShown() {
+    return enabled && overlayFitsField();
+  }
+
   function syncOverlay() {
-    if (!mesh || !material) return;
-    const fitted = overlayFitsField();
-    mesh.visible = enabled && fitted;
-    if (visitedMesh) visitedMesh.visible = enabled && fitted;
-    if (!enabled || !fitted) return;
+    if (!material) return;
+    const show = overlayShown();
+    if (fogChunks.length) {
+      if (!show) {
+        const hide = [];
+        for (let i = 0; i < fogChunks.length; i++) {
+          const chunk = fogChunks[i];
+          if (chunk.listed === false) continue;
+          hide.push(chunk.unseen, chunk.visited);
+          chunk.listed = false;
+        }
+        if (hide.length) suspendMeshes(scene, hide);
+      }
+      setTableFogShown(show);
+    } else if (mesh) {
+      mesh.visible = show;
+      if (visitedMesh) visitedMesh.visible = show;
+    } else {
+      return;
+    }
+    if (!show) return;
     uploadTexture();
+  }
+
+  /** Hide height fog past the terrain keep ring. The flat sheet stays on the table. */
+  function updateLod(camera, deltaMs = 120) {
+    if (!fogLod || !fogChunks.length || !camera) return;
+    fogLodElapsed += deltaMs;
+    const look = terrainLookXZ(camera);
+    const moved = (look.x - fogLodX) ** 2 + (look.z - fogLodZ) ** 2;
+    if (fogLodElapsed < 120) return;
+    if (moved < 16) return;
+    fogLodElapsed = 0;
+    fogLodX = look.x;
+    fogLodZ = look.z;
+    const show = overlayShown();
+    const hide = [];
+    const reveal = [];
+    for (let i = 0; i < fogChunks.length; i++) {
+      const chunk = fogChunks[i];
+      const dx = look.x - chunk.x;
+      const dz = look.z - chunk.z;
+      const far = dx * dx + dz * dz > fogLod.keepSq;
+      const want = show && !far;
+      const listed = chunk.listed !== false;
+      chunk.far = far;
+      if (want === listed) continue;
+      (want ? reveal : hide).push(chunk.unseen, chunk.visited);
+      chunk.listed = want;
+    }
+    if (hide.length) suspendMeshes(scene, hide);
+    if (reveal.length) resumeMeshes(scene, reveal);
   }
 
   function overlayNeedsFullPaint() {
@@ -1454,6 +1672,7 @@ export function createFogOfWar() {
     commitDisplayLists,
     attachOverlay,
     syncOverlay,
+    updateLod,
     detachOverlay,
     overlayNeedsFullPaint,
     forEachDirtyTile,

@@ -24,6 +24,7 @@ import { grantStartingResources } from './resources.js';
 import { KOTH_STARTING_RESOURCES } from './storage.js';
 import { loadUnit, passengerCount, transportCapacityOf } from './transport.js';
 import { rngU32 } from './rng.js';
+import { mapTypeById, normalizeMapType } from './mapType.js';
 import * as fx from './fixed.js';
 
 /** Staging AI cold start. */
@@ -140,6 +141,35 @@ export function defaultMatchAgoras(worldHalfF, mapW, count = 2, worldHalfZF = wo
     out.push({ owner: i, x: bases[i][0], z: bases[i][1] });
   }
   return out;
+}
+
+/**
+ * Start pads a generated map keeps clear for this type.
+ * 1v1 uses the first two match bases. Teams uses the four lanes.
+ * King of the Hill uses the five drop pads. Adventure leaves the land alone.
+ * @param {string} mapType
+ */
+export function spawnPadsForMapType(mapType, worldHalfF, mapW, worldHalfZF = worldHalfF) {
+  const spec = mapTypeById(normalizeMapType(mapType, ''));
+  if (!spec || spec.id === 'adventure') return [];
+  if (spec.koth) return kothBases(worldHalfF, worldHalfZF);
+  const bases = spawnBases(worldHalfF, {
+    laneBases: spec.laneBases,
+    mapW,
+    worldHalfZF,
+  });
+  return bases.slice(0, spec.players);
+}
+
+/** Home agoras planted on generate. King of the Hill and Adventure stay empty. */
+export function agorasForMapType(mapType, worldHalfF, mapW, worldHalfZF = worldHalfF) {
+  const spec = mapTypeById(normalizeMapType(mapType, ''));
+  if (!spec?.placeAgoras) return [];
+  return spawnPadsForMapType(mapType, worldHalfF, mapW, worldHalfZF).map((p, i) => ({
+    owner: i,
+    x: p[0],
+    z: p[1],
+  }));
 }
 
 /** Default-map bases (tests / importers that expect a stable export). */

@@ -5,6 +5,7 @@
 import * as fx from '../sim/fixed.js';
 import { bufferFrame, collectFramesForTick, pruneLedger } from '../sim/commandFrame.js';
 import { applyTreeUpdatesToField } from '../sim/trees.js';
+import { applyDoorSnapshot } from '../sim/doorCombat.js';
 import { applyRockUpdatesToField } from '../sim/scenery.js';
 import { excludeHumanAiPlayers } from '../sim/ai.js';
 import { SimClient } from './simClient.js';
@@ -207,6 +208,7 @@ export class SimSession {
     this.matchWinner = -1;
     this.agoras = [];
     this.buildings = [];
+    this.doors = [];
     /** Owner tech bitmasks from the worker (see sim/tech.js). */
     this.tech = [];
     /** Per-owner resource banks from the worker (see sim/resources.js). */
@@ -264,7 +266,7 @@ export class SimSession {
     if (config.aiPlayers !== undefined) this.aiPlayers = config.aiPlayers ?? [];
     if (config.humanPlayers) this.setHumanPlayers(config.humanPlayers);
     this.aiPlayers = excludeHumanAiPlayers(this.aiPlayers, this.humanPlayers);
-    const { count, field, agoras, buildings, tech, resources, checksum } = await this.client.init({
+    const { count, field, agoras, buildings, doors, tech, resources, checksum } = await this.client.init({
       ...config,
       aiPlayers: this.aiPlayers,
       humanPlayers: this.humanPlayers,
@@ -274,6 +276,7 @@ export class SimSession {
     this.field = field ?? this.client.field;
     this.agoras = agoras ?? this.client._agoras ?? [];
     this.buildings = buildings ?? this.client._buildings ?? [];
+    this.doors = doors ?? this.client._doors ?? [];
     this.tech = tech ?? this.client._tech ?? [];
     this.resources = resources ?? this.client._resources ?? [];
     this.koth = null;
@@ -861,6 +864,18 @@ export class SimSession {
       if (extra?.buildings) {
         this.buildings = extra.buildings;
         if (extra.buildingsChanged) this.onBuildingsChanged?.(this.buildings);
+      }
+      if (extra?.doorUpdates && this.doors) {
+        const updates = extra.doorUpdates;
+        const broken = [];
+        for (let i = 0; i < updates.length && i < this.doors.length; i++) {
+          if (!this.doors[i].open && updates[i].open) broken.push(this.doors[i]);
+          this.doors[i].hp = updates[i].hp | 0;
+          this.doors[i].open = updates[i].open ? 1 : 0;
+        }
+        if (broken.length && applyDoorSnapshot(this.field, this.doors)) {
+          this.onDoorsChanged?.(broken);
+        }
       }
       if (extra?.tech) {
         this.tech = extra.tech;

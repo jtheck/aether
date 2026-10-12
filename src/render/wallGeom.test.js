@@ -176,6 +176,15 @@ describe('curtain wall mesh', () => {
     assertSane(geom.iron);
     assert.equal(geom.stats.doors, 1);
     assert.equal(geom.stats.gates, 1);
+    let ironLo = Infinity;
+    let ironHi = -Infinity;
+    const iron = geom.iron.positions;
+    for (let i = 1; i < iron.length; i += 3) {
+      ironLo = Math.min(ironLo, iron[i]);
+      ironHi = Math.max(ironHi, iron[i]);
+    }
+    assert.ok(ironLo < -0.5, `bars should enter the ground, lowest y ${ironLo}`);
+    assert.ok(ironHi > style.height, `bars should run up into the wall, highest y ${ironHi}`);
     const open = buildWallGeometry([{
       closed: false,
       points: [{ x: 0, z: 0 }, { x: 16, z: 0 }],

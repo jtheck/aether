@@ -5,7 +5,7 @@ Desktop shell that loads [https://aether.garden](https://aether.garden).
 ## Prerequisites
 
 1. App ID is **5043860** (`app/steam_appid.txt`). Windows depot **5043861**. Linux depot **5043862** (`Aether.Garden Depot Linux`).
-   - Installation → Launch Options: Linux executable **`Aether`**. Arguments (WebGPU on Linux): `--enable-unsafe-webgpu --enable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE --use-angle=vulkan --ignore-gpu-blocklist --ozone-platform=x11`
+   - Installation → Launch Options: Linux executable **`Aether`**. Arguments (WebGPU on Linux): `--enable-unsafe-webgpu --enable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE,WebXRLayers,WebXRWebGPUBinding --use-angle=vulkan --ignore-gpu-blocklist --ozone-platform=x11`
 2. Optional Steam redistributables: set `STEAMWORKS_SDK` to your SDK root before `dist` / upload.
 
 ## Run locally

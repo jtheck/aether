@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildField, createField, TERRAIN } from './field.js';
+import { buildField, createField, findPath, TERRAIN } from './field.js';
+import * as fx from './fixed.js';
 import {
   DEFAULT_WALL_STYLE,
   DOOR_SPAN,
@@ -123,14 +124,100 @@ describe('wall occupancy', () => {
     assert.equal(passAt(field, 2, 2), 1);
   });
 
-  it('leaves a door passable and keeps the next edge blocked', () => {
-    const field = openField();
-    const walls = { style: DEFAULT_WALL_STYLE, runs: [{ ...run, openings: [{ d: 6, span: DOOR_SPAN, gate: 0 }] }] };
-    applyWallOccupancy(field, walls);
-    assert.equal(passAt(field, 9, 7), 1, 'south side of the door');
-    assert.equal(passAt(field, 9, 8), 1, 'north side of the door');
-    assert.equal(passAt(field, 10, 7), 0);
-    assert.equal(passAt(field, 10, 8), 0);
+  it('leaves an open door passable and a shut door blocked', () => {
+    const open = openField();
+    applyWallOccupancy(open, {
+      style: DEFAULT_WALL_STYLE,
+      runs: [{ ...run, openings: [{ d: 6, span: DOOR_SPAN, gate: 0, open: 1 }] }],
+    });
+    assert.equal(passAt(open, 9, 7), 1, 'south side of the open door');
+    assert.equal(passAt(open, 9, 8), 1, 'north side of the open door');
+    assert.equal(passAt(open, 10, 7), 0);
+    assert.equal(passAt(open, 10, 8), 0);
+
+    const shut = openField();
+    applyWallOccupancy(shut, {
+      style: DEFAULT_WALL_STYLE,
+      runs: [{ ...run, openings: [{ d: 6, span: DOOR_SPAN, gate: 0, open: 0 }] }],
+    });
+    assert.equal(passAt(shut, 9, 7), 0);
+    assert.equal(passAt(shut, 9, 8), 0);
+  });
+
+  it('opens both tiles of an open gate and none of a shut gate', () => {
+    const open = openField();
+    applyWallOccupancy(open, {
+      style: DEFAULT_WALL_STYLE,
+      runs: [{ ...run, openings: [{ d: 8, span: 8, gate: 1, open: 1 }] }],
+    });
+    assert.equal(passAt(open, 9, 7), 1);
+    assert.equal(passAt(open, 9, 8), 1);
+    assert.equal(passAt(open, 10, 7), 1);
+    assert.equal(passAt(open, 10, 8), 1);
+    assert.equal(passAt(open, 8, 7), 0);
+    assert.equal(passAt(open, 11, 8), 0);
+
+    const shut = openField();
+    applyWallOccupancy(shut, {
+      style: DEFAULT_WALL_STYLE,
+      runs: [{ ...run, openings: [{ d: 8, span: 8, gate: 1, open: 0 }] }],
+    });
+    assert.equal(passAt(shut, 9, 7), 0);
+    assert.equal(passAt(shut, 9, 8), 0);
+    assert.equal(passAt(shut, 10, 7), 0);
+    assert.equal(passAt(shut, 10, 8), 0);
+  });
+
+  it('keeps a gate open through the corner tile and a shut gate sealed', () => {
+    const square = [
+      { x: -16, z: -16 },
+      { x: 16, z: -16 },
+      { x: 16, z: 16 },
+      { x: -16, z: 16 },
+    ];
+    function court(openGate) {
+      const field = createField(1, { width: 32, height: 32 });
+      field.pass.fill(1);
+      field.activeMask.fill(1);
+      field.terrainTypes.fill(TERRAIN.GRASS);
+      field.tileType.fill(0);
+      const runs = [{ closed: true, points: square.map((p) => ({ ...p })) }];
+      placeWallOpening(runs, 12, -16, true, 8, openGate);
+      applyWallOccupancy(field, { runs });
+      return field;
+    }
+    const opened = court(true);
+    assert.equal(passAt(opened, 18, 11), 1);
+    assert.equal(passAt(opened, 18, 12), 1);
+    assert.equal(passAt(opened, 19, 11), 1, 'corner tile of the gate');
+    assert.equal(passAt(opened, 19, 12), 1, 'corner tile of the gate');
+    assert.equal(passAt(opened, 20, 12), 0, 'return wall stays shut');
+    const wx = new Int32Array(32);
+    const wy = new Int32Array(32);
+    assert.ok(findPath(
+      opened,
+      fx.fromFloat(12),
+      fx.fromFloat(-24),
+      fx.fromFloat(12),
+      fx.fromFloat(-8),
+      wx,
+      wy,
+      32,
+    ) > 0);
+
+    const shut = court(false);
+    assert.equal(passAt(shut, 18, 11), 0);
+    assert.equal(passAt(shut, 19, 12), 0);
+    assert.equal(findPath(
+      shut,
+      fx.fromFloat(0),
+      fx.fromFloat(-24),
+      fx.fromFloat(0),
+      fx.fromFloat(-8),
+      wx,
+      wy,
+      32,
+    ), 0);
   });
 
   it('releases a deleted wall without reopening solid water', () => {

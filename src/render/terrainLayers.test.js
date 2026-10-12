@@ -26,7 +26,7 @@ function grid(rows) {
   const height = rows.length;
   const width = rows[0].length;
   const types = new Uint8Array(width * height);
-  const kind = { G, D, W };
+  const kind = { G, D, W, R: TERRAIN.GRAVEL, T: TERRAIN.TILE };
   rows.forEach((row, r) => {
     const z = height - 1 - r;
     for (let x = 0; x < width; x++) types[z * width + x] = kind[row[x]];
@@ -100,6 +100,27 @@ describe('tileLayer', () => {
       }
     }
     assert.ok(junctions > 0);
+  });
+
+  it('blends tile over gravel on the pave sheet', () => {
+    const g = grid(['TTT', 'RRR']);
+    assert.deepEqual(layerAt(g, 1, 1), { sheet: ATLAS.TILE_GRAVEL, cell: CELL_FULL });
+    const edge = layerAt(g, 1, 0);
+    assert.equal(edge.sheet, ATLAS.TILE_GRAVEL);
+    assert.equal(edge.cell, terrainCornerCell(g.types, 3, 2, 1, 0, TERRAIN.TILE));
+    assert.notEqual(edge.cell, CELL_EMPTY);
+    assert.notEqual(edge.cell, CELL_FULL);
+  });
+
+  it('meets grass, dirt, and water on a hard edge', () => {
+    const besideGrass = grid(['GG', 'RR']);
+    assert.deepEqual(layerAt(besideGrass, 0, 1), { sheet: ATLAS.GRASS_DIRT, cell: CELL_FULL });
+    assert.deepEqual(layerAt(besideGrass, 0, 0), { sheet: ATLAS.TILE_GRAVEL, cell: CELL_EMPTY });
+    const pond = grid(['RRR', 'RWR', 'RRR']);
+    assert.deepEqual(layerAt(pond, 1, 1), { sheet: ATLAS.GRASS_WATER, cell: CELL_EMPTY });
+    const shore = grid(['DD', 'TT']);
+    assert.deepEqual(layerAt(shore, 0, 1), { sheet: ATLAS.GRASS_DIRT, cell: CELL_EMPTY });
+    assert.deepEqual(layerAt(shore, 0, 0), { sheet: ATLAS.TILE_GRAVEL, cell: CELL_FULL });
   });
 });
 

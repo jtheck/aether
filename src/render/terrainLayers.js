@@ -4,8 +4,10 @@
 // terrain touching its corners. Single-pair tiles use a sheet cell as-is. A
 // water tile touched by both grass and dirt (a junction) gets a composite cell
 // built from the three sheets, which share one painting and blob layout.
+// The pave set (tile over gravel) blends on its own sheets and meets this
+// set on a hard tile edge. See TERRAIN_BLEND_SETS.
 
-import { ATLAS, TERRAIN, terrainCornerCell } from '../sim/field.js';
+import { ATLAS, TERRAIN, blendSetLayer, terrainCornerCell } from '../sim/field.js';
 
 export const ATLAS_GRID = 4;
 export const CELL_FULL = 6;
@@ -40,6 +42,23 @@ export const TERRAIN_LOOK = {
 
 /** Kept small. Emissive is unshadowed, so it fills cast shadows on the grass. */
 export const TERRAIN_EMISSIVE = [0.016, 0.018, 0.012];
+/**
+ * One neutral fill for every pave sheet. Tile and gravel (and a later third)
+ * keep their contrast in the atlas art, so the blend does not step in the light.
+ */
+export const PAVE_DIFFUSE = [1.06, 1.06, 1.06];
+const PAVE_AMBIENT = 0.16;
+
+/** RGBA byte of the flat pave emissive texel (already divided by diffuse level). */
+export function paveLookBytes() {
+  const out = new Uint8Array(4);
+  for (let c = 0; c < 3; c++) {
+    const v = (TERRAIN_EMISSIVE[c] + PAVE_AMBIENT) / TERRAIN_DIFFUSE_LEVEL;
+    out[c] = Math.round(Math.min(1, Math.max(0, v)) * 255);
+  }
+  out[3] = 255;
+  return out;
+}
 export const TERRAIN_DIFFUSE_LEVEL = 0.963;
 /** Default hemi intensity. Shade under it matches the old per-ground tints. */
 const SHADE_LIGHT = 0.34;
@@ -71,6 +90,8 @@ export function junctionKey(dirtCell, grassCell) {
  * Junction tiles return SHEET_JUNCTION with `junctionKey(dirt, grass)`.
  */
 export function tileLayer(types, width, height, x, z) {
+  const side = blendSetLayer(types, width, height, x, z);
+  if (side != null) return side;
   const self = types[z * width + x];
   if (self === TERRAIN.WATER) {
     const grass = terrainCornerCell(types, width, height, x, z, TERRAIN.GRASS);

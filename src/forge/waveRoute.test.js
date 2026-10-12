@@ -7,6 +7,10 @@ import {
   collectWaveParams,
   listWaveHops,
   popWaveHop,
+  removeWaveHopAt,
+  replaceWaveHop,
+  setZoneEra,
+  setZoneWaves,
   tileToWaveFrac,
   waveFracToTile,
   waveTargetObjective,
@@ -44,6 +48,20 @@ describe('forge wave route', () => {
     assert.equal(popWaveHop(a), true);
     assert.equal(a.params.route.length, 2);
     assert.deepEqual(listWaveHops([a], [[0.1, 0.1]]), [...a.params.route, [0.1, 0.1]]);
+  });
+
+  it('edits a hop and the zone count in place', () => {
+    const obj = { id: 'gate', params: { waves: 2, era: 1, route: [[0.2, 0.2], [0.4, 0.4]] } };
+    assert.equal(replaceWaveHop(obj, 1, [0.6, 0.7]), true);
+    assert.deepEqual(obj.params.route[1], [0.6, 0.7]);
+    assert.equal(removeWaveHopAt(obj, 0), true);
+    assert.equal(obj.params.route.length, 1);
+    setZoneWaves(obj, 0);
+    assert.equal(obj.params.waves, undefined);
+    setZoneEra(obj, 5);
+    assert.equal(obj.params.era, 5);
+    setZoneEra(obj, 0);
+    assert.equal(obj.params.era, undefined);
   });
 
   it('arms a zone when the first hop lands on it', () => {

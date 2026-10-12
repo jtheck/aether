@@ -4,6 +4,19 @@
 export const WAVE_ROUTE_MAX = 3;
 export const WAVE_DEFAULT_COUNT = 3;
 
+/** Adventure attack rosters. Index matches the sim era. */
+export const WAVE_ERAS = [
+  { id: 1, label: '1 — warriors and archers' },
+  { id: 2, label: '2 — warlocks from the second group' },
+  { id: 3, label: '3 — wizards from the second group' },
+  { id: 4, label: '4 — monks, warlocks from the first group' },
+  { id: 5, label: '5 — monks plus warlocks, wizards, and shamans' },
+];
+
+export function waveHopName(index) {
+  return (index | 0) === 0 ? 'Form up' : `Stop ${index | 0}`;
+}
+
 export function tileToWaveFrac(tx, tz, width, height) {
   const mw = Math.max(1, (width | 0) - 1);
   const mh = Math.max(1, (height | 0) - 1);
@@ -53,6 +66,40 @@ export function appendWaveHop(obj, hop, { waves = 0, era = 0 } = {}) {
   if (route.length >= WAVE_ROUTE_MAX) return false;
   obj.params.route = [...route, hop];
   return true;
+}
+
+export function replaceWaveHop(obj, index, hop) {
+  const route = obj?.params?.route;
+  const i = index | 0;
+  if (!Array.isArray(route) || i < 0 || i >= route.length) return false;
+  if (!Array.isArray(hop) || hop.length < 2) return false;
+  route[i] = hop;
+  return true;
+}
+
+export function removeWaveHopAt(obj, index) {
+  const route = obj?.params?.route;
+  const i = index | 0;
+  if (!Array.isArray(route) || i < 0 || i >= route.length) return false;
+  route.splice(i, 1);
+  if (!route.length) delete obj.params.route;
+  return true;
+}
+
+export function setZoneWaves(obj, waves) {
+  if (!obj) return;
+  const n = Math.max(0, waves | 0);
+  if (!obj.params) obj.params = {};
+  if (n <= 0) delete obj.params.waves;
+  else obj.params.waves = n;
+}
+
+export function setZoneEra(obj, era) {
+  if (!obj) return;
+  const n = Math.max(0, Math.min(5, era | 0));
+  if (!obj.params) obj.params = {};
+  if (n <= 0) delete obj.params.era;
+  else obj.params.era = n;
 }
 
 export function popWaveHop(obj) {

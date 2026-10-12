@@ -46,9 +46,188 @@ const LITE_PATCHES = [
 	sg._version++;`,
   },
   {
+    // Unit meshes are omitted from the cascade fit so a walking army does not
+    // move the projection under a still tree map.
+    file: /csm-shadow-task-hooks\.js$/,
+    from: `	for (const mesh of casterMeshes) {
+		const ti = mesh.thinInstances;`,
+    to: `	for (const mesh of casterMeshes) {
+		if (mesh._shadowDynamic) continue;
+		const ti = mesh.thinInstances;`,
+  },
+  {
+    // Dynamic casters (units) and still casters (trees, buildings) get their
+    // own depth array. The receiver takes the darker of the two, so a pose
+    // does not clear the forest and a zoom does not drop unit shadows.
+    file: /csm-shadow-task-hooks\.js$/,
+    from: `		for (const mesh of casterMeshes) {
+			const material = mesh.material;
+			if (material && i <= (mesh._shadowMaxCascade ?? i)) addMeshToTask(task, mesh, { material: getNoColorView(material, materialViews) });
+		}
+		tasks.push(task);
+		cameras.push(camera);
+	}
+	const compositeTask = {
+		record() {
+			for (const t of tasks) t.record();
+		},
+		execute() {
+			let draws = 0;
+			for (const t of tasks) draws += t.execute?.() ?? 0;
+			return draws;
+		},
+		dispose() {
+			for (const t of tasks) t.dispose();
+		}
+	};`,
+    to: `		for (const mesh of casterMeshes) {
+			const material = mesh.material;
+			if (material && mesh._shadowDynamic && i <= (mesh._shadowMaxCascade ?? i)) addMeshToTask(task, mesh, { material: getNoColorView(material, materialViews) });
+		}
+		tasks.push(task);
+		cameras.push(camera);
+	}
+	const stillTasks = [];
+	for (let i = 0; i < n; i++) {
+		const layerView = sg._stillDepthTexture.createView({
+			dimension: "2d",
+			baseArrayLayer: i,
+			arrayLayerCount: 1
+		});
+		const rt = {
+			_descriptor: {
+				size: { width: cfg._mapSize, height: cfg._mapSize },
+				dFormat: "depth32float",
+				depthClearValue: 1,
+				depthCompare: "less-equal",
+				samples: 1
+			},
+			_colorTexture: null,
+			_colorView: null,
+			_depthTexture: sg._stillDepthTexture,
+			_depthView: layerView,
+			_width: cfg._mapSize,
+			_height: cfg._mapSize,
+			_eager: true,
+			_ownsDepthTexture: false
+		};
+		const stillTask = createRenderTask({
+			name: \`csmStill\${i}\`,
+			rt,
+			clr: true,
+			cam: cameras[i],
+			autoMirror: false,
+			_skipClusteredLights: true
+		}, engine, scene);
+		for (const mesh of casterMeshes) {
+			const material = mesh.material;
+			if (material && !mesh._shadowDynamic && i <= (mesh._shadowMaxCascade ?? i)) addMeshToTask(stillTask, mesh, { material: getNoColorView(material, materialViews) });
+		}
+		stillTasks.push(stillTask);
+	}
+	const compositeTask = {
+		record() {
+			for (const t of tasks) t.record();
+			for (const t of stillTasks) t.record();
+		},
+		execute() {
+			let draws = 0;
+			let staticVersion = 0;
+			// The list closed over at task creation is the boot set. Trees and
+			// buildings join later, and a still map keyed off the boot set stays
+			// stale until the camera moves.
+			const stillCasters = sg._shadowTaskState?._casterMeshes ?? casterMeshes;
+			for (const mesh of stillCasters) {
+				if (mesh._shadowDynamic) continue;
+				const ti = mesh.thinInstances;
+				staticVersion += (mesh.worldMatrixVersion || 0) + ((ti && ti._version) || 0);
+			}
+			const camKey = _cameraChangeKey(scene.camera);
+			if (sg._stillCamKey !== camKey || sg._stillCasters !== stillCasters || sg._stillStaticVersion !== staticVersion) {
+				sg._stillCamKey = camKey;
+				sg._stillCasters = stillCasters;
+				sg._stillStaticVersion = staticVersion;
+				for (const t of stillTasks) draws += t.execute?.() ?? 0;
+			}
+			for (const t of tasks) draws += t.execute?.() ?? 0;
+			return draws;
+		},
+		dispose() {
+			for (const t of tasks) t.dispose();
+			for (const t of stillTasks) t.dispose();
+		}
+	};`,
+  },
+  {
+    file: /csm-shadow-task-hooks\.js$/,
+    from: '		_cascadeScratch: _createCascadeScratch(n)\n	};',
+    to: '		_cascadeScratch: _createCascadeScratch(n),\n		_stillTasks: stillTasks\n	};',
+  },
+  {
+    file: /csm-shadow-task-hooks\.js$/,
+    from: '	if (drop.size) for (const task of tasks) _dropTaskMeshes(task, drop);',
+    to: '	if (drop.size) {\n		for (const task of tasks) _dropTaskMeshes(task, drop);\n		for (const task of state._stillTasks ?? []) _dropTaskMeshes(task, drop);\n	}',
+  },
+  {
+    file: /csm-shadow-task-hooks\.js$/,
+    from: `			for (let c = 0; c < tasks.length && c <= (maxCascade ?? c); c++) {
+				const task = tasks[c];
+				_enableTaskMeshPopulation(task);
+				task._pendingMeshes.push({
+					mesh,
+					material: view ?? material
+				});
+			}`,
+    to: `			const bucket = mesh._shadowDynamic ? tasks : (state._stillTasks ?? tasks);
+			for (let c = 0; c < bucket.length && c <= (maxCascade ?? c); c++) {
+				const task = bucket[c];
+				_enableTaskMeshPopulation(task);
+				task._pendingMeshes.push({
+					mesh,
+					material: view ?? material
+				});
+			}`,
+  },
+  {
     file: /csm-directional-shadow-generator\.js$/,
     from: '_shadowUBO: createUniformBuffer(engine, /* @__PURE__ */ new Float32Array(80)),',
     to: '_shadowUBO: createUniformBuffer(engine, /* @__PURE__ */ new Float32Array(96)),',
+  },
+  {
+    // Second depth array for trees and buildings. Units keep _depthTexture.
+    file: /csm-directional-shadow-generator\.js$/,
+    from: `	const depthTexture = device.createTexture({
+		size: {
+			width: mapSize,
+			height: mapSize,
+			depthOrArrayLayers: numCascades
+		},
+		format: "depth32float",
+		usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+	});`,
+    to: `	const depthTexture = device.createTexture({
+		size: {
+			width: mapSize,
+			height: mapSize,
+			depthOrArrayLayers: numCascades
+		},
+		format: "depth32float",
+		usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+	});
+	const stillDepthTexture = device.createTexture({
+		size: {
+			width: mapSize,
+			height: mapSize,
+			depthOrArrayLayers: numCascades
+		},
+		format: "depth32float",
+		usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+	});`,
+  },
+  {
+    file: /csm-directional-shadow-generator\.js$/,
+    from: '		_depthTexture: depthTexture,',
+    to: '		_depthTexture: depthTexture,\n		_stillDepthTexture: stillDepthTexture,',
   },
   {
     file: /csm-shadow-fragment-core\.js$/,
@@ -59,6 +238,65 @@ const LITE_PATCHES = [
     file: /csm-shadow-fragment-core\.js$/,
     from: 'diff=csmInfo${suffix}.viewFrustumZ[i]-viewZ;',
     to: 'diff=csmInfo${suffix}.viewFrustumZ[i]-(csmInfo${suffix}.fitView*worldPos).z;',
+  },
+  {
+    // Tree/building depth. Sampled with the same cascade fit as the unit map.
+    file: /csm-shadow-fragment-core\.js$/,
+    from: `		}, {
+			_name: \`csmInfo\${suffix}\`,
+			_type: { _kind: "uniform-buffer" },
+			_group: "shadow",
+			_visibility: STAGE_FRAGMENT
+		});`,
+    to: `		}, {
+			_name: \`csmInfo\${suffix}\`,
+			_type: { _kind: "uniform-buffer" },
+			_group: "shadow",
+			_visibility: STAGE_FRAGMENT
+		}, {
+			_name: \`csmStillTex\${suffix}\`,
+			_type: {
+				_kind: "texture",
+				_textureType: "texture_depth_2d_array",
+				_sampleType: "depth"
+			},
+			_group: "shadow",
+			_visibility: STAGE_FRAGMENT
+		});`,
+  },
+  {
+    file: /csm-shadow-fragment-core\.js$/,
+    from: 'sh/=144.0;sh=mix(csmInfo${suffix}.shadowsInfo.x,1.0,sh);return computeFallOffCsm${suffix}(sh,clipSpace.xy,csmInfo${suffix}.shadowsInfo.w);',
+    to: 'var stillSh=0.0;stillSh+=uvw0.x*uvw0.y*textureSampleCompareLevel(csmStillTex${suffix},csmComp${suffix},base+vec2<f32>(u[0],v[0]),layer,depthRef);stillSh+=uvw1.x*uvw0.y*textureSampleCompareLevel(csmStillTex${suffix},csmComp${suffix},base+vec2<f32>(u[1],v[0]),layer,depthRef);stillSh+=uvw2.x*uvw0.y*textureSampleCompareLevel(csmStillTex${suffix},csmComp${suffix},base+vec2<f32>(u[2],v[0]),layer,depthRef);stillSh+=uvw0.x*uvw1.y*textureSampleCompareLevel(csmStillTex${suffix},csmComp${suffix},base+vec2<f32>(u[0],v[1]),layer,depthRef);stillSh+=uvw1.x*uvw1.y*textureSampleCompareLevel(csmStillTex${suffix},csmComp${suffix},base+vec2<f32>(u[1],v[1]),layer,depthRef);stillSh+=uvw2.x*uvw1.y*textureSampleCompareLevel(csmStillTex${suffix},csmComp${suffix},base+vec2<f32>(u[2],v[1]),layer,depthRef);stillSh+=uvw0.x*uvw2.y*textureSampleCompareLevel(csmStillTex${suffix},csmComp${suffix},base+vec2<f32>(u[0],v[2]),layer,depthRef);stillSh+=uvw1.x*uvw2.y*textureSampleCompareLevel(csmStillTex${suffix},csmComp${suffix},base+vec2<f32>(u[1],v[2]),layer,depthRef);stillSh+=uvw2.x*uvw2.y*textureSampleCompareLevel(csmStillTex${suffix},csmComp${suffix},base+vec2<f32>(u[2],v[2]),layer,depthRef);sh/=144.0;stillSh/=144.0;sh=mix(csmInfo${suffix}.shadowsInfo.x,1.0,sh);stillSh=mix(csmInfo${suffix}.shadowsInfo.x,1.0,stillSh);let dyn=computeFallOffCsm${suffix}(sh,clipSpace.xy,csmInfo${suffix}.shadowsInfo.w);let still=computeFallOffCsm${suffix}(stillSh,clipSpace.xy,csmInfo${suffix}.shadowsInfo.w);return min(dyn,still);',
+  },
+  {
+    file: /material-shadow-bindings\.js$/,
+    from: `			}, {
+				binding: entries.length + 2,
+				resource: { buffer: gen._shadowUBO }
+			});`,
+    to: `			}, {
+				binding: entries.length + 2,
+				resource: { buffer: gen._shadowUBO }
+			}, {
+				binding: entries.length + 3,
+				resource: gen._stillDepthTexture.createView()
+			});`,
+  },
+  {
+    file: /pbr-geometry-view-.*\.js$/,
+    from: `			entries.push({
+				binding: b++,
+				resource: { buffer: sg._shadowUBO }
+			});`,
+    to: `			entries.push({
+				binding: b++,
+				resource: { buffer: sg._shadowUBO }
+			});
+			entries.push({
+				binding: b++,
+				resource: sg._stillDepthTexture.createView()
+			});`,
   },
   {
     // Standard materials only compile shadow sampling when some mesh in that
@@ -119,7 +357,7 @@ function liteGameplayPatches() {
   return {
     name: 'aether-lite-patches',
     setup(build) {
-      build.onLoad({ filter: /csm-shadow-task-hooks\.js$|csm-shadow-fragment-core\.js$|csm-directional-shadow-generator\.js$|standard-group-builder\.js$|standard-template\.js$|standard-renderable\.js$|xr-session\.js$/ }, (args) => {
+      build.onLoad({ filter: /csm-shadow-task-hooks\.js$|csm-shadow-fragment-core\.js$|csm-directional-shadow-generator\.js$|standard-group-builder\.js$|standard-template\.js$|standard-renderable\.js$|xr-session\.js$|material-shadow-bindings\.js$|pbr-geometry-view-.*\.js$/ }, (args) => {
         const patches = LITE_PATCHES.filter((p) => p.file.test(args.path));
         if (!patches.length) return null;
         let src = readFileSync(args.path, 'utf8');

@@ -5,6 +5,7 @@ import {
   addToScene,
   cloneTransformNode,
   createCylinder,
+  createShaderMaterial,
   createStandardMaterial,
   flushThinInstances,
   markMaterialUboDirty,
@@ -38,6 +39,13 @@ const FOOT_CLEARANCE = 0.06;
 const COLLAR_Y_SCALE = 0.32;
 const COLLAR_Y_LIFT = 0.9;
 const COLLAR_ALPHA = 0.82;
+/**
+ * Opaque pass order. Terrain stays at the default (100). The selection ring
+ * blends next, without writing depth, and the building draws after it so the
+ * model covers the ring instead of the near arc painting over the walls.
+ */
+const COLLAR_RENDER_ORDER = 110;
+const BUILDING_RENDER_ORDER = 120;
 /** Unfinished sites sit smaller until villagers raise them. */
 const SITE_SCALE = 0.58;
 /** First work — a small pop off the foundation. */
@@ -171,12 +179,37 @@ function applyUnlit(mat) {
 }
 
 function makeCollarMaterial() {
-  const mat = createStandardMaterial();
-  mat.diffuseColor = [0.35, 0.95, 1];
-  mat.emissiveColor = [0.2, 0.55, 0.7];
-  mat.alpha = COLLAR_ALPHA;
-  applyUnlit(mat);
-  return mat;
+  // Blended, but kept in the opaque bucket (needAlphaBlending: false) so it
+  // draws before the building. Depth is not written, so the building test
+  // still sees the ground and replaces every ring pixel it covers.
+  return createShaderMaterial({
+    name: 'building-selection-collar',
+    attributes: ['position'],
+    uniforms: ['world', 'viewProjection'],
+    needAlphaBlending: false,
+    blend: {
+      color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+      alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+    },
+    depthWrite: false,
+    backFaceCulling: false,
+    vertexSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+};
+@vertex fn mainVertex(input: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  let instanceWorld = mat4x4<f32>(input.world0, input.world1, input.world2, input.world3);
+  let wp = (shaderSystem.world * instanceWorld) * vec4<f32>(input.position, 1.0);
+  out.position = shaderSystem.viewProjection * wp;
+  return out;
+}`,
+    fragmentSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+};
+@fragment fn mainFragment(_input: VertexOutput) -> @location(0) vec4<f32> {
+  return vec4<f32>(0.35, 0.95, 1.0, ${COLLAR_ALPHA});
+}`,
+  });
 }
 
 function makeGhostMaterial() {
@@ -247,6 +280,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
     const parts = await loadBakedUnitMeshParts(engine, SELECTION_COLLAR_URL);
     for (const mesh of parts) {
       mesh.material = makeCollarMaterial();
+      mesh.renderOrder = COLLAR_RENDER_ORDER;
       mesh.pickable = false;
       const matrices = new Float32Array(16);
       const colors = new Float32Array([0.35, 0.95, 1, COLLAR_ALPHA]);
@@ -262,12 +296,8 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
   } catch (err) {
     console.warn('[buildings] selection collar failed; using cyan disc', err);
     const mesh = createCylinder(engine, { diameter: 1, height: 0.2, tessellation: 32 });
-    const mat = createStandardMaterial();
-    mat.diffuseColor = [0.2, 0.95, 1];
-    mat.emissiveColor = [0.15, 0.7, 0.85];
-    mat.alpha = COLLAR_ALPHA;
-    applyUnlit(mat);
-    mesh.material = mat;
+    mesh.material = makeCollarMaterial();
+    mesh.renderOrder = COLLAR_RENDER_ORDER;
     mesh.pickable = false;
     const matrices = new Float32Array(16);
     setThinInstances(mesh, matrices, 1);
@@ -474,6 +504,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
       const src = parts[i];
       // Clone so the unused template keeps its own (unbound) thin-instance state.
       const mesh = cloneTransformNode(src);
+      mesh.renderOrder = BUILDING_RENDER_ORDER;
       mesh.pickable = USE_GPU_PICK;
       const isTeamColor = isTeamColorMaterial(mesh.material);
       const colors = isTeamColor ? teamColors : whiteColors;
@@ -649,14 +680,17 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
     const all = list ?? [];
     for (let gi = 0; gi < all.length; gi++) {
       const b = all[gi];
+      // Display lists drop fogged and dead buildings, so the loop index is not
+      // the sim slot. Clicks have to land on the building that was actually hit.
+      const index = Number.isInteger(b.simIndex) ? b.simIndex : gi;
       const key = buildingKey(b.type, b.x, b.z);
       seen.add(key);
       let s = visuals.get(key);
       if (!s) {
-        s = makeVisual(b, gi);
+        s = makeVisual(b, index);
         visuals.set(key, s);
       } else {
-        s.globalIndex = gi;
+        s.globalIndex = index;
         s.x = b.x;
         s.z = b.z;
         s.yaw = b.yaw ?? 0;

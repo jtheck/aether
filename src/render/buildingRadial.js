@@ -60,6 +60,13 @@ const MENU_Y = 2.4;
 const MENU_RING_OUTER = 18.25;
 const MENU_RING_INNER = 17.55;
 const MENU_RING_H = 0.35;
+/**
+ * Transparent draws sort by mesh origin. The outer ring is one mesh, so its
+ * far arc would paint over the pads for half the orbit. Shift the origin
+ * back along the normal (local +Y) and place the mesh that far behind so the
+ * ring still sits on the disc but sorts behind every pad and icon.
+ */
+const RING_SORT_BIAS = 4;
 const RIM_R = (MENU_RING_OUTER + MENU_RING_INNER) * 0.5;
 const PAD_OUTER = 4.68;
 const PAD_INNER = 3.06;
@@ -202,8 +209,9 @@ function createAnnulusMesh(engine, name, opts = {}) {
   const segments = opts.segments ?? 48;
   const ro = 1;
   const ri = Math.max(0.05, Math.min(0.95, innerFrac));
-  const y0 = -h * 0.5;
-  const y1 = h * 0.5;
+  const yShift = opts.yOffset ?? 0;
+  const y0 = -h * 0.5 + yShift;
+  const y1 = h * 0.5 + yShift;
 
   /** @type {number[]} */
   const positions = [];
@@ -504,6 +512,58 @@ function writeFacingMatrix(matrices, slot, x, y, z, rx, ry, rz, ux, uy, uz, fx, 
 }
 
 /**
+ * Lite sorts transparent draws by mesh.worldMatrix translation, and standard
+ * materials compose `mesh.world * instanceWorld`. An icon mesh left at the
+ * origin sorts there and slips behind its pad for half the camera orbit.
+ * Park the mesh on the visible anchor (in front of the pad). The bounds
+ * offset is a model-space instance translation so the mesh still lands where
+ * the old full instance matrix put it.
+ */
+function poseIconLayer(mesh, matrices, anchorX, anchorY, anchorZ, scale, rx, ry, rz, ux, uy, uz, fx, fy, fz, cx, cy, cz) {
+  const at = radialIconAnchor(
+    anchorX, anchorY, anchorZ,
+    rx, ry, rz, fx, fy, fz,
+    scale, cx, cy, cz,
+  );
+  if (mesh.position) {
+    mesh.position.x = anchorX;
+    mesh.position.y = anchorY;
+    mesh.position.z = anchorZ;
+  }
+  if (mesh.scaling) {
+    mesh.scaling.x = scale;
+    mesh.scaling.y = scale;
+    mesh.scaling.z = scale;
+  }
+  const q = quatFromBasis(rx, ry, rz, ux, uy, uz, fx, fy, fz);
+  const rq = mesh.rotationQuaternion;
+  if (rq) {
+    if (typeof rq.set === 'function') rq.set(q.x, q.y, q.z, q.w);
+    else {
+      rq.x = q.x;
+      rq.y = q.y;
+      rq.z = q.z;
+      rq.w = q.w;
+    }
+  }
+  mesh.markLocalDirty?.();
+  const inv = scale !== 0 ? 1 / scale : 1;
+  const dx = at.x - anchorX;
+  const dy = at.y - anchorY;
+  const dz = at.z - anchorZ;
+  writeFacingMatrix(
+    matrices, 0,
+    (dx * rx + dy * ry + dz * rz) * inv,
+    (dx * ux + dy * uy + dz * uz) * inv,
+    (dx * fx + dy * fy + dz * fz) * inv,
+    1, 0, 0,
+    0, 1, 0,
+    0, 0, 1,
+    1,
+  );
+}
+
+/**
  * Quaternion from orthonormal basis columns (X, Y, Z).
  * @returns {{ x: number, y: number, z: number, w: number }}
  */
@@ -670,6 +730,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     inner: MENU_RING_INNER / MENU_RING_OUTER,
     height: MENU_RING_H / MENU_RING_OUTER,
     segments: 64,
+    yOffset: RING_SORT_BIAS,
   });
   menuRing.material = ringMat;
   menuRing.pickable = false;
@@ -1527,28 +1588,14 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   function poseIcon(type, iconX, iconY, iconZ, iconScale, hovered) {
     const batch = icons.get(type);
     if (!batch) return;
-    const at = radialIconAnchor(
-      iconX,
-      iconY,
-      iconZ,
-      -bx,
-      0,
-      -bz,
-      -hx,
-      0,
-      -hz,
-      iconScale,
-      batch.cx ?? 0,
-      batch.cy ?? 0,
-      batch.cz ?? 0,
-    );
     for (const layer of batch.layers) {
-      writeFacingMatrix(
+      poseIconLayer(
+        layer.mesh,
         layer.matrices,
-        0,
-        at.x,
-        at.y,
-        at.z,
+        iconX,
+        iconY,
+        iconZ,
+        iconScale,
         -bx,
         0,
         -bz,
@@ -1558,7 +1605,9 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
         -hx,
         0,
         -hz,
-        iconScale,
+        batch.cx ?? 0,
+        batch.cy ?? 0,
+        batch.cz ?? 0,
       );
       setThinInstanceCount(layer.mesh, 1);
       flushThinInstances(layer.mesh);
@@ -1703,13 +1752,17 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       return;
     }
     const s = hudScale;
-    // Annulus mesh outerR=1 → world outer = MENU_RING_OUTER * s
+    // Annulus mesh outerR=1 → world outer = MENU_RING_OUTER * s.
+    // Origin sits RING_SORT_BIAS back along the normal so this mesh sorts
+    // behind the pads; the vertex shift puts the band back on the disc.
+    const ringScale = MENU_RING_OUTER * s;
+    const ringBack = RING_SORT_BIAS * ringScale;
     placeMeshOriented(
       menuRing,
-      centerX,
-      centerY,
-      centerZ,
-      MENU_RING_OUTER * s,
+      centerX - nx * ringBack,
+      centerY - ny * ringBack,
+      centerZ - nz * ringBack,
+      ringScale,
       bx,
       by,
       bz,

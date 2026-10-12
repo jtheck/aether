@@ -4,6 +4,7 @@
 import * as fx from './fixed.js';
 import { TILE_SIZE_F, snapToPassable } from './field.js';
 import { UNIT, getUnitDef, isMechanical } from './unitTypes.js';
+import { unitAttackDamage } from './namedUnit.js';
 import { clearPath } from './path.js';
 import { clearEngagement } from './engagement.js';
 import { ORDER } from './world.js';
@@ -256,7 +257,7 @@ export function startMonkLob(w, field, monk, victim) {
   }
 
   const def = getUnitDef(UNIT.MONK);
-  const dmg = Math.max(1, Math.round(def.attackDamage * MONK_KICK_DAMAGE_MUL));
+  const dmg = unitAttackDamage(w, monk, def.attackDamage, MONK_KICK_DAMAGE_MUL);
   applyDamage(w, victim, dmg, monk);
 
   w.abilityCd[monk] = MONK_KICK_COOLDOWN;

@@ -1,8 +1,8 @@
 // Curtain walls as polylines snapped to tile corners.
 // The mesh is extruded in render/wallGeom.js — castle ashlar or dungeon brick.
-// A run blocks every tile its centerline crosses. Doors (one tile) and gates
-// (two) leave that span open. The forge stamps this into field.pass; a match
-// does not draw or block on walls yet.
+// A run blocks every tile its centerline crosses. An open door (one tile) and an
+// open gate (two) leave that span open. A shut door or shut gate stays blocked.
+// fieldFromGarden stamps that into field.pass, and the match draws the same runs.
 
 import { TERRAIN, TILE_SIZE_F, worldHalfFFromField, worldHalfZFFromField } from './field.js';
 import { SCENERY, rockFootprintRadiusForStock } from './scenery.js';
@@ -389,6 +389,12 @@ function runSpans(run) {
   return { spans, perim: arc };
 }
 
+/** World xz of an opening's center along its run. */
+export function openingWorldPoint(run, opening) {
+  const { spans, perim } = runSpans(run);
+  return pointAtArc(spans, perim, !!run?.closed, Number(opening?.d) || 0);
+}
+
 function pointAtArc(spans, perim, closed, arc) {
   let d = arc;
   if (closed && perim > 0) {
@@ -549,31 +555,28 @@ export function removeNearestOpening(runs, x, z, maxDist = OPENING_REACH) {
   return true;
 }
 
-function pointInOpening(arc, opening, closed, perim) {
-  const half = opening.span * 0.5;
-  if (!closed || perim <= 0) return Math.abs(arc - opening.d) <= half + 1e-4;
-  let gap = Math.abs(arc - opening.d);
-  if (gap > perim * 0.5) gap = perim - gap;
-  return gap <= half + 1e-4;
+/** Only an open door or an open gate is a way through. */
+function passableOpening(opening) {
+  return !!opening?.open;
 }
 
-function intervalOpen(a0, a1, openings, closed, perim) {
-  if (!openings?.length) return false;
-  if (a1 - a0 < 1e-3) {
-    const mid = (a0 + a1) * 0.5;
-    for (const opening of openings) {
-      if (pointInOpening(mid, opening, closed, perim)) return true;
-    }
-    return false;
+/** How much of [a0, a1] sits inside this opening, including across a closed seam. */
+function coveredByOpening(a0, a1, opening, closed, perim) {
+  const half = opening.span * 0.5;
+  const bands = closed && perim > 0
+    ? [
+      [opening.d - half, opening.d + half],
+      [opening.d - half + perim, opening.d + half + perim],
+      [opening.d - half - perim, opening.d + half - perim],
+    ]
+    : [[opening.d - half, opening.d + half]];
+  let total = 0;
+  for (let i = 0; i < bands.length; i++) {
+    const c0 = a0 > bands[i][0] ? a0 : bands[i][0];
+    const c1 = a1 < bands[i][1] ? a1 : bands[i][1];
+    if (c1 > c0) total += c1 - c0;
   }
-  const lo = a0 + 1e-3;
-  const hi = a1 - 1e-3;
-  for (const opening of openings) {
-    if (pointInOpening(lo, opening, closed, perim) && pointInOpening(hi, opening, closed, perim)) {
-      return true;
-    }
-  }
-  return false;
+  return total;
 }
 
 function segmentOverlapT(ax, az, bx, bz, minX, minZ, maxX, maxZ) {
@@ -615,6 +618,11 @@ function markRunBlocked(field, mask, run) {
   const openings = run.openings || [];
   const halfX = worldHalfFFromField(field);
   const halfZ = worldHalfZFFromField(field);
+  const n = width * height;
+  const hole = new Uint8Array(n);
+  const solid = new Uint8Array(n);
+  // Half a tile of doorway is enough to use that tile. A corner touch is not.
+  const minOpen = TILE_SIZE_F * 0.5 - 0.05;
   for (const seg of spans) {
     if (seg.len < 1e-4) continue;
     const minX = Math.min(seg.a.x, seg.b.x);
@@ -633,12 +641,23 @@ function markRunBlocked(field, mask, run) {
         const z0 = tz * TILE_SIZE_F - halfZ;
         const hit = segmentOverlapT(seg.a.x, seg.a.z, seg.b.x, seg.b.z, x0, z0, x0 + TILE_SIZE_F, z0 + TILE_SIZE_F);
         if (!hit) continue;
+        const len = (hit[1] - hit[0]) * seg.len;
+        if (len < 0.35) continue;
         const a0 = seg.arc + hit[0] * seg.len;
         const a1 = seg.arc + hit[1] * seg.len;
-        if (intervalOpen(a0, a1, openings, run.closed, perim)) continue;
-        mask[tz * width + tx] = 1;
+        let covered = 0;
+        for (let o = 0; o < openings.length; o++) {
+          if (!passableOpening(openings[o])) continue;
+          covered += coveredByOpening(a0, a1, openings[o], run.closed, perim);
+        }
+        const i = tz * width + tx;
+        if (covered >= minOpen || (len >= 0.75 && covered >= len - 0.05)) hole[i] = 1;
+        else solid[i] = 1;
       }
     }
+  }
+  for (let i = 0; i < n; i++) {
+    if (!hole[i] && solid[i]) mask[i] = 1;
   }
 }
 
@@ -675,9 +694,11 @@ function canRelease(field, i) {
 }
 
 /**
- * Stamp wall runs into field.pass. Tiles a centerline crosses become blocked;
- * a door or gate clears the tiles of that span. Previous wall tiles are
- * released unless water, the table rim, or a rock still owns them.
+ * Stamp wall runs into field.pass. Tiles a centerline crosses become blocked.
+ * An open door or open gate clears every tile that span covers — including a
+ * corner tile the return wall also touches. A shut door or shut gate stays blocked.
+ * Previous wall tiles are released unless water, the table rim, or a rock still
+ * owns them.
  */
 export function applyWallOccupancy(field, walls) {
   if (!field?.pass) return field;

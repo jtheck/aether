@@ -3,6 +3,7 @@
 
 import * as fx from './fixed.js';
 import { getUnitDef, UNIT } from './unitTypes.js';
+import { unitAttackDamage } from './namedUnit.js';
 import { PROJECTILE, getProjectileDef } from './projectileTypes.js';
 import { spawnProjectile } from './projectiles.js';
 import { FROG_COUNT, FROG_PLAGUE_COOLDOWN, spawnFrogPlague } from './frogs.js';
@@ -17,7 +18,6 @@ import {
   HOLY_ARMOR_COOLDOWN,
   applyAreaHolyArmor,
   holyArmorRadius,
-  holyArmorShieldAmount,
   pushSeparatedHolyArmorFx,
 } from './holyArmor.js';
 import {
@@ -253,7 +253,6 @@ function castWarlockFireballGroup(w, casters, aimX, aimY) {
   if (!ready.length) return false;
   const rank = compoundRank(ready.length);
   const def = getUnitDef(UNIT.WARLOCK);
-  const damage = Math.max(1, Math.round(def.attackDamage * 1.35));
   const speed = fireballSpeedForRank(rank);
   const scatter = rank > 1 ? 0 : undefined;
   const centroid = groupCentroid(w, ready);
@@ -272,7 +271,7 @@ function castWarlockFireballGroup(w, casters, aimX, aimY) {
       y: w.py[i],
       aimX: aimed.aimX,
       aimY: aimed.aimY,
-      damage,
+      damage: unitAttackDamage(w, i, def.attackDamage, 1.35),
       speed,
       power: rank,
       aimScatter: scatter,
@@ -299,7 +298,7 @@ function castWarlockFireballGroup(w, casters, aimX, aimY) {
       y: w.py[i],
       aimX: aimed.aimX + fx.mul(perpX, lateral),
       aimY: aimed.aimY + fx.mul(perpY, lateral),
-      damage,
+      damage: unitAttackDamage(w, i, def.attackDamage, 1.35),
       speed,
       power: rank,
       aimScatter: 0,
@@ -324,7 +323,6 @@ function castPlagueOfFrogsGroup(w, casters, aimX, aimY) {
   }
   const rank = compoundRank(ready.length);
   const def = getUnitDef(UNIT.SHAMAN);
-  const damage = Math.max(1, Math.round(def.attackDamage * 1.1));
   const total = FROG_COUNT + (rank - 1) * FROG_EXTRA_EACH;
   const rangeScale = FROG_RANGE_MUL[rank - 1];
   let spawned = 0;
@@ -341,7 +339,7 @@ function castPlagueOfFrogsGroup(w, casters, aimX, aimY) {
       y: w.py[i],
       aimX,
       aimY,
-      damage,
+      damage: unitAttackDamage(w, i, def.attackDamage, 1.1),
       count: share,
       rangeScale,
     });
@@ -356,18 +354,19 @@ function castWizardLightningGroup(w, field, casters, aimX, aimY) {
   if (!ready.length || !field) return false;
   const rank = compoundRank(ready.length);
   const def = getUnitDef(UNIT.WIZARD);
-  const damage = Math.max(1, Math.round(def.attackDamage * 4.5));
   const owner = w.owner[ready[0]];
 
   const basis = aimDir(w.px[ready[0]], w.py[ready[0]], aimX, aimY);
   for (let n = 0; n < rank; n++) {
     const branched = stormBranchAim(aimX, aimY, n, basis.x, basis.y);
+    const source = ready[n % ready.length];
+    const damage = unitAttackDamage(w, source, def.attackDamage, 4.5);
     if (n === 0) {
       deliverLightningStrike(
         w,
         field,
         owner,
-        ready[0],
+        source,
         branched.x,
         branched.y,
         damage,
@@ -378,7 +377,7 @@ function castWizardLightningGroup(w, field, casters, aimX, aimY) {
     queueLightningStrike(w, {
       strikeAt: w.tick + n * LIGHTNING_FOLLOWUP_GAP,
       owner,
-      source: ready[n % ready.length],
+      source,
       aimX: branched.x,
       aimY: branched.y,
       damage,
@@ -393,11 +392,11 @@ function castHolyArmorGroup(w, casters) {
   const ready = filterType(w, casters, UNIT.PRIEST);
   if (!ready.length) return false;
   const rank = compoundRank(ready.length);
-  const amount = holyArmorShieldAmount(UNIT.PRIEST);
   const radius = holyArmorRadius(rank);
   let applied = 0;
   for (let k = 0; k < ready.length; k++) {
     const i = ready[k];
+    const amount = Math.max(8, unitAttackDamage(w, i, getUnitDef(UNIT.PRIEST).attackDamage, 1.8));
     applied += applyAreaHolyArmor(w, w.owner[i], w.px[i], w.py[i], {
       radius,
       amount,

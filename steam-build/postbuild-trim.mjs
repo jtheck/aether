@@ -94,7 +94,7 @@ Categories=Game;
   const manifestPath = path.join(distRoot, 'package.nw', 'package.json');
   if (fs.existsSync(manifestPath)) {
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    const extra = '--no-sandbox --disable-gpu-sandbox --ozone-platform=x11 --enable-unsafe-webgpu --enable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE --use-angle=vulkan --ignore-gpu-blocklist';
+    const extra = '--no-sandbox --disable-gpu-sandbox --ozone-platform=x11 --enable-unsafe-webgpu --enable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE,WebXRLayers,WebXRWebGPUBinding --use-angle=vulkan --ignore-gpu-blocklist';
     const args = typeof manifest['chromium-args'] === 'string' ? manifest['chromium-args'] : '';
     if (!args.includes('--enable-unsafe-webgpu')) {
       manifest['chromium-args'] = (args + ' ' + extra).trim();

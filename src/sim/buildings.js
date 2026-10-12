@@ -939,8 +939,8 @@ function tileKeepsSlow(field, i) {
 }
 
 /**
- * Open a ruined building's tiles. Never unblocks water / table / rocks / other
- * live buildings. Incremental — does not restamp the whole map.
+ * Open a ruined building's tiles. Never unblocks water / table / walls / rocks /
+ * other live buildings. Incremental — does not restamp the whole map.
  */
 export function clearStructureOccupancyAt(field, typeId, xFixed, zFixed, opts = {}) {
   if (!field?.pass || !getBuildingFootprint(typeId)) return;
@@ -953,6 +953,7 @@ export function clearStructureOccupancyAt(field, typeId, xFixed, zFixed, opts = 
         !(field.activeMask && field.activeMask[i] === 0)
         && !isSolidWater(field, i)
         && !field.tableEdge?.[i]
+        && !field.wallBlock?.[i]
         && !rockCovers(field, tx, tz)
         && !otherLiveBuildingCovers(field, buildings, i, exceptIndex, coordsAreFloat)
       ) {
@@ -1697,6 +1698,7 @@ export function serializeBuildings(buildings) {
       (b.rallyHop2Order | 0) === ORDER.ATTACK_MOVE ? ORDER.ATTACK_MOVE : ORDER.MOVE,
     prodPaused: b.prodPaused | 0,
     built: b.built != null ? b.built | 0 : 1,
+    villageSpawnAcc: b.villageSpawnAcc | 0,
     buildProgress: b.buildProgress | 0,
     buildTime: b.buildTime != null ? b.buildTime | 0 : getBuildTime(b.type),
     tracks: (b.tracks ?? []).map((t) => ({

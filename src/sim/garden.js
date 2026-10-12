@@ -1,13 +1,15 @@
 // .garden v4 — table + terrain + optional scenery / doodads / backdrops / placements.
+// Optional `mt` is the map type (onevsone, teams, koth, adventure). Missing means
+// the old generator, which dries every 1v1 and team start.
 // v3 files still decode (no scenery / doodads / backdrops / placements).
 // Optional `dd` is a doodadType RLE (visual-only stamps).
 // Optional `bd` is a list of off-board backdrop poses.
-// Optional `wl` is procedural curtain walls (style + corner runs). Forge draws them;
-// the match does not spawn or block on them yet.
+// Optional `wl` is procedural curtain walls (style + corner runs). The forge draws
+// them while editing; a match stamps them onto the field and renders that copy.
 
 import { applyTableSilhouette, createFullCellMask, createFullCellRadius, normalizeTableShape } from './tableShape.js';
 import { applySeededHeight, buildField, composeHeightMap, createField, generateHeightMap, PAINTED_LIFT_MAX, PAINTED_LIFT_MIN, refreshTerrainDerived, TILE_SIZE_F, tileCenterX, tileCenterY, worldToTile, worldToTileZ } from './field.js';
-import { applyAuthoredScenery, SCENERY } from './scenery.js';
+import { applyAuthoredScenery, clearOffTableScenery, SCENERY } from './scenery.js';
 import { ensureDoodadArrays, hasAuthoredDoodads } from './doodads.js';
 import { cloneBackdrops, encodeBackdrops, normalizeBackdrops } from './backdrops.js';
 import { spawn } from './world.js';
@@ -18,7 +20,10 @@ import { encodeStory, normalizeStory } from '../story/timeline.js';
 import { encodeObjectives, normalizeObjectives } from '../story/objectives.js';
 import * as fx from './fixed.js';
 import { normalizeNeutralTeams } from './teams.js';
-import { decodeWalls, encodeWalls } from './walls.js';
+import { applyWallOccupancy, decodeWalls, encodeWalls } from './walls.js';
+import { normalizeMapType } from './mapType.js';
+import { isNamedUnit } from './namedUnit.js';
+import { spawnPadsForMapType } from './worldSetup.js';
 
 export const GARDEN_VERSION = 4;
 export const GARDEN_VERSION_MIN = 3;
@@ -76,6 +81,7 @@ function decodeCellBits(str, expected) {
 }
 
 function hasAuthoredScenery(field) {
+  if (field?.sceneryAuthored === true) return true;
   if (!field?.sceneryType) return false;
   for (let i = 0; i < field.sceneryType.length; i++) {
     if (field.sceneryType[i]) return true;
@@ -135,6 +141,7 @@ function normalizeUnits(list) {
       tx = tiles.tx;
       tz = tiles.tz;
     }
+    const yaw = Number(u.yaw);
     return {
       owner: u.owner | 0,
       type: u.type | 0,
@@ -143,8 +150,35 @@ function normalizeUnits(list) {
       name: u.name ? String(u.name) : '',
       ...(world || {}),
       ...(Number.isFinite(Number(u.hp)) ? { hp: u.hp | 0 } : {}),
+      ...(Number.isFinite(yaw) && Math.abs(yaw) > 1e-4 ? { yaw } : {}),
     };
   });
+}
+
+function encodeUnitYaws(units) {
+  let any = false;
+  const out = [];
+  for (let i = 0; i < units.length; i++) {
+    const y = Number(units[i].yaw) || 0;
+    if (Math.abs(y) > 1e-4) any = true;
+    out.push(Math.round(y * 1000) / 1000);
+  }
+  return any ? out : null;
+}
+
+function applyUnitYaws(units, raw) {
+  if (!Array.isArray(raw)) return units;
+  for (let i = 0; i < units.length && i < raw.length; i++) {
+    const y = Number(raw[i]);
+    if (Number.isFinite(y) && Math.abs(y) > 1e-4) units[i].yaw = y;
+  }
+  return units;
+}
+
+function fixedFaceFromYaw(yaw) {
+  const y = Number(yaw);
+  if (!Number.isFinite(y) || Math.abs(y) < 1e-4) return null;
+  return { faceX: fx.fromFloat(Math.sin(y)), faceY: fx.fromFloat(Math.cos(y)) };
 }
 
 function encodeUnitTuple(u) {
@@ -255,6 +289,50 @@ function decodeSignedUnit(str, n) {
   return decodeSignedSpan(str, n, 1);
 }
 
+function encodeCelestial(state) {
+  if (!state || !Array.isArray(state.bodies) || state.bodies.length < 2) return null;
+  const bodies = [];
+  for (let i = 0; i < 2; i++) {
+    const body = state.bodies[i];
+    if (!body) return null;
+    bodies.push([
+      String(body.kind || 'sun'),
+      Math.round((Number(body.azimuth) || 0) * 100) / 100,
+      Math.round((Number(body.elevation) || 0) * 100) / 100,
+      Math.round((Number(body.intensity) || 0) * 1000) / 1000,
+    ]);
+  }
+  const color = Array.isArray(state.clearColor) ? state.clearColor : [0, 0, 0];
+  return {
+    e: Math.round((Number(state.exposure) || 0) * 1000) / 1000,
+    c: Math.round((Number(state.contrast) || 0) * 1000) / 1000,
+    k: [0, 1, 2].map((i) => Math.round((Number(color[i]) || 0) * 1000) / 1000),
+    b: bodies,
+  };
+}
+
+export function decodeCelestial(raw) {
+  if (!raw || !Array.isArray(raw.b) || raw.b.length < 2) return null;
+  const bodies = [];
+  for (let i = 0; i < 2; i++) {
+    const body = raw.b[i];
+    if (!Array.isArray(body)) return null;
+    bodies.push({
+      kind: String(body[0] || 'sun'),
+      azimuth: Number(body[1]) || 0,
+      elevation: Number(body[2]) || 0,
+      intensity: Number(body[3]) || 0,
+    });
+  }
+  const color = Array.isArray(raw.k) ? raw.k : [0, 0, 0];
+  return {
+    exposure: Number(raw.e) || 0,
+    contrast: Number(raw.c) || 0,
+    clearColor: [0, 1, 2].map((i) => Number(color[i]) || 0),
+    bodies,
+  };
+}
+
 function encodeStartingResources(raw) {
   const n = normalizeStartingResources(raw);
   if (!n) return null;
@@ -310,6 +388,8 @@ export function encodeGarden(field, extras = {}) {
   if (backdrops.length) out.bd = encodeBackdrops(backdrops);
   if (units.length) {
     out.u = units.map(encodeUnitTuple);
+    const yaws = encodeUnitYaws(units);
+    if (yaws) out.uy = yaws;
   }
   if (buildings.length) out.b = buildings.map((b) => [b.owner, b.type, b.x, b.z, b.yaw]);
   if (agoras.length) out.g = agoras.map((g) => [g.owner, g.x, g.z]);
@@ -317,6 +397,8 @@ export function encodeGarden(field, extras = {}) {
   if (sr) out.sr = sr;
   const story = encodeStory(extras.story);
   if (story) out.story = story;
+  const light = encodeCelestial(extras.celestial);
+  if (light) out.lt = light;
   const objectives = encodeObjectives(extras.objectives);
   if (objectives) out.obj = objectives;
   const tableHalf = (field.width * TILE_SIZE_F) / 2;
@@ -329,6 +411,9 @@ export function encodeGarden(field, extras = {}) {
   if (packedWalls) out.wl = packedWalls;
   const neutrals = normalizeNeutralTeams(extras.neutralTeams);
   if (neutrals) out.nr = neutrals;
+  if (extras.mapType != null && String(extras.mapType).trim() !== '') {
+    out.mt = normalizeMapType(extras.mapType);
+  }
   return out;
 }
 
@@ -386,7 +471,7 @@ export function decodeGarden(data) {
     treeStock: data.ts ? decodeRle(data.ts, n) : null,
     doodadType: data.dd ? decodeRle(data.dd, n) : null,
     backdrops: normalizeBackdrops(data.bd),
-    units: normalizeUnits(data.u),
+    units: applyUnitYaws(normalizeUnits(data.u), data.uy),
     buildings: normalizeBuildings(data.b),
     agoras: normalizeAgoras(data.g),
     startingResources: normalizeStartingResources(data.sr ?? data.startingResources),
@@ -397,10 +482,12 @@ export function decodeGarden(data) {
       : data.pl ? decodeSignedUnit(data.pl, n) : null,
     suppressCenterBlock: !!data.ncb,
     story: data.story ? normalizeStory(data.story) : null,
+    celestial: decodeCelestial(data.lt),
     objectives: normalizeObjectives(data.obj),
     cameraHalfF: Number(data.ch) > 0 ? Number(data.ch) : 0,
     neutralTeams: normalizeNeutralTeams(data.nr),
     walls: decodeWalls(data.wl),
+    mapType: data.mt != null && String(data.mt).trim() !== '' ? normalizeMapType(data.mt) : '',
   };
 }
 
@@ -408,9 +495,17 @@ export function decodeGarden(data) {
 export function fieldFromGarden(data) {
   const g = decodeGarden(data);
   const authored = g.terrainTypes.length === g.width * g.height;
+  const half = (g.width * TILE_SIZE_F) / 2;
+  const halfZ = (g.height * TILE_SIZE_F) / 2;
   const field = authored
     ? createField(g.seed, { width: g.width, height: g.height })
-    : buildField(g.seed, { width: g.width, height: g.height });
+    : buildField(g.seed, {
+      width: g.width,
+      height: g.height,
+      ...(g.mapType
+        ? { spawnPads: spawnPadsForMapType(g.mapType, half, g.width, halfZ) }
+        : {}),
+    });
   if (authored) {
     if (g.regionLift) {
       generateHeightMap(field);
@@ -440,14 +535,20 @@ export function fieldFromGarden(data) {
   if (g.authoredScenery) {
     if (g.sceneryType?.length === field.sceneryType.length) field.sceneryType.set(g.sceneryType);
     if (g.treeStock?.length === field.treeStock.length) field.treeStock.set(g.treeStock);
+    field.sceneryAuthored = true;
     applyAuthoredScenery(field);
   }
   if (g.doodadType?.length === field.width * field.height) {
     ensureDoodadArrays(field);
     field.doodadType.set(g.doodadType);
   }
+  clearOffTableScenery(field);
   if (g.backdrops?.length) field.backdrops = cloneBackdrops(g.backdrops);
   if (g.cameraHalfF > 0) field.cameraHalfF = g.cameraHalfF;
+  if (g.walls?.runs?.length) {
+    field.walls = g.walls;
+    applyWallOccupancy(field, g.walls);
+  }
   return field;
 }
 
@@ -463,6 +564,8 @@ export function applyGardenPlacements(world, field, garden) {
       x: hasWorld ? fx.fromFloat(u.x) : tileCenterX(u.tx),
       y: hasWorld ? fx.fromFloat(u.z) : tileCenterY(u.tz),
       hp: Number.isFinite(Number(u.hp)) ? u.hp | 0 : undefined,
+      named: isNamedUnit(u.name),
+      ...fixedFaceFromYaw(u.yaw),
     });
   }
   for (const b of garden.buildings ?? []) {

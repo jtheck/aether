@@ -10,7 +10,14 @@ export const FX_DISTANCE = 900;
 /** VAT walk/idle playback — freeze (fps=0) beyond this. */
 export const VAT_DISTANCE = 400;
 
-/** Scenery mesh→billboard (3× original 480/520). */
+/**
+ * Scenery mesh→billboard swap (eye 3D distance). Perspective detail only:
+ * near = full GLB/bake mesh, far = atlas billboard.
+ *
+ * On large boards the mesh/billboard split is also an XZ ring: full meshes
+ * out to the old tile distance, billboards from there past the tiles
+ * (`resourceMesh` / `resourceDrop` in terrain.js).
+ */
 export const SCENERY_LOD_TREE = 1440;
 export const SCENERY_LOD_ROCK = 1560;
 

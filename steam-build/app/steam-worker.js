@@ -291,6 +291,9 @@ async function handle(req, res) {
         description: bodyPub.description,
         visibility: bodyPub.visibility,
         previewJpeg: bodyPub.previewJpeg,
+        files: bodyPub.files,
+        campaign: bodyPub.campaign,
+        tags: bodyPub.tags,
       });
       if (!published || !published.ok) {
         console.warn('[steam-worker] workshop publish failed', published);

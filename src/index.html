@@ -602,6 +602,8 @@
       <div id="match-lobby-chapter-row" class="match-lobby-setting" hidden>
         <label for="match-lobby-chapter">Chapter</label>
         <select id="match-lobby-chapter"></select>
+        <button type="button" class="btn" id="match-lobby-load-map">Load</button>
+        <input id="match-lobby-map-file" type="file" accept=".garden,.campaign,.json" hidden>
       </div>
       <button type="button" class="btn" id="match-lobby-ready">Ready</button>
       <button type="button" class="btn" id="match-lobby-start" hidden>Start</button>
@@ -834,13 +836,10 @@
         <summary>General</summary>
         <div class="help-body">
           <dl class="help-keys">
-            <dt>Escape</dt><dd>Open menu</dd>
-            <dt>?</dt><dd>Help</dd>
-            <dt>B</dt><dd>Open agora</dd>
-            <dt>Space</dt><dd>Follow selection</dd>
-            <dt>1–6</dt><dd>Select group. Again, center camera. Hold to assign</dd>
-            <dt>Ctrl+1–6</dt><dd>Assign group</dd>
-            <dt>O</dt><dd>Hide HUD</dd>
+            <dt>Screen side edges</dt><dd>Zoom</dd>
+            <dt>Screen top/bottom edges</dt><dd>Rotate</dd>
+            <dt>Top stats</dt><dd>Population, Game Clock, FPS, Ping</dd>
+            <dt>Bottom icons</dt><dd>Resources - Wood, Stone, Minerals, Food</dd>
           </dl>
         </div>
       </details>
@@ -860,6 +859,12 @@
             <dt>T</dt><dd>Zoom in</dd>
             <dt>S</dt><dd>Rotate</dd>
             <dt>F</dt><dd>Rotate the other way</dd>
+            <dt>Escape</dt><dd>Open menu</dd>
+            <dt>B</dt><dd>Open agora</dd>
+            <dt>Space</dt><dd>Follow selection</dd>
+            <dt>1–6</dt><dd>Select group. Again, center camera. Hold to assign</dd>
+            <dt>Ctrl+1–6</dt><dd>Assign group</dd>
+            <dt>O</dt><dd>Hide HUD</dd>
           </dl>
         </div>
       </details>
@@ -902,6 +907,8 @@
       <details>
         <summary>XR</summary>
         <div class="help-body">
+          Requires WebGPU XR capable Browser.
+          <h5>If the XR button is not visible at the top of the menu, try visiting: chrome://flags/ in your browser, and Enable: 'WebXR Layers' and 'WebXR/WebGPU Binding'.</h5>
           <dl class="help-keys">
             <dt>XR</dt><dd>Enter headset</dd>
             <dt>Left stick</dt><dd>Walk</dd>

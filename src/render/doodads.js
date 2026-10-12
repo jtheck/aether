@@ -104,6 +104,7 @@ function emptyDoodads() {
     applyTreeUpdates() {},
     applyFogDim() {},
     applyFogTiles() {},
+    setShown() {},
     dispose() {},
   };
 }
@@ -159,7 +160,7 @@ function placementsForSlot(field, slot) {
  * @param {object} field
  * @param {(x: number, z: number) => number} groundYAt
  */
-export async function createDoodadsFromField(engine, scene, field, groundYAt) {
+export async function createDoodadsFromField(engine, scene, field, groundYAt, opts = {}) {
   /** @type {{ mesh: object, matrices: Float32Array, colors: Float32Array, capacity: number }[]} */
   let mushroomBatches = [];
   /** @type {{ mesh: object, matrices: Float32Array, colors: Float32Array, capacity: number }[]} */
@@ -184,6 +185,22 @@ export async function createDoodadsFromField(engine, scene, field, groundYAt) {
     ...mushroomBatches.map((b) => b.mesh),
     ...wagonBatches.map((b) => b.mesh),
   ];
+  let shown = true;
+  function applyShown() {
+    if (shown) return;
+    for (let i = 0; i < meshes.length; i++) meshes[i].visible = false;
+  }
+  function setShown(on) {
+    shown = on !== false;
+    if (shown) {
+      for (let i = 0; i < meshes.length; i++) {
+        const n = meshes[i].thinInstances?.count ?? 0;
+        meshes[i].visible = n > 0;
+      }
+      return;
+    }
+    applyShown();
+  }
   let mushroomPrev = 0;
   let wagonPrev = 0;
   let dirty = false;
@@ -191,6 +208,28 @@ export async function createDoodadsFromField(engine, scene, field, groundYAt) {
   /** @type {((x: number, z: number) => number) | null} */
   let fogFactor = null;
   let liveField = field;
+  // Same ring as the tiles. Infinity keeps every doodad (normal boards).
+  const dropSq = Number.isFinite(opts.drop) && opts.drop > 0 ? opts.drop * opts.drop : Infinity;
+  let lookX = 0;
+  let lookZ = 0;
+  let lodElapsed = 0;
+  let lastLookX = Infinity;
+  let lastLookZ = Infinity;
+
+  function cameraLookAt(camera) {
+    const t = camera?.target;
+    if (t && Number.isFinite(t.x) && Number.isFinite(t.z)) return { x: t.x, z: t.z };
+    const wm = camera?.worldMatrix;
+    if (wm && Number.isFinite(wm[12]) && Number.isFinite(wm[14])) return { x: wm[12], z: wm[14] };
+    return null;
+  }
+
+  function inRing(x, z) {
+    if (dropSq === Infinity) return true;
+    const dx = lookX - x;
+    const dz = lookZ - z;
+    return dx * dx + dz * dz <= dropSq;
+  }
 
   function ensureCapacity(batches, needed) {
     if (!batches.length) return;
@@ -239,6 +278,7 @@ export async function createDoodadsFromField(engine, scene, field, groundYAt) {
       if (size <= 0.001) continue;
       for (let i = 0; i < c.instances.length; i++) {
         const inst = c.instances[i];
+        if (!inRing(inst.x, inst.z)) continue;
         const y = groundYAt(inst.x, inst.z) + (inst.yOff ?? 0);
         const scale = inst.scale * size;
         for (let b = 0; b < batches.length; b++) {
@@ -269,6 +309,7 @@ export async function createDoodadsFromField(engine, scene, field, groundYAt) {
   function rebuild() {
     mushroomPrev = rebuildKind(mushroomBatches, DOODAD.MUSHROOM, mushroomPrev);
     wagonPrev = rebuildKind(wagonBatches, DOODAD.WAGON, wagonPrev);
+    applyShown();
   }
 
   function instancesFor(slot) {
@@ -362,9 +403,25 @@ export async function createDoodadsFromField(engine, scene, field, groundYAt) {
     dirty = false;
   }
 
-  function update(deltaMs) {
+  function update(camera, deltaMs = 16) {
     if (disposed) return;
     const dt = Math.min(100, Math.max(0, deltaMs));
+    if (dropSq !== Infinity && camera) {
+      lodElapsed += dt;
+      const look = cameraLookAt(camera);
+      if (look) {
+        const moved = (look.x - lastLookX) ** 2 + (look.z - lastLookZ) ** 2;
+        const due = lastLookX === Infinity || (lodElapsed >= 120 && moved >= 16);
+        if (due) {
+          lookX = look.x;
+          lookZ = look.z;
+          lastLookX = look.x;
+          lastLookZ = look.z;
+          lodElapsed = 0;
+          dirty = true;
+        }
+      }
+    }
     let animating = false;
     for (const [key, c] of clusters) {
       if (c.leaving) {
@@ -383,6 +440,7 @@ export async function createDoodadsFromField(engine, scene, field, groundYAt) {
       rebuild();
       dirty = false;
     }
+    applyShown();
   }
 
   function dispose() {
@@ -404,6 +462,7 @@ export async function createDoodadsFromField(engine, scene, field, groundYAt) {
     applyTreeUpdates,
     applyFogDim,
     applyFogTiles,
+    setShown,
     dispose,
   };
 }

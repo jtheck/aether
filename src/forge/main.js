@@ -14,13 +14,17 @@ import {
   createMeshFromData,
   createStandardMaterial,
 } from '../vendor/lite/liteVendor.js';
+import { createPlacePreview } from './placePreview.js';
 import {
   buildField,
   FORGE_MAX_CHUNKS,
   FORGE_MIN_CHUNKS,
+  LOD_MAP_CHUNKS,
   SKIRMISH_MAP_CHUNKS,
   forgeTilesForChunks,
   consumeWaterDirty,
+  HEIGHT_AMPLITUDE,
+  paintRegionLevel,
   paintRegionLift,
   REGION_LIFT_STEP,
   TABLE_CHUNK_TILES,
@@ -47,7 +51,22 @@ import {
   worldToCell,
 } from '../sim/tableShape.js';
 import { TERRAIN } from '../sim/field.js';
-import { decodeGarden, encodeGarden, fieldFromGarden, GARDEN_SESSION_KEY } from '../sim/garden.js';
+import { decodeGarden, encodeGarden, fieldFromGarden } from '../sim/garden.js';
+import { stageSessionGarden, writeCampaignPack, writeSessionGarden } from '../app/gardenSession.js';
+import {
+  addChapter,
+  addEpisode,
+  createCampaignDraft,
+  draftChapterCount,
+  draftFromBundle,
+  draftToBundle,
+  draftToIndex,
+  removeChapter,
+  renameCampaign,
+  renameCurrentEpisode,
+  syncChapterGarden,
+} from './campaignDraft.js';
+import { firstChapterFile, flattenCampaignChapters, formatPackRef, isCampaignBundle } from '../story/campaignPack.js';
 import {
   formatWorkshopRef,
   loadGardenRef,
@@ -56,10 +75,10 @@ import {
   workshopPageUrl,
 } from '../app/workshop.js';
 import { RESOURCE_KINDS, STARTING_RESOURCES } from '../sim/resources.js';
-import { applyAuthoredScenery, populateScenery, paintSceneryBrush, SCENERY } from '../sim/scenery.js';
+import { applyAuthoredScenery, clearAllScenery, clearOffTableScenery, populateScenery, paintSceneryBrush, SCENERY } from '../sim/scenery.js';
 import { DOODAD, paintDoodadBrush } from '../sim/doodads.js';
 import { UNIT_DEFS } from '../sim/unitTypes.js';
-import { PLACEABLE_BUILDINGS, snapBuildingWorld } from '../sim/buildings.js';
+import { BUILDING_FOOTPRINTS, BUILDING_YAW_SNAP, PLACEABLE_BUILDINGS, snapBuildingWorld, snapBuildingYaw } from '../sim/buildings.js';
 import {
   OPENING_REACH,
   applyWallOccupancy,
@@ -73,10 +92,12 @@ import {
   snapWallCorner,
   wallKindOf,
 } from '../sim/walls.js';
-import { defaultMatchAgoras } from '../sim/worldSetup.js';
+import { DEFAULT_MAP_TYPE, MAP_TYPES, normalizeMapType } from '../sim/mapType.js';
+import { agorasForMapType, spawnPadsForMapType } from '../sim/worldSetup.js';
 import { createCameraController, resolveCameraExtents, resolveCameraHalfF } from '../render/cameraController.js';
 import {
   CLIP_CAMERA,
+  CLIP_HOLD,
   CLIP_LINE,
   LINE_STYLES,
   activeReel,
@@ -88,17 +109,22 @@ import {
 import { createStoryPlayer } from '../story/player.js';
 import { createStoryHud } from '../story/hud.js';
 import { createStorySpeech, narratorLines } from '../story/speech.js';
-import { findNamedUnit, namedUnits } from '../story/cast.js';
+import { findNamedUnit, mergeStoryParty, namedUnits, normalizeSpeaker, storyPartyPlacements } from '../story/cast.js';
 import { OBJ_KINDS, normalizeObjectives } from '../story/objectives.js';
 import { createStorySheet } from './storySheet.js';
 import {
+  WAVE_ERAS,
   WAVE_ROUTE_MAX,
   appendWaveHop,
   collectWaveParams,
-  listWaveHops,
   popWaveHop,
+  removeWaveHopAt,
+  replaceWaveHop,
+  setZoneEra,
+  setZoneWaves,
   tileToWaveFrac,
   waveFracToTile,
+  waveHopName,
   waveTargetObjective,
 } from './waveRoute.js';
 import {
@@ -112,6 +138,13 @@ import {
 import { createTerrainFromField, createTileGridOverlay, surfaceHeightAt } from '../render/terrain.js';
 import { buildWallGeometry } from '../render/wallGeom.js';
 import { createWallMaterials, createWallMesh } from '../render/walls.js';
+import {
+  BACKDROP,
+  BACKDROP_DEFS,
+  defaultBackdropY,
+  freshBackdrop,
+  nearestBackdrop,
+} from '../sim/backdrops.js';
 import { softDetachMesh } from '../render/meshLifecycle.js';
 import { aetherSteam } from '../app/steam.js';
 
@@ -138,13 +171,18 @@ const state = {
   placeKind: 'unit',
   placeType: 1,
   owner: 0,
+  /** Grabbed placements: { kind: 'unit'|'building'|'agora'|'objective', index }[]. */
+  placePicks: [],
   brush: 1,
   /** 1–10. 10 matches the old full raise/lower step. */
   liftStrength: 6,
   showGrid: false,
+  showScenery: true,
   showChunks: true,
   showTiles: false,
   mapName: '',
+  /** Garden `mt`. Generate lays out starts for this type. */
+  mapType: DEFAULT_MAP_TYPE,
   painting: false,
   selected: [],
   units: [],
@@ -158,11 +196,21 @@ const state = {
   objectives: [],
   /** Fractional hops for the next zone (consumed when a wave zone is placed). */
   waveRoute: [],
+  /** Waves / era applied to the next zone, until a zone is selected. */
+  waveDraft: { waves: 0, era: 1 },
+  /** Selected wave zone and hop. pending = hops not attached to a zone yet. */
+  waveEdit: null,
   startingResources: { ...STARTING_RESOURCES },
   story: emptyStory(),
   storyClipId: null,
   /** 0 = follow the table. Positive world half-extent = custom pan/zoom box. */
   cameraHalfF: 0,
+  /** Table panel: chunk silhouette, or off-board props. */
+  tableTool: 'chunks',
+  /** Disc/Castle arms a single drop. Empty clicks go back to chunks once it is placed. */
+  propArmed: false,
+  propType: BACKDROP.CASTLE,
+  propIndex: -1,
 };
 
 const CELESTIAL_STORE_KEY = 'aether.forge.celestial';
@@ -182,11 +230,18 @@ let tileWireTimer = 0;
 let tileWireStamp = 0;
 let overlayFreeze = 0;
 let cameraBoundMesh = null;
+let propDrag = null;
+/** After a drop, the pointer-up returns the table to chunk editing. */
+let propReturnChunks = false;
+let propSyncGen = 0;
 let brushMesh = null;
 let brushKey = '';
 let lastBrushWorld = null;
 let lastPaintKey = '';
+/** Visible height (heightMap units) locked for the current level stroke. */
+let levelHold = null;
 let placeMeshes = [];
+let placePreview = null;
 let wallParts = { castle: null, dungeon: null, wood: null, iron: null };
 let wallGhostMesh = null;
 let wallGhostWood = null;
@@ -209,10 +264,15 @@ let sceneryFullRebuild = false;
 let holdPreviewCamera = false;
 let workshopPreviewJpeg = '';
 let workshopDescEdited = false;
+let campaignDraft = createCampaignDraft();
 let storyPlayer = null;
 let storyHud = null;
 let storySpeech = null;
 let storySheet = null;
+/** Pointer is dragging the grabbed placements. */
+let placeDrag = null;
+/** Drag on empty ground. Becomes a select box once the pointer travels. */
+let placeBox = null;
 
 function matVecUnproject(inv, ndcX, ndcY, depth) {
   const x = inv[0] * ndcX + inv[4] * ndcY + inv[8] * depth + inv[12];
@@ -224,24 +284,35 @@ function matVecUnproject(inv, ndcX, ndcY, depth) {
 }
 
 function pickGround(clientX, clientY) {
-  const rect = canvas.getBoundingClientRect();
-  const w = rect.width || 1;
-  const h = rect.height || 1;
-  const vp = getViewProjectionMatrix(camera, w / h);
-  const inv = invertMat4(vp);
-  if (!inv) return null;
-  const ndcX = (2 * (clientX - rect.left)) / w - 1;
-  const ndcY = 1 - (2 * (clientY - rect.top)) / h;
-  const near = matVecUnproject(inv, ndcX, ndcY, 1);
-  const far = matVecUnproject(inv, ndcX, ndcY, 0);
-  const dy = far[1] - near[1];
-  if (Math.abs(dy) < 1e-8) return null;
-  const t = -near[1] / dy;
-  if (t < 0) return null;
-  return {
-    x: near[0] + (far[0] - near[0]) * t,
-    z: near[2] + (far[2] - near[2]) * t,
+  const ray = viewRay(clientX, clientY);
+  if (!ray || Math.abs(ray.dy) < 1e-8) return null;
+  // The visible ground sits above y=0. A flat-plane hit lands further from
+  // the camera, which reads as above the cursor.
+  const at = (t) => {
+    const x = ray.x + ray.dx * t;
+    const y = ray.y + ray.dy * t;
+    const z = ray.z + ray.dz * t;
+    const h = field ? surfaceHeightAt(field, x, z) : 0;
+    return { x, z, above: y - h };
   };
+  let lo = 0;
+  let hi = 1;
+  let a = at(lo);
+  let b = at(hi);
+  if (a.above > 0 && b.above > 0) {
+    const t = -ray.y / ray.dy;
+    if (t < 0 || t > 1) return null;
+    return { x: ray.x + ray.dx * t, z: ray.z + ray.dz * t };
+  }
+  if (a.above <= 0) return { x: a.x, z: a.z };
+  for (let i = 0; i < 20; i++) {
+    const mid = (lo + hi) * 0.5;
+    const s = at(mid);
+    if (s.above > 0) lo = mid;
+    else hi = mid;
+  }
+  const hit = at((lo + hi) * 0.5);
+  return { x: hit.x, z: hit.z };
 }
 
 function viewRay(clientX, clientY) {
@@ -305,15 +376,49 @@ function chunksOfTiles(tiles) {
   return Math.max(1, Math.round((tiles | 0) / TABLE_CHUNK_TILES));
 }
 
+function chunkOptionLabel(chunks) {
+  const n = chunks | 0;
+  const tiles = n * TABLE_CHUNK_TILES;
+  return `${n} chunks, ${tiles} tiles${n > LOD_MAP_CHUNKS ? ' *' : ''}`;
+}
+
+function chunkSizeOptionsHtml() {
+  let html = '';
+  for (let n = FORGE_MIN_CHUNKS; n <= FORGE_MAX_CHUNKS; n += 2) {
+    html += `<option value="${n}">${chunkOptionLabel(n)}</option>`;
+  }
+  return html;
+}
+
+function selectChunkCount(select, chunks) {
+  if (!select) return;
+  const n = chunks | 0;
+  const value = String(n);
+  if (![...select.options].some((o) => o.value === value)) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = chunkOptionLabel(n);
+    select.appendChild(opt);
+  }
+  select.value = value;
+}
+
 function newField(width, height, seed, extras = {}) {
   const w = forgeTilesForChunks(chunksOfTiles(width));
   const h = forgeTilesForChunks(chunksOfTiles(height ?? width));
-  const next = buildField(seed, { width: w, height: h });
+  const half = (w * TILE_SIZE_F) / 2;
+  const halfZ = (h * TILE_SIZE_F) / 2;
+  const mapType = extras.mapType || state.mapType;
+  const next = buildField(seed, {
+    width: w,
+    height: h,
+    spawnPads: spawnPadsForMapType(mapType, half, w, halfZ),
+  });
   applyTableSilhouette(next, {
     cellSize: TABLE_CHUNK_TILES,
     cellMask: extras.cellMask ?? createFullCellMask(w, h, TABLE_CHUNK_TILES),
     cellRadius: extras.cellRadius ?? createFullCellRadius(w, h, TABLE_CHUNK_TILES, extras.radius ?? DEFAULT_CELL_RADIUS),
-    suppressCenterBlock: extras.suppressCenterBlock === true,
+    suppressCenterBlock: extras.suppressCenterBlock !== false,
   });
   return next;
 }
@@ -405,74 +510,578 @@ async function flushSceneryPaint() {
   }
 }
 
+function placeGeneratedScenery() {
+  if (!field) return;
+  populateScenery(field, null, reservedFromPlacements());
+  field.sceneryAuthored = true;
+}
+
+function placeGeneratedStarts() {
+  if (!field) return;
+  state.agoras = agorasForMapType(
+    state.mapType,
+    worldHalfFFromField(field),
+    field.width,
+    worldHalfZFFromField(field),
+  );
+}
+
 function reservedFromPlacements() {
   const half = worldHalfFFromField(field);
   const halfZ = worldHalfZFFromField(field);
   const pts = [];
   for (const u of state.units) {
-    pts.push([(u.tx + 0.5) * TILE_SIZE_F - half, (u.tz + 0.5) * TILE_SIZE_F - halfZ]);
+    const at = unitWorldXZ(u);
+    pts.push([at.x, at.z]);
   }
   for (const o of state.objectives) {
     pts.push([(o.tx + 0.5) * TILE_SIZE_F - half, (o.tz + 0.5) * TILE_SIZE_F - halfZ]);
   }
   for (const b of state.buildings) pts.push([b.x, b.z]);
   for (const g of state.agoras) pts.push([g.x, g.z]);
+  const pads = spawnPadsForMapType(state.mapType, half, field.width, halfZ);
+  for (const p of pads) pts.push(p);
   return pts;
 }
 
 function readWaveForm() {
+  const zone = state.waveEdit?.id ? waveZoneById(state.waveEdit.id) : null;
+  if (zone) {
+    return {
+      waves: zone.params?.waves | 0,
+      era: zone.params?.era | 0,
+    };
+  }
   return {
-    waves: Number(document.getElementById('place-obj-waves')?.value) || 0,
-    era: Number(document.getElementById('place-obj-era')?.value) || 0,
+    waves: state.waveDraft.waves | 0,
+    era: state.waveDraft.era | 0,
   };
 }
 
-function syncWaveRouteHint() {
-  const el = document.getElementById('place-obj-route-hint');
-  if (!el || !field) return;
-  const pending = state.waveRoute.length;
-  const armed = (state.objectives || []).filter((o) => (o.params?.waves | 0) > 0);
-  const hops = listWaveHops(state.objectives, state.waveRoute).length;
-  const bits = [];
-  if (armed.length) bits.push(`${armed.length} wave zone${armed.length === 1 ? '' : 's'}`);
-  if (hops) bits.push(`${hops} hop${hops === 1 ? '' : 's'}`);
-  if (pending) bits.push(`${pending} waiting for a zone`);
-  el.textContent = bits.length
-    ? bits.join(' · ')
-    : `No hops. First Hop click is where they form up (max ${WAVE_ROUTE_MAX}).`;
+function hopTileLabel(wp) {
+  if (!field) return '';
+  const tile = waveFracToTile(wp[0], wp[1], field.width, field.height);
+  return `${tile.tx}, ${tile.tz}`;
+}
+
+function selectedHop(edit, id, index, pending = false) {
+  if (!edit) return false;
+  if (pending) return !!edit.pending && edit.hopIndex === index;
+  return !edit.pending && edit.id === id && edit.hopIndex === index;
+}
+
+function renderWaveEditor() {
+  const host = document.getElementById('wave-zone-list');
+  if (!host || !field) return;
+  const active = document.activeElement;
+  if (active && host.contains(active) && (active.tagName === 'INPUT' || active.tagName === 'SELECT')) return;
+  host.replaceChildren();
+
+  const editingId = state.waveEdit?.id || null;
+  const zones = state.objectives;
+
+  const addBtn = (label, attrs, { active = false } = {}) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    if (active) b.classList.add('active');
+    for (const [k, v] of Object.entries(attrs)) b.dataset[k] = String(v);
+    return b;
+  };
+
+  if (!zones.length && !state.waveRoute.length) {
+    const empty = document.createElement('p');
+    empty.className = 'hint';
+    empty.textContent = 'No zones yet. Place one, then set how many groups attack it.';
+    host.appendChild(empty);
+  }
+
+  for (const obj of zones) {
+    const head = addBtn(
+      `${obj.kind || 'zone'}${obj.label ? ` “${obj.label}”` : ''} · ${obj.tx | 0}, ${obj.tz | 0}`,
+      { waveAct: 'select-zone', waveId: obj.id },
+      { active: editingId === obj.id },
+    );
+    host.appendChild(head);
+    if (editingId !== obj.id) continue;
+    const editing = document.createElement('p');
+    editing.className = 'hint';
+    editing.textContent = 'Groups and era edit this zone. 0 groups means it does not attack.';
+    host.appendChild(editing);
+    host.appendChild(waveFields(obj));
+    host.appendChild(hopList(obj.params?.route || [], obj.id, false));
+  }
+
+  if (state.waveRoute.length) {
+    const pending = document.createElement('p');
+    pending.className = 'hint';
+    pending.textContent = 'Hops waiting for a zone. They attach to the next zone you place.';
+    host.appendChild(pending);
+    host.appendChild(hopList(state.waveRoute, '', true));
+  }
+  if (!editingId) {
+    const next = document.createElement('p');
+    next.className = 'hint';
+    next.textContent = 'Groups and era apply to the next zone you place. 0 groups means the zone does not attack.';
+    host.appendChild(next);
+    host.appendChild(waveFields(null));
+  }
+}
+
+function waveFields(obj) {
+  const wrap = document.createElement('div');
+  const waves = document.createElement('input');
+  waves.type = 'number';
+  waves.min = '0';
+  waves.step = '1';
+  waves.dataset.waveField = 'waves';
+  if (obj) waves.dataset.waveId = obj.id;
+  waves.value = String(obj ? (obj.params?.waves | 0) : (state.waveDraft.waves | 0));
+  const era = document.createElement('select');
+  era.dataset.waveField = 'era';
+  if (obj) era.dataset.waveId = obj.id;
+  const currentEra = obj ? (obj.params?.era | 0) : (state.waveDraft.era | 0);
+  const none = document.createElement('option');
+  none.value = '0';
+  none.textContent = 'Default mix';
+  era.appendChild(none);
+  for (const choice of WAVE_ERAS) {
+    const opt = document.createElement('option');
+    opt.value = String(choice.id);
+    opt.textContent = choice.label;
+    era.appendChild(opt);
+  }
+  era.value = String(currentEra);
+  const wavesLabel = document.createElement('label');
+  wavesLabel.textContent = 'Groups';
+  wavesLabel.appendChild(waves);
+  const eraLabel = document.createElement('label');
+  eraLabel.textContent = 'Era';
+  eraLabel.appendChild(era);
+  wrap.appendChild(wavesLabel);
+  wrap.appendChild(eraLabel);
+  return wrap;
+}
+
+function hopList(route, id, pending) {
+  const wrap = document.createElement('div');
+  route.forEach((wp, index) => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.appendChild(addHopButton(
+      `${waveHopName(index)} · ${hopTileLabel(wp)}`,
+      { waveAct: pending ? 'select-pending' : 'select-hop', waveId: id, waveIndex: index },
+      selectedHop(state.waveEdit, id, index, pending),
+    ));
+    row.appendChild(addHopButton('Remove', {
+      waveAct: pending ? 'remove-pending' : 'remove-hop',
+      waveId: id,
+      waveIndex: index,
+    }));
+    wrap.appendChild(row);
+  });
+  if (route.length < WAVE_ROUTE_MAX) {
+    wrap.appendChild(addHopButton('Add hop', {
+      waveAct: pending ? 'add-pending' : 'add-hop',
+      waveId: id,
+    }));
+  }
+  return wrap;
+}
+
+function addHopButton(label, attrs, active = false) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = label;
+  if (active) b.classList.add('active');
+  for (const [k, v] of Object.entries(attrs)) b.dataset[k] = v == null ? '' : String(v);
+  return b;
+}
+
+function armWaveHopPlace() {
+  state.placeKind = 'wavehop';
+  document.querySelectorAll('[data-place]').forEach((x) => x.classList.remove('active'));
+}
+
+function waveZoneById(id) {
+  return state.objectives.find((o) => o.id === id) || null;
 }
 
 function applyWaveHop(tx, tz) {
   const hop = tileToWaveFrac(tx, tz, field.width, field.height);
-  const target = waveTargetObjective(state.objectives);
-  if (target) {
-    if (!appendWaveHop(target, hop, readWaveForm())) return;
-  } else if (state.waveRoute.length < WAVE_ROUTE_MAX) {
-    state.waveRoute.push(hop);
+  const edit = state.waveEdit;
+  if (edit?.pending) {
+    if (!state.waveRoute[edit.hopIndex]) return;
+    state.waveRoute[edit.hopIndex] = hop;
+  } else if (edit && Number.isInteger(edit.hopIndex)) {
+    const obj = waveZoneById(edit.id);
+    if (!obj || !replaceWaveHop(obj, edit.hopIndex, hop)) return;
   } else {
-    return;
+    const target = edit?.id ? waveZoneById(edit.id) : waveTargetObjective(state.objectives);
+    if (target) {
+      if (!appendWaveHop(target, hop, readWaveForm())) return;
+      state.waveEdit = { id: target.id, hopIndex: target.params.route.length - 1 };
+    } else if (state.waveRoute.length < WAVE_ROUTE_MAX) {
+      state.waveRoute.push(hop);
+      state.waveEdit = { pending: true, hopIndex: state.waveRoute.length - 1 };
+    } else {
+      return;
+    }
   }
-  syncWaveRouteHint();
+  renderWaveEditor();
 }
 
 function undoWaveHop() {
   const target = waveTargetObjective(state.objectives);
   if (target && popWaveHop(target)) {
-    syncWaveRouteHint();
+    renderWaveEditor();
     return;
   }
   if (state.waveRoute.length) {
     state.waveRoute.pop();
-    syncWaveRouteHint();
+    renderWaveEditor();
   }
 }
 
-function clearWaveHops() {
-  const target = waveTargetObjective(state.objectives);
-  if (target?.params?.route) delete target.params.route;
-  state.waveRoute = [];
-  syncWaveRouteHint();
+function placeList(kind) {
+  if (kind === 'unit') return state.units;
+  if (kind === 'building') return state.buildings;
+  if (kind === 'agora') return state.agoras;
+  if (kind === 'objective') return state.objectives;
+  return null;
+}
+
+function tileAtWorld(pos) {
+  const half = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
+  return {
+    tx: Math.floor((pos.x + half) / TILE_SIZE_F),
+    tz: Math.floor((pos.z + halfZ) / TILE_SIZE_F),
+  };
+}
+
+function worldAtTile(tx, tz) {
+  const half = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
+  return {
+    x: (tx + 0.5) * TILE_SIZE_F - half,
+    z: (tz + 0.5) * TILE_SIZE_F - halfZ,
+  };
+}
+
+function unitWorldXZ(u) {
+  if (Number.isFinite(u.x) && Number.isFinite(u.z)) return { x: u.x, z: u.z };
+  return worldAtTile(u.tx, u.tz);
+}
+
+function placementWorld(kind, item) {
+  if (kind === 'unit') return unitWorldXZ(item);
+  if (kind === 'objective') return worldAtTile(item.tx, item.tz);
+  return { x: item.x, z: item.z };
+}
+
+function tileOpen(tx, tz) {
+  if (!field) return false;
+  if (tx < 0 || tz < 0 || tx >= field.width || tz >= field.height) return false;
+  if (field.activeMask?.[tz * field.width + tx] === 0) return false;
+  return true;
+}
+
+function grabReach(kind, item) {
+  if (kind === 'unit') return 2.4;
+  if (kind === 'objective') return Math.max(2, (item.r || 1) * 1.6);
+  const fp = BUILDING_FOOTPRINTS[item?.type] || (kind === 'agora' ? BUILDING_FOOTPRINTS.agora : null);
+  const half = ((fp?.w ?? 2) * TILE_SIZE_F) * 0.5;
+  return Math.max(2.2, half * 0.72);
+}
+
+function hitPlacement(pos) {
+  if (!pos) return null;
+  let best = null;
+  const consider = (kind) => {
+    const list = placeList(kind);
+    if (!list) return;
+    for (let i = 0; i < list.length; i++) {
+      const p = placementWorld(kind, list[i]);
+      const d = Math.hypot(p.x - pos.x, p.z - pos.z);
+      const reach = grabReach(kind, list[i]);
+      if (d > reach) continue;
+      if (!best || d < best.d) best = { kind, index: i, d };
+    }
+  };
+  consider('unit');
+  consider('building');
+  consider('agora');
+  consider('objective');
+  return best;
+}
+
+function clearPlacePick() {
+  state.placePicks = [];
+  placeDrag = null;
+  placeBox = null;
+  syncPlacePickUi();
   updatePlaceMarkers();
+}
+
+function livePicks() {
+  return state.placePicks.filter((p) => placeList(p.kind)?.[p.index]);
+}
+
+function groupOrigins(picks = livePicks()) {
+  const out = [];
+  for (const p of picks) {
+    const item = placeList(p.kind)?.[p.index];
+    if (!item) continue;
+    const w = placementWorld(p.kind, item);
+    out.push({ kind: p.kind, index: p.index, x: w.x, z: w.z });
+  }
+  return out;
+}
+
+function syncPlacePickUi() {
+  const el = document.getElementById('place-pick-hint');
+  const picks = livePicks();
+  if (picks.length > 1) {
+    if (el) {
+      el.textContent = `${picks.length} selected. Drag to move the group. [ ] turns it. Right-click or Escape lets go.`;
+    }
+    return;
+  }
+  const pick = picks[0];
+  const item = pick ? placeList(pick.kind)?.[pick.index] : null;
+  if (!item) {
+    if (el) {
+      el.textContent = 'Drag a box to select units. Click empty ground to place. Party, then click, stands the four heroes on that spot. [ ] turns a selection. Shift-click removes.';
+    }
+    return;
+  }
+  if (pick.kind === 'unit') {
+    const nameEl = document.getElementById('place-name');
+    if (nameEl && document.activeElement !== nameEl) nameEl.value = item.name || '';
+    if (el) {
+      const who = item.name || 'Unit';
+      el.textContent = `${who} grabbed. Drag or click the ground to move. [ ] rotates. Right-click or Escape to let go.`;
+    }
+    return;
+  }
+  if (el) {
+    const label = pick.kind === 'building' ? 'Building' : pick.kind === 'agora' ? 'Agora' : 'Zone';
+    const turn = pick.kind === 'building' ? ' [ ] rotates.' : '';
+    el.textContent = `${label} grabbed. Drag or click the ground to move.${turn} Right-click or Escape to let go.`;
+  }
+}
+
+function writeUnitWorld(item, x, z) {
+  const tile = tileAtWorld({ x, z });
+  if (!tileOpen(tile.tx, tile.tz)) return false;
+  item.tx = tile.tx;
+  item.tz = tile.tz;
+  const center = worldAtTile(tile.tx, tile.tz);
+  if (Math.hypot(x - center.x, z - center.z) < 0.08) {
+    delete item.x;
+    delete item.z;
+  } else {
+    item.x = x;
+    item.z = z;
+  }
+  return true;
+}
+
+function applyGroupDelta(origins, dx, dz) {
+  if (Math.abs(dx) < 1e-6 && Math.abs(dz) < 1e-6) return false;
+  const next = [];
+  for (const o of origins) {
+    const x = o.x + dx;
+    const z = o.z + dz;
+    if (o.kind === 'unit' || o.kind === 'objective') {
+      const tile = tileAtWorld({ x, z });
+      if (!tileOpen(tile.tx, tile.tz)) return false;
+    }
+    next.push({ x, z });
+  }
+  let changed = false;
+  for (let i = 0; i < origins.length; i++) {
+    const o = origins[i];
+    const item = placeList(o.kind)?.[o.index];
+    if (!item) continue;
+    if (o.kind === 'unit') {
+      if (!writeUnitWorld(item, next[i].x, next[i].z)) return false;
+      changed = true;
+    } else if (o.kind === 'objective') {
+      const tile = tileAtWorld(next[i]);
+      if (item.tx === tile.tx && item.tz === tile.tz) continue;
+      item.tx = tile.tx;
+      item.tz = tile.tz;
+      changed = true;
+    } else if (o.kind === 'building') {
+      const snapped = snapBuildingWorld(String(item.type), fx.fromFloat(next[i].x), fx.fromFloat(next[i].z));
+      item.x = fx.toFloat(snapped.x);
+      item.z = fx.toFloat(snapped.z);
+      changed = true;
+    } else if (o.kind === 'agora') {
+      item.x = next[i].x;
+      item.z = next[i].z;
+      changed = true;
+    }
+  }
+  if (changed) updatePlaceMarkers();
+  return changed;
+}
+
+function beginGroupDrag(pos) {
+  placeDrag = { x: pos.x, z: pos.z, origins: groupOrigins() };
+}
+
+function moveGroupDrag(pos) {
+  if (!placeDrag?.origins || !pos) return;
+  applyGroupDelta(placeDrag.origins, pos.x - placeDrag.x, pos.z - placeDrag.z);
+}
+
+function moveGroupTo(pos) {
+  const primary = livePicks()[0];
+  const item = primary && placeList(primary.kind)?.[primary.index];
+  if (!item || !pos) return;
+  const here = placementWorld(primary.kind, item);
+  applyGroupDelta(groupOrigins(), pos.x - here.x, pos.z - here.z);
+}
+
+function turnYaw(item, step, snap) {
+  let y = (Number(item.yaw) || 0) + step;
+  y = snap ? snapBuildingYaw(y) : Math.atan2(Math.sin(y), Math.cos(y));
+  item.yaw = Math.abs(y) < 1e-4 ? 0 : y;
+}
+
+function rotatePlacePick(dir) {
+  const picks = livePicks();
+  if (!picks.length) return;
+  if (picks.length === 1) {
+    const pick = picks[0];
+    const item = placeList(pick.kind)[pick.index];
+    if (pick.kind === 'building') turnYaw(item, dir * BUILDING_YAW_SNAP, true);
+    else if (pick.kind === 'unit') turnYaw(item, dir * (Math.PI / 8), false);
+    else return;
+    updatePlaceMarkers();
+    return;
+  }
+  const step = dir * (Math.PI / 8);
+  const worlds = picks.map((p) => placementWorld(p.kind, placeList(p.kind)[p.index]));
+  let cx = 0;
+  let cz = 0;
+  for (const w of worlds) {
+    cx += w.x;
+    cz += w.z;
+  }
+  cx /= worlds.length;
+  cz /= worlds.length;
+  const c = Math.cos(step);
+  const s = Math.sin(step);
+  const next = [];
+  for (let i = 0; i < picks.length; i++) {
+    const dx = worlds[i].x - cx;
+    const dz = worlds[i].z - cz;
+    const x = cx + c * dx - s * dz;
+    const z = cz + s * dx + c * dz;
+    const tile = tileAtWorld({ x, z });
+    if ((picks[i].kind === 'unit' || picks[i].kind === 'objective') && !tileOpen(tile.tx, tile.tz)) return;
+    next.push({ x, z, tx: tile.tx, tz: tile.tz });
+  }
+  for (let i = 0; i < picks.length; i++) {
+    const item = placeList(picks[i].kind)[picks[i].index];
+    if (picks[i].kind === 'unit') {
+      if (!writeUnitWorld(item, next[i].x, next[i].z)) return;
+      turnYaw(item, step, false);
+    } else if (picks[i].kind === 'objective') {
+      item.tx = next[i].tx;
+      item.tz = next[i].tz;
+    } else if (picks[i].kind === 'building') {
+      const snapped = snapBuildingWorld(String(item.type), fx.fromFloat(next[i].x), fx.fromFloat(next[i].z));
+      item.x = fx.toFloat(snapped.x);
+      item.z = fx.toFloat(snapped.z);
+      turnYaw(item, step, true);
+    } else if (picks[i].kind === 'agora') {
+      item.x = next[i].x;
+      item.z = next[i].z;
+    }
+  }
+  updatePlaceMarkers();
+}
+
+function deletePlacePick() {
+  const grouped = { unit: [], building: [], agora: [], objective: [] };
+  for (const p of state.placePicks) grouped[p.kind]?.push(p.index);
+  for (const kind of Object.keys(grouped)) {
+    const list = placeList(kind);
+    if (!list) continue;
+    const idx = [...new Set(grouped[kind])].sort((a, b) => b - a);
+    for (const i of idx) {
+      if (i >= 0 && i < list.length) list.splice(i, 1);
+    }
+  }
+  state.placePicks = [];
+  placeDrag = null;
+  placeBox = null;
+  syncPlacePickUi();
+  updatePlaceMarkers();
+}
+
+function placeStoryPartyAt(tx, tz) {
+  const placed = storyPartyPlacements(tx, tz, field.width, field.height, state.owner, 'row');
+  state.units = mergeStoryParty(state.units, placed);
+}
+
+function unitsInBox(x0, z0, x1, z1) {
+  const minX = Math.min(x0, x1);
+  const maxX = Math.max(x0, x1);
+  const minZ = Math.min(z0, z1);
+  const maxZ = Math.max(z0, z1);
+  const picks = [];
+  for (let i = 0; i < state.units.length; i++) {
+    const p = placementWorld('unit', state.units[i]);
+    if (p.x >= minX && p.x <= maxX && p.z >= minZ && p.z <= maxZ) {
+      picks.push({ kind: 'unit', index: i });
+    }
+  }
+  return picks;
+}
+
+function finishPlaceBox() {
+  const box = placeBox;
+  if (!box) return;
+  placeBox = null;
+  if (box.active) {
+    state.placePicks = unitsInBox(box.x0, box.z0, box.x1, box.z1);
+    syncPlacePickUi();
+    updatePlaceMarkers();
+    return;
+  }
+  if (state.placePicks.length) moveGroupTo({ x: box.x0, z: box.z0 });
+  else applyPlace({ x: box.x0, z: box.z0 });
+}
+
+function handlePlacePointerDown(pos, e) {
+  if (!pos) return;
+  if (e.shiftKey) {
+    applyPlace(pos, { remove: true });
+    clearPlacePick();
+    return;
+  }
+  const hit = hitPlacement(pos);
+  if (hit) {
+    const already = state.placePicks.some((p) => p.kind === hit.kind && p.index === hit.index);
+    if (!already) state.placePicks = [{ kind: hit.kind, index: hit.index }];
+    beginGroupDrag(pos);
+    try { canvas.setPointerCapture(e.pointerId); } catch { /* already gone */ }
+    syncPlacePickUi();
+    updatePlaceMarkers();
+    return;
+  }
+  placeBox = {
+    x0: pos.x, z0: pos.z, x1: pos.x, z1: pos.z,
+    cx: e.clientX, cy: e.clientY,
+    active: false,
+  };
+  try { canvas.setPointerCapture(e.pointerId); } catch { /* already gone */ }
 }
 
 function applyPlace(pos, { remove = false } = {}) {
@@ -487,7 +1096,9 @@ function applyPlace(pos, { remove = false } = {}) {
   const tz = Math.floor((pos.z + halfZ) / TILE_SIZE_F);
   if (tx < 0 || tz < 0 || tx >= field.width || tz >= field.height) return;
   if (field.activeMask?.[tz * field.width + tx] === 0) return;
-  if (state.placeKind === 'unit') {
+  if (state.placeKind === 'party') {
+    placeStoryPartyAt(tx, tz);
+  } else if (state.placeKind === 'unit') {
     const name = String(document.getElementById('place-name')?.value || '').trim();
     state.units.push({ owner: state.owner, type: state.placeType | 0, tx, tz, name });
   } else if (state.placeKind === 'wavehop') {
@@ -499,12 +1110,13 @@ function applyPlace(pos, { remove = false } = {}) {
     const message = String(document.getElementById('place-obj-message')?.value || '').trim();
     const next = String(document.getElementById('place-obj-next')?.value || '').trim();
     const params = collectWaveParams({
-      waves: Number(document.getElementById('place-obj-waves')?.value) || 0,
-      era: Number(document.getElementById('place-obj-era')?.value) || 0,
+      waves: state.waveDraft.waves | 0,
+      era: state.waveDraft.era | 0,
       route: state.waveRoute,
     });
+    const id = `obj-${state.objectives.length}`;
     state.objectives.push({
-      id: `obj-${state.objectives.length}`,
+      id,
       kind,
       tx,
       tz,
@@ -515,7 +1127,8 @@ function applyPlace(pos, { remove = false } = {}) {
       ...(params ? { params } : {}),
     });
     if (params) state.waveRoute = [];
-    syncWaveRouteHint();
+    state.waveEdit = { id };
+    renderWaveEditor();
   } else if (state.placeKind === 'agora') {
     state.agoras.push({ owner: state.owner, x: pos.x, z: pos.z });
   } else {
@@ -534,7 +1147,7 @@ function applyPlace(pos, { remove = false } = {}) {
 function removeNearestPlacement(pos) {
   const pickNear = (list, getXZ) => {
     let best = -1;
-    let bestD = 18;
+    let bestD = 4;
     for (let i = 0; i < list.length; i++) {
       const p = getXZ(list[i]);
       const d = Math.hypot(p.x - pos.x, p.z - pos.z);
@@ -547,11 +1160,8 @@ function removeNearestPlacement(pos) {
   };
   const half = worldHalfFFromField(field);
   const halfZ = worldHalfZFFromField(field);
-  if (state.placeKind === 'unit') {
-    pickNear(state.units, (u) => ({
-      x: (u.tx + 0.5) * TILE_SIZE_F - half,
-      z: (u.tz + 0.5) * TILE_SIZE_F - halfZ,
-    }));
+  if (state.placeKind === 'unit' || state.placeKind === 'party') {
+    pickNear(state.units, (u) => unitWorldXZ(u));
   } else if (state.placeKind === 'wavehop') {
     undoWaveHop();
   } else if (state.placeKind === 'objective') {
@@ -593,13 +1203,6 @@ function updatePlaceMarkers() {
   if (!engine || !scene) return;
   const half = field ? worldHalfFFromField(field) : 0;
   const halfZ = field ? worldHalfZFFromField(field) : 0;
-  const ownerColor = (owner) => [
-    [0.25, 0.55, 1],
-    [1, 0.32, 0.25],
-    [0.4, 1, 0.45],
-    [0.95, 0.8, 0.25],
-    [0.75, 0.45, 1],
-  ][owner | 0] ?? [0.8, 0.8, 0.8];
   const addMarker = (name, positions, indices, color) => {
     if (!positions.length) return;
     const pos = new Float32Array(positions);
@@ -618,24 +1221,25 @@ function updatePlaceMarkers() {
     placeMeshes.push(mesh);
   };
   const groundY = (x, z, lift) => (field ? surfaceHeightAt(field, x, z) : 0) + lift;
-  const byOwner = new Map();
-  for (const u of state.units) {
-    const key = u.owner | 0;
-    if (!byOwner.has(key)) byOwner.set(key, { pos: [], idx: [] });
-    const b = byOwner.get(key);
-    const wx = (u.tx + 0.5) * TILE_SIZE_F - half;
-    const wz = (u.tz + 0.5) * TILE_SIZE_F - halfZ;
-    pushBoxMarker(b.pos, b.idx, wx, groundY(wx, wz, 1.2), wz, 3.2, 6, 3.2);
-  }
-  for (const [owner, b] of byOwner) addMarker(`forge-units-${owner}`, b.pos, b.idx, ownerColor(owner));
-  const bBy = new Map();
-  for (const building of state.buildings) {
-    const key = building.owner | 0;
-    if (!bBy.has(key)) bBy.set(key, { pos: [], idx: [] });
-    const b = bBy.get(key);
-    pushBoxMarker(b.pos, b.idx, building.x, groundY(building.x, building.z, 0.4), building.z, 10, 8, 10);
-  }
-  for (const [owner, b] of bBy) addMarker(`forge-buildings-${owner}`, b.pos, b.idx, ownerColor(owner));
+  placePreview?.sync({
+    units: state.units.map((u) => ({
+      owner: u.owner | 0,
+      type: u.type | 0,
+      x: unitWorldXZ(u).x,
+      z: unitWorldXZ(u).z,
+      yaw: u.yaw || 0,
+      name: u.name || '',
+    })),
+    buildings: state.buildings.map((b) => ({
+      owner: b.owner | 0,
+      type: String(b.type),
+      x: b.x,
+      z: b.z,
+      yaw: b.yaw ?? 0,
+      built: 1,
+      hp: 1,
+    })),
+  });
   const gPos = [];
   const gIdx = [];
   for (const g of state.agoras) {
@@ -654,13 +1258,45 @@ function updatePlaceMarkers() {
   if (field) {
     const hopPos = [];
     const hopIdx = [];
-    for (const wp of listWaveHops(state.objectives, state.waveRoute)) {
+    const selPos = [];
+    const selIdx = [];
+    const pushHop = (wp, selected) => {
       const tile = waveFracToTile(wp[0], wp[1], field.width, field.height);
       const wx = (tile.tx + 0.5) * TILE_SIZE_F - half;
       const wz = (tile.tz + 0.5) * TILE_SIZE_F - halfZ;
-      pushBoxMarker(hopPos, hopIdx, wx, groundY(wx, wz, 1.6), wz, 4.2, 5, 4.2);
+      pushBoxMarker(selected ? selPos : hopPos, selected ? selIdx : hopIdx, wx, groundY(wx, wz, 1.6), wz, 4.2, 5, 4.2);
+    };
+    for (const obj of state.objectives) {
+      const route = obj.params?.route || [];
+      route.forEach((wp, i) => pushHop(wp, selectedHop(state.waveEdit, obj.id, i, false)));
     }
+    state.waveRoute.forEach((wp, i) => pushHop(wp, selectedHop(state.waveEdit, '', i, true)));
     addMarker('forge-wave-hops', hopPos, hopIdx, [1, 0.55, 0.18]);
+    addMarker('forge-wave-hop-selected', selPos, selIdx, [0.45, 0.95, 1]);
+  }
+  if (placeBox?.active) {
+    const box = {
+      x0: Math.min(placeBox.x0, placeBox.x1),
+      x1: Math.max(placeBox.x0, placeBox.x1),
+      z0: Math.min(placeBox.z0, placeBox.z1),
+      z1: Math.max(placeBox.z0, placeBox.z1),
+    };
+    const bPos = [];
+    const bIdx = [];
+    pushCellRim(bPos, bIdx, box, 0.45, 0.28);
+    addMarker('forge-select-box', bPos, bIdx, [0.45, 0.95, 1]);
+  }
+  const sPos = [];
+  const sIdx = [];
+  for (const pick of state.placePicks) {
+    const picked = placeList(pick.kind)?.[pick.index];
+    if (!picked) continue;
+    const p = placementWorld(pick.kind, picked);
+    const span = Math.min(4.2, grabReach(pick.kind, picked) * 2);
+    pushBoxMarker(sPos, sIdx, p.x, groundY(p.x, p.z, 0.15), p.z, span, 0.25, span);
+  }
+  if (sPos.length) {
+    addMarker('forge-pick', sPos, sIdx, [0.25, 1, 0.85]);
   }
   if (sceneRegistered) invalidateRenderBundles(engine);
 }
@@ -850,10 +1486,13 @@ function refreshDrapeOverlays() {
 
 function brushColor() {
   if (state.layer === 'terrain') {
+    if (state.lift === 'level') return [0.82, 0.86, 0.78];
     if (state.lift > 0) return [0.95, 0.78, 0.28];
     if (state.lift < 0) return [0.40, 0.72, 1.0];
     if (state.terrain === TERRAIN.DIRT) return [0.78, 0.55, 0.30];
     if (state.terrain === TERRAIN.WATER) return [0.28, 0.62, 0.98];
+    if (state.terrain === TERRAIN.GRAVEL) return [0.28, 0.28, 0.30];
+    if (state.terrain === TERRAIN.TILE) return [0.72, 0.72, 0.74];
     return [0.35, 0.88, 0.42];
   }
   if (state.stamp === 'doodad') {
@@ -1360,6 +1999,8 @@ async function rebuildTerrain() {
   try {
     const next = await createTerrainFromField(engine, scene, snap, camera, {
       skipScenery: false,
+      // Editor meshes (including the draft ghost) are drawn separately.
+      skipWalls: true,
       chunkedAtlas: true,
     });
     if (gen !== fieldGen) {
@@ -1367,6 +2008,7 @@ async function rebuildTerrain() {
       return;
     }
     terrain = next;
+    terrain.setSceneryVisible?.(state.showScenery);
     grid = createTileGridOverlay(engine, scene, snap, { edges: false });
     grid.setVisible(state.showGrid);
     if (!sceneRegistered) {
@@ -1406,6 +2048,7 @@ function selectChunk(cx, cz, { add = false } = {}) {
 function applySelectedShape() {
   if (!field?.tableShape) return;
   applyTableSilhouette(field, field.tableShape);
+  clearOffTableScenery(field);
   scheduleRebuild();
   updateSelectUi();
 }
@@ -1416,6 +2059,155 @@ function toggleSelectedChunks() {
   const next = !allOn;
   for (const s of state.selected) setCellEnabled(field.tableShape, s.cx, s.cz, next);
   applySelectedShape();
+}
+
+function propList() {
+  if (!field) return [];
+  if (!Array.isArray(field.backdrops)) field.backdrops = [];
+  return field.backdrops;
+}
+
+function selectedProp() {
+  const list = field?.backdrops;
+  if (!list || state.propIndex < 0 || state.propIndex >= list.length) return null;
+  return list[state.propIndex];
+}
+
+function setTableTool(tool) {
+  state.tableTool = tool === 'props' ? 'props' : 'chunks';
+  if (state.tableTool !== 'props') {
+    state.propArmed = false;
+    propDrag = null;
+    propReturnChunks = false;
+  }
+  document.getElementById('table-tool-chunks')?.classList.toggle('active', state.tableTool === 'chunks');
+  document.getElementById('table-tool-props')?.classList.toggle('active', state.tableTool === 'props');
+  syncPropUi();
+  updateSelectUi();
+}
+
+function syncPropUi() {
+  const list = field?.backdrops || [];
+  const box = document.getElementById('prop-list');
+  if (box) {
+    box.replaceChildren();
+    if (!list.length) box.textContent = 'No props.';
+    list.forEach((pose, i) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.dataset.propIndex = String(i);
+      btn.textContent = `${BACKDROP_DEFS[pose.type]?.label || pose.type} · ${Math.round(pose.scale)}`;
+      btn.classList.toggle('active', i === state.propIndex);
+      box.append(btn);
+    });
+  }
+  document.querySelectorAll('[data-prop]').forEach((btn) => {
+    btn.classList.toggle('active', state.propArmed && btn.dataset.prop === state.propType);
+  });
+  const pose = selectedProp();
+  const scale = document.getElementById('prop-scale');
+  const y = document.getElementById('prop-y');
+  const yaw = document.getElementById('prop-yaw');
+  const scaleLabel = document.getElementById('prop-scale-label');
+  const yLabel = document.getElementById('prop-y-label');
+  const yawLabel = document.getElementById('prop-yaw-label');
+  if (scale) {
+    scale.disabled = !pose;
+    if (pose && document.activeElement !== scale) scale.value = String(Math.round(pose.scale));
+  }
+  if (y) {
+    y.disabled = !pose;
+    if (pose && document.activeElement !== y) y.value = String(Math.round(pose.y));
+  }
+  if (yaw) {
+    yaw.disabled = !pose;
+    if (pose && document.activeElement !== yaw) {
+      yaw.value = String(Math.round((pose.yaw * 180) / Math.PI) % 360);
+    }
+  }
+  if (scaleLabel) scaleLabel.textContent = pose ? String(Math.round(pose.scale)) : '—';
+  if (yLabel) yLabel.textContent = pose ? String(Math.round(pose.y)) : '—';
+  if (yawLabel) yawLabel.textContent = pose ? String(Math.round((pose.yaw * 180) / Math.PI) % 360) : '—';
+  const remove = document.getElementById('btn-prop-remove');
+  if (remove) remove.disabled = !pose;
+}
+
+function poseProps() {
+  if (!terrain) return;
+  if (terrain.applyBackdropPoses?.(field)) {
+    if (sceneRegistered) invalidateRenderBundles(engine);
+    return;
+  }
+  const gen = ++propSyncGen;
+  const pending = terrain.syncBackdrops?.(field);
+  if (!pending?.then) return;
+  pending.then((ok) => {
+    if (!ok || gen !== propSyncGen) return;
+    if (sceneRegistered) invalidateRenderBundles(engine);
+  }).catch((err) => {
+    console.warn('[forge] prop sync failed', err);
+  });
+}
+
+function propGesture(pos) {
+  if (!pos) return false;
+  if (state.propArmed) return true;
+  return nearestBackdrop(propList(), pos.x, pos.z) >= 0;
+}
+
+function placeOrGrabProp(pos) {
+  if (!pos || !field) return;
+  const list = propList();
+  const hit = nearestBackdrop(list, pos.x, pos.z);
+  if (hit >= 0) {
+    state.propIndex = hit;
+    propDrag = { index: hit, dx: list[hit].x - pos.x, dz: list[hit].z - pos.z };
+    syncPropUi();
+    return;
+  }
+  if (!state.propArmed) return;
+  const pose = freshBackdrop(state.propType, pos.x, pos.z);
+  if (!pose) return;
+  list.push(pose);
+  state.propIndex = list.length - 1;
+  propDrag = { index: state.propIndex, dx: 0, dz: 0 };
+  state.propArmed = false;
+  propReturnChunks = true;
+  syncPropUi();
+  poseProps();
+}
+
+function movePropDrag(pos) {
+  if (!propDrag || !pos) return;
+  const pose = propList()[propDrag.index];
+  if (!pose) return;
+  pose.x = Math.round((pos.x + propDrag.dx) * 1000) / 1000;
+  pose.z = Math.round((pos.z + propDrag.dz) * 1000) / 1000;
+  poseProps();
+}
+
+function patchSelectedProp(partial) {
+  const pose = selectedProp();
+  if (!pose) return;
+  if (partial.scale != null && partial.y == null) {
+    const seated = defaultBackdropY(pose.type, pose.scale);
+    if (Math.abs(pose.y - seated) < 0.05) {
+      partial = { ...partial, y: defaultBackdropY(pose.type, partial.scale) };
+    }
+  }
+  Object.assign(pose, partial);
+  syncPropUi();
+  poseProps();
+}
+
+function removeSelectedProp() {
+  const list = propList();
+  if (state.propIndex < 0 || state.propIndex >= list.length) return;
+  list.splice(state.propIndex, 1);
+  state.propIndex = list.length ? Math.min(state.propIndex, list.length - 1) : -1;
+  propDrag = null;
+  syncPropUi();
+  poseProps();
 }
 
 function applyAt(pos, { add = false } = {}) {
@@ -1431,18 +2223,26 @@ function applyAt(pos, { add = false } = {}) {
     const halfZ = worldHalfZFFromField(field);
     const tx = Math.floor((pos.x + half) / TILE_SIZE_F);
     const tz = Math.floor((pos.z + halfZ) / TILE_SIZE_F);
-    const key = `terrain:${tx}:${tz}:${state.brush}:${state.lift}:${state.liftStrength}:${state.terrain}:${add ? 1 : 0}`;
+    const leveling = state.lift === 'level';
+    const key = leveling
+      ? `level:${tx}:${tz}:${state.brush}:${state.liftStrength}`
+      : `terrain:${tx}:${tz}:${state.brush}:${state.lift}:${state.liftStrength}:${state.terrain}:${add ? 1 : 0}`;
     if (key === lastPaintKey) return;
     lastPaintKey = key;
-    const dirty = state.lift
-      ? paintRegionLift(
-        field,
-        tx,
-        tz,
-        (add ? -state.lift : state.lift) * REGION_LIFT_STEP * (state.liftStrength / 10),
-        state.brush,
-      )
-      : paintTerrainBrush(field, tx, tz, state.terrain, state.brush);
+    if (leveling && (levelHold == null || !Number.isFinite(levelHold))) {
+      levelHold = tileHeightWorld(field, tx, tz) / HEIGHT_AMPLITUDE;
+    }
+    const dirty = leveling
+      ? paintRegionLevel(field, tx, tz, levelHold, state.liftStrength / 10, state.brush)
+      : state.lift
+        ? paintRegionLift(
+          field,
+          tx,
+          tz,
+          (add ? -state.lift : state.lift) * REGION_LIFT_STEP * (state.liftStrength / 10),
+          state.brush,
+        )
+        : paintTerrainBrush(field, tx, tz, state.terrain, state.brush);
     if (dirty.length) {
       queueTerrainPaint(dirty);
       if (state.lift) refreshBrushCursor();
@@ -1461,14 +2261,13 @@ function applyAt(pos, { add = false } = {}) {
     const dirty = state.stamp === 'doodad'
       ? paintDoodadBrush(field, tx, tz, state.doodad, state.brush)
       : paintSceneryBrush(field, tx, tz, state.scenery, state.brush, { refresh: false });
+    if (state.stamp !== 'doodad' && dirty.length) field.sceneryAuthored = true;
     if (dirty.length) {
       if (terrain?.applyAuthoredSceneryTiles) {
         terrain.applyAuthoredSceneryTiles(field, dirty);
         if (sceneRegistered) invalidateRenderBundles(engine);
-        queueSceneryPaint();
-      } else {
-        queueSceneryPaint(dirty);
       }
+      queueSceneryPaint(dirty);
     }
     return;
   }
@@ -1603,6 +2402,8 @@ function gardenExtras() {
     story: state.story,
     cameraHalfF: state.cameraHalfF,
     walls: wallsForGarden(),
+    celestial: celestial?.getState?.() ?? null,
+    mapType: state.mapType,
   };
 }
 
@@ -1774,11 +2575,57 @@ function addStoryLine() {
 }
 
 function deleteStoryClip() {
-  if (!state.storyClipId) return;
   const reel = currentReel();
-  commitReel({ ...reel, clips: reel.clips.filter((c) => c.id !== state.storyClipId) });
-  state.storyClipId = null;
-  syncStoryEditor();
+  const idx = reel.clips.findIndex((c) => c.id === state.storyClipId);
+  if (idx < 0) return;
+  const clips = reel.clips.filter((c) => c.id !== state.storyClipId);
+  const next = clips[idx] || clips[idx - 1] || null;
+  state.storyClipId = next?.id ?? null;
+  commitReel({ ...reel, clips });
+  if (next) storyPlayer?.seek(next.t);
+  refreshStorySheet();
+}
+
+function storyClipLabel(clip) {
+  const t = Number(clip.t) || 0;
+  const stamp = `${t.toFixed(1)}s`;
+  if (clip.kind === CLIP_LINE) {
+    const who = clip.speaker ? `${clip.speaker}: ` : '';
+    return `${stamp} Line — ${who}${clip.text || '…'}`;
+  }
+  if (clip.kind === CLIP_HOLD) return `${stamp} Pause`;
+  const end = `${clip.tx | 0}, ${clip.tz | 0}`;
+  return `${stamp} Camera — ${end}`;
+}
+
+function renderStoryClipList() {
+  const host = document.getElementById('story-clip-list');
+  if (!host) return;
+  host.replaceChildren();
+  const clips = currentReel().clips;
+  if (!clips.length) {
+    const empty = document.createElement('p');
+    empty.className = 'hint';
+    empty.textContent = 'No clips yet.';
+    host.appendChild(empty);
+    return;
+  }
+  for (const clip of clips) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.textContent = storyClipLabel(clip);
+    row.style.display = 'block';
+    row.style.width = '100%';
+    row.style.textAlign = 'left';
+    if (clip.id === state.storyClipId) row.classList.add('active');
+    row.addEventListener('click', () => {
+      state.storyClipId = clip.id;
+      storyPlayer?.seek(clip.t);
+      syncStoryEditor();
+      refreshStorySheet();
+    });
+    host.appendChild(row);
+  }
 }
 
 function patchSelectedClip(patch) {
@@ -1803,6 +2650,7 @@ function syncStoryEditor() {
   if (empty) empty.style.display = clip ? 'none' : 'block';
   if (camFields) camFields.style.display = clip?.kind === CLIP_CAMERA ? 'block' : 'none';
   if (lineFields) lineFields.style.display = clip?.kind === CLIP_LINE ? 'block' : 'none';
+  renderStoryClipList();
   if (clip?.kind === CLIP_CAMERA) {
     const set = (id, v) => { const el = document.getElementById(id); if (el && el !== document.activeElement) el.value = String(v); };
     set('story-cam-t', clip.t);
@@ -1959,26 +2807,160 @@ function bindStoryUi() {
   });
 }
 
-function exportMap() {
-  const json = JSON.stringify(gardenPayload(), null, 0);
+function gardenFileName() {
+  return `${(state.mapName || 'map').replace(/[^\w-]+/g, '_')}.garden`;
+}
+
+function downloadGarden(json, name) {
   const blob = new Blob([json], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `${(state.mapName || 'map').replace(/[^\w-]+/g, '_')}.garden`;
+  a.download = name;
   a.click();
   URL.revokeObjectURL(a.href);
 }
 
+async function exportMap() {
+  const name = gardenFileName();
+  const picker = typeof globalThis.showSaveFilePicker === 'function'
+    ? globalThis.showSaveFilePicker.bind(globalThis)
+    : null;
+  if (picker) {
+    try {
+      const handle = await picker({
+        suggestedName: name,
+        types: [{
+          description: 'Garden map',
+          accept: { 'application/json': ['.garden'] },
+        }],
+      });
+      const json = JSON.stringify(gardenPayload(), null, 0);
+      const writable = await handle.createWritable();
+      await writable.write(json);
+      await writable.close();
+      return;
+    } catch (err) {
+      if (err && (err.name === 'AbortError' || err.code === 20)) return;
+      console.error(err);
+    }
+  }
+  downloadGarden(JSON.stringify(gardenPayload(), null, 0), name);
+}
+
+function renderCampaignDraft() {
+  const list = document.getElementById('episode-list');
+  const nameEl = document.getElementById('campaign-name');
+  const episodeEl = document.getElementById('episode-name');
+  if (nameEl && document.activeElement !== nameEl) nameEl.value = campaignDraft.name;
+  const ep = campaignDraft.episodes[campaignDraft.episodeIndex] || campaignDraft.episodes[0];
+  if (episodeEl && document.activeElement !== episodeEl) episodeEl.value = ep?.name || '';
+  if (!list) return;
+  list.replaceChildren();
+  const chapters = [];
+  for (const episode of campaignDraft.episodes) {
+    for (const ch of episode.chapters) chapters.push({ episode: episode.name, ...ch });
+  }
+  if (!chapters.length) {
+    list.textContent = 'No chapters yet. Add this map to start an episode.';
+    return;
+  }
+  for (const ch of chapters) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const label = document.createElement('span');
+    label.textContent = `${ch.episode} · ${ch.name}`;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.textContent = 'Remove';
+    remove.addEventListener('click', () => {
+      removeChapter(campaignDraft, ch.file);
+      renderCampaignDraft();
+    });
+    row.append(label, remove);
+    list.append(row);
+  }
+}
+
+function currentChapterTitle() {
+  return String(state.mapName || gardenPayload().n || '').trim() || 'Chapter';
+}
+
+function addCurrentChapter() {
+  const garden = gardenPayload();
+  const title = currentChapterTitle();
+  if (syncChapterGarden(campaignDraft, title, garden)) {
+    renderCampaignDraft();
+    return;
+  }
+  addChapter(campaignDraft, { name: title, garden });
+  renderCampaignDraft();
+}
+
+function exportCampaign() {
+  syncChapterGarden(campaignDraft, currentChapterTitle(), gardenPayload());
+  const bundle = draftToBundle(campaignDraft);
+  if (!bundle) {
+    alert('Add a chapter before exporting a campaign.');
+    return;
+  }
+  const name = `${(bundle.name || 'campaign').replace(/[^\w-]+/g, '_')}.campaign`;
+  downloadGarden(JSON.stringify(bundle), name);
+}
+
+function playCampaign() {
+  syncChapterGarden(campaignDraft, currentChapterTitle(), gardenPayload());
+  const bundle = draftToBundle(campaignDraft);
+  if (!bundle) {
+    alert('Add a chapter before playing a campaign.');
+    return;
+  }
+  const first = formatPackRef(firstChapterFile(bundle));
+  const url = `/?garden=${encodeURIComponent(first)}&solo=1`;
+  writeCampaignPack(JSON.stringify(bundle)).then(() => {
+    window.open(url, '_blank');
+  }).catch((err) => {
+    console.error(err);
+    alert('Could not start that campaign.');
+  });
+}
+
 function playMap() {
-  sessionStorage.setItem(GARDEN_SESSION_KEY, JSON.stringify(gardenPayload()));
-  window.open('/?garden=session&solo=1', '_blank');
+  const json = JSON.stringify(gardenPayload());
+  const url = '/?garden=session&solo=1';
+  let where = 'overflow';
+  try {
+    where = stageSessionGarden(json);
+  } catch (err) {
+    console.error(err);
+    alert('Could not start that map.');
+    return;
+  }
+  if (where === 'session') {
+    window.open(url, '_blank');
+    return;
+  }
+  // Open during the click, then navigate once IndexedDB has the garden.
+  // A later window.open is blocked once the quota fallback goes async.
+  const opened = window.open('about:blank', '_blank');
+  writeSessionGarden(json).then(() => {
+    if (opened) opened.location.replace(url);
+    else alert('Allow popups to play the map.');
+  }).catch((err) => {
+    console.error(err);
+    try { opened?.close(); } catch { /* already closed */ }
+    alert('Could not start that map.');
+  });
 }
 
 function applyGardenJson(json) {
   const g = decodeGarden(json);
   field = fieldFromGarden(json);
   state.mapName = g.name || '';
+  state.mapType = g.mapType || DEFAULT_MAP_TYPE;
   state.units = g.units;
+  state.placePicks = [];
+  placeDrag = null;
+  placeBox = null;
   state.buildings = g.buildings;
   state.agoras = g.agoras;
   state.objectives = normalizeObjectives(g.objectives);
@@ -1993,20 +2975,41 @@ function applyGardenJson(json) {
   wallCursor = null;
   storyPlayer?.setReel(currentReel());
   state.selected = [];
+  state.propIndex = -1;
+  state.propArmed = false;
+  propDrag = null;
+  propReturnChunks = false;
   celestial?.setWorldHalfF(Math.max(worldHalfFFromField(field), worldHalfZFFromField(field)));
+  if (g.celestial) {
+    celestial?.apply(g.celestial);
+    persistCelestial();
+    syncLightUi();
+  }
   applyCameraBound();
   syncFormFromField();
+  syncPlacePickUi();
   syncStoryEditor();
-  syncWaveRouteHint();
+  renderWaveEditor();
   rebuildTerrain();
+  syncPropUi();
 }
 
 function importFile(file) {
   file.text().then((text) => {
-    applyGardenJson(JSON.parse(text));
+    const data = JSON.parse(text);
+    if (isCampaignBundle(data)) {
+      const draft = draftFromBundle(data);
+      if (!draft) throw new Error('empty campaign');
+      campaignDraft = draft;
+      const first = flattenCampaignChapters(draftToIndex(draft))[0];
+      applyGardenJson(data.gardens[first.file]);
+      renderCampaignDraft();
+      return;
+    }
+    applyGardenJson(data);
   }).catch((err) => {
     console.error(err);
-    alert('Could not import that .garden file.');
+    alert('Could not import that map.');
   });
 }
 
@@ -2221,15 +3224,28 @@ async function publishWorkshopMap() {
   const btn = document.getElementById('btn-workshop-publish');
   if (btn) btn.disabled = true;
   try {
-    const garden = gardenPayload();
+    syncChapterGarden(campaignDraft, currentChapterTitle(), gardenPayload());
+    const bundle = draftChapterCount(campaignDraft) ? draftToBundle(campaignDraft) : null;
     const description = document.getElementById('workshop-publish-desc')?.value.trim()
-      || workshopDescriptionFor(garden, state.mapName);
-    const result = await aetherSteam.publishWorkshopGarden({
-      garden,
-      title: state.mapName || garden.n || workshopNameSuggestions(garden)[0] || 'Garden',
-      description,
-      previewJpeg: workshopPreviewJpeg || undefined,
-    });
+      || workshopDescriptionFor(bundle ? bundle.gardens[firstChapterFile(bundle)] : gardenPayload(), state.mapName);
+    const body = bundle
+      ? {
+        title: bundle.name || state.mapName || 'Campaign',
+        description,
+        previewJpeg: workshopPreviewJpeg || undefined,
+        campaign: draftToIndex(campaignDraft),
+        files: flattenCampaignChapters(bundle).map((ch) => ({
+          file: ch.file,
+          garden: bundle.gardens[ch.file],
+        })),
+      }
+      : {
+        garden: gardenPayload(),
+        title: state.mapName || gardenPayload().n || workshopNameSuggestions(gardenPayload())[0] || 'Garden',
+        description,
+        previewJpeg: workshopPreviewJpeg || undefined,
+      };
+    const result = await aetherSteam.publishWorkshopGarden(body);
     if (!result?.ok) {
       console.warn('[forge] workshop publish failed', result);
       if (result?.needsAgreement) aetherSteam.openOverlay('workshop-legal');
@@ -2258,8 +3274,8 @@ function syncWorkshopChrome() {
   if (publish) publish.hidden = !steam;
   if (hint) {
     hint.textContent = steam
-      ? 'Subscribe to a map on Steam Workshop, then Load it here. Publish uploads this map. Campaigns use a relative Next garden (maps/02.garden). Play opens a solo match from this map.'
-      : 'Subscribe and publish from the Steam build. On the web, export/import .garden files, or browse maps on Steam Workshop. Play opens a solo match from this map.';
+      ? 'Subscribe to a map on Steam Workshop, then Load it here. Publish uploads this map, or the campaign if you have added chapters. Play opens a solo match from this map.'
+      : 'Subscribe and publish from the Steam build. On the web, export a .garden or a .campaign, then Load it in Adventure. Play opens a solo match from this map.';
   }
 }
 
@@ -2301,8 +3317,11 @@ function updateSelectUi() {
   const radLabel = document.getElementById('radius-label');
   const shape = field?.tableShape;
   if (!hint || !shape) return;
+  const armed = state.tableTool === 'props' && state.propArmed;
   if (!state.selected.length) {
-    hint.textContent = 'Click to select. Shift-click to add. Double-click to toggle on/off.';
+    hint.textContent = armed
+      ? 'Click empty ground to place it. Click Chunks to edit the table.'
+      : 'Click to select. Shift-click to add. Double-click to toggle on/off.';
     if (enabledEl) {
       enabledEl.disabled = true;
       enabledEl.indeterminate = false;
@@ -2313,7 +3332,9 @@ function updateSelectUi() {
   const onCount = state.selected.filter((s) => isCellEnabled(shape, s.cx, s.cz)).length;
   const radii = state.selected.map((s) => getCellRadius(shape, s.cx, s.cz));
   const sameR = radii.every((r) => r === radii[0]);
-  if (state.selected.length === 1) {
+  if (armed) {
+    hint.textContent = 'Click empty ground to place it. Click Chunks to edit the table.';
+  } else if (state.selected.length === 1) {
     const sel = state.selected[0];
     const kind = chunkCornerKind(shape, sel.cx, sel.cz);
     hint.textContent = `Chunk (${sel.cx}, ${sel.cz})  ·  ${onCount ? 'on' : 'off'}  ·  ${kind}`;
@@ -2338,10 +3359,12 @@ function syncFormFromField() {
   const nameEl = document.getElementById('map-name');
   const chunksX = document.getElementById('map-chunks-x');
   const chunksY = document.getElementById('map-chunks-y');
-  if (chunksX) chunksX.value = String(chunksOfTiles(field.width));
-  if (chunksY) chunksY.value = String(chunksOfTiles(field.height));
+  selectChunkCount(chunksX, chunksOfTiles(field.width));
+  selectChunkCount(chunksY, chunksOfTiles(field.height));
   if (seedEl) seedEl.value = String(field.seed);
   if (nameEl) nameEl.value = state.mapName;
+  const typeEl = document.getElementById('map-type');
+  if (typeEl) typeEl.value = normalizeMapType(state.mapType);
   syncCenterPlinthUi();
   syncCameraBoundUi();
   for (const kind of RESOURCE_KINDS) {
@@ -2390,9 +3413,14 @@ function setLayer(layer) {
   updateSelectIndicator();
 }
 
+function liftToken(raw) {
+  return raw === 'level' ? 'level' : Number(raw);
+}
+
 function setTerrain(type) {
   state.terrain = type;
   state.lift = 0;
+  levelHold = null;
   document.querySelectorAll('[data-terrain]').forEach((b) => {
     b.classList.toggle('active', Number(b.dataset.terrain) === type);
   });
@@ -2402,9 +3430,10 @@ function setTerrain(type) {
 
 function setLift(dir) {
   state.lift = dir;
+  levelHold = null;
   document.querySelectorAll('[data-terrain]').forEach((b) => b.classList.remove('active'));
   document.querySelectorAll('[data-lift]').forEach((b) => {
-    b.classList.toggle('active', Number(b.dataset.lift) === dir);
+    b.classList.toggle('active', liftToken(b.dataset.lift) === dir);
   });
   refreshBrushCursor();
 }
@@ -2428,6 +3457,11 @@ function mountUi() {
     <div id="panel-file" class="panel" style="display:none">
       <label>Name</label>
       <input id="map-name" type="text" placeholder="Map name">
+      <label>Map type</label>
+      <select id="map-type">
+        ${MAP_TYPES.map((t) => `<option value="${t.id}"${t.id === state.mapType ? ' selected' : ''}>${t.name}</option>`).join('')}
+      </select>
+      <p class="hint">Saved on the .garden file. Generate keeps that type’s starts on grass. 1 vs 1 and Teams also get home agoras. King of the Hill clears the five drop pads. Adventure leaves the land alone.</p>
       <label>Starting wood</label>
       <input id="start-wood" type="number" min="0" value="${STARTING_RESOURCES.wood}">
       <label>Starting stone</label>
@@ -2437,18 +3471,31 @@ function mountUi() {
       <label>Starting food</label>
       <input id="start-food" type="number" min="0" value="${STARTING_RESOURCES.food}">
       <label>Width</label>
-      <input id="map-chunks-x" type="number" min="${FORGE_MIN_CHUNKS}" max="${FORGE_MAX_CHUNKS}" step="2" value="${DEFAULT_CHUNKS}">
+      <select id="map-chunks-x">${chunkSizeOptionsHtml()}</select>
       <label>Depth</label>
-      <input id="map-chunks-y" type="number" min="${FORGE_MIN_CHUNKS}" max="${FORGE_MAX_CHUNKS}" step="2" value="${DEFAULT_CHUNKS}">
-      <p class="hint">Odd chunks, ${FORGE_MIN_CHUNKS}–${FORGE_MAX_CHUNKS} (${forgeTilesForChunks(FORGE_MIN_CHUNKS)}–${forgeTilesForChunks(FORGE_MAX_CHUNKS)} tiles). Width and depth can differ. Generate rebuilds the board.</p>
+      <select id="map-chunks-y">${chunkSizeOptionsHtml()}</select>
+      <p class="hint">* Past ${LOD_MAP_CHUNKS} chunks (${forgeTilesForChunks(LOD_MAP_CHUNKS)} tiles), LOD is enabled.</p>
       <label>Seed</label>
       <input id="map-seed" type="number" value="${DEFAULT_SEED}">
       <div class="row">
         <button id="btn-generate">Generate</button>
+        <button id="btn-random" type="button">Random</button>
         <button id="btn-export">Export .garden</button>
         <button id="btn-import">Import</button>
         <button id="btn-play">Play</button>
       </div>
+      <label>Campaign</label>
+      <input id="campaign-name" type="text" maxlength="80" value="Campaign">
+      <label>Episode</label>
+      <input id="episode-name" type="text" maxlength="80" value="Episode 1">
+      <div class="row">
+        <button id="btn-episode-add" type="button">Add chapter</button>
+        <button id="btn-episode-new" type="button">New episode</button>
+        <button id="btn-episode-export" type="button">Export campaign</button>
+        <button id="btn-episode-play" type="button">Play campaign</button>
+      </div>
+      <div id="episode-list" class="hint">No chapters yet. Add this map to start an episode.</div>
+      <p class="hint">A campaign is an ordered list of chapters. Episodes are headings. Export a .campaign file for the web game, or publish the list to Workshop.</p>
       <label>Steam Workshop</label>
       <select id="workshop-maps">
         <option value="">Subscribed maps…</option>
@@ -2458,8 +3505,8 @@ function mountUi() {
         <a id="btn-workshop-browse" class="kakko" href="${workshopPageUrl()}" target="_blank" rel="noopener noreferrer">Browse Workshop</a>
         <button id="btn-workshop-publish" type="button">Publish to Workshop</button>
       </div>
-      <input id="import-file" type="file" accept=".garden,.json" style="display:none">
-      <p class="hint" id="workshop-hint">Subscribe and publish from the Steam build. On the web, export/import .garden files, or browse maps on Steam Workshop. Play opens a solo match from this map.</p>
+      <input id="import-file" type="file" accept=".garden,.campaign,.json" style="display:none">
+      <p class="hint" id="workshop-hint">Subscribe and publish from the Steam build. On the web, export a .garden or a .campaign, then Load it in Adventure. Play opens a solo match from this map.</p>
     </div>
     <div id="workshop-publish-dlg">
       <label>Publish name</label>
@@ -2479,14 +3526,32 @@ function mountUi() {
       <label><input id="chunk-enabled" type="checkbox" checked disabled> Chunk enabled</label>
       <label>Radius <span id="radius-label">${DEFAULT_CELL_RADIUS}</span></label>
       <input id="chunk-radius" type="range" min="0" max="32" value="${DEFAULT_CELL_RADIUS}" disabled>
-      <label><input id="center-plinth" type="checkbox" checked> Center plinth</label>
-      <p class="hint">0 = sharp corner + plinth. Raise radius to fillet that corner. Outer rails get matching side plinths. Odd boards can also plant a center plinth — uncheck to leave the middle open.</p>
+      <label><input id="center-plinth" type="checkbox"> Center plinth</label>
+      <p class="hint">0 = sharp corner + plinth. Raise radius to fillet that corner. Outer rails get matching side plinths. Odd boards can also plant a center plinth — check to put one in the middle.</p>
       <label>Camera bound <span id="camera-bound-label">100%</span></label>
       <input id="camera-bound" type="range" min="20" max="100" value="100">
       <p class="hint">Pan and zoom stay inside this box. 100% is the full table — lower it to keep a vista rim the camera cannot cross.</p>
       <div class="row">
         <button id="btn-enable-all">Enable all chunks</button>
       </div>
+      <label>Props</label>
+      <div class="row">
+        <button id="table-tool-chunks" type="button" class="active">Chunks</button>
+        <button id="table-tool-props" type="button">Props</button>
+      </div>
+      <div class="row">
+        <button data-prop="${BACKDROP.DISC}" type="button">Disc</button>
+        <button data-prop="${BACKDROP.CASTLE}" type="button">Castle</button>
+        <button id="btn-prop-remove" type="button">Remove</button>
+      </div>
+      <div id="prop-list" class="hint">No props.</div>
+      <label>Size <span id="prop-scale-label">${BACKDROP_DEFS[BACKDROP.CASTLE].defaultScale}</span></label>
+      <input id="prop-scale" type="range" min="4" max="240" step="1" value="${BACKDROP_DEFS[BACKDROP.CASTLE].defaultScale}" disabled>
+      <label>Height <span id="prop-y-label">0</span></label>
+      <input id="prop-y" type="range" min="-800" max="40" step="1" value="0" disabled>
+      <label>Turn <span id="prop-yaw-label">0</span></label>
+      <input id="prop-yaw" type="range" min="0" max="360" step="1" value="0" disabled>
+      <p class="hint">Props sit beside the table or in a hole. Disc or Castle arms one drop — click the ground once, then chunk clicks work again. Double-click a chunk to turn it on or off. Click a prop to drag it. They do not block movement.</p>
     </div>
     <div id="panel-terrain" class="panel" style="display:none">
       <div class="row">
@@ -2495,12 +3560,17 @@ function mountUi() {
         <button data-terrain="${TERRAIN.WATER}">Water</button>
         <button data-lift="1">Raise</button>
         <button data-lift="-1">Lower</button>
+        <button data-lift="level">Level</button>
+      </div>
+      <div class="row">
+        <button data-terrain="${TERRAIN.GRAVEL}">Gravel</button>
+        <button data-terrain="${TERRAIN.TILE}">Tile</button>
       </div>
       <label>Brush <span id="brush-label">1</span></label>
       <input id="brush-size" type="range" min="0" max="6" value="1">
       <label>Strength <span id="lift-strength-label">6</span></label>
       <input id="lift-strength" type="range" min="1" max="10" value="6">
-      <p class="hint">Raise and lower ease across the brush. Strength is how hard each stroke pushes. The table edge stays between the rail and the floor; the middle can go further.</p>
+      <p class="hint">Raise and lower ease across the brush. Level keeps the height you first click and pulls the stroke toward it. Strength is how hard each stamp pushes. The table edge stays between the rail and the floor; the middle can go further. Tile blends into gravel. Both meet grass, dirt, and water on a straight edge.</p>
     </div>
     <div id="panel-scenery" class="panel" style="display:none">
       <div class="row">
@@ -2522,7 +3592,7 @@ function mountUi() {
         <button id="btn-clear-scenery">Clear scenery</button>
         <button id="btn-clear-doodads">Clear doodads</button>
       </div>
-      <p class="hint">Trees and rocks gather / block. Doodads are paint-only — they do not path or harvest. Grove mushrooms still sprout on their own when a stand matures. Generate fills around painted trees. Clear wipes that row only.</p>
+      <p class="hint">Trees and rocks gather / block. Doodads are paint-only — they do not path or harvest. Grove mushrooms still sprout on their own when a stand matures. A new map already includes them. Generate fills around what you painted. Clear removes trees and rocks from the map. The Scenery checkbox only hides them.</p>
     </div>
     <div id="panel-walls" class="panel" style="display:none">
       <p class="hint" id="wall-aim">Wall: click corners. Right-click finishes the run. Erase takes out one section.</p>
@@ -2557,8 +3627,14 @@ function mountUi() {
       <input id="place-name" type="text" placeholder="Stumpey">
       <label>Units</label>
       <div class="row">
+        <button data-place="party" type="button">Party</button>
+        <button id="place-rot-l" type="button">Rotate left</button>
+        <button id="place-rot-r" type="button">Rotate right</button>
+      </div>
+      <div class="row">
         ${UNIT_DEFS.map((u) => `<button data-place="unit" data-type="${u.id}">${u.name}</button>`).join('')}
       </div>
+      <p id="place-pick-hint" class="hint">Drag a box to select units. Click empty ground to place. Party, then click, stands the four heroes on that spot. Drag a selection to move it. [ ] turns it.</p>
       <label>Buildings</label>
       <div class="row">
         <button data-place="agora" data-type="agora">Agora</button>
@@ -2567,7 +3643,6 @@ function mountUi() {
       <label>Objectives</label>
       <div class="row">
         <button data-place="objective" data-type="objective">Zone</button>
-        <button data-place="wavehop" data-type="wavehop">Hop</button>
       </div>
       <label>Kind
         <select id="place-obj-kind">
@@ -2578,13 +3653,10 @@ function mountUi() {
       <label>Label <input id="place-obj-label" type="text" placeholder="Reach the old road"></label>
       <label>Message <input id="place-obj-message" type="text"></label>
       <label>Next garden <input id="place-obj-next" type="text" placeholder="/maps/chapter2.garden"></label>
-      <label>Waves <input id="place-obj-waves" type="number" min="0" step="1" value="0"></label>
-      <label>Era (1–5) <input id="place-obj-era" type="number" min="0" max="5" step="1" value="1"></label>
-      <div class="row">
-        <button id="btn-clear-wave-hops" type="button">Clear hops</button>
-      </div>
-      <p id="place-obj-route-hint" class="hint">No hops. First Hop click is where they form up (max ${WAVE_ROUTE_MAX}).</p>
-      <p class="hint">Click to place. Shift-click to remove the nearest of that kind. Waves &gt; 0 makes hostiles march at the zone — place the zone, then Hop along the path (first click is the spawn). No hops = they form on a ring around the zone. Escape / advance loads Next garden when a party unit enters the zone.</p>
+      <p class="hint">Party is a stamp: click the ground and the four heroes stand in a row there. Click again to move that same row. Escape and advance load Next garden when a party unit enters the zone.</p>
+      <label>Enemy waves</label>
+      <p class="hint">Adventure maps only — not a skirmish army. A zone with a group count sends hostile waves at it, one every 12 seconds. Era is which army. Hops are their path: Form up is where they appear, later stops are the march, and the zone is the last stop. No hops and they appear in a ring around the zone. Click a hop, then the map, to move it.</p>
+      <div id="wave-zone-list"></div>
     </div>
     <div id="panel-story" class="panel" style="display:none">
       <div class="row">
@@ -2601,7 +3673,8 @@ function mountUi() {
         <button id="story-add-line" type="button">Add line</button>
         <button id="story-delete" type="button">Delete clip</button>
       </div>
-      <p id="story-clip-empty" class="hint">Add a camera from the current view, or a line. Orbit, then Set start / Set end to confirm waypoints. Jump / Follow a named unit, or aim a camera clip at them. Click the map to aim the selected end look-at. Scrub the sheet to seek.</p>
+      <p id="story-clip-empty" class="hint">Add a camera from the current view, or a line. Orbit, then Set start / Set end to confirm waypoints. Jump / Follow a named unit, or aim a camera clip at them. Click the map to aim the selected end look-at. Scrub the sheet to seek. Delete removes the clip selected in the list, including ones stacked at the start.</p>
+      <div id="story-clip-list"></div>
       <div id="story-cast"></div>
       <div id="story-clip-camera" style="display:none">
         <div class="row">
@@ -2674,6 +3747,7 @@ function mountUi() {
     <label title="Red is blocked, yellow is slow"><input id="show-grid" type="checkbox"> Collision</label>
     <label title="Chunk outlines"><input id="show-chunks" type="checkbox" checked> Chunk borders</label>
     <label title="Tile corners, plus the slope diagonal"><input id="show-tiles" type="checkbox"> Tile wireframe</label>
+    <label title="Hide trees, rocks, and doodads without removing them"><input id="show-scenery" type="checkbox" checked> Scenery</label>
   `;
   document.body.appendChild(view);
   ui.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -2687,7 +3761,7 @@ function mountUi() {
     b.addEventListener('click', () => setTerrain(Number(b.dataset.terrain)));
   });
   ui.querySelectorAll('[data-lift]').forEach((b) => {
-    b.addEventListener('click', () => setLift(Number(b.dataset.lift)));
+    b.addEventListener('click', () => setLift(liftToken(b.dataset.lift)));
   });
   ui.querySelectorAll('[data-scenery]').forEach((b) => {
     b.addEventListener('click', () => {
@@ -2718,25 +3792,94 @@ function mountUi() {
       ui.querySelectorAll('[data-place]').forEach((x) => {
         x.classList.toggle('active', x === b);
       });
+      const grabbedUnit = state.placePicks.some((p) => p.kind === 'unit');
+      state.placePicks = [];
+      placeDrag = null;
+      placeBox = null;
+      if (grabbedUnit) {
+        const nameEl = document.getElementById('place-name');
+        if (nameEl) nameEl.value = '';
+      }
+      syncPlacePickUi();
+      updatePlaceMarkers();
     });
   });
-  ui.querySelector('[data-place]')?.classList.add('active');
+  ui.querySelector('[data-place="unit"]')?.classList.add('active');
   document.getElementById('place-owner').addEventListener('input', (e) => {
     state.owner = Math.max(0, Math.min(4, Number(e.target.value) || 0));
+    let changed = false;
+    for (const pick of state.placePicks) {
+      const item = placeList(pick.kind)?.[pick.index];
+      if (item && item.owner != null) {
+        item.owner = state.owner;
+        changed = true;
+      }
+    }
+    if (changed) updatePlaceMarkers();
   });
-  document.getElementById('btn-clear-wave-hops')?.addEventListener('click', () => {
-    clearWaveHops();
+  document.getElementById('place-name')?.addEventListener('input', (e) => {
+    const picks = livePicks();
+    if (picks.length !== 1 || picks[0].kind !== 'unit') return;
+    const u = state.units[picks[0].index];
+    if (u) u.name = String(e.target.value || '');
   });
-  syncWaveRouteHint();
+  document.getElementById('place-rot-l')?.addEventListener('click', () => rotatePlacePick(-1));
+  document.getElementById('place-rot-r')?.addEventListener('click', () => rotatePlacePick(1));
+  const waveList = document.getElementById('wave-zone-list');
+  waveList?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-wave-act]');
+    if (!btn || !waveList.contains(btn)) return;
+    const act = btn.dataset.waveAct;
+    const id = btn.dataset.waveId || '';
+    const index = Number(btn.dataset.waveIndex);
+    if (act === 'select-zone') {
+      state.waveEdit = { id };
+    } else if (act === 'select-hop') {
+      state.waveEdit = { id, hopIndex: index };
+      armWaveHopPlace();
+    } else if (act === 'select-pending') {
+      state.waveEdit = { pending: true, hopIndex: index };
+      armWaveHopPlace();
+    } else if (act === 'add-hop') {
+      state.waveEdit = { id };
+      armWaveHopPlace();
+    } else if (act === 'add-pending') {
+      state.waveEdit = null;
+      armWaveHopPlace();
+    } else if (act === 'remove-hop') {
+      removeWaveHopAt(waveZoneById(id), index);
+      if (state.waveEdit?.id === id && state.waveEdit.hopIndex === index) state.waveEdit = { id };
+    } else if (act === 'remove-pending') {
+      if (index >= 0 && index < state.waveRoute.length) state.waveRoute.splice(index, 1);
+      if (state.waveEdit?.pending && state.waveEdit.hopIndex === index) state.waveEdit = null;
+    }
+    renderWaveEditor();
+    updatePlaceMarkers();
+  });
+  waveList?.addEventListener('change', (e) => {
+    const input = e.target.closest('[data-wave-field]');
+    if (!input) return;
+    const id = input.dataset.waveId || '';
+    const obj = id ? waveZoneById(id) : null;
+    const n = Number(input.value) || 0;
+    if (input.dataset.waveField === 'waves') {
+      if (obj) setZoneWaves(obj, n);
+      else state.waveDraft.waves = Math.max(0, n | 0);
+    } else if (input.dataset.waveField === 'era') {
+      if (obj) setZoneEra(obj, n);
+      else state.waveDraft.era = Math.max(0, Math.min(5, n | 0));
+    }
+    renderWaveEditor();
+  });
+  renderWaveEditor();
   document.getElementById('btn-gen-scenery').addEventListener('click', () => {
     populateScenery(field, null, reservedFromPlacements(), { keepExisting: true });
+    field.sceneryAuthored = true;
     queueSceneryPaint(null, { full: true });
     grid?.refreshOccupancy(field);
   });
   document.getElementById('btn-clear-scenery').addEventListener('click', () => {
-    if (field.sceneryType) field.sceneryType.fill(0);
-    if (field.treeStock) field.treeStock.fill(0);
-    applyAuthoredScenery(field);
+    clearAllScenery(field);
     queueSceneryPaint(null, { full: true });
     grid?.refreshOccupancy(field);
   });
@@ -2750,6 +3893,9 @@ function mountUi() {
   });
   document.getElementById('map-name').addEventListener('input', (e) => {
     state.mapName = e.target.value;
+  });
+  document.getElementById('map-type').addEventListener('change', (e) => {
+    state.mapType = normalizeMapType(e.target.value);
   });
   for (const kind of RESOURCE_KINDS) {
     document.getElementById(`start-${kind}`).addEventListener('input', (e) => {
@@ -2839,6 +3985,11 @@ function mountUi() {
     tileWireStamp = 0;
     updateTileWire();
   });
+  document.getElementById('show-scenery').addEventListener('change', (e) => {
+    state.showScenery = e.target.checked;
+    terrain?.setSceneryVisible?.(state.showScenery);
+    if (sceneRegistered) invalidateRenderBundles(engine);
+  });
   document.getElementById('camera-bound').addEventListener('input', (e) => {
     setCameraBoundPct(Number(e.target.value) || 100);
   });
@@ -2850,13 +4001,51 @@ function mountUi() {
     scheduleRebuild();
     updateSelectUi();
   });
-  document.getElementById('btn-generate').addEventListener('click', () => {
+  document.getElementById('table-tool-chunks')?.addEventListener('click', () => setTableTool('chunks'));
+  document.getElementById('table-tool-props')?.addEventListener('click', () => {
+    state.propArmed = false;
+    setTableTool('props');
+  });
+  document.querySelectorAll('[data-prop]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.propType = btn.dataset.prop;
+      state.propArmed = true;
+      setTableTool('props');
+    });
+  });
+  document.getElementById('prop-list')?.addEventListener('click', (e) => {
+    const btn = e.target?.closest?.('[data-prop-index]');
+    if (!btn) return;
+    state.propIndex = Number(btn.dataset.propIndex);
+    setTableTool('props');
+    syncPropUi();
+  });
+  document.getElementById('btn-prop-remove')?.addEventListener('click', removeSelectedProp);
+  document.getElementById('prop-scale')?.addEventListener('input', (e) => {
+    const scale = Number(e.target.value);
+    if (!(scale > 0)) return;
+    patchSelectedProp({ scale });
+  });
+  document.getElementById('prop-y')?.addEventListener('input', (e) => {
+    patchSelectedProp({ y: Number(e.target.value) || 0 });
+  });
+  document.getElementById('prop-yaw')?.addEventListener('input', (e) => {
+    const deg = Number(e.target.value) || 0;
+    patchSelectedProp({ yaw: (deg * Math.PI) / 180 });
+  });
+  function generateFromSeed(seed) {
     const width = forgeTilesForChunks(Number(document.getElementById('map-chunks-x').value));
     const height = forgeTilesForChunks(Number(document.getElementById('map-chunks-y').value));
-    const seed = Number(document.getElementById('map-seed').value) || 0;
-    field = newField(width, height, seed, { suppressCenterBlock: field?.suppressCenterBlock === true });
+    field = newField(width, height, seed >>> 0, { suppressCenterBlock: field?.suppressCenterBlock === true });
     state.selected = [];
+    state.propIndex = -1;
+    state.propArmed = false;
+    propDrag = null;
+    propReturnChunks = false;
     state.units = [];
+    state.placePicks = [];
+    placeDrag = null;
+    placeBox = null;
     state.buildings = [];
     state.objectives = [];
     state.waveRoute = [];
@@ -2865,16 +4054,39 @@ function mountUi() {
     state.wallDraftOpenings = [];
     wallCursor = null;
     state.cameraHalfF = 0;
-    state.agoras = defaultMatchAgoras(worldHalfFFromField(field), field.width, 2, worldHalfZFFromField(field));
+    placeGeneratedStarts();
+    placeGeneratedScenery();
     celestial?.setWorldHalfF(Math.max(worldHalfFFromField(field), worldHalfZFFromField(field)));
     applyCameraBound();
     syncCenterPlinthUi();
-    syncWaveRouteHint();
+    renderWaveEditor();
     syncFormFromField();
+    syncPlacePickUi();
+    syncPropUi();
     rebuildTerrain();
+  }
+  document.getElementById('btn-generate').addEventListener('click', () => {
+    generateFromSeed(Number(document.getElementById('map-seed').value) || 0);
+  });
+  document.getElementById('btn-random').addEventListener('click', () => {
+    generateFromSeed((Math.random() * 0x100000000) >>> 0);
   });
   document.getElementById('btn-export').addEventListener('click', exportMap);
   document.getElementById('btn-play').addEventListener('click', playMap);
+  document.getElementById('btn-episode-add')?.addEventListener('click', addCurrentChapter);
+  document.getElementById('btn-episode-new')?.addEventListener('click', () => {
+    addEpisode(campaignDraft, '');
+    renderCampaignDraft();
+  });
+  document.getElementById('btn-episode-export')?.addEventListener('click', exportCampaign);
+  document.getElementById('btn-episode-play')?.addEventListener('click', () => { playCampaign(); });
+  document.getElementById('campaign-name')?.addEventListener('input', (e) => {
+    renameCampaign(campaignDraft, e.target.value);
+  });
+  document.getElementById('episode-name')?.addEventListener('input', (e) => {
+    renameCurrentEpisode(campaignDraft, e.target.value);
+    renderCampaignDraft();
+  });
   document.getElementById('btn-import').addEventListener('click', () => {
     document.getElementById('import-file').click();
   });
@@ -3002,9 +4214,15 @@ async function main() {
   mountUi();
   engine = await createEngine(canvas, { msaaSamples: 1 });
   scene = createSceneContext(engine);
+  placePreview = createPlacePreview(engine, scene, (x, z) => (
+    field ? surfaceHeightAt(field, x, z) : 0
+  ), () => {
+    if (sceneRegistered) invalidateRenderBundles(engine);
+  });
 
   field = newField(DEFAULT_SIZE, DEFAULT_SIZE, DEFAULT_SEED);
-  state.agoras = defaultMatchAgoras(worldHalfFFromField(field), field.width, 2, worldHalfZFFromField(field));
+  placeGeneratedStarts();
+  placeGeneratedScenery();
   const worldHalfF = worldHalfFFromField(field);
   const worldHalfZF = worldHalfZFFromField(field);
   camera = createArcRotateCamera(-Math.PI / 2.1, Math.PI / 3.2, Math.max(worldHalfF, worldHalfZF) * 1.55, {
@@ -3080,6 +4298,10 @@ async function main() {
           } else if (erase) deleteWallAt(pos);
           else addWallPoint(pos);
         }
+      } else if (state.layer === 'place') {
+        handlePlacePointerDown(pos, e);
+      } else if (state.layer === 'table' && state.tableTool === 'props' && propGesture(pos)) {
+        placeOrGrabProp(pos);
       } else {
         applyAt(pos, { add: e.shiftKey });
       }
@@ -3088,8 +4310,10 @@ async function main() {
   canvas.addEventListener('dblclick', (e) => {
     e.preventDefault();
     if (state.layer !== 'table') return;
+    if (state.tableTool === 'props' && state.propArmed) return;
     const pos = pickGround(e.clientX, e.clientY);
     if (!pos || !field?.tableShape) return;
+    if (state.tableTool === 'props' && nearestBackdrop(propList(), pos.x, pos.z) >= 0) return;
     const { cx, cz } = worldToCell(field, pos.x, pos.z, field.tableShape.cellSize);
     if (!isSelected(cx, cz)) selectChunk(cx, cz);
     toggleSelectedChunks();
@@ -3097,8 +4321,24 @@ async function main() {
   canvas.addEventListener('pointermove', (e) => {
     if (!storyDriving()) cam.handlePointerMove(e);
     const pos = pickGround(e.clientX, e.clientY);
+    if (propDrag && state.layer === 'table' && state.tableTool === 'props' && (e.buttons & 1)) {
+      movePropDrag(pos);
+    }
     if (state.painting && (state.layer === 'terrain' || state.layer === 'scenery') && e.buttons & 1) {
       applyAt(pos);
+    }
+    if (placeBox && state.layer === 'place' && (e.buttons & 1) && pos) {
+      if (!placeBox.active) {
+        const travel = Math.hypot(e.clientX - placeBox.cx, e.clientY - placeBox.cy);
+        if (travel > 6) placeBox.active = true;
+      }
+      if (placeBox.active) {
+        placeBox.x1 = pos.x;
+        placeBox.z1 = pos.z;
+        updatePlaceMarkers();
+      }
+    } else if (placeDrag && state.layer === 'place' && (e.buttons & 1)) {
+      moveGroupDrag(pos);
     }
     const aiming = state.layer === 'walls' && (wallOpeningMode() || state.wallTool === 'erase' || e.shiftKey);
     const wallPos = aiming ? pickWallAim(e.clientX, e.clientY) : pos;
@@ -3107,12 +4347,24 @@ async function main() {
   });
   canvas.addEventListener('pointerup', (e) => {
     const panned = cam.handlePointerUp(e);
-    if (e.button === 2 && !panned && state.layer === 'walls' && !storyDriving()) {
+    if (e.button === 0 && state.layer === 'place') finishPlaceBox();
+    if (e.button !== 2 || panned || storyDriving()) return;
+    if (state.layer === 'walls') {
       if (wallOpeningMode() || state.wallTool === 'erase') setWallTool('lay');
       else finishWallRun();
+      return;
     }
+    if (state.layer === 'place' && state.placePicks.length) clearPlacePick();
   });
   window.addEventListener('pointerup', () => {
+    finishPlaceBox();
+    placeDrag = null;
+    propDrag = null;
+    if (propReturnChunks) {
+      propReturnChunks = false;
+      setTableTool('chunks');
+    }
+    levelHold = null;
     if (!state.painting && !sceneryPending) return;
     state.painting = false;
     lastPaintKey = '';
@@ -3137,6 +4389,11 @@ async function main() {
       return;
     }
     const slider = e.target?.tagName === 'INPUT' && e.target.type === 'range';
+    if (state.layer === 'table' && !typing && e.key === 'Escape' && (state.tableTool === 'props' || state.propArmed)) {
+      e.preventDefault();
+      setTableTool('chunks');
+      return;
+    }
     if (state.layer === 'walls' && e.key === 'Escape') {
       e.preventDefault();
       if (wallOpeningMode() || state.wallTool === 'erase') setWallTool('lay');
@@ -3155,6 +4412,23 @@ async function main() {
         return;
       }
     }
+    if (state.layer === 'place' && !typing) {
+      if (e.key === '[' || e.key === ']') {
+        e.preventDefault();
+        rotatePlacePick(e.key === ']' ? 1 : -1);
+        return;
+      }
+      if (e.key === 'Escape' && state.placePicks.length) {
+        e.preventDefault();
+        clearPlacePick();
+        return;
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && state.placePicks.length) {
+        e.preventDefault();
+        deletePlacePick();
+        return;
+      }
+    }
     if (storyDriving()) return;
     cam.handleKeyDown(e);
   });
@@ -3168,6 +4442,7 @@ async function main() {
     if (!storyDriving() && !holdPreviewCamera) cam.tick(deltaMs);
     celestial?.update?.(deltaMs);
     terrain?.update?.(camera, deltaMs);
+    placePreview?.update?.(deltaMs);
   });
 
   await rebuildTerrain();

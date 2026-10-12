@@ -11,6 +11,7 @@
 
 import { cam, hold, line, narrate } from './reel.js';
 import { UNIT } from '../sim/unitTypes.js';
+import { campaignIndex } from './campaignPack.js';
 
 /** @param {string} kind @param {number} fx @param {number} fz @param {number} r */
 function obj(kind, fx, fz, r, label, message, opts = {}) {
@@ -840,7 +841,7 @@ export function campaignGardenUrl(id) {
   return `/maps/${id}.garden`;
 }
 
-/** Flat, ordered chapter list with resolved next-chapter chaining. */
+/** Flat, ordered chapter list. Continuation lives on the campaign index, not on each garden. */
 export const CAMPAIGN_CHAPTERS = (() => {
   const flat = [];
   for (const ep of EPISODES) {
@@ -855,11 +856,20 @@ export const CAMPAIGN_CHAPTERS = (() => {
   for (let i = 0; i < flat.length; i++) {
     flat[i].id = flat[i].def.id;
     flat[i].name = flat[i].def.name;
+    flat[i].file = `${flat[i].def.id}.garden`;
     flat[i].url = campaignGardenUrl(flat[i].def.id);
-    flat[i].nextUrl = i + 1 < flat.length ? campaignGardenUrl(flat[i + 1].def.id) : '';
   }
   return flat;
 })();
+
+/** Same document a player campaign publishes: episodes, then chapter files. */
+export function officialCampaignIndex() {
+  return campaignIndex('Campaign', EPISODES.map((ep) => ({
+    name: ep.name,
+    theme: ep.theme || '',
+    chapters: ep.chapters.map((ch) => ({ file: `${ch.id}.garden`, name: ch.name })),
+  })));
+}
 
 /** Menu-facing catalog rows: `{ id, name, garden, episode }`. */
 export const CHAPTER_CATALOG = CAMPAIGN_CHAPTERS.map((c) => ({

@@ -33,21 +33,15 @@ import {
 import { UNIT } from '../sim/unitTypes.js';
 import { encodeGarden } from '../sim/garden.js';
 import { CLIP_CAMERA, normalizeStory } from './timeline.js';
+import { storyPartyPlacements } from './cast.js';
 import { isTerminalObjective } from './objectives.js';
 import { markChapterExit } from './exits.js';
 import { reelFromSteps } from './reel.js';
-import { CAMPAIGN_CHAPTERS, EPISODES } from './campaign.js';
+import { CAMPAIGN_CHAPTERS, EPISODES, officialCampaignIndex } from './campaign.js';
+import { packStamp } from './campaignPack.js';
 
 const NO_REFRESH = { refresh: false };
 const ENEMY_OWNER = 4;
-
-/** The four heroes, laid in a small diamond around the spawn anchor. */
-const HEROES = [
-  { name: 'Stumpey', type: UNIT.MYCO, dx: 0, dz: 1 },
-  { name: 'Goblin', type: UNIT.WARLOCK, dx: -3, dz: 1 },
-  { name: 'Lady', type: UNIT.PRIEST, dx: 0, dz: -1 },
-  { name: 'Doc', type: UNIT.SHAMAN, dx: 3, dz: -1 },
-];
 
 function clampTile(v, n) {
   return Math.max(0, Math.min(n - 1, v | 0));
@@ -258,13 +252,7 @@ function dressSet(field, def, seed) {
 }
 
 function buildHeroes(anchor, w, h) {
-  return HEROES.map((hero) => ({
-    owner: 0,
-    type: hero.type,
-    name: hero.name,
-    tx: clampTile(anchor.tx + hero.dx, w),
-    tz: clampTile(anchor.tz + hero.dz, h),
-  }));
+  return storyPartyPlacements(anchor.tx, anchor.tz, w, h, 0);
 }
 
 function objectivesFor(def) {
@@ -358,7 +346,7 @@ function placeDestroyTargets(field, objectives, existing = []) {
   return { units, buildings };
 }
 
-function resolveObjectives(def, w, h, nextUrl) {
+function resolveObjectives(def, w, h) {
   const out = [];
   (def.objectives || []).forEach((o, i) => {
     const params = o.params ? { ...o.params } : null;
@@ -377,9 +365,6 @@ function resolveObjectives(def, w, h, nextUrl) {
     // Tag wave objectives with their episode so the spawner picks the era roster.
     if ((params?.waves | 0) > 0) {
       objective.params = { ...params, era: def.episode | 0 };
-    }
-    if (isTerminalObjective(objective) && !objective.next && nextUrl) {
-      objective.next = nextUrl;
     }
     out.push(objective);
   });
@@ -427,10 +412,12 @@ function resolveSteps(steps, w, h) {
 
 /**
  * Build one chapter garden.
+ * Chapter order is not written onto the objectives — the campaign index
+ * (and the `pk.files` stamp applied by buildCampaign) owns the chain.
+ * An objective's own `next` is kept, for a branch.
  * @param {object} def chapter definition from the manifest
- * @param {string} [nextUrl] garden url for the next chapter (chapter chaining)
  */
-export function buildChapterGarden(def, nextUrl = '') {
+export function buildChapterGarden(def) {
   const prevW = activeMapW();
   const prevH = activeMapH();
   try {
@@ -451,7 +438,7 @@ export function buildChapterGarden(def, nextUrl = '') {
     const escorts = buildEscortUnits(objectivesFor(def), anchor, w, h);
     const camps = placeCamps(field, def.camps, w, h);
     const halls = placeHalls(field, def.halls, w, h);
-    const objectives = resolveObjectives(def, w, h, nextUrl);
+    const objectives = resolveObjectives(def, w, h);
     const targets = placeDestroyTargets(field, objectives, [...camps.buildings, ...halls]);
     clearPlay(field, anchor, heroes, objectives);
     applyAuthoredScenery(field);
@@ -480,15 +467,21 @@ export function buildChapterGarden(def, nextUrl = '') {
   }
 }
 
-/** Build every chapter, resolving next-chapter chaining from manifest order. */
+/** Build every chapter. `pk.files` matches the campaign index order. */
 export function buildCampaign() {
-  return CAMPAIGN_CHAPTERS.map((c) => ({
-    id: c.id,
-    url: c.url,
-    episode: c.episode,
-    name: c.name,
-    garden: buildChapterGarden(c.def, c.nextUrl),
-  }));
+  const stamp = packStamp(officialCampaignIndex());
+  return CAMPAIGN_CHAPTERS.map((c) => {
+    const garden = buildChapterGarden(c.def);
+    if (stamp) garden.pk = stamp;
+    return {
+      id: c.id,
+      url: c.url,
+      file: c.file,
+      episode: c.episode,
+      name: c.name,
+      garden,
+    };
+  });
 }
 
 /** Convenience for tests / tooling. */

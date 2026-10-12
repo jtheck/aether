@@ -2,7 +2,9 @@
 // Host still embeds the JSON for web guests; this only loads a local subscribe.
 
 import { GARDEN_SESSION_KEY } from '../sim/garden.js';
-import { readSessionGarden } from './gardenSession.js';
+import { mapTypeById } from '../sim/mapType.js';
+import { isGardenOverflowMark, readCampaignPack, readSessionGarden } from './gardenSession.js';
+import { gardenFromBundle, parsePackRef } from '../story/campaignPack.js';
 
 export const WORKSHOP_SCHEME = 'workshop:';
 export const STEAM_APP_ID = 5043860;
@@ -64,7 +66,12 @@ function nextFromObjective(raw) {
   return '';
 }
 
-/** Steam listing tags: Map|Campaign and Skirmish|Adventure. */
+function declaredMapLabel(garden) {
+  if (garden?.mt == null || String(garden.mt).trim() === '') return '';
+  return mapTypeById(garden.mt)?.name || '';
+}
+
+/** Steam listing tags: Map|Campaign and the play mode. */
 export function workshopListingTags(garden) {
   const objs = Array.isArray(garden?.objectives) ? garden.objectives
     : Array.isArray(garden?.obj) ? garden.obj
@@ -77,7 +84,9 @@ export function workshopListingTags(garden) {
       break;
     }
   }
-  return [campaign ? 'Campaign' : 'Map', (garden?.story || objs.length) ? 'Adventure' : 'Skirmish'];
+  const mode = declaredMapLabel(garden)
+    || ((garden?.story || objs.length) ? 'Adventure' : 'Skirmish');
+  return [campaign ? 'Campaign' : 'Map', mode];
 }
 
 export function isDefaultWorkshopName(name) {
@@ -161,10 +170,21 @@ export async function loadGardenRef(raw, opts = {}) {
     else if (typeof sessionStorage !== 'undefined') {
       try { stored = sessionStorage.getItem(GARDEN_SESSION_KEY); } catch { stored = null; }
     }
+    if (isGardenOverflowMark(stored)) stored = null;
     if (!stored && typeof opts.sessionFallback === 'function') stored = await opts.sessionFallback();
     else if (!stored && typeof opts.sessionText !== 'function') stored = await readSessionGarden();
-    if (!stored) throw new Error('no session garden');
+    if (!stored || isGardenOverflowMark(stored)) throw new Error('no session garden');
     return JSON.parse(stored);
+  }
+  const pack = parsePackRef(text);
+  if (pack) {
+    let raw = null;
+    if (typeof opts.packText === 'function') raw = await opts.packText();
+    else raw = await readCampaignPack();
+    if (!raw) throw new Error('no campaign pack');
+    const garden = gardenFromBundle(JSON.parse(raw), pack.file);
+    if (!garden) throw new Error('pack garden missing');
+    return garden;
   }
   const workshop = parseWorkshopRef(text);
   if (workshop) {

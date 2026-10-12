@@ -53,6 +53,11 @@ export const SKIRMISH_MAP_H = SKIRMISH_MAP_W;
 export const STRESS_MAP_CHUNKS = 31;
 export const STRESS_MAP_W = tilesForOddChunks(STRESS_MAP_CHUNKS);
 export const STRESS_MAP_H = STRESS_MAP_W;
+/**
+ * Largest board that stays one full draw. One odd size past stress.
+ * Anything longer uses terrain LOD.
+ */
+export const LOD_MAP_CHUNKS = STRESS_MAP_CHUNKS + 2;
 /** Forge presets — 5 / 9 / 13 chunks. The editor also accepts any odd count in range. */
 export const FORGE_MAP_SIZES = [TINY_MAP_CHUNKS, SKIRMISH_MAP_CHUNKS, DEFAULT_MAP_CHUNKS]
   .map((chunks) => tilesForOddChunks(chunks));
@@ -168,14 +173,89 @@ export const TERRAIN = {
   WATER: 1,
   DIRT: 2,
   GRASS: 3,
+  /** Loose stone. Base of the pave set; tile draws over it. */
+  GRAVEL: 4,
+  /** Cobble pavers. Overlay of the pave set. */
+  TILE: 5,
 };
 
-/** Which 4×4 atlas PNG a tile's shore comes from. */
+/** Which 4×4 atlas PNG a tile's shore comes from. 3 is the natural junction sheet. */
 export const ATLAS = {
   GRASS_DIRT: 0,
   GRASS_WATER: 1,
   DIRT_WATER: 2,
+  TILE_GRAVEL: 4,
 };
+
+const ATLAS_CELL_FULL = 6;
+const ATLAS_CELL_EMPTY = 12;
+
+/**
+ * Sets that blend only among themselves. Grass / dirt / water stay on their
+ * own sheets. `order` is low to high — later members draw over earlier ones.
+ * `pairs` is [high, low, atlas]. Two members need one sheet. A third member
+ * needs a sheet for each pair it forms; until those exist, a lower tile
+ * touched by two higher members shows only the higher blob.
+ */
+export const TERRAIN_BLEND_SETS = [
+  {
+    order: [TERRAIN.GRAVEL, TERRAIN.TILE],
+    pairs: [[TERRAIN.TILE, TERRAIN.GRAVEL, ATLAS.TILE_GRAVEL]],
+  },
+];
+
+/** @type {Map<number, { set: { order: number[], pairs: number[][] }, rank: number }>} */
+const blendMembership = new Map();
+for (const set of TERRAIN_BLEND_SETS) {
+  for (let rank = 0; rank < set.order.length; rank++) {
+    blendMembership.set(set.order[rank], { set, rank });
+  }
+}
+
+function pairAtlas(set, high, low) {
+  const pairs = set.pairs;
+  for (let i = 0; i < pairs.length; i++) {
+    if (pairs[i][0] === high && pairs[i][1] === low) return pairs[i][2];
+  }
+  return -1;
+}
+
+export function isBlendAtlas(id) {
+  for (const set of TERRAIN_BLEND_SETS) {
+    for (let i = 0; i < set.pairs.length; i++) {
+      if (set.pairs[i][2] === id) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Packed `sheet << 8 | cell` for a side blend set, or null for grass / dirt / water.
+ * The top member is the solid cell. A lower member shows the highest overlay
+ * touching its corners, or the empty cell when nothing does.
+ */
+export function blendSetLayer(types, width, height, x, z) {
+  const self = types[z * width + x];
+  const member = blendMembership.get(self);
+  if (!member) return null;
+  const { set, rank } = member;
+  const top = set.order[set.order.length - 1];
+  if (self === top) {
+    const under = set.order[rank - 1];
+    const sheet = pairAtlas(set, top, under);
+    return ((sheet >= 0 ? sheet : set.pairs[0][2]) << 8) | ATLAS_CELL_FULL;
+  }
+  for (let i = set.order.length - 1; i > rank; i--) {
+    const above = set.order[i];
+    const cell = terrainCornerCell(types, width, height, x, z, above);
+    if (cell === ATLAS_CELL_EMPTY) continue;
+    const sheet = pairAtlas(set, above, self);
+    if (sheet < 0) continue;
+    return (sheet << 8) | cell;
+  }
+  const sheet = pairAtlas(set, set.order[rank + 1], self);
+  return ((sheet >= 0 ? sheet : set.pairs[0][2]) << 8) | ATLAS_CELL_EMPTY;
+}
 
 /** World-Y scale for heightMap (0–1) — tile ripples plus edge-locked region lift. */
 export const HEIGHT_AMPLITUDE = 14;
@@ -194,7 +274,7 @@ const WATER_FLAT = 0.94;
 /** Tiles from the table rim before seeded chunk lift is allowed to reach full height. */
 export const EDGE_LOCK_TILES = 8;
 /**
- * Raise / lower brush, added after the rim lock. Negative lowers.
+ * Raise / lower / level brush, added after the rim lock. Negative lowers.
  * Wide enough for the extra height allowed inland of the table edge.
  */
 export const PAINTED_LIFT_MIN = -3.6;
@@ -278,7 +358,7 @@ export function createField(seed = 0, dims = {}) {
     detailHeight: new Float32Array(n),
     /** Seeded chunk lift (0–1). Fades out at the rails. */
     regionLift: new Float32Array(n),
-    /** Raise / lower brush. Not faded at the rails. */
+    /** Raise / lower / level brush. Not faded at the rails. */
     paintedLift: new Float32Array(n),
     terrainTypes: new Uint8Array(n),
     tileType: new Uint8Array(n),
@@ -290,13 +370,15 @@ export function createField(seed = 0, dims = {}) {
 
 /**
  * Seeded procedural field: shallow height → terrain → marching squares → pass.
+ * `spawnPads` (world x/z) keeps those starts on grass. Omit it to dry the
+ * usual 1v1 and team pads. Pass `[]` to leave every lake where the seed put it.
  * @param {number} [seed]
- * @param {{ width?: number, height?: number }} [dims]
+ * @param {{ width?: number, height?: number, spawnPads?: Array<[number, number]> }} [dims]
  */
 export function buildField(seed = 0, dims = {}) {
   const field = createField(seed, dims);
   generateHeightMap(field);
-  assignTerrainByElevation(field);
+  assignTerrainByElevation(field, dims.spawnPads);
   seedRegionLift(field);
   composeHeightMap(field);
   applyTerrainTransitions(field);
@@ -352,6 +434,23 @@ export function fieldSnapshot(field) {
       ? field.backdrops.map((b) => ({ ...b }))
       : [],
   };
+  if (field.walls?.runs?.length) {
+    snapshot.walls = {
+      style: { ...field.walls.style },
+      runs: field.walls.runs.map((run) => ({
+        closed: !!run.closed,
+        kind: run.kind === 'dungeon' ? 'dungeon' : 'castle',
+        points: (run.points || []).map((p) => ({ x: p.x, z: p.z })),
+        openings: (run.openings || []).map((o) => ({
+          d: o.d,
+          span: o.span,
+          gate: o.gate ? 1 : 0,
+          open: o.open ? 1 : 0,
+        })),
+      })),
+    };
+  }
+  if (field.wallBlock?.length) snapshot.wallBlock = field.wallBlock.slice();
   const tileMask = field.activeMask ?? field.tileMask ?? field.enabledMask;
   if (tileMask?.slice) snapshot.activeMask = tileMask.slice();
   if (field.chunkMask && typeof field.chunkMask[Symbol.iterator] === 'function') {
@@ -1114,23 +1213,236 @@ function ensureHeightLayers(field) {
   if (!field.paintedLift || field.paintedLift.length !== n) field.paintedLift = new Float32Array(n);
 }
 
-/** Tile-ripple height (0–1). Terrain bands read this; region lift is composed after. */
+function roll01(seed, salt) {
+  return u32Hash((seed ^ salt) >>> 0) / 4294967296;
+}
+
+function noise01(ix, iz, seed) {
+  return u32Hash(Math.imul(ix, 374761393) ^ Math.imul(iz, 668265263) ^ seed) / 4294967296;
+}
+
+/** Smooth value noise. Lattice coords may be negative after a rotation or warp. */
+function valueNoise01(x, z, seed) {
+  const x0 = Math.floor(x);
+  const z0 = Math.floor(z);
+  const tx = fade01(x - x0);
+  const tz = fade01(z - z0);
+  const v00 = noise01(x0, z0, seed);
+  const v10 = noise01(x0 + 1, z0, seed);
+  const v01 = noise01(x0, z0 + 1, seed);
+  const v11 = noise01(x0 + 1, z0 + 1, seed);
+  const a = v00 + (v10 - v00) * tx;
+  const b = v01 + (v11 - v01) * tx;
+  return a + (b - a) * tz;
+}
+
+function rotatedNoise(x, z, seed, scale, c, s) {
+  const inv = 1 / scale;
+  return valueNoise01((x * c - z * s) * inv, (x * s + z * c) * inv, seed);
+}
+
+function angleCS(seed, salt) {
+  const t = roll01(seed, salt) * Math.PI * 2;
+  return { c: Math.cos(t), s: Math.sin(t) };
+}
+
+/**
+ * Per-seed landform, with the old sin(x)·cos(z) weave laid through the grass.
+ * The landform is the coast, lake, or highland. `latticeMix` is how much of
+ * the felt height follows the weave.
+ */
+function mapLayout(seed, width, height) {
+  const s = seed >>> 0;
+  const span = Math.max(width, height);
+  const r = (salt) => roll01(s, salt);
+  const warp = angleCS(s, 0x11);
+  const hill = angleCS(s, 0x21);
+  const hill2 = angleCS(s, 0x22);
+  const coast = angleCS(s, 0x31);
+  const dirtAng = angleCS(s, 0x41);
+  const styleA = u32Hash(s ^ 0x51) % 5;
+  let styleB = u32Hash(s ^ 0x52) % 5;
+  if (styleB === styleA) styleB = (styleA + 1 + (u32Hash(s ^ 0x53) % 4)) % 5;
+  return {
+    seed: s,
+    width,
+    height,
+    span,
+    styleA,
+    styleB,
+    // Secondary shape only roughens the primary one.
+    mix: 0.08 + r(0x54) * 0.14,
+    // How much of the felt height is the old weave. Terrain bands are separate.
+    latticeMix: 0.34 + r(0x94) * 0.14,
+    waterFrac: 0.05 + r(0x61) * 0.13,
+    dirtFrac: 0.12 + r(0x62) * 0.26,
+    dirtStyle: u32Hash(s ^ 0x63) % 4,
+    warpC: warp.c,
+    warpS: warp.s,
+    warpScale: Math.max(24, span * (0.28 + r(0x12) * 0.22)),
+    warpAmp: Math.max(5, span * (0.035 + r(0x13) * 0.05)),
+    hillC: hill.c,
+    hillS: hill.s,
+    hill2C: hill2.c,
+    hill2S: hill2.s,
+    hillScale: Math.max(36, span * (0.34 + r(0x23) * 0.24)),
+    coastC: coast.c,
+    coastS: coast.s,
+    shelfCx: width * (0.3 + r(0x33) * 0.4),
+    shelfCz: height * (0.3 + r(0x34) * 0.4),
+    shelfRad: Math.max(28, span * (0.22 + r(0x35) * 0.24)),
+    basin: r(0x36) < 0.55,
+    dirtC: dirtAng.c,
+    dirtS: dirtAng.s,
+    dirtScale: Math.max(20, span * (0.14 + r(0x42) * 0.3)),
+    breakScale: Math.max(26, span * (0.18 + r(0x24) * 0.14)),
+  };
+}
+
+function warpPos(p, x, z) {
+  const wx = (rotatedNoise(x, z, p.seed ^ 0x101, p.warpScale, p.warpC, p.warpS) - 0.5) * 2 * p.warpAmp;
+  const wz = (rotatedNoise(z, x, p.seed ^ 0x102, p.warpScale, p.warpS, p.warpC) - 0.5) * 2 * p.warpAmp;
+  return [x + wx, z + wz];
+}
+
+/** One landform in warped tile space. 0 hills, 1 patchwork, 2 valley, 3 shelf, 4 coast. */
+function styleHeight(p, id, x, z) {
+  const s = p.seed;
+  if (id === 0) {
+    const a = rotatedNoise(x, z, s ^ 0x201, p.hillScale, p.hillC, p.hillS);
+    const b = rotatedNoise(x, z, s ^ 0x202, p.hillScale * 0.62, p.hill2C, p.hill2S);
+    return a * 0.74 + b * 0.26;
+  }
+  if (id === 1) {
+    const a = rotatedNoise(x, z, s ^ 0x301, p.breakScale, p.hillC, p.hillS);
+    const b = rotatedNoise(x, z, s ^ 0x302, p.breakScale * 1.85, p.hill2C, p.hill2S);
+    return a * 0.56 + b * 0.44;
+  }
+  if (id === 2) {
+    const base = rotatedNoise(x, z, s ^ 0x401, p.hillScale, p.hillC, p.hillS);
+    const n = rotatedNoise(x, z, s ^ 0x402, p.hillScale * 0.8, p.hill2C, p.hill2S);
+    const channel = 1 - Math.abs(n * 2 - 1);
+    // Beads along the channel so the lowland is a chain of lakes, not a moat.
+    const bead = rotatedNoise(x, z, s ^ 0x403, p.hillScale * 0.48, p.hillC, p.hillS);
+    const cut = channel * channel * (0.22 + 0.78 * bead);
+    return base * 0.55 + (1 - cut) * 0.45;
+  }
+  if (id === 3) {
+    const dx = (x - p.shelfCx) / p.shelfRad;
+    const dz = (z - p.shelfCz) / p.shelfRad;
+    const t = Math.min(1, Math.hypot(dx, dz) / 1.35);
+    const e = t * t * (3 - 2 * t);
+    const oval = p.basin ? e : 1 - e;
+    const n = rotatedNoise(x, z, s ^ 0x501, p.hillScale * 0.72, p.hillC, p.hillS);
+    return oval * 0.8 + n * 0.2;
+  }
+  const along = (x * p.coastC + z * p.coastS) / p.span;
+  const n = rotatedNoise(x, z, s ^ 0x601, p.hillScale * 0.7, p.hill2C, p.hill2S);
+  return 0.5 + along * 0.9 + (n - 0.5) * 0.34;
+}
+
+function macroHeight(p, x, z) {
+  const [px, pz] = warpPos(p, x, z);
+  const a = styleHeight(p, p.styleA, px, pz);
+  const b = styleHeight(p, p.styleB, px, pz);
+  return a * (1 - p.mix) + b * p.mix;
+}
+
+/**
+ * Previous height field. Same frequencies and weights as the old generator.
+ * The phase comes from the seed, so the crossings are not glued to the origin.
+ */
+function latticeHeight(x, z, seed) {
+  const p1 = roll01(seed, 0x91) * Math.PI * 2;
+  const p2 = roll01(seed, 0x92) * Math.PI * 2;
+  const p3 = roll01(seed, 0x93) * Math.PI * 2;
+  const wave1 = Math.sin(x * 0.1 + p1) * Math.cos(z * 0.1 + p1);
+  const wave2 = Math.sin(x * 0.25 + p2) * Math.cos(z * 0.25 + p2);
+  const wave3 = Math.sin(x * 0.5 + p3) * Math.cos(z * 0.5 + p3);
+  const wave4 = Math.sin((x + z) * 0.3 + p1) * 0.5;
+  return (wave1 * 0.35 + wave2 * 0.3 + wave3 * 0.25 + wave4 * 0.1 + 1) * 0.5;
+}
+
+function mixedHeight(p, x, z) {
+  return macroHeight(p, x, z) * (1 - p.latticeMix) + latticeHeight(x, z, p.seed) * p.latticeMix;
+}
+
+/**
+ * Landform dirt, separate from the weave. The weave's own high band is
+ * painted on later so the two patterns do not erase each other.
+ * 0 ragged highlands, 1 clearings, 2 smaller scars, 3 broken tracks.
+ */
+function dirtScoreAt(p, x, z, h) {
+  const s = p.seed;
+  const n = rotatedNoise(x, z, s ^ 0x701, p.dirtScale, p.dirtC, p.dirtS);
+  if (p.dirtStyle === 0) return h * 0.62 + n * 0.38;
+  if (p.dirtStyle === 1) return n;
+  if (p.dirtStyle === 2) {
+    const m = rotatedNoise(x, z, s ^ 0x702, Math.max(16, p.dirtScale * 0.55), p.hillC, p.hillS);
+    return n * 0.4 + m * 0.6;
+  }
+  const band = 1 - Math.abs(n * 2 - 1);
+  const brk = rotatedNoise(x, z, s ^ 0x703, Math.max(16, p.dirtScale * 0.65), p.hill2C, p.hill2S);
+  return band * (0.3 + 0.7 * brk);
+}
+
+function percentileThreshold(values, frac) {
+  const buckets = 1024;
+  const counts = new Uint32Array(buckets);
+  const n = values.length;
+  for (let i = 0; i < n; i++) {
+    const h = values[i];
+    const b = h <= 0 ? 0 : h >= 1 ? buckets - 1 : (h * buckets) | 0;
+    counts[b]++;
+  }
+  let target = Math.round(frac * n);
+  if (target < 1) target = 1;
+  else if (target > n - 1) target = n - 1;
+  let acc = 0;
+  for (let b = 0; b < buckets; b++) {
+    acc += counts[b];
+    if (acc >= target) return (b + 0.5) / buckets;
+  }
+  return 1;
+}
+
+/** Cut above which about `frac` of all tiles (the highest land scores) qualify. */
+function topFractionCut(values, land, frac) {
+  const buckets = 1024;
+  const counts = new Uint32Array(buckets);
+  const n = values.length;
+  let landCount = 0;
+  for (let i = 0; i < n; i++) {
+    if (!land[i]) continue;
+    landCount++;
+    const h = values[i];
+    const b = h <= 0 ? 0 : h >= 1 ? buckets - 1 : (h * buckets) | 0;
+    counts[b]++;
+  }
+  let want = Math.round(frac * n);
+  if (want < 1) want = 1;
+  if (want > landCount) want = landCount;
+  let left = want;
+  for (let b = buckets - 1; b >= 0; b--) {
+    left -= counts[b];
+    if (left <= 0) return b / buckets;
+  }
+  return 0;
+}
+
+/** Tile height (0–1). Lakes sit in the lows. Region lift is composed after. */
 export function generateHeightMap(field) {
   ensureHeightLayers(field);
   const { width, height, heightMap, detailHeight, seed } = field;
-  const seed1 = seed * 0.01;
-  const seed2 = seed * 0.02;
-  const seed3 = seed * 0.03;
+  const layout = mapLayout(seed, width, height);
+  const rippleAng = angleCS(layout.seed, 0x7e0);
+  const rippleScale = 8 + roll01(layout.seed, 0x7e1) * 5;
   let minH = Infinity;
   let maxH = -Infinity;
 
   for (let z = 0; z < height; z++) {
     for (let x = 0; x < width; x++) {
-      const wave1 = Math.sin(x * 0.1 + seed1) * Math.cos(z * 0.1 + seed1);
-      const wave2 = Math.sin(x * 0.25 + seed2) * Math.cos(z * 0.25 + seed2);
-      const wave3 = Math.sin(x * 0.5 + seed3) * Math.cos(z * 0.5 + seed3);
-      const wave4 = Math.sin((x + z) * 0.3 + seed1) * 0.5;
-      const h = (wave1 * 0.35 + wave2 * 0.3 + wave3 * 0.25 + wave4 * 0.1 + 1) * 0.5;
+      const h = mixedHeight(layout, x, z);
       heightMap[z * width + x] = h;
       if (h < minH) minH = h;
       if (h > maxH) maxH = h;
@@ -1138,10 +1450,17 @@ export function generateHeightMap(field) {
   }
 
   const range = maxH - minH || 1;
-  for (let i = 0; i < heightMap.length; i++) {
-    const h = (heightMap[i] - minH) / range;
-    heightMap[i] = h;
-    detailHeight[i] = h;
+  for (let z = 0; z < height; z++) {
+    for (let x = 0; x < width; x++) {
+      const i = z * width + x;
+      let h = (heightMap[i] - minH) / range;
+      const ripple = (rotatedNoise(x, z, layout.seed ^ 0x7e2, rippleScale, rippleAng.c, rippleAng.s) - 0.5) * 0.04;
+      h += ripple;
+      if (h < 0) h = 0;
+      else if (h > 1) h = 1;
+      heightMap[i] = h;
+      detailHeight[i] = h;
+    }
   }
 }
 
@@ -1487,6 +1806,107 @@ export function paintRegionLift(field, tx, tz, delta, radius = 0) {
   return dirty;
 }
 
+/**
+ * Pull the brush toward a visible height (same units as heightMap).
+ * `strength` is 0–1 of the remaining gap closed at the center this stamp.
+ * The rim eases in. Tiles may rise or fall. Slope and sculpt bands still apply.
+ */
+export function paintRegionLevel(field, tx, tz, target, strength = 1, radius = 0) {
+  if (!Number.isFinite(target)) return [];
+  const pull = strength < 0 ? 0 : strength > 1 ? 1 : strength;
+  if (!(pull > 0)) return [];
+  ensureHeightLayers(field);
+  ensureWaterSurface(field);
+  computeEdgeLock(field);
+  const r = Math.max(0, radius | 0);
+  const dirty = [];
+  const ids = [];
+  const dist = [];
+  const { width, height, paintedLift, activeMask } = field;
+  for (let dz = -r; dz <= r; dz++) {
+    for (let dx = -r; dx <= r; dx++) {
+      const d2 = dx * dx + dz * dz;
+      if (d2 > r * r) continue;
+      const x = tx + dx;
+      const z = tz + dz;
+      if (x < 0 || z < 0 || x >= width || z >= height) continue;
+      const i = z * width + x;
+      if (activeMask && activeMask[i] === 0) continue;
+      ids.push(i);
+      dist.push(Math.sqrt(d2));
+    }
+  }
+  if (!ids.length) return dirty;
+  const vis = new Float32Array(ids.length);
+  const desiredHold = new Float32Array(ids.length);
+  const { detailHeight, regionLift, edgeLock, heightMap, waterLevel, terrainTypes } = field;
+  for (let k = 0; k < ids.length; k++) {
+    const i = ids[k];
+    const h = visibleHeight01(field, i);
+    vis[k] = h;
+    const band = sculptBand(edgeLock[i]);
+    let plane = target;
+    if (plane > band.hi) plane = band.hi;
+    else if (plane < band.lo) plane = band.lo;
+    let desired = h + (plane - h) * liftFalloff(dist[k], r) * pull;
+    if (desired > band.hi) desired = band.hi;
+    else if (desired < band.lo) desired = band.lo;
+    desiredHold[k] = desired;
+  }
+  const maxDh = MAX_SLOPE_Y / HEIGHT_AMPLITUDE;
+  const ortho = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const slot = new Int32Array(width * height);
+  slot.fill(-1);
+  for (let k = 0; k < ids.length; k++) slot[ids[k]] = k;
+  for (let iter = 0; iter < 16; iter++) {
+    for (let k = 0; k < ids.length; k++) {
+      const i = ids[k];
+      const x = i % width;
+      const z = (i / width) | 0;
+      let lo = -Infinity;
+      let hi = Infinity;
+      for (let n = 0; n < 4; n++) {
+        const nx = x + ortho[n][0];
+        const nz = z + ortho[n][1];
+        if (nx < 0 || nz < 0 || nx >= width || nz >= height) continue;
+        const j = nz * width + nx;
+        const nk = slot[j];
+        const nv = nk >= 0 ? desiredHold[nk] : visibleHeight01(field, j);
+        if (nv - maxDh > lo) lo = nv - maxDh;
+        if (nv + maxDh < hi) hi = nv + maxDh;
+      }
+      let d = desiredHold[k];
+      if (lo > hi) d = (lo + hi) * 0.5;
+      else {
+        if (d < lo) d = lo;
+        if (d > hi) d = hi;
+      }
+      const band = sculptBand(edgeLock[i]);
+      if (d > band.hi) d = band.hi;
+      else if (d < band.lo) d = band.lo;
+      desiredHold[k] = d;
+    }
+  }
+  for (let k = 0; k < ids.length; k++) {
+    const i = ids[k];
+    const e = edgeLock[i];
+    const desired = desiredHold[k];
+    let targetH = desired;
+    if (terrainTypes[i] === TERRAIN.WATER) {
+      const offset = waterLevel[i] - heightMap[i];
+      targetH = desired - offset + (WATER_RECESS * e) / HEIGHT_AMPLITUDE;
+    }
+    let next = (targetH - unpaintedFelt(detailHeight[i], regionLift[i], e)) / LIFT_WEIGHT;
+    if (next < PAINTED_LIFT_MIN) next = PAINTED_LIFT_MIN;
+    if (next > PAINTED_LIFT_MAX) next = PAINTED_LIFT_MAX;
+    if (next === paintedLift[i]) continue;
+    paintedLift[i] = next;
+    dirty.push({ x: i % width, z: (i / width) | 0 });
+  }
+  if (dirty.length) composeHeightMap(field, { preserveWaterDish: true });
+  return dirty;
+}
+
 /** Garden files omit baked height — rebuild ripples + seeded lift from the seed. */
 export function applySeededHeight(field) {
   generateHeightMap(field);
@@ -1494,16 +1914,60 @@ export function applySeededHeight(field) {
   composeHeightMap(field);
 }
 
-function assignTerrainByElevation(field) {
-  const { width, height, heightMap, terrainTypes } = field;
+function assignTerrainByElevation(field, spawnPads) {
+  const { width, height, terrainTypes, seed } = field;
   const n = width * height;
+  const layout = mapLayout(seed, width, height);
+  const landScore = new Float32Array(n);
+  const weaveScore = new Float32Array(n);
+  for (let z = 0; z < height; z++) {
+    for (let x = 0; x < width; x++) {
+      const i = z * width + x;
+      landScore[i] = macroHeight(layout, x, z);
+      weaveScore[i] = latticeHeight(x, z, layout.seed);
+    }
+  }
 
+  const landWaterCut = percentileThreshold(landScore, layout.waterFrac);
+  const dirtScore = new Float32Array(n);
+  const open = new Uint8Array(n);
+
+  for (let z = 0; z < height; z++) {
+    for (let x = 0; x < width; x++) {
+      const i = z * width + x;
+      if (landScore[i] < landWaterCut) {
+        terrainTypes[i] = TERRAIN.WATER;
+        continue;
+      }
+      open[i] = 1;
+      dirtScore[i] = dirtScoreAt(layout, x, z, landScore[i]);
+      terrainTypes[i] = TERRAIN.GRASS;
+    }
+  }
+
+  const landDirtCut = topFractionCut(dirtScore, open, layout.dirtFrac);
   for (let i = 0; i < n; i++) {
-    const h = heightMap[i];
-    // Water / grass / dirt bands — water is the low end of the heightmap.
-    if (h < 0.32) terrainTypes[i] = TERRAIN.WATER;
-    else if (h < 0.62) terrainTypes[i] = TERRAIN.GRASS;
-    else terrainTypes[i] = TERRAIN.DIRT;
+    if (open[i] && dirtScore[i] >= landDirtCut) {
+      terrainTypes[i] = TERRAIN.DIRT;
+      open[i] = 0;
+    }
+  }
+
+  // Old bands on the grass the landform left open. A lake or highland stays put;
+  // the meadow gets the crossing dirt and water.
+  let weaveMin = Infinity;
+  let weaveMax = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const w = weaveScore[i];
+    if (w < weaveMin) weaveMin = w;
+    if (w > weaveMax) weaveMax = w;
+  }
+  const weaveRange = weaveMax - weaveMin || 1;
+  for (let i = 0; i < n; i++) {
+    if (!open[i]) continue;
+    const w = (weaveScore[i] - weaveMin) / weaveRange;
+    if (w < 0.32) terrainTypes[i] = TERRAIN.WATER;
+    else if (w > 0.62) terrainTypes[i] = TERRAIN.DIRT;
   }
 
   // Steep height steps can skip grass. Keep a generated grass bank so those
@@ -1524,6 +1988,55 @@ function assignTerrainByElevation(field) {
       }
     }
   }
+  keepMatchSpawnsDry(field, spawnPads);
+}
+
+/**
+ * Agora pads sit on this inset (worldSetup.SPAWN_BASE_INSET).
+ * A generated lake used to cover them; the pad stays grass so a match can start.
+ */
+const MATCH_SPAWN_INSET = 0.6;
+const MATCH_SPAWN_CLEAR_TILES = 5;
+
+function legacyMatchSpawnSpots(halfX, halfZ) {
+  const ix = MATCH_SPAWN_INSET * halfX;
+  const iz = MATCH_SPAWN_INSET * halfZ;
+  return [
+    [-ix, 0], [ix, 0], [0, -iz], [0, iz],
+    [-ix, -iz], [ix, iz], [-ix, iz], [ix, -iz],
+  ];
+}
+
+/** Replace water with grass in a disc around each world-space pad. */
+export function drySpawnPads(field, spots, radiusTiles = MATCH_SPAWN_CLEAR_TILES) {
+  if (!field || !spots?.length) return;
+  const { width, height, terrainTypes } = field;
+  const halfX = width * TILE_SIZE_F * 0.5;
+  const halfZ = height * TILE_SIZE_F * 0.5;
+  const r = radiusTiles | 0;
+  const r2 = r * r;
+  for (let s = 0; s < spots.length; s++) {
+    const cx = Math.floor((spots[s][0] + halfX) / TILE_SIZE_F);
+    const cz = Math.floor((spots[s][1] + halfZ) / TILE_SIZE_F);
+    for (let dz = -r; dz <= r; dz++) {
+      const z = cz + dz;
+      if (z < 0 || z >= height) continue;
+      for (let dx = -r; dx <= r; dx++) {
+        if (dx * dx + dz * dz > r2) continue;
+        const x = cx + dx;
+        if (x < 0 || x >= width) continue;
+        const i = z * width + x;
+        if (terrainTypes[i] === TERRAIN.WATER) terrainTypes[i] = TERRAIN.GRASS;
+      }
+    }
+  }
+}
+
+function keepMatchSpawnsDry(field, spawnPads) {
+  const halfX = field.width * TILE_SIZE_F * 0.5;
+  const halfZ = field.height * TILE_SIZE_F * 0.5;
+  const spots = spawnPads === undefined ? legacyMatchSpawnSpots(halfX, halfZ) : spawnPads;
+  drySpawnPads(field, spots);
 }
 
 /**
@@ -1541,12 +2054,19 @@ function applyTerrainTransitions(field) {
     const t = terrainTypes[i];
     grass[i] = t === TERRAIN.GRASS ? 1 : 0;
     dirt[i] = t === TERRAIN.DIRT ? 1 : 0;
-    land[i] = t !== TERRAIN.WATER ? 1 : 0;
+    // Pave meets water on a hard edge, so it does not open a walkable shore.
+    land[i] = t !== TERRAIN.WATER && !blendMembership.has(t) ? 1 : 0;
   }
 
   for (let z = 0; z < height; z++) {
     for (let x = 0; x < width; x++) {
       const i = z * width + x;
+      const side = blendSetLayer(terrainTypes, width, height, x, z);
+      if (side != null) {
+        atlasId[i] = side >> 8;
+        tileType[i] = side & 255;
+        continue;
+      }
       const terrain = terrainTypes[i];
       if (terrain === TERRAIN.WATER) {
         tileType[i] = marchingCase(x, z, land, width, height);

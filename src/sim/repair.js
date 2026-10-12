@@ -2,6 +2,7 @@
 
 import * as fx from './fixed.js';
 import { UNIT, getUnitDef, isMechanical } from './unitTypes.js';
+import { unitMaxHp } from './namedUnit.js';
 import { clearPath, queuePath } from './path.js';
 import { clearEngagement } from './engagement.js';
 import { ORDER } from './world.js';
@@ -39,7 +40,7 @@ export function canRepairTarget(w, engineer, target) {
   if (isCarried(w, engineer) || isCarried(w, target)) return false;
   // Future: buildings would pass a different check here.
   if (!isMechanical(w.type[target])) return false;
-  const maxHp = getUnitDef(w.type[target]).hp;
+  const maxHp = unitMaxHp(w, target, getUnitDef(w.type[target]).hp);
   return w.hp[target] < maxHp;
 }
 
@@ -122,7 +123,7 @@ function findDamagedMechanical(w, engineer) {
 }
 
 function pulseRepair(w, engineer, target) {
-  const maxHp = getUnitDef(w.type[target]).hp;
+  const maxHp = unitMaxHp(w, target, getUnitDef(w.type[target]).hp);
   if (w.hp[target] >= maxHp) return false;
   // Reuse attackCd as repair cadence.
   if (w.attackCd[engineer] > 0) return true;
@@ -155,7 +156,7 @@ export function repairSystem(w) {
       endRepair(w, i);
       continue;
     }
-    const maxHp = getUnitDef(w.type[target]).hp;
+    const maxHp = unitMaxHp(w, target, getUnitDef(w.type[target]).hp);
     if (w.hp[target] >= maxHp) {
       endRepair(w, i);
       continue;

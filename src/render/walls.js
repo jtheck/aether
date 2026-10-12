@@ -5,11 +5,19 @@ import {
   createStandardMaterial,
   createTexture2DFromPixels,
   getOrCreateSampler,
+  loadTexture2D,
+  markMaterialUboDirty,
 } from '../vendor/lite/liteVendor.js';
+import { buildWallGeometry } from './wallGeom.js';
+import { softDetachMesh } from './meshLifecycle.js';
+
+const CASTLE_URL = '/assets/textures/castle.png';
+const DUNGEON_URL = '/assets/textures/dungeon.png';
 
 const textures = new WeakMap();
 const brickTextures = new WeakMap();
 const woodTextures = new WeakMap();
+const paintedTextures = new WeakMap();
 
 function clamp8(n) {
   const v = n < 0 ? 0 : n > 255 ? 255 : n;
@@ -89,30 +97,32 @@ function stoneMaterial(texture, ghost, diffuse) {
   return mat;
 }
 
-/** Vertical oak planks. One repeat across is one board; grain runs up V. */
+/** Two oak boards across the texture. Grain runs the full height, once. */
 export function doorWoodPixels(size = 128) {
   const pixels = new Uint8Array(size * size * 4);
-  const plank = 32;
-  const seam = 3;
+  const plank = size >> 1;
+  const seam = 5;
   for (let y = 0; y < size; y++) {
     const v = y / size;
-    const grain = Math.sin(v * Math.PI * 10) * 0.55
-      + Math.sin(v * Math.PI * 23 + 1.7) * 0.3
-      + Math.sin(v * Math.PI * 47) * 0.15;
+    const grain = Math.sin(v * Math.PI * 7) * 0.45
+      + Math.sin(v * Math.PI * 18 + 0.7) * 0.35
+      + Math.sin(v * Math.PI * 3) * 0.2;
     for (let x = 0; x < size; x++) {
-      const sx = x % plank;
-      const inSeam = sx < seam || sx > plank - 2;
-      const n = hash01((x / plank) | 0, 3);
+      const board = (x / plank) | 0;
+      const sx = x - board * plank;
+      const inSeam = sx < seam || sx >= plank - seam;
+      const n = hash01(board, 11);
       const o = (y * size + x) * 4;
       if (inSeam) {
-        pixels[o] = 62;
-        pixels[o + 1] = 38;
-        pixels[o + 2] = 22;
+        pixels[o] = 48;
+        pixels[o + 1] = 28;
+        pixels[o + 2] = 16;
       } else {
-        const tone = (n - 0.5) * 18 + grain * 16;
-        pixels[o] = clamp8(148 + tone);
-        pixels[o + 1] = clamp8(96 + tone * 0.72);
-        pixels[o + 2] = clamp8(52 + tone * 0.4);
+        const tone = (n - 0.5) * 28 + grain * 22;
+        const warm = board ? 8 : 0;
+        pixels[o] = clamp8(132 + tone + warm);
+        pixels[o + 1] = clamp8(78 + tone * 0.55);
+        pixels[o + 2] = clamp8(36 + tone * 0.28);
       }
       pixels[o + 3] = 255;
     }
@@ -209,17 +219,68 @@ function brickTexture(engine) {
   return texture;
 }
 
+function wallRepeatSampler(engine) {
+  return getOrCreateSampler(engine, {
+    addressModeU: 'repeat',
+    addressModeV: 'repeat',
+    minFilter: 'linear',
+    magFilter: 'linear',
+    mipmapFilter: 'linear',
+    maxAnisotropy: 8,
+  });
+}
+
+function loadWallPaint(engine) {
+  let pending = paintedTextures.get(engine);
+  if (pending) return pending;
+  const sampler = wallRepeatSampler(engine);
+  const load = (url) => loadTexture2D(engine, url, {
+    srgb: true,
+    mipMaps: true,
+    invertY: false,
+    addressModeU: 'repeat',
+    addressModeV: 'repeat',
+    minFilter: 'linear',
+    magFilter: 'linear',
+  }).then((texture) => {
+    texture.sampler = sampler;
+    return texture;
+  });
+  pending = Promise.all([load(CASTLE_URL), load(DUNGEON_URL)]).then(([castle, dungeon]) => ({
+    castle,
+    dungeon,
+  }));
+  paintedTextures.set(engine, pending);
+  pending.catch(() => paintedTextures.delete(engine));
+  return pending;
+}
+
+function usePaint(mat, texture) {
+  if (!mat || !texture) return;
+  mat.diffuseTexture = texture;
+  markMaterialUboDirty?.(mat);
+}
+
 export function createWallMaterials(engine) {
   const castleTex = stoneTexture(engine);
   const dungeonTex = brickTexture(engine);
-  return {
-    castle: stoneMaterial(castleTex, false, [1.08, 1.02, 0.94]),
-    dungeon: stoneMaterial(dungeonTex, false, [1, 0.99, 0.97]),
+  const mats = {
+    castle: stoneMaterial(castleTex, false, [1, 1, 1]),
+    dungeon: stoneMaterial(dungeonTex, false, [1, 1, 1]),
     castleGhost: stoneMaterial(castleTex, true, [0.85, 0.92, 0.8]),
     dungeonGhost: stoneMaterial(dungeonTex, true, [0.78, 0.8, 0.78]),
     wood: stoneMaterial(doorWoodTexture(engine), false, [0.92, 0.78, 0.58]),
     iron: flatMaterial([0.34, 0.36, 0.38], [0.12, 0.13, 0.14], [0.28, 0.28, 0.3]),
   };
+  loadWallPaint(engine).then((paint) => {
+    usePaint(mats.castle, paint.castle);
+    usePaint(mats.castleGhost, paint.castle);
+    usePaint(mats.dungeon, paint.dungeon);
+    usePaint(mats.dungeonGhost, paint.dungeon);
+  }).catch((err) => {
+    console.warn('[walls] castle/dungeon textures failed', err);
+  });
+  return mats;
 }
 
 export function createWallMesh(engine, name, geometry, material, { shadows = false } = {}) {
@@ -236,4 +297,61 @@ export function createWallMesh(engine, name, geometry, material, { shadows = fal
   mesh.pickable = false;
   mesh.receiveShadows = shadows;
   return mesh;
+}
+
+const WALL_PARTS = [
+  ['wall-castle', 'castle', 'castle'],
+  ['wall-dungeon', 'dungeon', 'dungeon'],
+  ['wall-wood', 'wood', 'wood'],
+  ['wall-iron', 'iron', 'iron'],
+];
+
+/**
+ * Match meshes for field.walls. The forge draws its own copies and passes skipWalls.
+ * @param {object} engine
+ * @param {object | null | undefined} scene
+ * @param {object | null | undefined} field
+ * @param {(x: number, z: number) => number} [sampleHeight]
+ */
+export function createCurtainWalls(engine, scene, field, sampleHeight) {
+  const runs = field?.walls?.runs;
+  if (!engine || !runs?.length) return { meshes: [], dispose() {} };
+  const geom = buildWallGeometry(runs, field.walls.style, sampleHeight);
+  const mats = createWallMaterials(engine);
+  const meshes = [];
+  let woodMesh = null;
+  for (let i = 0; i < WALL_PARTS.length; i++) {
+    const [name, part, mat] = WALL_PARTS[i];
+    const mesh = createWallMesh(engine, name, geom[part], mats[mat], { shadows: true });
+    if (!mesh) continue;
+    meshes.push(mesh);
+    if (name === 'wall-wood') woodMesh = mesh;
+  }
+  let disposed = false;
+  return {
+    meshes,
+    /** Rebuild the door leaves after a shut door is broken open. */
+    syncWood(nextField) {
+      if (disposed) return null;
+      const runsNow = nextField?.walls?.runs;
+      if (!runsNow?.length) return woodMesh;
+      const next = buildWallGeometry(runsNow, nextField.walls.style, sampleHeight);
+      if (woodMesh) {
+        softDetachMesh(scene, woodMesh);
+        const at = meshes.indexOf(woodMesh);
+        if (at >= 0) meshes.splice(at, 1);
+        woodMesh = null;
+      }
+      woodMesh = createWallMesh(engine, 'wall-wood', next.wood, mats.wood, { shadows: true });
+      if (woodMesh) meshes.push(woodMesh);
+      return woodMesh;
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      for (let i = 0; i < meshes.length; i++) softDetachMesh(scene, meshes[i]);
+      meshes.length = 0;
+      woodMesh = null;
+    },
+  };
 }

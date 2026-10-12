@@ -20,6 +20,7 @@ import {
   updateDefaultTextData,
 } from '../vendor/lite/liteVendor.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
+import { loadIdleIconMeshes } from './vatUnits.js';
 import { formatGameNumber } from '../sim/formatGameNumber.js';
 import { localHudSkin, resolveUnitModelUrl } from '../app/dlcCatalog.js';
 import {
@@ -65,6 +66,13 @@ const MENU_Y = 2.4;
 const MENU_RING_OUTER = 16.3;
 const MENU_RING_INNER = 15.9;
 const MENU_RING_H = 0.35;
+/**
+ * Transparent draws sort by mesh origin. Each outer arc is one mesh centered
+ * on the disc, so its far side paints over the pads for half the orbit.
+ * Shift the origin back along the normal (local +Y) and place the mesh that
+ * far behind so the arc still sits on the disc but sorts behind the pads.
+ */
+const RING_SORT_BIAS = 4;
 const RIM_R = (MENU_RING_OUTER + MENU_RING_INNER) * 0.5;
 const PAD_OUTER = 4.32;
 const PAD_INNER = 2.79;
@@ -143,6 +151,10 @@ const PAUSED_COLOR = [0.28, 0.78, 0.72];
 const PAUSED_EMISSIVE = [0.12, 0.48, 0.44];
 const PAUSED_PAD = [0.35, 0.85, 0.78];
 const PAUSED_PAD_EM = [0.14, 0.52, 0.48];
+/** Display-only auto-production pad (e.g. a village's villager trickle). */
+const AUTO_PAD_COLOR = [0.5, 0.56, 0.62];
+const AUTO_PAD_EMISSIVE = [0.14, 0.17, 0.2];
+const AUTO_PAD_ALPHA = 0.62;
 
 /** @typedef {'unit' | 'upgrade' | 'pause' | 'cancel'} ActionCategoryId */
 /** @typedef {null | 'cancel'} ArmedId */
@@ -419,8 +431,9 @@ function createPieSliceMesh(engine, name, opts = {}) {
   const outerEndAng = endAng - outerInsetAng;
   const innerStartAng = startAng + innerInsetAng;
   const innerEndAng = endAng - innerInsetAng;
-  const y0 = -h * 0.5;
-  const y1 = h * 0.5;
+  const yShift = opts.yOffset ?? 0;
+  const y0 = -h * 0.5 + yShift;
+  const y1 = h * 0.5 + yShift;
 
   /** @type {number[]} */
   const positions = [];
@@ -561,6 +574,58 @@ function writeFacingMatrix(matrices, slot, x, y, z, rx, ry, rz, ux, uy, uz, fx, 
   matrices[o + 13] = y;
   matrices[o + 14] = z;
   matrices[o + 15] = 1;
+}
+
+/**
+ * Lite sorts transparent draws by mesh.worldMatrix translation, and standard
+ * materials compose `mesh.world * instanceWorld`. An icon mesh left at the
+ * origin sorts there and slips behind its pad for half the camera orbit.
+ * Park the mesh on the visible anchor (in front of the pad). The bounds
+ * offset is a model-space instance translation so the mesh still lands where
+ * the old full instance matrix put it.
+ */
+function poseIconLayer(mesh, matrices, anchorX, anchorY, anchorZ, scale, rx, ry, rz, ux, uy, uz, fx, fy, fz, cx, cy, cz) {
+  const at = radialIconAnchor(
+    anchorX, anchorY, anchorZ,
+    rx, ry, rz, fx, fy, fz,
+    scale, cx, cy, cz,
+  );
+  if (mesh.position) {
+    mesh.position.x = anchorX;
+    mesh.position.y = anchorY;
+    mesh.position.z = anchorZ;
+  }
+  if (mesh.scaling) {
+    mesh.scaling.x = scale;
+    mesh.scaling.y = scale;
+    mesh.scaling.z = scale;
+  }
+  const q = quatFromBasis(rx, ry, rz, ux, uy, uz, fx, fy, fz);
+  const rq = mesh.rotationQuaternion;
+  if (rq) {
+    if (typeof rq.set === 'function') rq.set(q.x, q.y, q.z, q.w);
+    else {
+      rq.x = q.x;
+      rq.y = q.y;
+      rq.z = q.z;
+      rq.w = q.w;
+    }
+  }
+  mesh.markLocalDirty?.();
+  const inv = scale !== 0 ? 1 / scale : 1;
+  const dx = at.x - anchorX;
+  const dy = at.y - anchorY;
+  const dz = at.z - anchorZ;
+  writeFacingMatrix(
+    matrices, 0,
+    (dx * rx + dy * ry + dz * rz) * inv,
+    (dx * ux + dy * uy + dz * uz) * inv,
+    (dx * fx + dy * fy + dz * fz) * inv,
+    1, 0, 0,
+    0, 1, 0,
+    0, 0, 1,
+    1,
+  );
 }
 
 function quatFromBasis(xx, xy, xz, yx, yy, yz, zx, zy, zz) {
@@ -847,6 +912,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       height: MENU_RING_H / MENU_RING_OUTER,
       segments: 32,
       gap: ARC_GAP / MENU_RING_OUTER,
+      yOffset: RING_SORT_BIAS,
     });
     mesh.material = entry.mat;
     mesh.pickable = false;
@@ -986,7 +1052,11 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
 
   async function loadIconInner(key, url) {
     try {
-      const parts = await loadBakedUnitMeshParts(engine, url);
+      // Same still as the selection icons: idle frame when the GLB has one,
+      // bind pose when the unit isn't authored yet.
+      let parts = null;
+      if (key.startsWith('unit:')) parts = await loadIdleIconMeshes(engine, url);
+      if (!parts?.length) parts = await loadBakedUnitMeshParts(engine, url);
       /** @type {{ mesh: object, matrices: Float32Array, baseEmissive: number[] | null, baseDiffuse: number[] | null, visible: boolean }[]} */
       const layers = [];
       for (const mesh of parts) {
@@ -1488,6 +1558,13 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     if (!pad) return;
     const cat = CATEGORIES[pad.category] ?? CATEGORIES.unit;
     const mat = pad.mat;
+    // Display-only auto pad: a calm neutral disc so it never reads as a button.
+    if (slots[index]?.auto) {
+      mat.diffuseColor = [...AUTO_PAD_COLOR];
+      mat.emissiveColor = [...AUTO_PAD_EMISSIVE];
+      setMatAlpha(mat, AUTO_PAD_ALPHA);
+      return;
+    }
     const owned = slotResearched(slots[index]);
     let base = 0.92;
     if (owned && !hovered) {
@@ -1606,11 +1683,14 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
         kind: category,
         id: item.id,
         name: item.name,
-        costText: formatResourceCost(item.cost),
-        cost: item.cost,
+        costText: item.auto ? '' : formatResourceCost(item.cost),
+        cost: item.auto ? {} : item.cost,
         requires: item.requires,
         gate: 'ok',
         iconKey,
+        // Display-only slot (e.g. a village's auto-trickled villager): shows an
+        // icon + progress ring but is never a pick / train target.
+        auto: !!item.auto,
         ang,
         x: 0,
         y: centerY,
@@ -1755,8 +1835,10 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     }
     if (entry.q === q && entry.mesh) return;
     disposeProgressMesh(entry);
-    const startAng = -Math.PI / 2;
-    const endAng = startAng + q * Math.PI * 2;
+    // Menu angle grows toward screen-left, so a positive sweep from the top
+    // is counterclockwise. Pin the top ray and extend the other edge clockwise.
+    const endAng = -Math.PI / 2;
+    const startAng = endAng - q * Math.PI * 2;
     const mesh = createPieSliceMesh(engine, `action-menu-progress-${i}-${q}`, {
       startAng,
       endAng,
@@ -1785,28 +1867,14 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     if (s.iconKey) {
       const batch = icons.get(s.iconKey);
       if (batch) {
-        const at = radialIconAnchor(
-          iconX,
-          iconY,
-          iconZ,
-          bx,
-          0,
-          bz,
-          hx,
-          0,
-          hz,
-          iconScale,
-          batch.cx ?? 0,
-          batch.cy ?? 0,
-          batch.cz ?? 0,
-        );
         for (const layer of batch.layers) {
-          writeFacingMatrix(
+          poseIconLayer(
+            layer.mesh,
             layer.matrices,
-            0,
-            at.x,
-            at.y,
-            at.z,
+            iconX,
+            iconY,
+            iconZ,
+            iconScale,
             bx,
             0,
             bz,
@@ -1816,7 +1884,9 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
             hx,
             0,
             hz,
-            iconScale,
+            batch.cx ?? 0,
+            batch.cy ?? 0,
+            batch.cz ?? 0,
           );
           setThinInstanceCount(layer.mesh, 1);
           flushThinInstances(layer.mesh);
@@ -2086,12 +2156,14 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       const end = side.arc.start + side.arc.span;
       const entry = ensureArcMesh(side.id, start, end);
       if (!entry?.mesh) continue;
+      const ringScale = MENU_RING_OUTER * s;
+      const ringBack = RING_SORT_BIAS * ringScale;
       placeMeshOriented(
         entry.mesh,
-        centerX,
-        centerY,
-        centerZ,
-        MENU_RING_OUTER * s,
+        centerX - nx * ringBack,
+        centerY - ny * ringBack,
+        centerZ - nz * ringBack,
+        ringScale,
         bx,
         by,
         bz,
@@ -2359,11 +2431,13 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   /** Stick pie targets — one ring of units / upgrades / pause / cancel. */
   function stickTargets() {
     if (!open) return null;
-    const outer = slots.map((s) => ({
-      kind: s.kind,
-      id: s.id,
-      ang: s.ang,
-    }));
+    const outer = slots
+      .filter((s) => !s.auto)
+      .map((s) => ({
+        kind: s.kind,
+        id: s.id,
+        ang: s.ang,
+      }));
     if (utilityAvailable.pause && pauseSlot) {
       outer.push({ kind: /** @type {const} */ ('pause'), ang: pauseSlot.ang });
     }
@@ -2485,6 +2559,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
 
     for (let i = 0; i < slots.length; i++) {
       const s = slots[i];
+      if (s.auto) continue; // display-only, never a pick target
       if (padHit) {
         const dx = padHit.x - s.x;
         const dy = padHit.y - s.y;
@@ -2534,8 +2609,22 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     return false;
   }
 
+  /** Display-only auto pads swallow the click (keep the menu) but do nothing. */
+  function hitAutoPadAtRay(ray) {
+    if (!open || !ray || !edgePickable()) return false;
+    const pp = padPlanePoint();
+    const padHit = rayHitPlane(ray, pp.x, pp.y, pp.z, nx, ny, nz);
+    if (!padHit) return false;
+    const padR2 = (PAD_OUTER * hudScale) ** 2;
+    for (let i = 0; i < slots.length; i++) {
+      if (slots[i].auto && padDiscHit(slots[i], padHit, padR2)) return true;
+    }
+    return false;
+  }
+
   function hitAtRay(ray) {
     if (pickOptionAtRay(ray)) return true;
+    if (hitAutoPadAtRay(ray)) return true;
     if (hitUnavailableUtilityPadAtRay(ray)) return false;
     return hitRingBandAtRay(ray);
   }

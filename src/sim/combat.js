@@ -2,6 +2,7 @@
 
 import * as fx from './fixed.js';
 import { ATTACK_DELIVERY, getUnitDef, unitAttacksBuildings, unitIdleHunts } from './unitTypes.js';
+import { unitAttackDamage } from './namedUnit.js';
 import { revertBrigand } from './brigand.js';
 import { isHostile } from './teams.js';
 import { attackInRange, clearPath, queuePath, attackStandPoint } from './path.js';
@@ -27,7 +28,9 @@ import {
   isEconomyCombatBuilding,
 } from './buildingCombat.js';
 import { isBuildingAlive } from './buildings.js';
-import { clearAttackFocus } from './world.js';
+import { applyDamageDoor, attackDoorInRange, attackDoorStandPointOnField, DOOR_BASH_REACH_F, isDoorAlive, nearestShutDoor } from './doorCombat.js';
+import { lineClear } from './field.js';
+import { clearAttackFocus, lockAttackFocus } from './world.js';
 
 export const ACQUIRE_PHASES = 5;
 /** Squared-distance penalty per existing attacker — spreads fire without ignoring nearer threats. */
@@ -38,9 +41,35 @@ const REBALANCE_MARGIN = fx.mul(fx.fromInt(4), fx.fromInt(4));
 export function combatSystem(w, field) {
   rebuildSpatialGrid(w.spatial, w);
   rebuildEngagementClaims(w);
+  bashBlockingDoors(w, field);
   acquireTargets(w, field);
   resolveAttacks(w, field);
   tickMana(w);
+}
+
+/** Attack-move or move that runs into a shut door stops and breaks it. */
+function bashBlockingDoors(w, field) {
+  if (!w.doors?.length || !field) return;
+  const reach = fx.fromFloat(DOOR_BASH_REACH_F);
+  for (let i = 0; i < w.count; i++) {
+    if (!w.alive[i] || w.carriedBy?.[i] >= 0) continue;
+    const order = w.order[i];
+    if (order !== w.ORDER.ATTACK_MOVE && order !== w.ORDER.MOVE) continue;
+    if (!w.hasTarget[i] || w.attackFocus?.[i]) continue;
+    if (!unitAttacksBuildings(w.type[i])) continue;
+    if (lineClear(field, w.px[i], w.py[i], w.tx[i], w.ty[i])) continue;
+    const di = nearestShutDoor(w, w.px[i], w.py[i], reach);
+    if (di < 0) continue;
+    const door = w.doors[di];
+    w.order[i] = w.ORDER.ATTACK;
+    w.targetEntity[i] = -1;
+    if (w.targetBuilding) w.targetBuilding[i] = -1;
+    w.targetDoor[i] = di;
+    lockAttackFocus(w, i);
+    clearEngagement(w, i);
+    const stand = attackDoorStandPointOnField(w, field, i, door);
+    queuePath(w, i, stand.x, stand.y);
+  }
 }
 
 export { kill };
@@ -145,6 +174,7 @@ export function acquireTargets(w, field) {
 
       w.targetEntity[i] = best;
       if (w.targetBuilding) w.targetBuilding[i] = -1;
+      if (w.targetDoor) w.targetDoor[i] = -1;
       if (w.attackFocus) w.attackFocus[i] = 0;
       w.order[i] = w.ORDER.ATTACK;
       claimEngagement(w, i, best);
@@ -191,6 +221,7 @@ export function acquireTargets(w, field) {
 
     w.targetEntity[i] = -1;
     w.targetBuilding[i] = bestBi;
+    if (w.targetDoor) w.targetDoor[i] = -1;
     if (w.attackFocus) w.attackFocus[i] = 0;
     w.order[i] = w.ORDER.ATTACK;
     clearEngagement(w, i);
@@ -224,14 +255,46 @@ function resolveAttacks(w, field) {
     const target = w.targetEntity[i];
     const bi = w.targetBuilding?.[i] ?? -1;
     const b = bi >= 0 ? w.buildings?.[bi] : null;
+    const di = w.targetDoor?.[i] ?? -1;
+    const door = di >= 0 ? w.doors?.[di] : null;
     const unitOk = target >= 0 && w.alive[target] && !(w.carriedBy?.[target] >= 0);
     const buildingOk = isBuildingAlive(b) && unitAttacksBuildings(w.type[i]);
-    if (!unitOk && !buildingOk) {
+    const doorOk = isDoorAlive(door) && unitAttacksBuildings(w.type[i]);
+    if (!unitOk && !buildingOk && !doorOk) {
       endAttack(w, i);
       continue;
     }
 
     const def = getUnitDef(w.type[i]);
+
+    if (doorOk) {
+      if (attackDoorInRange(w, i, door)) {
+        w.vx[i] = 0;
+        w.vy[i] = 0;
+        clearPath(w, i);
+        if (w.attackCd[i] <= 0) {
+          if (def.attackDelivery === ATTACK_DELIVERY.PROJECTILE) {
+            spawnProjectile(w, {
+              type: def.projectileType,
+              owner: w.owner[i],
+              source: i,
+              target: -1,
+              targetDoor: di,
+              x: w.px[i],
+              y: w.py[i],
+              aimX: door.x,
+              aimY: door.z,
+              damage: unitAttackDamage(w, i, def.attackDamage),
+            });
+          } else {
+            applyDamageDoor(w, field, di, unitAttackDamage(w, i, def.attackDamage));
+          }
+          w.attackCd[i] = def.attackCooldown;
+          if (!isDoorAlive(w.doors?.[di])) endAttack(w, i);
+        }
+      }
+      continue;
+    }
 
     if (attackInRange(w, i)) {
       w.vx[i] = 0;
@@ -250,10 +313,10 @@ function resolveAttacks(w, field) {
               y: w.py[i],
               aimX: w.px[target],
               aimY: w.py[target],
-              damage: def.attackDamage,
+              damage: unitAttackDamage(w, i, def.attackDamage),
             });
           } else {
-            applyDamage(w, target, def.attackDamage, i);
+            applyDamage(w, target, unitAttackDamage(w, i, def.attackDamage), i);
           }
           w.attackCd[i] = def.attackCooldown;
           if (!w.alive[target]) endAttack(w, i);
@@ -269,10 +332,10 @@ function resolveAttacks(w, field) {
               y: w.py[i],
               aimX: b.x,
               aimY: b.z,
-              damage: def.attackDamage,
+              damage: unitAttackDamage(w, i, def.attackDamage),
             });
           } else {
-            applyDamageBuilding(w, field, bi, def.attackDamage);
+            applyDamageBuilding(w, field, bi, unitAttackDamage(w, i, def.attackDamage));
           }
           w.attackCd[i] = def.attackCooldown;
           if (!isBuildingAlive(w.buildings?.[bi])) endAttack(w, i);

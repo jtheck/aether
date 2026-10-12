@@ -18,5 +18,5 @@
     "icon": "build/icon.png",
     "position": "center"
   },
-  "chromium-args": "--disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --in-process-gpu --remote-debugging-port=9222 --user-data-dir=.nw-user-data"
+  "chromium-args": "--disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --in-process-gpu --remote-debugging-port=9222 --user-data-dir=.nw-user-data --enable-features=WebXRLayers,WebXRWebGPUBinding"
 }

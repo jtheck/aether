@@ -6,8 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { decodeGarden } from '../sim/garden.js';
 import { TERRAIN } from '../sim/field.js';
 import { SCENERY } from '../sim/scenery.js';
-import { CAMPAIGN_CHAPTERS, CHAPTER_CATALOG, EPISODES, campaignGardenUrl } from './campaign.js';
-import { buildChapterGarden } from './campaignBuild.js';
+import { CAMPAIGN_CHAPTERS, CHAPTER_CATALOG, EPISODES, campaignGardenUrl, officialCampaignIndex } from './campaign.js';
+import { buildCampaign, buildChapterGarden } from './campaignBuild.js';
+import { nextChapterFile } from './campaignPack.js';
 import { isTerminalObjective } from './objectives.js';
 import { normalizeStory } from './timeline.js';
 
@@ -21,14 +22,17 @@ describe('campaign manifest', () => {
     assert.equal(new Set(ids).size, 19);
   });
 
-  it('chains each chapter to the next and ends the campaign clean', () => {
-    for (let i = 0; i < CAMPAIGN_CHAPTERS.length; i++) {
-      const c = CAMPAIGN_CHAPTERS[i];
-      const expected = i + 1 < CAMPAIGN_CHAPTERS.length
-        ? campaignGardenUrl(CAMPAIGN_CHAPTERS[i + 1].id)
-        : '';
-      assert.equal(c.nextUrl, expected);
-    }
+  it('orders chapters on the campaign index and does not bake next urls', () => {
+    const index = officialCampaignIndex();
+    assert.equal(nextChapterFile(index, 'e1c1.garden'), 'e1c2.garden');
+    assert.equal(nextChapterFile(index, CAMPAIGN_CHAPTERS.at(-1).file), '');
+    assert.equal(CAMPAIGN_CHAPTERS[0].url, campaignGardenUrl('e1c1'));
+    const first = CAMPAIGN_CHAPTERS[0];
+    const terminal = decodeGarden(buildChapterGarden(first.def)).objectives.find(isTerminalObjective);
+    assert.equal(terminal.next, '');
+    const built = buildCampaign();
+    assert.deepEqual(built[0].garden.pk.files[0], 'e1c1.garden');
+    assert.equal(built[0].garden.pk.files.length, 19);
   });
 
   it('exposes a menu catalog labelled by episode', () => {
@@ -41,7 +45,7 @@ describe('campaign manifest', () => {
 describe('campaign chapter build', () => {
   it('builds a garden with four heroes, two reels, and a terminal objective', () => {
     const first = CAMPAIGN_CHAPTERS[0];
-    const json = buildChapterGarden(first.def, first.nextUrl);
+    const json = buildChapterGarden(first.def);
     const g = decodeGarden(json);
     const heroes = g.units.filter((u) => u.name);
     assert.equal(heroes.length, 4);
@@ -49,7 +53,7 @@ describe('campaign chapter build', () => {
     assert.equal(g.story.reels.length, 2);
     assert.ok(g.objectives.some(isTerminalObjective));
     const terminal = g.objectives.find(isTerminalObjective);
-    assert.equal(terminal.next, first.nextUrl);
+    assert.equal(terminal.next, '');
   });
 
   it('varies board size across the campaign (not all one shape)', () => {
@@ -94,8 +98,8 @@ describe('campaign chapter build', () => {
   it('paints water, forest, and halls onto the board', () => {
     const moat = CAMPAIGN_CHAPTERS.find((c) => c.id === 'e1c4');
     const woods = CAMPAIGN_CHAPTERS.find((c) => c.id === 'e4c1');
-    const gMoat = decodeGarden(buildChapterGarden(moat.def, moat.nextUrl));
-    const gWoods = decodeGarden(buildChapterGarden(woods.def, woods.nextUrl));
+    const gMoat = decodeGarden(buildChapterGarden(moat.def));
+    const gWoods = decodeGarden(buildChapterGarden(woods.def));
     const water = [...gMoat.terrainTypes].filter((t) => t === TERRAIN.WATER).length;
     const trees = [...gWoods.sceneryType].filter((t) => t === SCENERY.TREE).length;
     assert.ok(water > 80, `moat chapter should be a water barrier, got ${water} water tiles`);
@@ -107,7 +111,7 @@ describe('campaign chapter build', () => {
   it('carries preserved params through a v4 garden roundtrip', () => {
     const race = CAMPAIGN_CHAPTERS.find((c) => c.def.objectives.some((o) => o.params));
     assert.ok(race, 'a chapter should author objective params');
-    const json = buildChapterGarden(race.def, race.nextUrl);
+    const json = buildChapterGarden(race.def);
     const g = decodeGarden(json);
     assert.ok(g.objectives.some((o) => o.params && Object.keys(o.params).length > 0));
   });
@@ -116,7 +120,7 @@ describe('campaign chapter build', () => {
 describe('cinematic vision reveal', () => {
   it('defaults chapter cinematics to reveal the enemy faction', () => {
     const c = CAMPAIGN_CHAPTERS.find((x) => x.id === 'e1c1');
-    const g = decodeGarden(buildChapterGarden(c.def, c.nextUrl));
+    const g = decodeGarden(buildChapterGarden(c.def));
     const s = normalizeStory(g.story);
     const intro = s.reels.find((r) => r.when === 'start');
     assert.deepEqual(intro.reveal, [4]);
@@ -125,7 +129,7 @@ describe('cinematic vision reveal', () => {
   it('honors an explicit full-map reveal override', () => {
     const c = CAMPAIGN_CHAPTERS.find((x) => x.id === 'e5c1');
     assert.equal(c.def.reveal, 'all');
-    const g = decodeGarden(buildChapterGarden(c.def, c.nextUrl));
+    const g = decodeGarden(buildChapterGarden(c.def));
     const s = normalizeStory(g.story);
     const intro = s.reels.find((r) => r.when === 'start');
     assert.equal(intro.reveal, 'all');
@@ -155,5 +159,16 @@ describe('generated garden files match the builder', () => {
       assert.equal(g.story.reels.length, 2, `${c.id} reels`);
       assert.ok(g.objectives.some(isTerminalObjective), `${c.id} terminal`);
     }
+  });
+
+  it('ships campaign.json and stamps play order on each chapter', () => {
+    const index = JSON.parse(readFileSync(join(here, '../../maps/campaign.json'), 'utf8'));
+    assert.equal(index.kind, 'campaign');
+    assert.equal(index.episodes.length, 5);
+    const data = JSON.parse(readFileSync(join(here, '../../maps/e1c1.garden'), 'utf8'));
+    assert.equal(data.pk.files[1], 'e1c2.garden');
+    assert.equal(data.pk.files.length, CAMPAIGN_CHAPTERS.length);
+    const g = decodeGarden(data);
+    assert.equal(g.objectives.find(isTerminalObjective).next, '');
   });
 });

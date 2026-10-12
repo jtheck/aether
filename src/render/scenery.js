@@ -101,11 +101,29 @@ function unseenGreenKill(t) {
 }
 /**
  * Untextured PBR + outdoor key / 2.15 exposure reads as a chalk wash.
- * Thin-instance color multiplies albedo (same path as fog), so this hits
- * both the GLB/bake meshes and the atlas billboards.
+ * Thin-instance color multiplies albedo (same path as fog). Tree cards
+ * upload a compressed gray; rocks use BILLBOARD_ROCK_LIFT.
  */
 const TREE_ALBEDO_DIM = 0.24;
 const ROCK_ALBEDO_DIM = 0.30;
+/** Atlas cards share the mesh tint’s brightness. The tint itself is a green
+ *  push for the untextured GLB, and on the painted card that push goes neon. */
+const BILLBOARD_ROCK_LIFT = 2.5;
+/** Gray multiply for a tree card. Mature sight sits at MID; saplings ease to HI.
+ *  A floor at 0.58 lifted rim giants (luma ~0.05) onto the same gray as a
+ *  normal card, and the sun clamp then blew that limb out on the board edge. */
+const BILLBOARD_TREE_LO = 0.26;
+const BILLBOARD_TREE_MID = 0.655;
+const BILLBOARD_TREE_HI = 0.72;
+/** Mature in-sight luma. Darker than this is a rim giant, not a fogged sapling. */
+const BILLBOARD_LUMA_PIVOT = 0.13;
+const BILLBOARD_LUMA_HI = 0.38;
+/** How far past the mesh ring a card eases up to full billboard brightness. */
+const BILLBOARD_EDGE_BAND = 0.14;
+/** Brightness of a card sitting on the mesh ring, relative to a far card. */
+const BILLBOARD_EDGE_SCALE = 0.62;
+/** Dull sheen. A wide highlight on seen ground and the vision edge reads as chrome. */
+const TREE_SPEC_SIGHT = { color: [0.03, 0.032, 0.035], power: 48 };
 /** Sapling — brighter leaf green. Same multiply range as TREE_ALBEDO_DIM. */
 const TREE_TINT_SMALL = [0.26, 0.48, 0.16];
 /** Mature canopy — same green, much darker. */
@@ -312,7 +330,37 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     };
   }
   const atlas = await getAtlas(engine);
+  // Beyond this XZ radius from the look-at point, resources are hidden outright
+  // (mesh and billboard). Terrain passes its keep ring here so trees/rocks drop
+  // with the tiles under them instead of floating over the bare table.
+  // Infinity (default) keeps every resource — the right call when terrain is one
+  // full draw (normal maps).
+  const resourceDropSq = Number.isFinite(opts.resourceDrop) && opts.resourceDrop > 0
+    ? opts.resourceDrop * opts.resourceDrop
+    : Infinity;
+  // Inside this XZ radius from the look point, trees/rocks stay full meshes.
+  // Between it and resourceDrop they are billboards. Infinity keeps the old
+  // eye-distance swap (normal boards).
+  const resourceMeshSq = Number.isFinite(opts.resourceMesh) && opts.resourceMesh > 0
+    ? opts.resourceMesh * opts.resourceMesh
+    : Infinity;
   const meshes = [];
+  let shown = true;
+  function applyShown() {
+    if (shown) return;
+    for (let i = 0; i < meshes.length; i++) meshes[i].visible = false;
+  }
+  function setShown(on) {
+    shown = on !== false;
+    if (shown) {
+      for (let i = 0; i < meshes.length; i++) {
+        const n = meshes[i].thinInstances?.count ?? 0;
+        meshes[i].visible = n > 0;
+      }
+      return;
+    }
+    applyShown();
+  }
   const batches = [];
   /** @type {Map<number, object>} */
   const batchByKind = new Map();
@@ -362,7 +410,10 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
             opts.onModelMesh?.(part.mesh);
           }
           batch.pickParts = pickPartsFromMeshes(batch.modelParts.map((part) => part.mesh));
-          if (!disposed) batch.dirty = true;
+          if (!disposed) {
+            batch.dirty = true;
+            applyShown();
+          }
         })
         .catch((err) => {
           if (!disposed) console.warn(`[scenery] model ${batch.variant.modelUrl} failed`, err);
@@ -382,7 +433,6 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     const billboardMatrices = new Float32Array(capacity * 16);
     const colors = makeDimColors(capacity, albedoDimFor(variant.kind));
     setThinInstances(billboardMesh, billboardMatrices, capacity);
-    setThinInstanceColors(billboardMesh, colors);
     setThinInstanceCount(billboardMesh, capacity);
     billboardMesh.pickable = false;
     meshes.push(billboardMesh);
@@ -405,11 +455,13 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       billboardMesh,
       billboardMatrices,
       colors,
+      billboardColors: null,
       modelParts,
       freeSlots,
       dirty: true,
       capacity,
     };
+    uploadBillboardColors(batch);
     batches.push(batch);
     batchByKind.set(variant.kind, batch);
     if (isTree) {
@@ -457,10 +509,11 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     const colors = makeDimColors(cap, albedoDimFor(batch.variant.kind));
     if (batch.colors) colors.set(batch.colors.subarray(0, oldCap * 4));
     setThinInstances(batch.billboardMesh, billboardMatrices, cap);
-    setThinInstanceColors(batch.billboardMesh, colors);
     setThinInstanceCount(batch.billboardMesh, cap);
     batch.billboardMatrices = billboardMatrices;
     batch.colors = colors;
+    batch.billboardColors = null;
+    uploadBillboardColors(batch);
     for (const part of batch.modelParts) {
       const matrices = new Float32Array(cap * 16);
       matrices.set(part.matrices.subarray(0, oldCap * 16));
@@ -775,8 +828,12 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     }
 
     const cameraPos = cameraPosition(activeCamera);
+    // Drop ring is measured from the look-at point (same reference terrain uses
+    // to cull chunks) so resources vanish exactly where the tiles do.
+    const lookXZ = cameraLookAt(activeCamera);
     // Refresh the mesh/billboard split when the camera moves. A full thin-instance
-    // flush is the expensive part, so it waits for 120ms or a few world units.
+    // flush is the expensive part, so it waits out the interval. A move check
+    // without that wait rewrites every tree while panning.
     let anyDirty = false;
     for (let b = 0; b < batches.length; b++) {
       if (batches[b].dirty) { anyDirty = true; break; }
@@ -785,7 +842,10 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       (cameraPos.x - lastCameraX) ** 2 +
       (cameraPos.y - lastCameraY) ** 2 +
       (cameraPos.z - lastCameraZ) ** 2;
-    const lodDue = force || elapsed >= LOD_UPDATE_MS || movedSq >= LOD_MOVE_THRESHOLD_SQ;
+    const lodDue = force || (
+      elapsed >= LOD_UPDATE_MS &&
+      (lastCameraX === Infinity || movedSq >= LOD_MOVE_THRESHOLD_SQ)
+    );
     if (lodDue || anyDirty) {
       if (lodDue) {
         elapsed = 0;
@@ -795,11 +855,12 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       }
       for (const batch of batches) {
         if (!batch.dirty && !lodDue) continue;
-        updateBatchLod(batch, cameraPos);
+        updateBatchLod(batch, cameraPos, lookXZ, resourceDropSq, resourceMeshSq);
         batch.dirty = false;
       }
     }
     tickHarvestPings();
+    applyShown();
   }
 
   function applyTreeUpdates(updates) {
@@ -945,6 +1006,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     if (!colors) return;
     const p = batch.instances[index];
     const t = fogFactor ? fogFactor(p.x, p.z) : 0;
+    p.fogT = t;
     const fogMul = (fogFactor ? fogAlbedoScale(t) : 1) * harvestBoost(p.tileIndex, performance.now());
     const o = index * 4;
     if (batch.variant.kind === SCENERY.TREE) {
@@ -1035,7 +1097,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
 
   function flushBatchColors(batch) {
     if (!batch.colors) return;
-    setThinInstanceColors(batch.billboardMesh, batch.colors);
+    uploadBillboardColors(batch);
     for (let p = 0; p < batch.modelParts.length; p++) {
       setThinInstanceColors(batch.modelParts[p].mesh, batch.colors);
     }
@@ -1114,6 +1176,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     applyTreeUpdates,
     applyRockUpdates,
     applyAuthoredTiles,
+    setShown,
     applyFogDim,
     applyFogTiles,
     pingHarvest,
@@ -1149,6 +1212,8 @@ function makeEmptyTreeInstance() {
     burnLeanSign: 0,
     burnLeanMax: 0,
     burnDurMs: 0,
+    fogT: 0,
+    edgeDim: 0,
   };
 }
 
@@ -1316,36 +1381,97 @@ function collectRenderableMeshes(node, out) {
   for (const child of node?.children ?? []) collectRenderableMeshes(child, out);
 }
 
+/**
+ * Normal at a point on a crossed card.
+ * XZ points back along the vertex, toward the trunk. On these cards that is
+ * the direction the key light treats as the sun side: aiming outward lit the
+ * shade and left the sunny side dark. Y still rises through the crown so
+ * light from above stays on the top.
+ */
+function crownNormal(x, y, z, faceX, faceY, faceZ, tree) {
+  const crownY = PLANE_SIZE * (tree ? 0.58 : 0.42);
+  // Wide XZ spread aimed the quad's left and right edges straight at the key
+  // light. On the board rim that limb is against the sky, so the card lights up.
+  const spread = tree ? 0.22 : 0.35;
+  const puff = tree ? 0.8 : 0.55;
+  const nx = -(x * spread + faceX * puff);
+  const ny = (y - crownY) * (tree ? 0.62 : 0.4) + (tree ? 0.42 : 0.55) + faceY * puff;
+  const nz = -(z * spread + faceZ * puff);
+  const len = Math.hypot(nx, ny, nz) || 1;
+  return [nx / len, ny / len, nz / len];
+}
+
+/** CCW front-face normal (WebGPU frontFace ccw). */
+function cardFaceNormal(corners) {
+  const ax = corners[1][0] - corners[0][0];
+  const ay = corners[1][1] - corners[0][1];
+  const az = corners[1][2] - corners[0][2];
+  const bx = corners[2][0] - corners[0][0];
+  const by = corners[2][1] - corners[0][1];
+  const bz = corners[2][2] - corners[0][2];
+  const nx = ay * bz - az * by;
+  const ny = az * bx - ax * bz;
+  const nz = ax * by - ay * bx;
+  const len = Math.hypot(nx, ny, nz) || 1;
+  return [nx / len, ny / len, nz / len];
+}
+
+function pushCrownSide(positions, normals, uvs, indices, corners, uv, face, tree, reversed) {
+  const base = positions.length / 3;
+  const s = reversed ? -1 : 1;
+  for (let i = 0; i < 4; i++) {
+    const [x, y, z] = corners[i];
+    positions.push(x, y, z);
+    const n = crownNormal(x, y, z, face[0] * s, face[1] * s, face[2] * s, tree);
+    normals.push(n[0], n[1], n[2]);
+    uvs.push(uv[i * 2], uv[i * 2 + 1]);
+  }
+  if (!reversed) {
+    indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  } else {
+    indices.push(base, base + 2, base + 1, base, base + 3, base + 2);
+  }
+}
+
+/** Two crossed cards, each with a front and a back so the visible side bulges outward. */
+function pushCrownCard(positions, normals, uvs, indices, corners, uv, tree) {
+  const face = cardFaceNormal(corners);
+  pushCrownSide(positions, normals, uvs, indices, corners, uv, face, tree, false);
+  pushCrownSide(positions, normals, uvs, indices, corners, uv, face, tree, true);
+}
+
 function createBillboardMesh(engine, variant, atlas) {
   const half = PLANE_SIZE * 0.5;
-  const positions = new Float32Array([
-    -half, 0, 0, half, 0, 0, half, PLANE_SIZE, 0, -half, PLANE_SIZE, 0,
-    0, 0, -half, 0, 0, half, 0, PLANE_SIZE, half, 0, PLANE_SIZE, -half,
-  ]);
-  const normals = new Float32Array([
-    0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1,
-    -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0,
-  ]);
-  const indices = new Uint32Array([
-    0, 1, 2, 0, 2, 3,
-    4, 5, 6, 4, 6, 7,
-  ]);
+  const tree = variant.kind === SCENERY.TREE;
+  const positions = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
   const cellSize = 1 / ATLAS_GRID;
   const u0 = variant.cell * cellSize + CELL_INSET;
   const u1 = (variant.cell + 1) * cellSize - CELL_INSET;
   const v0 = CELL_INSET;
   const v1 = cellSize - CELL_INSET;
-  const uvs = new Float32Array([
-    u0, v1, u1, v1, u1, v0, u0, v0,
-    u0, v1, u1, v1, u1, v0, u0, v0,
-  ]);
+  const uv = [u0, v1, u1, v1, u1, v0, u0, v0];
+  pushCrownCard(positions, normals, uvs, indices, [
+    [-half, 0, 0],
+    [half, 0, 0],
+    [half, PLANE_SIZE, 0],
+    [-half, PLANE_SIZE, 0],
+  ], uv, tree);
+  pushCrownCard(positions, normals, uvs, indices, [
+    [0, 0, -half],
+    [0, 0, half],
+    [0, PLANE_SIZE, half],
+    [0, PLANE_SIZE, -half],
+  ], uv, tree);
   const mesh = createMeshFromData(
     engine,
     `scenery-${variant.name}`,
-    positions,
-    normals,
-    indices,
-    uvs,
+    Float32Array.from(positions),
+    Float32Array.from(normals),
+    Uint32Array.from(indices),
+    Float32Array.from(uvs),
   );
   const mat = createStandardMaterial();
   mat.diffuseTexture = atlas;
@@ -1353,11 +1479,18 @@ function createBillboardMesh(engine, variant, atlas) {
   mat.opacityFromRGB = false;
   mat.alphaCutOff = 0.35;
   mat.diffuseColor = [1, 1, 1];
-  mat.ambientColor = [0.28, 0.28, 0.24];
+  mat.ambientColor = tree ? [0.14, 0.145, 0.13] : [0.28, 0.28, 0.24];
   mat.emissiveColor = [0, 0, 0];
-  mat.specularColor = [0, 0, 0];
-  mat.backFaceCulling = false;
+  // Sight and seen stay matte. A wide sheen on those tiers chrome-plates the sun side.
+  mat.specularColor = tree ? TREE_SPEC_SIGHT.color : [0, 0, 0];
+  mat.specularPower = tree ? TREE_SPEC_SIGHT.power : 1;
+  // Each card has its own front and back. Culling keeps the outward bulge
+  // that faces you; drawing both would z-fight the lit side against the shade.
+  mat.backFaceCulling = true;
   mesh.material = mat;
+  // A shadow on the card flattens the sun side down onto the shade.
+  mesh.receiveShadows = false;
+  mesh._skipShadowReceive = true;
   return mesh;
 }
 
@@ -1414,7 +1547,7 @@ function collectInstances(field, variant, surfaceHeightAt) {
 // Fallback if an older snapshot omits treeStock (full-size tree).
 const TREE_STAGE_FALLBACK_STOCK = 42;
 
-function updateBatchLod(batch, cameraPos) {
+function updateBatchLod(batch, cameraPos, lookXZ, dropSq = Infinity, meshSq = Infinity) {
   const {
     variant,
     instances,
@@ -1428,13 +1561,36 @@ function updateBatchLod(batch, cameraPos) {
   // drawing/flushing all of it every update is pure waste.
   let lastModelSlot = -1;
   let lastBillboardSlot = -1;
+  let edgeChanged = false;
+  const noteEdge = (p, edge) => {
+    // Map-rim cards follow the same fog gray as every other card. Forcing the
+    // mesh-seam dim here left a dark outline that did not match the veil.
+    if (Math.abs((p.edgeDim || 0) - edge) <= 0.05) return;
+    p.edgeDim = edge;
+    edgeChanged = true;
+  };
   for (let i = 0; i < instances.length; i++) {
     const p = instances[i];
     const stockScale = p.stockScale ?? 1;
     if (stockScale <= 0) {
       for (const part of modelParts) writeHiddenMatrix(part.matrices, i);
       writeHiddenMatrix(billboardMatrices, i);
+      noteEdge(p, 0);
       continue;
+    }
+    // Past the billboard ring, hide both. Between the mesh ring and that,
+    // keep a card even where the tiles have already become table.
+    let lookDistSq = 0;
+    if ((dropSq !== Infinity || meshSq !== Infinity) && lookXZ) {
+      const ldx = lookXZ.x - p.x;
+      const ldz = lookXZ.z - p.z;
+      lookDistSq = ldx * ldx + ldz * ldz;
+      if (dropSq !== Infinity && lookDistSq > dropSq) {
+        for (const part of modelParts) writeHiddenMatrix(part.matrices, i);
+        writeHiddenMatrix(billboardMatrices, i);
+        noteEdge(p, 0);
+        continue;
+      }
     }
     const modelScale = variant.modelScale * stockScale;
     const billboardScale = variant.billboardScale * stockScale;
@@ -1442,7 +1598,8 @@ function updateBatchLod(batch, cameraPos) {
     const dx = cameraPos.x - p.x;
     const dy = cameraPos.y - p.y;
     const dz = cameraPos.z - p.z;
-    const near = dx * dx + dy * dy + dz * dz <= lodDistanceSq;
+    const pastMesh = meshSq !== Infinity && lookDistSq > meshSq;
+    const near = !pastMesh && dx * dx + dy * dy + dz * dz <= lodDistanceSq;
     if (near && modelParts.length) {
       for (const part of modelParts) {
         writeModelInstanceMatrix(
@@ -1458,9 +1615,12 @@ function updateBatchLod(batch, cameraPos) {
         );
       }
       writeHiddenMatrix(billboardMatrices, i);
+      noteEdge(p, 0);
       lastModelSlot = i;
     } else {
       for (const part of modelParts) writeHiddenMatrix(part.matrices, i);
+      const eyeDistSq = dx * dx + dy * dy + dz * dz;
+      noteEdge(p, billboardEdgeDim(lookDistSq, eyeDistSq, meshSq, lodDistanceSq));
       writeInstanceMatrix(
         billboardMatrices,
         i,
@@ -1480,6 +1640,15 @@ function updateBatchLod(batch, cameraPos) {
   }
   setThinInstanceCount(billboardMesh, lastBillboardSlot + 1);
   flushThinInstances(billboardMesh);
+  if (edgeChanged && variant.kind === SCENERY.TREE) uploadBillboardColors(batch);
+}
+
+/** Ground point the camera looks at (XZ) — matches terrain's chunk-cull ref. */
+function cameraLookAt(camera) {
+  const t = camera?.target;
+  if (t && Number.isFinite(t.x) && Number.isFinite(t.z)) return { x: t.x, z: t.z };
+  const eye = cameraPosition(camera);
+  return { x: eye.x, z: eye.z };
 }
 
 function cameraPosition(camera) {
@@ -1531,6 +1700,73 @@ function deterministicPlacement(tx, tz, seed, kind) {
 
 function albedoDimFor(kind) {
   return kind === SCENERY.TREE ? TREE_ALBEDO_DIM : ROCK_ALBEDO_DIM;
+}
+
+/** Sight and seen share one gray. Cards on the mesh ring are pulled down so
+ *  they don't pop brighter than the model they just replaced. Rim giants stay
+ *  below the mature card — the old curve floored them next to it. */
+export function billboardTreeGray(luma, edgeDim) {
+  let base;
+  if (luma >= BILLBOARD_LUMA_PIVOT) {
+    const t = Math.min(1, (luma - BILLBOARD_LUMA_PIVOT) / (BILLBOARD_LUMA_HI - BILLBOARD_LUMA_PIVOT));
+    base = BILLBOARD_TREE_MID + (BILLBOARD_TREE_HI - BILLBOARD_TREE_MID) * t;
+  } else {
+    const t = BILLBOARD_LUMA_PIVOT > 0 ? Math.max(0, luma / BILLBOARD_LUMA_PIVOT) : 0;
+    base = BILLBOARD_TREE_LO + (BILLBOARD_TREE_MID - BILLBOARD_TREE_LO) * t;
+  }
+  const edge = edgeDim > 0 ? (edgeDim > 1 ? 1 : edgeDim) : 0;
+  return base * (BILLBOARD_EDGE_SCALE + (1 - BILLBOARD_EDGE_SCALE) * (1 - edge));
+}
+
+/** 1 on the model/card seam, 0 once the card is clearly past it. */
+function billboardEdgeDim(lookDistSq, eyeDistSq, meshSq, lodSq) {
+  let edge = 0;
+  if (meshSq < Infinity && lookDistSq > meshSq) {
+    const mesh = Math.sqrt(meshSq);
+    const band = Math.max(36, mesh * BILLBOARD_EDGE_BAND);
+    const u = (Math.sqrt(lookDistSq) - mesh) / band;
+    if (u < 1) edge = 1 - (u < 0 ? 0 : u);
+  }
+  if (lodSq < Infinity && eyeDistSq > lodSq) {
+    const lod = Math.sqrt(lodSq);
+    const band = Math.max(48, lod * BILLBOARD_EDGE_BAND);
+    const u = (Math.sqrt(eyeDistSq) - lod) / band;
+    if (u < 1) edge = Math.max(edge, 1 - (u < 0 ? 0 : u));
+  }
+  return edge;
+}
+
+function uploadBillboardColors(batch) {
+  const src = batch.colors;
+  if (!src || !batch.billboardMesh) return;
+  let dst = batch.billboardColors;
+  if (!dst || dst.length !== src.length) {
+    dst = new Float32Array(src.length);
+    batch.billboardColors = dst;
+  }
+  const tree = batch.variant.kind === SCENERY.TREE;
+  const lift = BILLBOARD_ROCK_LIFT;
+  for (let i = 0; i < src.length; i += 4) {
+    let r = src[i];
+    let g = src[i + 1];
+    let b = src[i + 2];
+    if (tree) {
+      const luma = r * 0.3 + g * 0.59 + b * 0.11;
+      const shade = billboardTreeGray(luma, batch.instances[i >> 2]?.edgeDim ?? 0);
+      r = shade;
+      g = shade;
+      b = shade;
+    } else {
+      r *= lift;
+      g *= lift;
+      b *= lift;
+    }
+    dst[i] = r;
+    dst[i + 1] = g;
+    dst[i + 2] = b;
+    dst[i + 3] = src[i + 3];
+  }
+  setThinInstanceColors(batch.billboardMesh, dst);
 }
 
 function makeDimColors(cap, dim) {

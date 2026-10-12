@@ -9,6 +9,7 @@ import { rebuildSpatialGrid } from './spatialGrid.js';
 import { ensureTreeArrays } from './trees.js';
 import { applyRockOccupancyFromStock } from './scenery.js';
 import { applyWorldStructureOccupancy, defaultRallyWorld, getBuildTime, getBuildingHp } from './buildings.js';
+import { exportDoorState, importDoorState } from './doorCombat.js';
 import { ORDER } from './world.js';
 import * as fx from './fixed.js';
 import { applySerializedTech, serializeTech } from './tech.js';
@@ -23,7 +24,7 @@ import { isManaCaster, MANA_MAX } from './mana.js';
 export const CHECKPOINT_FORMAT = 1;
 
 const ENTITY_I32 = [
-  'px', 'py', 'vx', 'vy', 'faceX', 'faceY', 'tx', 'ty', 'speed', 'targetEntity', 'targetBuilding', 'engagementTarget',
+  'px', 'py', 'vx', 'vy', 'faceX', 'faceY', 'tx', 'ty', 'speed', 'targetEntity', 'targetBuilding', 'targetDoor', 'engagementTarget',
   'navDestX', 'navDestY', 'lastPx', 'lastPy', 'hp', 'carriedBy', 'transportTarget',
   'rallyHop1X', 'rallyHop1Y', 'rallyHop2X', 'rallyHop2Y',
   'dotSource', 'locustSource', 'lobFromX', 'lobFromY', 'lobToX', 'lobToY', 'squadId',
@@ -40,7 +41,7 @@ const ENTITY_U8 = [
   'hasTarget', 'order', 'navWpCount', 'navWpIndex', 'pathRequest', 'pathSlowAware',
   'rallyHopCount', 'rallyHop1Order', 'rallyHop2Order',
   'stuckTicks', 'repathCount', 'lobTrail', 'type', 'owner', 'alive', 'carriedKind',
-  'gatherDefensive', 'gatherAct', 'attackFocus',
+  'gatherDefensive', 'gatherAct', 'attackFocus', 'named',
 ];
 
 /**
@@ -80,7 +81,7 @@ export function exportWorldCheckpoint(w, field, checksum) {
       u16: ['age', 'lifetime'],
       u32: ['generation'],
       i32: [
-        'source', 'target', 'targetBuilding', 'px', 'py', 'vx', 'vy', 'aimX', 'aimY',
+        'source', 'target', 'targetBuilding', 'targetDoor', 'px', 'py', 'vx', 'vy', 'aimX', 'aimY',
         'wanderOx', 'wanderOy', 'damage', 'speed',
       ],
       pathHits: true,
@@ -104,6 +105,7 @@ export function exportWorldCheckpoint(w, field, checksum) {
     koth: exportKoth(w.koth),
     agoras: exportAgoras(w.agoras),
     buildings: exportBuildings(w.buildings),
+    doors: exportDoorState(w.doors),
     tech: serializeTech(w),
     resources: serializeResources(w),
     foodUpkeepAcc: serializeFoodUpkeep(w),
@@ -143,6 +145,7 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   if (!ent.arrays.pathSlowAware && w.pathSlowAware) w.pathSlowAware.fill(0);
   if (!ent.arrays.attackFocus && w.attackFocus) w.attackFocus.fill(0);
   if (!ent.arrays.gatherAct && w.gatherAct) w.gatherAct.fill(0);
+  if (!ent.arrays.named && w.named) w.named.fill(0);
   if (!ent.arrays.targetBuilding && w.targetBuilding) w.targetBuilding.fill(-1);
   if (!ent.arrays.locustTicks && w.locustTicks) w.locustTicks.fill(0);
   if (!ent.arrays.locustStacks && w.locustStacks) w.locustStacks.fill(0);
@@ -226,6 +229,10 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   // pass is not checkpointed; shrink rock discs to remaining stock, then OR buildings.
   applyRockOccupancyFromStock(field);
   applyWorldStructureOccupancy(field, w);
+  importDoorState(w, field, checkpoint.doors);
+  if (w.projectiles?.targetDoor && !checkpoint.projectiles?.arrays?.targetDoor) {
+    w.projectiles.targetDoor.fill(-1);
+  }
 
   // Render-only queues — empty after restore.
   clearFxStore(w.lightningFx);

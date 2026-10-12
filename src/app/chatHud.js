@@ -35,6 +35,36 @@ export function chatLinePhase(ageMs, revealing) {
   return 'gone';
 }
 
+/**
+ * One chat row per spoken moment. Clip ids repeat across chapters (`intro-line-4`),
+ * so they cannot be the lifetime key.
+ * @param {object[]} lines
+ * @param {number} [seqStart]
+ * @param {number} [now]
+ */
+export function storyLineRecords(lines, seqStart = 0, now = Date.now()) {
+  const records = [];
+  let seq = seqStart | 0;
+  if (!Array.isArray(lines)) return { records, seq };
+  for (const line of lines) {
+    const name = String(line?.name || line?.speaker || '').trim();
+    const text = String(line?.text || '').trim();
+    const narration = Boolean(line?.narration) || !name;
+    if (!text || (!name && !line?.narration)) continue;
+    seq += 1;
+    records.push({
+      id: `story:${seq}`,
+      from: null,
+      name,
+      narration,
+      color: narration ? '' : (typeof line.color === 'string' ? line.color : '#fc4'),
+      text,
+      ts: now,
+    });
+  }
+  return { records, seq };
+}
+
 const STYLE_ID = 'chat-hud-style';
 const CSS = `
 #chat-hud { position: fixed; left: 12px; bottom: 40px; z-index: 10001;
@@ -140,7 +170,7 @@ export function setupChatHud({ resolveChat, getUserId } = {}) {
   let open = false;
   /** Local story lines. Not part of the networked room log. */
   const storyLog = [];
-  const storySeen = new Set();
+  let storySeq = 0;
   /** @type {Map<string, ReturnType<typeof setTimeout>>} */
   const fadeTimers = new Map();
   let revealUntil = 0;
@@ -289,40 +319,17 @@ export function setupChatHud({ resolveChat, getUserId } = {}) {
   }
 
   function noteStory(lines) {
-    if (!Array.isArray(lines) || !lines.length) return;
-    let added = false;
-    const now = Date.now();
-    for (const line of lines) {
-      const name = String(line?.name || line?.speaker || '').trim();
-      const text = String(line?.text || '').trim();
-      const narration = Boolean(line?.narration) || !name;
-      if (!text || (!name && !line?.narration)) continue;
-      const rawId = String(line.id || `${name}:${text}`);
-      const id = rawId.startsWith('story:') ? rawId : `story:${rawId}`;
-      if (storySeen.has(id)) continue;
-      storySeen.add(id);
-      storyLog.push({
-        id,
-        from: null,
-        name,
-        narration,
-        color: narration ? '' : (typeof line.color === 'string' ? line.color : '#fc4'),
-        text,
-        ts: now,
-      });
-      added = true;
-      while (storyLog.length > 100) {
-        const dropped = storyLog.shift();
-        if (dropped) storySeen.delete(dropped.id);
-      }
-    }
-    if (added) refresh();
+    const batch = storyLineRecords(lines, storySeq, Date.now());
+    storySeq = batch.seq;
+    if (!batch.records.length) return;
+    storyLog.push(...batch.records);
+    while (storyLog.length > 100) storyLog.shift();
+    refresh();
   }
 
   function clearStory() {
-    if (!storyLog.length && !storySeen.size) return;
+    if (!storyLog.length) return;
     storyLog.length = 0;
-    storySeen.clear();
     refresh();
   }
 

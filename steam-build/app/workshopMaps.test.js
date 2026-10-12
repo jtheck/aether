@@ -116,6 +116,38 @@ describe('workshopMaps subscribed list', () => {
     const items = maps.listSubscribedMaps(workshop);
     assert.deepEqual(items.map((item) => item.id), ['99', '100']);
   });
+
+  it('reads campaign.json and uses its name', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aeg-workshop-'));
+    try {
+      writeGarden(dir, 'e1c2.garden', JSON.stringify({ v: 4, n: 'Sally', w: 16, h: 16, s: 1, cs: 16, cm: '1' }));
+      writeGarden(dir, 'e1c1.garden', JSON.stringify({ v: 4, n: 'Breach', w: 16, h: 16, s: 1, cs: 16, cm: '1' }));
+      fs.writeFileSync(path.join(dir, 'campaign.json'), JSON.stringify({
+        kind: 'campaign',
+        name: 'Siege',
+        episodes: [{
+          name: 'The Siege',
+          chapters: [
+            { file: 'e1c1.garden', name: 'Breach' },
+            { file: 'e1c2.garden', name: 'Sally' },
+          ],
+        }],
+      }));
+      const workshop = {
+        getSubscribedItems: () => [7n],
+        getItemState: () => maps.ITEM_STATE.Subscribed | maps.ITEM_STATE.Installed,
+        getItemInstallInfo: () => ({ folder: dir }),
+      };
+      const items = maps.listSubscribedMaps(workshop);
+      assert.equal(items[0].title, 'Siege');
+      assert.deepEqual(items[0].campaign.episodes[0].chapters.map((ch) => ch.file), [
+        'e1c1.garden',
+        'e1c2.garden',
+      ]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('workshop overlay url', () => {
@@ -179,6 +211,48 @@ describe('workshopMaps publish', () => {
     assert.equal(result.id, '55');
     assert.deepEqual(result.tags, ['Campaign', 'Adventure']);
     assert.deepEqual(calls[0], ['Campaign', 'Adventure']);
+  });
+
+  it('writes each chapter plus campaign.json', async () => {
+    const workshop = {
+      createItem: async () => 70n,
+      startItemUpdate: () => 1n,
+      setItemTitle: () => true,
+      setItemDescription: () => true,
+      setItemVisibility: () => true,
+      setItemTags: () => true,
+      setItemContent: (_h, folder) => {
+        assert.equal(fs.existsSync(path.join(folder, 'breach.garden')), true);
+        assert.equal(fs.existsSync(path.join(folder, 'sally.garden')), true);
+        const index = JSON.parse(fs.readFileSync(path.join(folder, 'campaign.json'), 'utf8'));
+        assert.equal(index.name, 'Siege');
+        assert.equal(index.episodes[0].chapters[1].file, 'sally.garden');
+        return true;
+      },
+      submitItemUpdate: async () => true,
+    };
+    const result = await maps.publishWorkshopItem(workshop, null, {
+      appId: 5043860,
+      title: 'Siege',
+      campaign: {
+        kind: 'campaign',
+        name: 'Siege',
+        episodes: [{
+          name: 'The Siege',
+          chapters: [
+            { file: 'breach.garden', name: 'Breach' },
+            { file: 'sally.garden', name: 'Sally' },
+          ],
+        }],
+      },
+      files: [
+        { file: 'breach.garden', garden: { v: 4, n: 'Breach', w: 8, h: 8 } },
+        { file: 'sally.garden', garden: { v: 4, n: 'Sally', w: 8, h: 8 } },
+      ],
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.file, 'breach.garden');
+    assert.deepEqual(result.tags, ['Campaign', 'Adventure']);
   });
 
   it('writes a jpeg preview from base64 and passes it to setItemPreview', async () => {

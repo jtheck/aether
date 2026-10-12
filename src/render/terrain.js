@@ -14,7 +14,8 @@ import {
 } from '../vendor/lite/liteVendor.js';
 import {
   ATLAS,
-  DEFAULT_MAP_CHUNKS,
+  LOD_MAP_CHUNKS,
+  HEIGHT_AMPLITUDE,
   TERRAIN,
   TILE_SIZE_F,
   tileHeightWorld,
@@ -36,8 +37,9 @@ import {
 import { createSceneryFromField } from './scenery.js';
 import { createDoodadsFromField } from './doodads.js';
 import { createBackdropsFromField } from './backdrops.js';
+import { createCurtainWalls } from './walls.js';
 import { EXPOSURE, SKY_HORIZON, SKY_HORIZON_SUN, SKY_ZENITH } from './celestial.js';
-import { softDetachMesh } from './meshLifecycle.js';
+import { resumeMeshes, softDetachMesh, suspendMeshes } from './meshLifecycle.js';
 import { classifyGridTile, placementFillKind, placementGridWindow } from './placementGrid.js';
 import { ATLAS_GRID, SHEET_JUNCTION, TERRAIN_LOOK, tileLayer } from './terrainLayers.js';
 import { PAGE_BUCKET_BASE, createTerrainMaterials, loadTerrainAtlas } from './terrainAtlas.js';
@@ -79,10 +81,30 @@ const endgrainTextures = new WeakMap();
 
 const TERRAIN_LOD_MS = 120;
 const TERRAIN_LOD_MOVE_SQ = 16;
-/** v1 kept about six chunks of tiles around the view. The rest is the table. */
-const TERRAIN_KEEP_CHUNKS = 6;
-/** Dark green felt, just under the tiles. Matches v1's table floor. */
+/** Tiles, fog, and water kept around the view. The rest is the table. */
+const TERRAIN_KEEP_CHUNKS = 9;
+/** Full tree/rock meshes out to where tiles used to stop. */
+const SCENERY_MESH_CHUNKS = 6;
+/** Billboards continue past the tile ring, then drop. */
+const SCENERY_BILLBOARD_CHUNKS = 13;
+/** Fallback table Y when a field has no height data. */
 const TABLE_FLOOR_Y = -0.75;
+/** Gap below the lowest tile so the table never poke through the felt. */
+const TABLE_FLOOR_GAP = 1;
+
+/** Y just beneath the lowest tile, so the felt table sits right under the board. */
+export function tableFloorYForField(field) {
+  const hm = field?.heightMap;
+  if (!hm?.length) return TABLE_FLOOR_Y;
+  let min = Infinity;
+  for (let i = 0; i < hm.length; i++) if (hm[i] < min) min = hm[i];
+  const water = field.waterLevel;
+  if (water?.length === hm.length) {
+    for (let i = 0; i < water.length; i++) if (water[i] < min) min = water[i];
+  }
+  if (!Number.isFinite(min)) return TABLE_FLOOR_Y;
+  return min * HEIGHT_AMPLITUDE - TABLE_FLOOR_GAP;
+}
 
 function lodCameraPosition(camera) {
   if (
@@ -122,9 +144,31 @@ function lodLookAt(camera) {
   return { x: eye.x, z: eye.z };
 }
 
+/** Look-at XZ used to decide which terrain chunks stay. Fog culls on the same point. */
+export function terrainLookXZ(camera) {
+  return lodLookAt(camera);
+}
+
 /**
- * Boards larger than the normal map keep a ring of real tiles around the
- * camera and show the dark table under the rest. Small matches stay one draw.
+ * Chunk grid + keep radius for boards that hide far tiles.
+ * Null through the stress board plus one size, where the whole felt stays one draw.
+ */
+export function terrainChunkLodSpec(field) {
+  if (!field?.width || !field?.height) return null;
+  const cell = Math.max(1, field.tableShape?.cellSize || field.chunkSize || 16);
+  const chunksAcross = Math.max(
+    Math.ceil(field.width / cell),
+    Math.ceil(field.height / cell),
+  );
+  if (chunksAcross <= LOD_MAP_CHUNKS) return null;
+  const span = cell * TILE_SIZE_F;
+  const keep = TERRAIN_KEEP_CHUNKS * span;
+  return { chunkSize: cell, span, keepSq: keep * keep };
+}
+
+/**
+ * Boards longer than the LOD size keep a ring of real tiles around the
+ * camera and show the dark table under the rest. Smaller matches stay one draw.
  */
 function createTerrainChunkLod(engine, scene, field, chunkSize, atlasByChunk) {
   const halfX = worldHalfFFromField(field);
@@ -153,15 +197,18 @@ function createTerrainChunkLod(engine, scene, field, chunkSize, atlasByChunk) {
   const keepSq = keep * keep;
 
   function showChunk(chunk, on) {
-    for (let m = 0; m < chunk.meshes.length; m++) {
-      const mesh = chunk.meshes[m];
-      mesh.visible = on;
-      setSubtreeVisible(mesh, on);
-    }
+    const listed = chunk.listed !== false;
+    if (on === listed) return;
+    if (on) resumeMeshes(scene, chunk.meshes);
+    else suspendMeshes(scene, chunk.meshes);
+    chunk.listed = on;
   }
 
   function buildFloor() {
-    const y = TABLE_FLOOR_Y;
+    // Seat the table just under the lowest tile. Tile Y is heightMap * amplitude,
+    // so a hardcoded Y leaves a deep gap when the board sits above zero — that gap
+    // is what reads as "looking under the table" where chunks are hidden.
+    const y = tableFloorYForField(field);
     const positions = new Float32Array([
       -halfX, y, -halfZ,
       halfX, y, -halfZ,
@@ -176,29 +223,45 @@ function createTerrainChunkLod(engine, scene, field, chunkSize, atlasByChunk) {
       new Uint32Array([0, 1, 2, 0, 2, 3]),
     );
     const mat = createStandardMaterial();
-    mat.diffuseColor = [0.1, 0.3, 0.1];
-    mat.ambientColor = [0.04, 0.1, 0.04];
-    mat.emissiveColor = [0.012, 0.03, 0.012];
-    mat.specularColor = [0.02, 0.02, 0.02];
+    // Untextured. The old [0.1, 0.3, 0.1] is a pure green, and the sun grade
+    // turns the vision holes neon. This stays a dull cloth.
+    mat.diffuseColor = [0.045, 0.06, 0.04];
+    mat.ambientColor = [0.012, 0.016, 0.011];
+    mat.emissiveColor = [0, 0, 0];
+    mat.specularColor = [0.008, 0.01, 0.007];
     mat.backFaceCulling = false;
     mesh.material = mat;
     mesh.pickable = false;
     mesh.receiveShadows = false;
+    // One big plane spanning the whole board — never frustum-cull it, it has to
+    // back every hidden chunk no matter where the camera looks.
+    mesh.boundMin = [-halfX, y - 1, -halfZ];
+    mesh.boundMax = [halfX, y + 1, halfZ];
     addToScene(scene, mesh);
     floor = mesh;
   }
 
   function apply(camera) {
     const look = lodLookAt(camera);
+    const hide = [];
+    const show = [];
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       const dx = look.x - chunk.x;
       const dz = look.z - chunk.z;
       const far = dx * dx + dz * dz > keepSq;
-      if (far === chunk.far) continue;
+      const want = !far;
+      const listed = chunk.listed !== false;
       chunk.far = far;
-      showChunk(chunk, !far);
+      if (want === listed) continue;
+      const meshes = chunk.meshes;
+      for (let m = 0; m < meshes.length; m++) (want ? show : hide).push(meshes[m]);
+      chunk.listed = want;
     }
+    // One list edit for the whole ring. Per-mesh hide left ~20k renderables
+    // in the scene, and Lite walks that list after the game loop returns.
+    if (hide.length) suspendMeshes(scene, hide);
+    if (show.length) resumeMeshes(scene, show);
   }
 
   buildFloor();
@@ -215,7 +278,10 @@ function createTerrainChunkLod(engine, scene, field, chunkSize, atlasByChunk) {
       elapsed += deltaMs;
       const look = lodLookAt(camera);
       const moved = (look.x - lastX) ** 2 + (look.z - lastZ) ** 2;
-      if (elapsed < TERRAIN_LOD_MS && moved < TERRAIN_LOD_MOVE_SQ) return;
+      // Time gate only. A move check with OR rebuilds the ring every frame while
+      // panning, and that relink is what drops the frame rate.
+      if (elapsed < TERRAIN_LOD_MS) return;
+      if (moved < TERRAIN_LOD_MOVE_SQ) return;
       elapsed = 0;
       lastX = look.x;
       lastZ = look.z;
@@ -224,7 +290,6 @@ function createTerrainChunkLod(engine, scene, field, chunkSize, atlasByChunk) {
     dispose() {
       if (floor) softDetachMesh(scene, floor);
       floor = null;
-      for (let i = 0; i < chunks.length; i++) showChunk(chunks[i], true);
     },
   };
 }
@@ -244,9 +309,17 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     Math.ceil(field.width / cell),
     Math.ceil(field.height / cell),
   );
-  // Normal matches stay one draw. Larger boards split so far chunks can drop out.
-  const chunkSize = (opts.chunkedAtlas || chunksAcross > DEFAULT_MAP_CHUNKS) ? cell : 0;
-  const terrainLodOn = chunkSize > 0 && chunksAcross > DEFAULT_MAP_CHUNKS;
+  // Up through the LOD size the board stays one draw. Larger boards split so far chunks can drop out.
+  const chunkSize = (opts.chunkedAtlas || chunksAcross > LOD_MAP_CHUNKS) ? cell : 0;
+  const terrainLodOn = chunkSize > 0 && chunksAcross > LOD_MAP_CHUNKS;
+  // Meshes out to the old tile ring. Billboards from there past the tiles.
+  // Doodads still stop with the tiles. Normal boards keep every resource.
+  const terrainSpan = chunkSize * TILE_SIZE_F;
+  const tileDrop = terrainLodOn
+    ? Math.max(terrainSpan, (TERRAIN_KEEP_CHUNKS - 0.5) * terrainSpan)
+    : Infinity;
+  const resourceMesh = terrainLodOn ? SCENERY_MESH_CHUNKS * terrainSpan : Infinity;
+  const resourceDrop = terrainLodOn ? SCENERY_BILLBOARD_CHUNKS * terrainSpan : Infinity;
   // Chunk repaints composite junction cells synchronously, so keep pixels resident.
   let holdsAtlasSource = false;
   try {
@@ -282,7 +355,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     ...backdrop.meshes,
     ...buildTableFrameMeshes(engine, field, active),
     ...atlasMeshes,
-    ...(specGlint.mesh ? [specGlint.mesh] : []),
+    ...specGlint.meshes,
   ];
   let disposed = false;
   let liveField = field;
@@ -298,6 +371,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     dispose() {},
   });
   let doodads = emptyDoodads();
+  let sceneryShown = true;
   const doodadsReady = opts.skipScenery
     ? Promise.resolve()
     : createDoodadsFromField(
@@ -305,12 +379,14 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       scene,
       field,
       (x, z) => surfaceHeightAt(liveField, x, z),
+      { drop: tileDrop },
     ).then((d) => {
       if (disposed) {
         d.dispose();
         return;
       }
       doodads = d;
+      d.setShown?.(sceneryShown);
       for (const mesh of d.meshes) {
         if (built.indexOf(mesh) < 0) built.push(mesh);
       }
@@ -320,6 +396,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     });
   const emptyBackdrops = () => ({ meshes: [], dispose() {} });
   let backdrops = emptyBackdrops();
+  let backdropGen = 0;
   const backdropsReady = opts.skipScenery
     ? Promise.resolve()
     : createBackdropsFromField(engine, scene, field).then((b) => {
@@ -344,6 +421,8 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       {
         ...opts,
         scene,
+        resourceDrop,
+        resourceMesh,
         onModelMesh(mesh) {
           if (disposed) {
             softDetachMesh(scene, mesh);
@@ -383,6 +462,12 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
   for (const mesh of scenery.meshes) {
     if (built.indexOf(mesh) < 0) built.push(mesh);
   }
+  const curtainWalls = opts.skipWalls
+    ? { meshes: [], dispose() {} }
+    : createCurtainWalls(engine, scene, field, (x, z) => surfaceHeightAt(liveField, x, z));
+  for (const mesh of curtainWalls.meshes) {
+    if (built.indexOf(mesh) < 0) built.push(mesh);
+  }
   for (const mesh of built) addToScene(scene, mesh);
   return {
     meshes: built,
@@ -394,11 +479,11 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     ]),
     update(activeCamera, deltaMs) {
       if (disposed) return;
-      specGlint.update();
+      specGlint.update(activeCamera, deltaMs);
       backdrop.update();
       scenery.update(activeCamera, deltaMs);
       terrainLod?.update(activeCamera, deltaMs);
-      doodads.update(deltaMs);
+      doodads.update(activeCamera, deltaMs);
     },
     forEachBurningTree(fn) {
       if (!disposed) scenery.forEachBurningTree?.(fn);
@@ -436,15 +521,30 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       scenery.applyFogTiles?.(forEachTile);
       doodads.applyFogTiles?.(forEachTile);
     },
+    syncDoorLeaves(nextField) {
+      if (disposed || opts.skipWalls) return null;
+      liveField = nextField ?? liveField;
+      const prev = curtainWalls.meshes?.find?.((mesh) => mesh?.name === 'wall-wood') ?? null;
+      const added = curtainWalls.syncWood?.(liveField) ?? null;
+      if (prev && prev !== added) {
+        const at = built.indexOf(prev);
+        if (at >= 0) built.splice(at, 1);
+      }
+      if (added) {
+        if (built.indexOf(added) < 0) built.push(added);
+        addToScene(scene, added);
+      }
+      return added;
+    },
     rebuildAtlasChunks(nextField, chunkKeys) {
       if (disposed || !chunkSize) return false;
       const keys = chunkKeys instanceof Set ? chunkKeys : new Set(chunkKeys ?? []);
       if (!keys.size) return false;
       specMap.rebuild(nextField);
       atlasLook.materials.bindSpecMap(specMap.texture);
-      const prevGlint = specGlint.mesh;
-      if (prevGlint) {
-        const gidx = built.indexOf(prevGlint);
+      const prevGlint = specGlint.meshes;
+      for (let g = 0; g < prevGlint.length; g++) {
+        const gidx = built.indexOf(prevGlint[g]);
         if (gidx >= 0) built.splice(gidx, 1);
       }
       const nextActive = createActiveCellLookup(nextField);
@@ -477,7 +577,37 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
         terrainLod?.noteChunkMeshes(key, next);
       }
       specGlint.rebuild(nextField, nextActive, specMap.texture, specMap.uv, { addToScene: true });
-      if (specGlint.mesh) built.push(specGlint.mesh);
+      for (let g = 0; g < specGlint.meshes.length; g++) built.push(specGlint.meshes[g]);
+      return true;
+    },
+    setSceneryVisible(on) {
+      sceneryShown = on !== false;
+      scenery.setShown?.(sceneryShown);
+      doodads.setShown?.(sceneryShown);
+    },
+    /** Move props already on screen. False when the set of props changed. */
+    applyBackdropPoses(nextField) {
+      if (disposed) return false;
+      return backdrops.apply?.(nextField?.backdrops) === true;
+    },
+    async syncBackdrops(nextField) {
+      if (disposed || opts.skipScenery) return false;
+      const gen = ++backdropGen;
+      const next = await createBackdropsFromField(engine, scene, nextField);
+      if (disposed || gen !== backdropGen) {
+        next.dispose();
+        return false;
+      }
+      const prev = backdrops;
+      const prevSet = new Set(prev.meshes ?? []);
+      for (let i = built.length - 1; i >= 0; i--) {
+        if (prevSet.has(built[i])) built.splice(i, 1);
+      }
+      prev.dispose();
+      backdrops = next;
+      for (const mesh of next.meshes) {
+        if (built.indexOf(mesh) < 0) built.push(mesh);
+      }
       return true;
     },
     async rebuildScenery(nextField, nextCamera) {
@@ -497,6 +627,8 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
         {
           ...opts,
           scene,
+          resourceDrop,
+          resourceMesh,
           onModelMesh(mesh) {
             if (disposed) {
               softDetachMesh(scene, mesh);
@@ -511,6 +643,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
         if (built.indexOf(mesh) < 0) built.push(mesh);
         addToScene(scene, mesh);
       }
+      scenery.setShown?.(sceneryShown);
       doodads.syncFromField(liveField, true);
       if (fogFactor) doodads.applyFogDim(fogFactor);
       return true;
@@ -519,18 +652,21 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       if (disposed) return;
       disposed = true;
       releaseAtlasSource();
+      const glintSet = new Set(specGlint.meshes);
       specGlint.dispose();
       specMap.dispose();
       // Scenery owns its meshes (and late model jobs); don't double-detach.
       const scenerySet = new Set(scenery.meshes ?? []);
       const doodadSet = new Set(doodads.meshes ?? []);
       const backdropSet = new Set(backdrops.meshes ?? []);
+      const wallSet = new Set(curtainWalls.meshes ?? []);
       scenery.dispose?.();
       terrainLod?.dispose();
       doodads.dispose();
       backdrops.dispose();
+      curtainWalls.dispose();
       for (const mesh of built) {
-        if (!mesh || scenerySet.has(mesh) || doodadSet.has(mesh) || backdropSet.has(mesh) || mesh === specGlint.mesh) continue;
+        if (!mesh || scenerySet.has(mesh) || doodadSet.has(mesh) || backdropSet.has(mesh) || wallSet.has(mesh) || glintSet.has(mesh)) continue;
         softDetachMesh(scene, mesh);
       }
       built.length = 0;
@@ -742,60 +878,30 @@ function readSunDir(scene) {
  * this pass only adds Phong so pond squares and milky film both stay off.
  */
 function createGroundSpecGlint(engine, scene) {
-  let mesh = null;
+  /** @type {object[]} */
+  let meshes = [];
+  /** @type {{ mesh: object, x: number, z: number, far: boolean }[]} */
+  let chunks = [];
   let material = null;
+  /** @type {{ keepSq: number } | null} */
+  let lod = null;
+  let elapsed = TERRAIN_LOD_MS;
+  let lastX = Infinity;
+  let lastZ = Infinity;
 
   function detach() {
-    if (mesh) softDetachMesh(scene, mesh);
-    mesh = null;
+    for (let i = 0; i < meshes.length; i++) softDetachMesh(scene, meshes[i]);
+    meshes = [];
+    chunks = [];
     material = null;
+    lod = null;
+    elapsed = TERRAIN_LOD_MS;
+    lastX = Infinity;
+    lastZ = Infinity;
   }
 
-  function rebuild(field, active, texture, specUv, opts = {}) {
-    detach();
-    if (!field || !texture) return;
-    const { width, height, terrainTypes } = field;
-    const half = worldHalfFFromField(field);
-    const halfZ = worldHalfZFFromField(field);
-    const positions = [];
-    const uvs = [];
-    const indices = [];
-    const cornerAt = new Map();
-    const corner = (tx, tz) => {
-      const key = tx + ',' + tz;
-      let i = cornerAt.get(key);
-      if (i != null) return i;
-      const x = tx * TILE_SIZE_F - half;
-      const z = tz * TILE_SIZE_F - halfZ;
-      i = positions.length / 3;
-      positions.push(x, surfaceHeightAt(field, x, z) + SPEC_OVERLAY_LIFT, z);
-      uvs.push(tx * SPEC_TEX_SCALE * (specUv?.invW ?? 0), tz * SPEC_TEX_SCALE * (specUv?.invH ?? 0));
-      cornerAt.set(key, i);
-      return i;
-    };
-    let count = 0;
-    for (let tz = 0; tz < height; tz++) {
-      for (let tx = 0; tx < width; tx++) {
-        if (!active(tx, tz)) continue;
-        if (!tileNeedsWaterGlint(active, terrainTypes, width, height, tx, tz)) continue;
-        const a = corner(tx, tz);
-        const b = corner(tx + 1, tz);
-        const c = corner(tx + 1, tz + 1);
-        const d = corner(tx, tz + 1);
-        indices.push(a, b, c, a, c, d);
-        count++;
-      }
-    }
-    if (count === 0) return;
-    const pos = new Float32Array(positions);
-    mesh = createMeshFromData(
-      engine,
-      'terrain-water-glint',
-      pos,
-      flatUpNormals(pos.length / 3),
-      new Uint32Array(indices),
-      new Float32Array(uvs),
-    );
+  function ensureMaterial(texture) {
+    if (material) return material;
     material = createShaderMaterial({
       name: 'terrain-water-glint',
       attributes: ['position', 'normal', 'uv'],
@@ -844,20 +950,138 @@ function createGroundSpecGlint(engine, scene) {
     });
     setShaderTexture(material, 'wetness', texture);
     setShaderUniform(material, 'sunDir', readSunDir(scene));
-    mesh.material = material;
-    mesh.pickable = false;
-    mesh.receiveShadows = false;
-    if (opts.addToScene) addToScene(scene, mesh);
+    return material;
   }
 
-  function update() {
-    if (!material) return;
-    setShaderUniform(material, 'sunDir', readSunDir(scene));
+  function collectGlint(field, active, specUv, tx0, tz0, tx1, tz1) {
+    const { width, height, terrainTypes } = field;
+    const half = worldHalfFFromField(field);
+    const halfZ = worldHalfZFFromField(field);
+    const positions = [];
+    const uvs = [];
+    const indices = [];
+    const cornerAt = new Map();
+    const corner = (tx, tz) => {
+      const key = tx + ',' + tz;
+      let i = cornerAt.get(key);
+      if (i != null) return i;
+      const x = tx * TILE_SIZE_F - half;
+      const z = tz * TILE_SIZE_F - halfZ;
+      i = positions.length / 3;
+      positions.push(x, surfaceHeightAt(field, x, z) + SPEC_OVERLAY_LIFT, z);
+      uvs.push(tx * SPEC_TEX_SCALE * (specUv?.invW ?? 0), tz * SPEC_TEX_SCALE * (specUv?.invH ?? 0));
+      cornerAt.set(key, i);
+      return i;
+    };
+    let count = 0;
+    for (let tz = tz0; tz < tz1; tz++) {
+      for (let tx = tx0; tx < tx1; tx++) {
+        if (!active(tx, tz)) continue;
+        if (!tileNeedsWaterGlint(active, terrainTypes, width, height, tx, tz)) continue;
+        const a = corner(tx, tz);
+        const b = corner(tx + 1, tz);
+        const c = corner(tx + 1, tz + 1);
+        const d = corner(tx, tz + 1);
+        indices.push(a, b, c, a, c, d);
+        count++;
+      }
+    }
+    if (count === 0) return null;
+    return { positions, uvs, indices };
+  }
+
+  function emit(name, bucket, texture, addToSceneNow) {
+    const pos = new Float32Array(bucket.positions);
+    const mesh = createMeshFromData(
+      engine,
+      name,
+      pos,
+      flatUpNormals(pos.length / 3),
+      new Uint32Array(bucket.indices),
+      new Float32Array(bucket.uvs),
+    );
+    mesh.material = ensureMaterial(texture);
+    mesh.pickable = false;
+    mesh.receiveShadows = false;
+    meshes.push(mesh);
+    if (addToSceneNow) addToScene(scene, mesh);
+    return mesh;
+  }
+
+  function rebuild(field, active, texture, specUv, opts = {}) {
+    detach();
+    if (!field || !texture) return;
+    const spec = terrainChunkLodSpec(field);
+    const add = !!opts.addToScene;
+    if (!spec) {
+      const bucket = collectGlint(field, active, specUv, 0, 0, field.width, field.height);
+      if (!bucket) return;
+      emit('terrain-water-glint', bucket, texture, add);
+      return;
+    }
+    lod = spec;
+    const half = worldHalfFFromField(field);
+    const halfZ = worldHalfZFFromField(field);
+    const chunksX = Math.ceil(field.width / spec.chunkSize);
+    const chunksZ = Math.ceil(field.height / spec.chunkSize);
+    for (let cz = 0; cz < chunksZ; cz++) {
+      for (let cx = 0; cx < chunksX; cx++) {
+        const bucket = collectGlint(
+          field,
+          active,
+          specUv,
+          cx * spec.chunkSize,
+          cz * spec.chunkSize,
+          Math.min(field.width, (cx + 1) * spec.chunkSize),
+          Math.min(field.height, (cz + 1) * spec.chunkSize),
+        );
+        if (!bucket) continue;
+        const mesh = emit(`terrain-water-glint-${cx}-${cz}`, bucket, texture, add);
+        chunks.push({
+          mesh,
+          x: (cx + 0.5) * spec.span - half,
+          z: (cz + 0.5) * spec.span - halfZ,
+          far: false,
+        });
+      }
+    }
+  }
+
+  function update(camera, deltaMs = TERRAIN_LOD_MS) {
+    if (material) setShaderUniform(material, 'sunDir', readSunDir(scene));
+    if (!lod || !chunks.length || !camera) return;
+    elapsed += deltaMs;
+    const look = terrainLookXZ(camera);
+    const moved = (look.x - lastX) ** 2 + (look.z - lastZ) ** 2;
+    if (elapsed < TERRAIN_LOD_MS) return;
+    if (moved < TERRAIN_LOD_MOVE_SQ) return;
+    elapsed = 0;
+    lastX = look.x;
+    lastZ = look.z;
+    const hide = [];
+    const show = [];
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const dx = look.x - chunk.x;
+      const dz = look.z - chunk.z;
+      const far = dx * dx + dz * dz > lod.keepSq;
+      const want = !far;
+      const listed = chunk.listed !== false;
+      chunk.far = far;
+      if (want === listed) continue;
+      (want ? show : hide).push(chunk.mesh);
+      chunk.listed = want;
+    }
+    if (hide.length) suspendMeshes(scene, hide);
+    if (show.length) resumeMeshes(scene, show);
   }
 
   return {
     get mesh() {
-      return mesh;
+      return meshes[0] ?? null;
+    },
+    get meshes() {
+      return meshes;
     },
     rebuild,
     update,

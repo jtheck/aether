@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import {
   buildField,
   createField,
+  fieldSnapshot,
   isPassable,
   isSlowTile,
   TERRAIN,
@@ -37,8 +38,8 @@ import {
   tileInTable,
   tileCenterWorld,
 } from './tableShape.js';
-import { encodeGarden, decodeGarden, fieldFromGarden, applyGardenPlacements } from './garden.js';
-import { populateScenery } from './scenery.js';
+import { encodeGarden, decodeCelestial, decodeGarden, fieldFromGarden, applyGardenPlacements } from './garden.js';
+import { clearAllScenery, populateScenery } from './scenery.js';
 import { buildTesterGarden, TESTER_STARTING_RESOURCES } from './testerGarden.js';
 import {
   buildStressGarden,
@@ -327,6 +328,8 @@ describe('garden codec', () => {
     assert.equal(g.terrainTypes.length, 32 * 32);
     assert.equal(json.hl, undefined);
     assert.equal(json.cr, undefined);
+    assert.equal(json.mt, undefined);
+    assert.equal(g.mapType, '');
 
     const again = fieldFromGarden(json);
     const json2 = encodeGarden(again);
@@ -335,6 +338,28 @@ describe('garden codec', () => {
     assert.equal(json2.t, json.t);
     assert.equal(typeof json.rl, 'string');
     assert.equal(json2.rl, json.rl);
+  });
+
+  it('stores the map type and defaults a missing one to blank', () => {
+    const field = buildField(3, { width: 32, height: 32 });
+    const json = encodeGarden(field, { mapType: 'teams' });
+    assert.equal(json.mt, 'teams');
+    assert.equal(decodeGarden(json).mapType, 'teams');
+    assert.equal(encodeGarden(field, { mapType: '1v1' }).mt, 'onevsone');
+    assert.equal(decodeGarden({ v: 4, w: 32, h: 32, s: 1, mt: 'koth' }).mapType, 'koth');
+    assert.equal(decodeGarden({ v: 4, w: 32, h: 32, s: 1 }).mapType, '');
+  });
+
+  it('rebuilds a seed-only garden for its map type', () => {
+    const adventure = fieldFromGarden({ v: 4, w: 144, h: 144, s: 2, mt: 'adventure' });
+    const legacy = buildField(2, { width: 144, height: 144 });
+    let restored = 0;
+    for (let i = 0; i < adventure.terrainTypes.length; i++) {
+      if (adventure.terrainTypes[i] === TERRAIN.WATER && legacy.terrainTypes[i] !== TERRAIN.WATER) {
+        restored++;
+      }
+    }
+    assert.ok(restored > 0);
   });
 
   it('roundtrips authored scenery and placements', () => {
@@ -377,6 +402,49 @@ describe('garden codec', () => {
     assert.equal(getResource(world, 0, 'mineral'), 12);
   });
 
+  it('keeps a cleared scenery map empty', () => {
+    const field = buildField(7, { width: 32, height: 32 });
+    applyTableSilhouette(field, {
+      cellSize: 16,
+      cellMask: createFullCellMask(32, 32, 16),
+      cellRadius: createFullCellRadius(32, 32, 16, 0),
+    });
+    populateScenery(field, null, []);
+    assert.ok([...field.sceneryType].some((v) => v !== 0), 'generated map has scenery');
+    clearAllScenery(field);
+    assert.equal(field.sceneryAuthored, true);
+    assert.equal([...field.sceneryType].some((v) => v !== 0), false);
+    assert.equal([...field.treeStock].some((v) => v !== 0), false);
+    const json = encodeGarden(field);
+    const g = decodeGarden(json);
+    assert.equal(g.authoredScenery, true);
+    assert.equal([...g.sceneryType].some((v) => v !== 0), false);
+    const again = fieldFromGarden(json);
+    assert.equal(again.sceneryAuthored, true);
+    assert.equal([...again.sceneryType].some((v) => v !== 0), false);
+    assert.equal(decodeGarden(encodeGarden(again)).authoredScenery, true);
+  });
+
+  it('roundtrips the forge light rig', () => {
+    const field = buildField(3, { width: 32, height: 32 });
+    const celestial = {
+      exposure: 1.4,
+      contrast: 1.1,
+      clearColor: [0.2, 0.3, 0.4],
+      bodies: [
+        { kind: 'moon', azimuth: 12, elevation: 18, intensity: 0.8 },
+        { kind: 'hemi', azimuth: 200, elevation: 40, intensity: 0.2 },
+      ],
+    };
+    const json = encodeGarden(field, { celestial });
+    const g = decodeGarden(json);
+    assert.equal(g.celestial.bodies[0].kind, 'moon');
+    assert.equal(g.celestial.bodies[0].azimuth, 12);
+    assert.equal(g.celestial.exposure, 1.4);
+    assert.deepEqual(decodeCelestial(json.lt), g.celestial);
+    assert.equal(decodeGarden(encodeGarden(field)).celestial, null);
+  });
+
   it('roundtrips authored backdrop poses', () => {
     const field = buildField(7, { width: 32, height: 32 });
     const json = encodeGarden(field, {
@@ -402,9 +470,31 @@ describe('garden codec', () => {
       units: [{ owner: 0, type: 5, tx: 4, tz: 6, name: 'Stumpey' }],
     });
     assert.deepEqual(json.u[0], [0, 5, 4, 6, 'Stumpey']);
+    assert.equal(json.uy, undefined);
     const g = decodeGarden(json);
     assert.equal(g.units[0].name, 'Stumpey');
     assert.deepEqual(encodeGarden(field, { units: g.units }).u[0], json.u[0]);
+  });
+
+  it('stores a unit facing beside the tuple and spawns looking that way', () => {
+    const field = buildField(3, { width: 32, height: 32 });
+    applyTableSilhouette(field, {
+      cellSize: 16,
+      cellMask: createFullCellMask(32, 32, 16),
+      cellRadius: createFullCellRadius(32, 32, 16, 0),
+    });
+    const yaw = Math.PI / 2;
+    const json = encodeGarden(field, {
+      units: [{ owner: 0, type: 5, tx: 4, tz: 6, name: 'Stumpey', yaw }],
+    });
+    assert.deepEqual(json.u[0], [0, 5, 4, 6, 'Stumpey']);
+    assert.ok(Math.abs(json.uy[0] - yaw) < 1e-3);
+    const g = decodeGarden(json);
+    assert.ok(Math.abs(g.units[0].yaw - yaw) < 1e-3);
+    const world = createWorld(3);
+    applyGardenPlacements(world, field, g);
+    assert.equal(world.faceX[0], fx.fromFloat(Math.sin(g.units[0].yaw)));
+    assert.equal(world.faceY[0], fx.fromFloat(Math.cos(g.units[0].yaw)));
   });
 
   it('roundtrips carried hp on a named unit', () => {
@@ -590,6 +680,23 @@ describe('garden codec', () => {
     assert.equal(g.walls.style.thickness, 1.2);
     assert.equal(encodeGarden(field).wl, undefined);
     assert.equal(decodeGarden(encodeGarden(field)).walls.runs.length, 0);
+    const live = fieldFromGarden(json);
+    assert.equal(live.walls.runs.length, 1);
+    assert.equal(live.walls.style.height, 7.5);
+    let blocked = 0;
+    for (let i = 0; i < live.wallBlock.length; i++) {
+      if (!live.wallBlock[i]) continue;
+      blocked++;
+      assert.equal(live.pass[i], 0);
+    }
+    assert.ok(blocked > 0);
+    const snap = fieldSnapshot(live);
+    assert.equal(snap.walls.runs.length, 1);
+    assert.equal(snap.walls.runs[0].points[2].z, 8);
+    assert.equal(snap.wallBlock.length, live.wallBlock.length);
+    const bare = fieldFromGarden(encodeGarden(field));
+    assert.equal(bare.walls, undefined);
+    assert.equal(fieldSnapshot(bare).walls, undefined);
   });
 
   it('roundtrips a custom camera bound and omits a full-table one', () => {

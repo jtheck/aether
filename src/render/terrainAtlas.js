@@ -10,23 +10,30 @@ import {
   setStandardEmissiveTexture,
   setStandardSpecularTexture,
 } from '../vendor/lite/liteVendor.js';
-import { ATLAS } from '../sim/field.js';
+import { ATLAS, isBlendAtlas } from '../sim/field.js';
 import {
   ATLAS_GRID,
+  PAVE_DIFFUSE,
   TERRAIN_DIFFUSE_LEVEL,
   blobMask,
   compositeJunction,
   junctionLookBlock,
+  paveLookBytes,
   sheetLookMap,
   srgbMipChain,
   terrainLookColors,
 } from './terrainLayers.js';
 
-const ATLAS_URLS = {
+const NATURAL_ATLAS_URLS = {
   [ATLAS.GRASS_DIRT]: '/assets/textures/atlas-grass-dirt.png',
   [ATLAS.GRASS_WATER]: '/assets/textures/atlas-grass-water.png',
   [ATLAS.DIRT_WATER]: '/assets/textures/atlas-dirt-water.png',
 };
+/** Side sets. A third pave member adds its pair sheets here. */
+const BLEND_ATLAS_URLS = {
+  [ATLAS.TILE_GRAVEL]: '/assets/textures/atlas-tile-gravel.png',
+};
+const ATLAS_URLS = { ...NATURAL_ATLAS_URLS, ...BLEND_ATLAS_URLS };
 /** Emissive maps are smooth; a quarter of the atlas resolution is plenty. */
 const LOOK_SCALE = 4;
 const PAGE_SLOTS = ATLAS_GRID * ATLAS_GRID;
@@ -70,9 +77,9 @@ async function createTerrainAtlas(engine) {
     if (source) return Promise.resolve(source);
     if (!sourcePromise) {
       sourcePromise = Promise.all([
-        decodeSheet(ATLAS_URLS[ATLAS.GRASS_DIRT]),
-        decodeSheet(ATLAS_URLS[ATLAS.GRASS_WATER]),
-        decodeSheet(ATLAS_URLS[ATLAS.DIRT_WATER]),
+        decodeSheet(NATURAL_ATLAS_URLS[ATLAS.GRASS_DIRT]),
+        decodeSheet(NATURAL_ATLAS_URLS[ATLAS.GRASS_WATER]),
+        decodeSheet(NATURAL_ATLAS_URLS[ATLAS.DIRT_WATER]),
       ]).then(([gd, gw, dw]) => {
         const size = gw.size;
         if (gd.size !== size || dw.size !== size) throw new Error('terrain atlas sheets differ in size');
@@ -237,7 +244,12 @@ async function createTerrainAtlas(engine) {
   const src = await retainSource();
   try {
     const lookSize = src.size / LOOK_SCALE;
+    const paveLook = lookTexture(paveLookBytes(), 1);
     for (const id of sheets.keys()) {
+      if (isBlendAtlas(id)) {
+        looks.set(id, paveLook);
+        continue;
+      }
       looks.set(id, lookTexture(sheetLookMap(id, src.mask, src.size, LOOK_SCALE, LOOK.emissive), lookSize));
     }
   } finally {
@@ -292,7 +304,7 @@ export function createTerrainMaterials(atlas, specTexture) {
     const diffuse = atlas.diffuseFor(bucket);
     if (!diffuse && bucket !== ATLAS.GRASS_DIRT) return get(ATLAS.GRASS_DIRT);
     mat = createStandardMaterial();
-    mat.diffuseColor = LOOK.diffuse;
+    mat.diffuseColor = isBlendAtlas(bucket) ? PAVE_DIFFUSE : LOOK.diffuse;
     // Ground tint and ambient live in the emissive map.
     mat.ambientColor = [0, 0, 0];
     mat.emissiveColor = [0, 0, 0];

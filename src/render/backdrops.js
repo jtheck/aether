@@ -6,7 +6,11 @@ import { loadBakedUnitMeshParts } from './unitModels.js';
 import { softDetachMesh } from './meshLifecycle.js';
 
 function emptyBackdrops() {
-  return { meshes: [], dispose() {} };
+  return {
+    meshes: [],
+    apply(raw) { return normalizeBackdrops(raw).length === 0; },
+    dispose() {},
+  };
 }
 
 function poseMesh(mesh, pose) {
@@ -45,10 +49,13 @@ export async function createBackdropsFromField(engine, scene, field) {
   }
 
   const meshes = [];
+  const groups = [];
+  const types = [];
   const usedTemplates = new Set();
   for (let i = 0; i < poses.length; i++) {
     const pose = poses[i];
     const parts = templates.get(pose.type) ?? [];
+    const group = [];
     for (let p = 0; p < parts.length; p++) {
       const src = parts[p];
       const mesh = usedTemplates.has(src) ? cloneTransformNode(src) : src;
@@ -59,12 +66,24 @@ export async function createBackdropsFromField(engine, scene, field) {
       poseMesh(mesh, pose);
       addToScene(scene, mesh);
       meshes.push(mesh);
+      group.push(mesh);
     }
+    groups.push(group);
+    types.push(pose.type);
   }
 
   let disposed = false;
   return {
     meshes,
+    apply(raw) {
+      const next = normalizeBackdrops(raw);
+      if (next.length !== groups.length) return false;
+      for (let i = 0; i < next.length; i++) {
+        if (next[i].type !== types[i]) return false;
+        for (const mesh of groups[i]) poseMesh(mesh, next[i]);
+      }
+      return true;
+    },
     dispose() {
       if (disposed) return;
       disposed = true;

@@ -38,8 +38,11 @@ import {
   stressShareVisionOwners,
 } from '../sim/ai.js';
 import { CMD } from '../sim/commands.js';
-import { decodeGarden } from '../sim/garden.js';
+import { villageVillagerProgress } from '../sim/buildingProduction.js';
+import { decodeCelestial, decodeGarden } from '../sim/garden.js';
 import { loadGardenRef, resolveNextGardenRef } from './workshop.js';
+import { continuationGardenRef, loadPlayIndex } from './campaignPlay.js';
+import { packFilesOf } from '../story/campaignPack.js';
 import { TESTER_GARDEN_URL } from '../sim/testerGarden.js';
 import {
   applySerializedBuildingOccupancy,
@@ -160,6 +163,7 @@ import { chapterIdForGardenUrl, chapterLabelFor, gardenUrlForChapter, getMode, i
 import { liveConfigFromLobby } from '../lobby/startConfig.js';
 import { createMatchStory } from '../story/matchPlay.js';
 import { castIndexFromUnits, normalizeSpeaker } from '../story/cast.js';
+import { NAMED_UNIT_SCALE, namedUnitHp } from '../sim/namedUnit.js';
 import { adventureDealSeed, prepareAdventureGarden, snapshotParty } from '../story/party.js';
 import {
   createObjectiveHud,
@@ -587,6 +591,7 @@ async function toggleMatchXr(renderer, getInput) {
 }
 
 async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide = 0, kothShard, solo = false }) {
+  const bootGardenRef = new URLSearchParams(location.search).get('garden') || '';
   const xrSupportPromise = isXrSessionSupported('immersive-vr');
   const skirmish = bootCfg.mode === 'skirmish';
   let kothLobbyUi = { refresh() {} };
@@ -685,6 +690,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       : undefined,
   });
   renderer.setCount(count);
+  const lit = decodeCelestial(garden?.lt);
+  if (lit) renderer.applyCelestial(lit);
   const fog = createFogOfWar();
   /**
    * Set by dumpFrameProfile. Fog used to run on worker onCommit (outside rAF),
@@ -810,8 +817,14 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       inFrame: false,
       pendingOutside: 0,
     };
+    renderer.armGpuTiming?.();
     console.log('[dumpFrameProfile] sampling', frameProf.left, 'frames… then console.table');
     return frameProf;
+  };
+  window.dumpRenderCost = () => {
+    const cost = renderer.debugRenderCost?.();
+    console.log('[dumpRenderCost]', cost);
+    return cost;
   };
   window.setProfileSim = (enabled = true) => {
     session.client?.setProfileSim?.(enabled);
@@ -830,6 +843,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     frameProf.pendingOutside = 0;
     frameProf.acc.frame = (frameProf.acc.frame ?? 0) + (now - t0);
     frameProf.acc.main = (frameProf.acc.main ?? 0) + (now - t0) + outside;
+    const gpu = renderer.gpuFrameMs?.();
+    if (gpu > 0) frameProf.acc.gpu = (frameProf.acc.gpu ?? 0) + gpu;
     frameProf.n++;
     frameProf.left--;
     if (frameProf.left > 0) return;
@@ -871,7 +886,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         x: renderX[i],
         y: renderY[i],
         z: renderZ[i],
-        r: (def.pickRadius ?? 1.8) * (renderer.unitZoomScale?.(def) ?? 1),
+        r: (def.pickRadius ?? 1.8) * (world.named?.[i] ? NAMED_UNIT_SCALE : 1) * (renderer.unitZoomScale?.(def) ?? 1),
       });
       const p = renderer.worldToScreen(renderX[i], renderY[i], renderZ[i]);
       if (!p || p.x < 0 || p.y < 0 || p.x > rect.width || p.y > rect.height) continue;
@@ -1190,7 +1205,14 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   function livingBuildingList(list) {
     if (!list) return list;
-    return list.filter((b) => b.hp == null || (b.hp | 0) > 0);
+    const out = [];
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i];
+      if (!b || (b.hp != null && (b.hp | 0) <= 0)) continue;
+      b.simIndex = i;
+      out.push(b);
+    }
+    return out;
   }
 
   function placeFoggedProps(buildingList = session.buildings, agoraList = session.agoras) {
@@ -1313,6 +1335,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       renderer.applySceneryFog?.(sceneryFogAt);
     }
     updateColors();
+  };
+
+  session.onDoorsChanged = (broken) => {
+    renderer.breakCurtainDoors?.(broken);
+    renderer.refreshTileGrid?.();
   };
 
   session.onBuildingsChanged = (list) => {
@@ -1937,8 +1964,32 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     return types;
   }
 
+  /** Primary-preferred index of a living village in the group, sites included (or -1). */
+  function firstVillageIndex(indices, list = session.buildings) {
+    const isVillage = (i) => {
+      const b = list?.[i];
+      return b && b.type === 'village' && (b.hp == null || (b.hp | 0) > 0);
+    };
+    if (isVillage(actionBuildingIndex)) return actionBuildingIndex;
+    for (let k = 0; k < (indices?.length ?? 0); k++) {
+      if (isVillage(indices[k] | 0)) return indices[k] | 0;
+    }
+    return -1;
+  }
+
   function menuForActionGroup(indices, list = session.buildings) {
-    return mergeBuildingMenus(typesForActionGroup(indices, list));
+    const menu = mergeBuildingMenus(typesForActionGroup(indices, list));
+    // Villages auto-trickle villagers (no train button) — surface a display-only
+    // villager pad so the player can watch that production's progress. Shown
+    // while the site is still rising; the ring stays empty until it completes.
+    if (firstVillageIndex(indices, list) >= 0) {
+      const units = [
+        { id: 'villager', name: 'Villager', cost: {}, auto: true },
+        ...(menu?.units ?? []),
+      ];
+      return { units, upgrades: menu?.upgrades ?? [] };
+    }
+    return menu;
   }
 
   function actionMenuKeyFrom(indices, list = session.buildings) {
@@ -1999,6 +2050,20 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       session.buildings,
       actionBuildingIndex,
     );
+    // Feed the village auto-villager trickle into the display-only villager pad.
+    const villageIdx = firstVillageIndex(indices);
+    if (villageIdx >= 0) {
+      tracks['unit:villager'] = {
+        progress: villageVillagerProgress(
+          session.state,
+          session.buildings?.[villageIdx],
+          session.buildings,
+          session.agoras,
+        ),
+        count: 0,
+        extra: 0,
+      };
+    }
     renderer.setActionRadialTracks?.(tracks);
     let anyWork = false;
     let anyUnpaused = false;
@@ -2243,6 +2308,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   /** Latched once the party is seen alive, so we never "lose" before heroes spawn. */
   let partySeen = false;
   let chapterAdvanceBusy = false;
+  let chapterHandoffPending = false;
+  let adventureGarden = null;
   let pendingChapterUrl = null;
   let objectivesArmedAt = 0;
   const chapterVotes = new Map();
@@ -2362,7 +2429,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     })();
   }
 
+  function currentAdventureRef() {
+    return ctxRef.current?.adventureLive?.gardenUrl || bootGardenRef || '';
+  }
+
   function beginAdventure(g) {
+    adventureGarden = g || null;
+    chapterHandoffPending = false;
     adventureStory = g?.story || null;
     adventureObjectives = gardenObjectivesOf(g);
     chapterWon = false;
@@ -2524,7 +2597,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   }
 
   function tickAdventureObjectives() {
-    if (!adventureObjectives.length || chapterWon || chapterLost || chapterAdvanceBusy) {
+    if (!adventureObjectives.length || chapterWon || chapterLost || chapterAdvanceBusy || chapterHandoffPending) {
       objectiveHud.set(adventureObjectives, { hidden: true });
       syncExitMarks(true);
       return;
@@ -2561,12 +2634,45 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     chapterWon = true;
     captureAdventureParty();
-    const next = result.next || '';
-    if (matchStory.playWin(adventureStory)) {
-      pendingChapterUrl = next;
+    const explicit = result.next || '';
+    const current = currentAdventureRef();
+    const packFiles = packFilesOf(adventureGarden);
+    const resolvedNow = continuationGardenRef({
+      explicit,
+      currentRef: current,
+      packFiles,
+    });
+    const canAskIndex = !explicit && !resolvedNow && (
+      current.startsWith('/maps/')
+      || current.toLowerCase().startsWith('pack:')
+      || current.toLowerCase().startsWith('workshop:')
+    );
+    if (canAskIndex) {
+      chapterHandoffPending = true;
+      const reelStarted = matchStory.playWin(adventureStory);
+      void loadPlayIndex(current, {
+        listWorkshopMaps: () => aetherSteam.listWorkshopMaps(),
+      }).then((index) => {
+        chapterHandoffPending = false;
+        if (!chapterWon || chapterLost) return;
+        const resolved = continuationGardenRef({
+          currentRef: current,
+          packFiles,
+          index,
+        });
+        pendingChapterUrl = resolved || '';
+        if (!reelStarted && !resolved) {
+          endAdventureMatch('Victory', 'Adventure complete');
+          setStatusText('Adventure complete');
+        }
+      });
       return;
     }
-    if (next) pendingChapterUrl = next;
+    if (matchStory.playWin(adventureStory)) {
+      pendingChapterUrl = resolvedNow;
+      return;
+    }
+    if (resolvedNow) pendingChapterUrl = resolvedNow;
     else {
       endAdventureMatch('Victory', 'Adventure complete');
       setStatusText('Adventure complete');
@@ -2676,6 +2782,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     canIssueCommands: () => !isObservingBoard() && playerCanInspect(),
     getAgoras: () => session.agoras ?? [],
     getBuildings: () => session.buildings ?? [],
+    getDoors: () => session.doors ?? [],
     getField: () => session.field ?? null,
     onBuildingSelected: (sel, _ptr, all) => {
       const list = all ?? (sel ? [sel] : null);
@@ -3356,7 +3463,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.cameraController?.tick?.(deltaMs);
     session.pump(deltaMs);
     tickAdventureObjectives();
-    if (pendingChapterUrl != null && !matchStory.driving() && !chapterAdvanceBusy && !chapterProposeSent) {
+    if (pendingChapterUrl != null && !chapterHandoffPending && !matchStory.driving() && !chapterAdvanceBusy && !chapterProposeSent) {
       const url = pendingChapterUrl;
       if (url) proposeChapterAdvance(url);
       else {
@@ -3544,7 +3651,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (fogHidden[i]) continue;
       const isSel = !!selected[i];
       const def = getUnitDef(world.type[i]);
-      const hurt = def.hp > 0 && world.hp[i] < def.hp;
+      const maxHp = world.named?.[i] ? namedUnitHp(def.hp) : def.hp;
+      const hurt = maxHp > 0 && world.hp[i] < maxHp;
       if (!isSel && !hurt) continue;
       const x = prev.x[i] + (cur.x[i] - prev.x[i]) * alpha;
       const z = prev.z[i] + (cur.z[i] - prev.z[i]) * alpha;
@@ -3678,12 +3786,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         }
         const loft = posed.loft;
         const yaw = posed.yaw;
-        let size = def.size * 0.85;
+        const hero = world.named?.[i] ? NAMED_UNIT_SCALE : 1;
+        let size = def.size * 0.85 * hero;
         const fade = deathFade[i];
         if (fade > 0) size *= fade;
         const gy = groundYCached(t, tx, tz);
         renderX[i] = x;
-        renderY[i] = gy + loft + (def.pickHeight ?? 1.1) * zoomFor(def);
+        renderY[i] = gy + loft + (def.pickHeight ?? 1.1) * hero * zoomFor(def);
         renderZ[i] = z;
         if (fade > 0) {
           colors[i * 4 + 3] = fade;
@@ -3744,13 +3853,14 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       let yaw = facingYaw[i];
       if (loft > 0.01 && dx * dx + dz * dz > 0.0004) yaw = Math.atan2(dx, dz);
       yaw += yawTwist;
-      let size = def.size;
+      const hero = world.named?.[i] ? NAMED_UNIT_SCALE : 1;
+      let size = def.size * hero;
       const fade = deathFade[i];
       if (fade > 0) size *= fade;
       // Pick sphere center at chest height over terrain (not sim `size`, which is spacing).
       const gy = groundYCached(i, x, z);
       renderX[i] = x;
-      renderY[i] = gy + loft + (def.pickHeight ?? 1.1) * zoomFor(def);
+      renderY[i] = gy + loft + (def.pickHeight ?? 1.1) * hero * zoomFor(def);
       renderZ[i] = z;
       if (fade > 0) {
         colors[i * 4 + 3] = fade;
@@ -3846,7 +3956,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
       wasSelected[i] = isSel ? 1 : 0;
 
-      const maxHp = def.hp;
+      const maxHp = world.named?.[i] ? namedUnitHp(def.hp) : def.hp;
       const hp = world.hp[i];
       if (maxHp > 0 && (isSel || hp < maxHp) && overlayBarAllow[i]) {
         const slot = isSel ? hbSelCount++ : hbHurtCount++;
@@ -3858,7 +3968,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         const o = slot * 4;
         buf[o] = x;
         buf[o + 1] = z;
-        buf[o + 2] = unitChipLift(loft, (def.pickHeight ?? 1.1) * zoomFor(def));
+        buf[o + 2] = unitChipLift(loft, (def.pickHeight ?? 1.1) * hero * zoomFor(def));
         buf[o + 3] = hp / maxHp;
         owners[slot] = world.owner[i];
         hps[slot] = hp | 0;
@@ -4067,14 +4177,15 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       for (let s = 0; s < take; s++) {
         const i = ids[s];
         const def = getUnitDef(world.type[i]);
-        const pick = def.pickRadius ?? 1.8;
+        const hero = world.named?.[i] ? NAMED_UNIT_SCALE : 1;
+        const pick = (def.pickRadius ?? 1.8) * hero;
         // Pick spheres sit inside the VAT mesh; the shield has to wrap the body.
         const zs = zoomFor(def);
         const slot = shieldSlots[s];
         slot.x = renderX[i];
         slot.y = renderY[i] + pick * 0.35 * zs;
         slot.z = renderZ[i];
-        slot.r = Math.max(pick * 1.65, (def.size ?? 5) * 0.37) * zs;
+        slot.r = Math.max(pick * 1.65, (def.size ?? 5) * hero * 0.37) * zs;
       }
       for (let s = take; s < OVERLAY_MAX_SHIELDS; s++) shieldSlots[s].r = 0;
       renderer.syncHolyShields(take > 0 ? shieldSlots : null);
@@ -4114,7 +4225,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           x: renderX[i],
           y: renderY[i],
           z: renderZ[i],
-          r: (def.pickRadius ?? 1.8) * zoomFor(def),
+          r: (def.pickRadius ?? 1.8) * (world.named?.[i] ? NAMED_UNIT_SCALE : 1) * zoomFor(def),
         });
       }
       // Buildings pick against their mesh, so H only draws unit spheres.
@@ -4231,6 +4342,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         fog: true,
         sharedVision: true,
         teamByOwner: [0, 0, 0, 0],
+        gardenUrl: bootGardenRef,
       }
       : null,
     setInteractive,
@@ -4276,6 +4388,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         party: handoff?.party,
         bank: handoff?.bank,
         epoch: handoff?.epoch,
+        garden: handoff?.garden,
         matchLobby: ctx.matchLobby || observerLobby,
       });
     } catch (err) {

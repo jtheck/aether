@@ -4,6 +4,57 @@
 // atlas/material state still used by the next field). Soft-detach only: hide,
 // zero thin-instance count, and unlink from scene lists.
 
+import { addToScene } from '../vendor/lite/liteVendor.js';
+
+/**
+ * Drop meshes out of the render lists without destroying GPU buffers.
+ * Hidden chunk LOD used to leave every mesh in the scene, and a max board
+ * is ~20k of those — Lite still walks them after the game loop returns.
+ * @param {object | null | undefined} scene
+ * @param {object[]} meshes
+ */
+export function suspendMeshes(scene, meshes) {
+  if (!scene || !meshes?.length) return;
+  const drop = new Set(meshes);
+  compactList(scene.meshes, drop);
+  compactList(scene._renderables, drop, (entry) => entry?.mesh);
+  const groups = scene._groups;
+  if (groups?.values) {
+    for (const group of groups.values()) compactList(group, drop);
+  }
+  for (let i = 0; i < meshes.length; i++) {
+    const mesh = meshes[i];
+    if (!mesh) continue;
+    mesh.visible = false;
+    mesh.parent = null;
+  }
+  scene._renderableVersion = (scene._renderableVersion | 0) + 1;
+}
+
+/**
+ * Put suspended meshes back on the scene. Lite rebuilds just those renderables.
+ * @param {object | null | undefined} scene
+ * @param {object[]} meshes
+ */
+export function resumeMeshes(scene, meshes) {
+  if (!scene || !meshes?.length) return;
+  for (let i = 0; i < meshes.length; i++) {
+    const mesh = meshes[i];
+    if (!mesh) continue;
+    mesh.visible = true;
+    addToScene(scene, mesh);
+  }
+}
+
+function compactList(list, drop, itemOf = (entry) => entry) {
+  if (!Array.isArray(list) || list.length === 0) return;
+  let w = 0;
+  for (let i = 0; i < list.length; i++) {
+    if (!drop.has(itemOf(list[i]))) list[w++] = list[i];
+  }
+  list.length = w;
+}
+
 /**
  * Stop a mesh from drawing / flushing without destroying GPU buffers.
  * @param {object | null | undefined} scene

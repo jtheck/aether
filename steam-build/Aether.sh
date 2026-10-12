@@ -26,7 +26,7 @@ exec "$HERE/Aether" \
   --no-sandbox \
   --disable-gpu-sandbox \
   --enable-unsafe-webgpu \
-  --enable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE \
+  --enable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE,WebXRLayers,WebXRWebGPUBinding \
   --use-angle=vulkan \
   --ignore-gpu-blocklist \
   "$@"

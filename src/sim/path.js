@@ -9,6 +9,7 @@ import {
   attackBuildingInRange,
   attackBuildingStandPoint,
 } from './buildingCombat.js';
+import { attackDoorInRange, attackDoorStandPoint, isDoorAlive } from './doorCombat.js';
 
 function liveBuilding(w, bi) {
   const b = w.buildings?.[bi];
@@ -85,6 +86,8 @@ export function attackInRange(w, i) {
     }
     return true;
   }
+  const di = w.targetDoor?.[i] ?? -1;
+  if (di >= 0) return attackDoorInRange(w, i, w.doors?.[di]);
   const bi = w.targetBuilding?.[i] ?? -1;
   if (bi >= 0) return attackBuildingInRange(w, i, liveBuilding(w, bi));
   return false;
@@ -262,6 +265,14 @@ function refreshAttackDestination(w, i) {
     w.navDestY[i] = stand.y;
     return;
   }
+  const di = w.targetDoor?.[i] ?? -1;
+  const door = di >= 0 ? w.doors?.[di] : null;
+  if (isDoorAlive(door)) {
+    const stand = attackDoorStandPoint(w, i, door);
+    w.navDestX[i] = stand.x;
+    w.navDestY[i] = stand.y;
+    return;
+  }
   const bi = w.targetBuilding?.[i] ?? -1;
   const b = liveBuilding(w, bi);
   if (!b) return;
@@ -277,7 +288,9 @@ function needsPath(w, i) {
     return w.hasTarget[i] !== 0;
   }
   if (order === ORDER.ATTACK) {
-    return w.targetEntity[i] >= 0 || (w.targetBuilding?.[i] ?? -1) >= 0;
+    return w.targetEntity[i] >= 0
+      || (w.targetBuilding?.[i] ?? -1) >= 0
+      || (w.targetDoor?.[i] ?? -1) >= 0;
   }
   if (order === ORDER.REPAIR) return w.targetEntity[i] >= 0;
   if (order === ORDER.GATHER) {
@@ -347,6 +360,20 @@ export function movementGoal(w, field, i) {
         return null;
       }
       const stand = attackStandPoint(w, i, t);
+      w.navDestX[i] = stand.x;
+      w.navDestY[i] = stand.y;
+      if (w.navWpCount[i] === 0 && w.pathRequest[i] === PATH_REQUEST.NONE) {
+        w.pathRequest[i] = nextPathRequest(w, i);
+      }
+    }
+  } else if (w.order[i] === ORDER.ATTACK && (w.targetDoor?.[i] ?? -1) >= 0) {
+    const door = w.doors?.[w.targetDoor[i]];
+    if (isDoorAlive(door)) {
+      if (attackInRange(w, i)) {
+        clearPath(w, i);
+        return null;
+      }
+      const stand = attackDoorStandPoint(w, i, door);
       w.navDestX[i] = stand.x;
       w.navDestY[i] = stand.y;
       if (w.navWpCount[i] === 0 && w.pathRequest[i] === PATH_REQUEST.NONE) {

@@ -45,6 +45,7 @@ export function createStorySheet({ onSeek, onSelect } = {}) {
   function bindScrub(node) {
     node.addEventListener('pointerdown', (ev) => {
       if (ev.button !== 0) return;
+      if (ev.target?.closest?.('.story-clip')) return;
       ev.preventDefault();
       const reel = normalizeReel(el._reel);
       onSeek?.(eventTime(ev, reel));
@@ -69,12 +70,24 @@ export function createStorySheet({ onSeek, onSelect } = {}) {
   function renderTrack(track, clips, selectedId, reel) {
     track.innerHTML = '';
     const win = windowSec(reel);
-    for (const clip of clips) {
+    const laneEnd = [];
+    const placed = clips.map((clip) => {
+      let lane = 0;
+      while (laneEnd[lane] != null && laneEnd[lane] > clip.t + 0.001) lane++;
+      laneEnd[lane] = clip.t + clip.dur;
+      return { clip, lane };
+    });
+    const rowH = 14;
+    track.style.height = `${Math.max(22, Math.max(1, laneEnd.length) * rowH + 4)}px`;
+    for (const { clip, lane } of placed) {
       const block = document.createElement('button');
       block.type = 'button';
       block.className = 'story-clip' + (clip.id === selectedId ? ' active' : '');
       block.style.left = `${(clip.t / win) * 100}%`;
       block.style.width = `${Math.max(1.2, (clip.dur / win) * 100)}%`;
+      block.style.top = `${2 + lane * rowH}px`;
+      block.style.height = `${rowH - 2}px`;
+      block.style.bottom = 'auto';
       if (clip.kind === CLIP_LINE) {
         block.textContent = clip.speaker || clip.text || 'line';
       } else if (Number.isFinite(clip.fromTx) && (clip.fromTx !== clip.tx || clip.fromTz !== clip.tz)) {
@@ -87,8 +100,9 @@ export function createStorySheet({ onSeek, onSelect } = {}) {
         : Number.isFinite(clip.fromTx)
           ? `camera ${clip.fromTx},${clip.fromTz} → ${clip.tx},${clip.tz}`
           : `camera ${clip.tx},${clip.tz}`;
-      block.addEventListener('click', (ev) => {
+      block.addEventListener('pointerdown', (ev) => {
         ev.stopPropagation();
+        ev.preventDefault();
         onSelect?.(clip.id);
         onSeek?.(clip.t);
       });

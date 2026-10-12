@@ -122,6 +122,57 @@ function pickDefaultGarden(files) {
   return sorted[0] || '';
 }
 
+function sanitizeCampaignData(data) {
+  if (!data || data.kind !== 'campaign' || !Array.isArray(data.episodes)) return null;
+  var episodes = [];
+  var count = 0;
+  for (var i = 0; i < data.episodes.length && count < MAX_GARDENS; i++) {
+    var ep = data.episodes[i];
+    if (!ep || !Array.isArray(ep.chapters)) continue;
+    var chapters = [];
+    for (var c = 0; c < ep.chapters.length && count < MAX_GARDENS; c++) {
+      var ch = ep.chapters[c];
+      var file = normalizeGardenRel(ch && ch.file);
+      if (!file) continue;
+      chapters.push({
+        file: file,
+        name: String((ch && ch.name) || '').slice(0, 80),
+      });
+      count += 1;
+    }
+    if (!chapters.length) continue;
+    episodes.push({
+      name: String(ep.name || 'Episode').slice(0, 80),
+      theme: String(ep.theme || '').slice(0, 40),
+      chapters: chapters,
+    });
+  }
+  if (!episodes.length) return null;
+  return {
+    v: 1,
+    kind: 'campaign',
+    name: String(data.name || 'Campaign').slice(0, 80),
+    episodes: episodes,
+  };
+}
+
+function readCampaignFile(folder, fsImpl) {
+  var io = fsImpl || fs;
+  if (!folder) return null;
+  var root = path.resolve(String(folder));
+  var full = path.resolve(root, 'campaign.json');
+  var prefix = root.endsWith(path.sep) ? root : root + path.sep;
+  if (full !== root && !full.startsWith(prefix)) return null;
+  var stat;
+  try { stat = io.statSync(full); } catch (_err) { return null; }
+  if (!stat || !stat.isFile() || stat.size > 256 * 1024) return null;
+  var text;
+  try { text = io.readFileSync(full, 'utf8'); } catch (_errRead) { return null; }
+  var data;
+  try { data = JSON.parse(text); } catch (_errJson) { return null; }
+  return sanitizeCampaignData(data);
+}
+
 function describeInstall(folder, fsImpl) {
   var io = fsImpl || fs;
   var rels = walkGardenRels(folder, io);
@@ -206,16 +257,21 @@ function listSubscribedMaps(workshop, opts) {
     }
     var flags = itemFlags(state);
     var gardens = [];
+    var campaign = null;
     if (flags.installed && published != null && typeof workshop.getItemInstallInfo === 'function') {
       try {
         var info = workshop.getItemInstallInfo(published);
-        if (info && info.folder) gardens = scan(info.folder, opts.fs);
+        if (info && info.folder) {
+          gardens = scan(info.folder, opts.fs);
+          campaign = readCampaignFile(info.folder, opts.fs);
+        }
       } catch (_errInfo) { /* ignore */ }
     } else if (flags.subscribed && !flags.downloading && typeof workshop.downloadItem === 'function' && published != null) {
       try { workshop.downloadItem(published, false); } catch (_errDl) { /* ignore */ }
     }
     var title = '';
     if (gardens.length) title = gardens[0].name || '';
+    if (campaign && campaign.name) title = campaign.name;
     items.push({
       id: id,
       title: title,
@@ -223,6 +279,7 @@ function listSubscribedMaps(workshop, opts) {
       downloading: flags.downloading,
       needsUpdate: flags.needsUpdate,
       gardens: gardens,
+      campaign: campaign,
     });
   }
   return items;
@@ -374,15 +431,32 @@ async function publishWorkshopItem(workshop, garden, opts) {
   opts = opts || {};
   var appId = (opts.appId | 0) || 0;
   if (!appId) return { ok: false, error: 'no app id' };
-  var text = typeof garden === 'string' ? garden : JSON.stringify(garden);
+  var pack = null;
+  if (Array.isArray(opts.files) && opts.files.length) {
+    var cleaned = sanitizeCampaignData(opts.campaign);
+    if (!cleaned) return { ok: false, error: 'campaign index missing' };
+    var packed = [];
+    for (var f = 0; f < opts.files.length && packed.length < MAX_GARDENS; f++) {
+      var row = opts.files[f];
+      var rel = normalizeGardenRel(row && row.file);
+      if (!rel) return { ok: false, error: 'invalid chapter file' };
+      var rowText = typeof row.garden === 'string' ? row.garden : JSON.stringify(row.garden);
+      var rowMeta = peekGardenMeta(rowText);
+      if (!rowMeta.ok) return { ok: false, error: rowMeta.error };
+      packed.push({ file: rel, text: JSON.stringify(rowMeta.garden) });
+    }
+    if (!packed.length) return { ok: false, error: 'campaign index missing' };
+    pack = { files: packed, campaign: cleaned };
+  }
+  var text = pack ? pack.files[0].text : (typeof garden === 'string' ? garden : JSON.stringify(garden));
   var meta = peekGardenMeta(text);
   if (!meta.ok) return { ok: false, error: meta.error };
   if (!workshop || typeof workshop.createItem !== 'function') {
     return { ok: false, error: 'workshop publish unavailable' };
   }
-  var title = String(opts.title || meta.name || 'Untitled garden').trim() || 'Untitled garden';
+  var title = String(opts.title || (pack && pack.campaign.name) || meta.name || 'Untitled garden').trim() || 'Untitled garden';
   var description = String(opts.description || '').trim();
-  var tags = Array.isArray(opts.tags) ? opts.tags : workshopTagsForGarden(meta.garden);
+  var tags = Array.isArray(opts.tags) ? opts.tags : (pack ? ['Campaign', 'Adventure'] : workshopTagsForGarden(meta.garden));
   var visibility = opts.visibility == null ? 0 : (opts.visibility | 0);
 
   var created;
@@ -406,7 +480,16 @@ async function publishWorkshopItem(workshop, garden, opts) {
   try {
     var contentDir = path.join(dir, 'content');
     try { io.mkdirSync(contentDir, { recursive: true }); } catch (_errMk) { /* exists */ }
-    io.writeFileSync(path.join(contentDir, 'map.garden'), JSON.stringify(meta.garden));
+    if (pack) {
+      for (var w = 0; w < pack.files.length; w++) {
+        var dest = path.join(contentDir, pack.files[w].file);
+        try { io.mkdirSync(path.dirname(dest), { recursive: true }); } catch (_errDir) { /* exists */ }
+        io.writeFileSync(dest, pack.files[w].text);
+      }
+      io.writeFileSync(path.join(contentDir, 'campaign.json'), JSON.stringify(pack.campaign));
+    } else {
+      io.writeFileSync(path.join(contentDir, 'map.garden'), JSON.stringify(meta.garden));
+    }
     wrote = true;
     var previewFile = opts.previewPath || writePreviewJpeg(dir, opts.previewJpeg, io);
     var changeNote = String(opts.changeNote || 'Published from Forge');
@@ -439,7 +522,7 @@ async function publishWorkshopItem(workshop, garden, opts) {
         return {
           ok: true,
           id: parsed.id,
-          file: 'map.garden',
+          file: pack ? pack.files[0].file : 'map.garden',
           title: title,
           tags: attempt.tags,
           needsAgreement: parsed.needsAgreement,
@@ -475,6 +558,8 @@ module.exports = {
   peekGardenMeta,
   walkGardenRels,
   pickDefaultGarden,
+  readCampaignFile,
+  sanitizeCampaignData,
   describeInstall,
   readGardenFile,
   itemFlags,

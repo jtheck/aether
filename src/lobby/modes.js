@@ -45,12 +45,20 @@ export function selectableAdventureChapters(search = pageSearch(), hostname = pa
   return ADVENTURE_CHAPTERS;
 }
 
-/** Official chapter id, or a workshop:<id>[/file] ref. */
+/** Official chapter id, a workshop ref, a web pack chapter, or the session garden. */
 export function gardenUrlForChapter(chapterId) {
   const raw = String(chapterId || '');
   const ch = KNOWN_CHAPTERS.find((c) => c.id === raw);
   if (ch?.garden) return ch.garden;
-  return raw.toLowerCase().startsWith('workshop:') ? raw : '';
+  const lower = raw.toLowerCase();
+  if (lower === 'session' || lower.startsWith('workshop:') || lower.startsWith('pack:')) return raw;
+  return '';
+}
+
+/** Host must embed the garden: web guests cannot fetch Workshop, pack, or session maps. */
+export function chapterRefNeedsHostGarden(chapterId) {
+  const raw = String(chapterId || '').toLowerCase();
+  return raw === 'session' || raw.startsWith('workshop:') || raw.startsWith('pack:');
 }
 
 export function chapterIdForGardenUrl(url) {
@@ -70,6 +78,10 @@ export function chapterLabelFor(ref = {}) {
   if (id.toLowerCase().startsWith('workshop:') || url.toLowerCase().startsWith('workshop:')) {
     return name.trim() || 'Workshop';
   }
+  if (id.toLowerCase().startsWith('pack:') || url.toLowerCase().startsWith('pack:')) {
+    return name.trim() || 'Custom';
+  }
+  if (id === 'session' || url === 'session') return name.trim() || 'Custom';
   return name.trim();
 }
 

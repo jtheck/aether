@@ -15,6 +15,7 @@ import { mergeFrames } from '../sim/commandFrame.js';
 import { checksum } from '../sim/checksum.js';
 import { serializeAgoras } from '../sim/agora.js';
 import { serializeBuildings, applyWorldStructureOccupancy } from '../sim/buildings.js';
+import { bindDoors, serializeDoors, takeDoorUpdates } from '../sim/doorCombat.js';
 import { serializeTech } from '../sim/tech.js';
 import { serializeResources } from '../sim/resources.js';
 import { takeStorageOverflow } from '../sim/storage.js';
@@ -155,6 +156,7 @@ self.onmessage = (e) => {
         populateScenery(field, world, reserved, kothDrop ? { reserveTrees: false } : undefined);
       }
       applyWorldStructureOccupancy(field, world);
+      bindDoors(world, field);
       beginSharedPublish(views);
       publishType(world, views);
       publishedTypeCount = world.count;
@@ -168,6 +170,7 @@ self.onmessage = (e) => {
         layoutVersion: SHARED_LAYOUT_VERSION,
         agoras: serializeAgoras(world.agoras),
         buildings: serializeBuildings(world.buildings),
+        doors: serializeDoors(world.doors),
         tech: serializeTech(world),
         resources: serializeResources(world),
         checksum: checksum(world, field),
@@ -213,6 +216,7 @@ self.onmessage = (e) => {
       const sporeBloomUpdates = takeSporeBloomUpdates(world);
       const monkKickUpdates = takeMonkKickUpdates(world);
       const buildingsChanged = !!world.buildingsDirty;
+      const doorUpdates = takeDoorUpdates(world);
       if (world.buildingsDirty) world.buildingsDirty = 0;
       const techChanged = !!world.techDirty;
       if (world.techDirty) world.techDirty = 0;
@@ -239,6 +243,7 @@ self.onmessage = (e) => {
         koth: serializeKoth(world.koth),
         buildings: serializeBuildings(world.buildings),
         buildingsChanged,
+        doorUpdates,
         agoras: serializeAgoras(world.agoras),
         tech: serializeTech(world),
         techChanged,

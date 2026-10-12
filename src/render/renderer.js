@@ -22,6 +22,7 @@ import {
   onSceneDispose,
   registerSceneWithShadowSupport,
   startEngine,
+  setGpuTimingEnabled,
   getViewProjectionMatrix,
   invertMat4,
   loadFont,
@@ -74,7 +75,7 @@ import {
   writeVatSlotParams,
 } from './vatUnits.js';
 import { createCelestialRig } from './celestial.js';
-import { createTerrainFromField, createTileGridOverlay, createPlacementGridOverlay, surfaceHeightAt } from './terrain.js';
+import { createTerrainFromField, createTileGridOverlay, createPlacementGridOverlay, surfaceHeightAt, terrainChunkLodSpec } from './terrain.js';
 import { createProjectileRenderer } from './projectiles.js';
 import { createPickHitboxRenderer } from './pickHitboxes.js';
 import { createHolyShieldMaterial, createHolyShieldMesh } from './holyShields.js';
@@ -922,7 +923,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     // or a sunny-side shadow disappears into the lawn.
     darkness: 0.05,
     frustumEdgeFalloff: 0.04,
-    forceRefreshEveryFrame: true,
+    // Redraw when the camera, the light, or a caster buffer actually changes.
+    // Forcing it every frame refits the cascades on the opening scene too.
+    // Unit poses still dirty the caster buffer every frame. Trees and buildings
+    // are a second depth atlas and are not cleared by that.
+    forceRefreshEveryFrame: false,
   };
   const shadowGen = createCsmDirectionalShadowGenerator(engine, sun, shadowOpts);
   sun.shadowGenerator = shadowGen;
@@ -1057,6 +1062,55 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     return fxEmitChance >= 1 || Math.random() < fxEmitChance;
   }
 
+  /** Planks fly off a broken door, then nothing is left in the opening. */
+  function emitDoorBreak(x, z) {
+    const y0 = groundYAt(x, z);
+    for (let n = 0; n < 12; n++) {
+      const ang = Math.random() * Math.PI * 2;
+      const speed = 2.4 + Math.random() * 5;
+      const tall = 0.55 + Math.random() * 0.85;
+      particles.emit({
+        hard: true,
+        blend: 'alpha',
+        position: [
+          x + Math.cos(ang) * 0.25,
+          y0 + 0.35 + Math.random() * 2.4,
+          z + Math.sin(ang) * 0.25,
+        ],
+        velocity: [
+          Math.cos(ang) * speed,
+          2.2 + Math.random() * 4.2,
+          Math.sin(ang) * speed,
+        ],
+        gravity: [0, -18, 0],
+        drag: 0.55,
+        color: [
+          0.42 + Math.random() * 0.22,
+          0.22 + Math.random() * 0.1,
+          0.1,
+          1,
+        ],
+        lifetime: 0.65 + Math.random() * 0.4,
+        startSize: [0.16 + Math.random() * 0.2, tall],
+        endSize: [0.06, tall * 0.35],
+        rotation: Math.random() * Math.PI,
+        spin: (Math.random() - 0.5) * 9,
+        killY: y0 - 0.15,
+      });
+    }
+    particles.emit({
+      ...puffSprite(0.5),
+      position: [x, y0 + 1.1, z],
+      velocity: [0, 1.4, 0],
+      gravity: [0, -3, 0],
+      color: [0.5, 0.38, 0.24, 0.4],
+      lifetime: 0.35,
+      startSize: 1.8,
+      endSize: 3.2,
+      drag: 1.4,
+    });
+  }
+
   /** v1 fire/smoke: explosion.png sprite + random spin. */
   function puffSprite(spin = 1.4) {
     return {
@@ -1079,7 +1133,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       // 3D trees/rocks pop in after Phase A register — fold them into CSM.
       onModelMesh(mesh) {
         if (!mesh) return;
-        mesh.receiveShadows = shadowsEnabled && !isBackdropMesh(mesh);
+        mesh.receiveShadows = shadowsEnabled && !isBackdropMesh(mesh) && !mesh._skipShadowReceive;
         noteShadowMesh(mesh);
       },
     };
@@ -2540,7 +2594,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
 
   function noteBatchMeshesForShadow(batch) {
-    for (const mesh of vatPartMeshes(batch)) noteShadowMesh(mesh);
+    for (const mesh of vatPartMeshes(batch)) {
+      // Pose updates must not count as a static-scene change. Units still
+      // draw into every cascade, or a zoom drops them into the last map
+      // and their shadows vanish.
+      mesh._shadowDynamic = true;
+      noteShadowMesh(mesh);
+    }
   }
 
   function collectShadowCasters() {
@@ -2570,7 +2630,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       for (const root of terrain.meshes) {
         // GLB/bake scenery only — billboard impostors are flat cards and cast junk.
         const name = root.name || '';
-        if (typeof name === 'string' && name.startsWith('scenery-model-')) {
+        if (typeof name === 'string' && (name.startsWith('scenery-model-') || name.startsWith('wall-'))) {
           forEachMesh(root, pushMesh);
         }
       }
@@ -2586,7 +2646,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (terrain?.meshes) {
       for (const root of terrain.meshes) {
         forEachMesh(root, (m) => {
-          m.receiveShadows = recv && !isBackdropMesh(m);
+          m.receiveShadows = recv && !isBackdropMesh(m) && !m._skipShadowReceive;
         });
       }
     }
@@ -2634,12 +2694,22 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       ? Math.max(worldHalfFFromField(fieldSnap), worldHalfZFFromField(fieldSnap))
       : Math.max(tableHalfF, tableHalfZF);
     const radius = camera?.radius;
-    const look = Number.isFinite(radius) ? radius * 1.45 : 0;
     // Headset: the range follows head height in coarse steps (xrShadowCover),
     // so the near slice sharpens as you drop toward the board.
-    const cover = xrEye() && xrFit._cover > 0
-      ? xrFit._cover
-      : Math.max(half * 2.75, look, 80);
+    let cover;
+    const ring = terrainChunkLodSpec(fieldSnap);
+    if (xrEye() && xrFit._cover > 0) {
+      cover = xrFit._cover;
+    } else if (ring) {
+      // Far tiles are the flat table. Fit the cascades to the camera plus the
+      // kept ring, in steps, so a zoom eases instead of refitting every frame.
+      const reach = (Number.isFinite(radius) ? radius : 0) + Math.sqrt(ring.keepSq);
+      cover = Math.ceil(Math.max(reach, 80) / 128) * 128;
+    } else {
+      // Normal boards stay on the board-sized fit. Tracking the live camera
+      // distance here refit the opening scene's cascades every frame.
+      cover = Math.max(half * 2.75, 80);
+    }
     if (cfg._shadowMaxZ !== cover) cfg._shadowMaxZ = cover;
   }
 
@@ -2733,10 +2803,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       scene.camera = xrFit;
       syncShadowCoverage();
     } else if (scene.camera !== camera) scene.camera = camera;
+    // Stepped on large boards, fixed on normal ones. A still camera does not write.
+    syncShadowCoverage();
     // Celestial spin demo (no-op unless toggled). Uses wall-clock delta so the
     // sun keeps sweeping even when the sim is paused.
     celestial.update(deltaMs);
     terrain?.update?.(viewCamera(), deltaMs);
+    fogApi?.updateLod?.(viewCamera(), deltaMs);
     // Freeze FX aging while sim is paused so bolts/trails don't burn out.
     const fxDt = fxPaused ? 0 : deltaMs;
     buildingProps.update?.(fxDt);
@@ -4872,6 +4945,26 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       syncPlacementGrid();
     },
 
+    /**
+     * A destroyed door's boards leave the wall and scatter. Remaining shut
+     * doors stay on the rebuilt wood mesh.
+     * @param {{ x: number, z: number }[]} doors
+     */
+    breakCurtainDoors(doors) {
+      const mesh = terrain?.syncDoorLeaves?.(fieldSnap);
+      if (mesh) {
+        mesh.receiveShadows = shadowsEnabled && !mesh._skipShadowReceive;
+        noteShadowMesh(mesh);
+      }
+      applyShadowState();
+      const list = doors || [];
+      for (let i = 0; i < list.length; i++) {
+        const door = list[i];
+        if (!door || !Number.isFinite(door.x) || !Number.isFinite(door.z)) continue;
+        emitDoorBreak(door.x, door.z);
+      }
+    },
+
     /** Rebuild blocked/slow overlay from the current field (grid-based buildings, etc.). */
     refreshTileGrid() {
       if (tileGridVisible) refreshTileGridOccupancy();
@@ -5135,6 +5228,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       return this.setUnitsEnabled(!unitsEnabled);
     },
 
+    /** Forge (and other clients) push a saved sun/fill rig. Spin stays local. */
+    applyCelestial(state) {
+      if (state) celestial.apply(state);
+      return celestial.getState();
+    },
+
     /** Spin the sun/fill through all angles to preview lighting. Client-only. */
     setCelestialSpin(on, opts) {
       return celestial.setSpin(on, opts);
@@ -5152,6 +5251,60 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     setFxPaused(on) {
       fxPaused = !!on;
       return fxPaused;
+    },
+
+    /** Previous frame's GPU time. First calls arm the timestamp query. */
+    armGpuTiming() {
+      setGpuTimingEnabled(engine, true);
+      return engine.gpuFrameTimeMs ?? 0;
+    },
+
+    gpuFrameMs() {
+      return engine.gpuFrameTimeMs ?? 0;
+    },
+
+    /**
+     * Console: renderer.debugRenderCost()
+     * Counts live scene meshes and the shadow setup. GPU ms is the previous frame.
+     */
+    debugRenderCost() {
+      setGpuTimingEnabled(engine, true);
+      const counts = Object.create(null);
+      const onCounts = Object.create(null);
+      const list = scene.meshes ?? [];
+      for (let i = 0; i < list.length; i++) {
+        const mesh = list[i];
+        const name = mesh?.name || '';
+        const kind = name.startsWith('terrain-water-glint')
+          ? 'waterGlint'
+          : name.startsWith('terrain-')
+            ? 'terrain'
+            : name.startsWith('fog-')
+              ? 'fog'
+              : name.startsWith('scenery-')
+                ? 'scenery'
+                : name.startsWith('table-')
+                  ? 'table'
+                  : 'other';
+        counts[kind] = (counts[kind] ?? 0) + 1;
+        if (mesh?.visible !== false) onCounts[kind] = (onCounts[kind] ?? 0) + 1;
+      }
+      const cfg = shadowGen?._config;
+      return {
+        gpuFrameMs: +(engine.gpuFrameTimeMs ?? 0).toFixed(2),
+        sceneMeshes: list.length,
+        visible: onCounts,
+        meshes: counts,
+        cameraRadius: camera?.radius ?? null,
+        shadow: {
+          enabled: shadowsEnabled,
+          mapSize: shadowOpts.mapSize,
+          cascades: shadowOpts.numCascades,
+          shadowMaxZ: cfg?._shadowMaxZ ?? shadowOpts.shadowMaxZ,
+          refreshEveryFrame: !!shadowOpts.forceRefreshEveryFrame,
+          casters: shadowCasterList.length,
+        },
+      };
     },
 
     /** Console helper: renderer.debugShadows() */

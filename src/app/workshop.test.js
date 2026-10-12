@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { stashSessionGarden } from './gardenSession.js';
+import { GARDEN_OVERFLOW_MARK, stashSessionGarden } from './gardenSession.js';
 import {
   formatWorkshopRef,
   isWorkshopRef,
@@ -67,6 +67,8 @@ describe('workshop refs', () => {
     }, 'Campaign 80');
     assert.match(campaign, /Next/);
     assert.deepEqual(workshopListingTags({ obj: [{ next: 'maps/02.garden' }] }), ['Campaign', 'Adventure']);
+    assert.deepEqual(workshopListingTags({ ...garden, mt: 'teams' }), ['Map', 'Teams']);
+    assert.match(workshopDescriptionFor({ ...garden, mt: 'koth' }, 'Hill'), /King of the Hill/);
   });
 
   it('resolves a relative next against the current Workshop pack', () => {
@@ -101,6 +103,17 @@ describe('loadGardenRef', () => {
       fetchGarden: async (href) => ({ v: 4, n: href, w: 8, h: 8 }),
     });
     assert.equal(url.n, '/maps/chapter1.garden');
+
+    const pack = await loadGardenRef('pack:e1c2.garden', {
+      packText: async () => JSON.stringify({
+        v: 1,
+        kind: 'campaign',
+        name: 'Siege',
+        episodes: [{ name: 'One', chapters: [{ file: 'e1c2.garden', name: 'Sally' }] }],
+        gardens: { 'e1c2.garden': { v: 4, n: 'Sally', w: 8, h: 8 } },
+      }),
+    });
+    assert.equal(pack.n, 'Sally');
   });
 
   it('throws when a workshop load has no garden', async () => {
@@ -113,6 +126,14 @@ describe('loadGardenRef', () => {
   it('reads a session garden that did not fit in sessionStorage', async () => {
     const session = await loadGardenRef('session', {
       sessionText: () => null,
+      sessionFallback: async () => '{"v":4,"n":"overflow","w":8,"h":8}',
+    });
+    assert.equal(session.n, 'overflow');
+  });
+
+  it('follows an overflow mark into the indexeddb garden', async () => {
+    const session = await loadGardenRef('session', {
+      sessionText: () => GARDEN_OVERFLOW_MARK,
       sessionFallback: async () => '{"v":4,"n":"overflow","w":8,"h":8}',
     });
     assert.equal(session.n, 'overflow');
@@ -150,5 +171,26 @@ describe('stashSessionGarden', () => {
     });
     assert.equal(removed, true);
     assert.equal(overflow, '{"v":4,"n":"big"}');
+  });
+
+  it('replaces a session garden with an overflow mark when the quota is full', async () => {
+    const saved = new Map();
+    let writes = 0;
+    await stashSessionGarden('{"v":4,"n":"big"}', {
+      storage: {
+        setItem(k, v) {
+          writes += 1;
+          if (writes === 1) {
+            const err = new Error('quota');
+            err.name = 'QuotaExceededError';
+            throw err;
+          }
+          saved.set(k, v);
+        },
+        removeItem(k) { saved.delete(k); },
+      },
+      writeOverflow: async () => {},
+    });
+    assert.equal(saved.get('aeg.garden'), GARDEN_OVERFLOW_MARK);
   });
 });

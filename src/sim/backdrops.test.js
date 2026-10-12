@@ -6,14 +6,17 @@ import {
   cloneBackdrops,
   defaultBackdropY,
   encodeBackdrops,
+  freshBackdrop,
   isBackdropType,
+  nearestBackdrop,
   normalizeBackdrops,
 } from './backdrops.js';
 
 describe('backdrops', () => {
   it('accepts known types and drops unknown ones', () => {
     assert.equal(isBackdropType(BACKDROP.DISC), true);
-    assert.equal(isBackdropType('castle'), false);
+    assert.equal(isBackdropType(BACKDROP.CASTLE), true);
+    assert.equal(isBackdropType('banner'), false);
     const list = normalizeBackdrops([
       { type: 'disc', x: 2, z: -4 },
       { type: 'nope', x: 1, z: 1 },
@@ -22,6 +25,19 @@ describe('backdrops', () => {
     assert.equal(list[0].type, BACKDROP.DISC);
     assert.equal(list[0].scale, BACKDROP_DEFS.disc.defaultScale);
     assert.equal(list[0].y, defaultBackdropY('disc', list[0].scale));
+  });
+
+  it('places a castle on the ground and a disc sunk to its mesh origin', () => {
+    const castle = freshBackdrop(BACKDROP.CASTLE, 12.2, -4);
+    assert.equal(castle.type, 'castle');
+    assert.equal(castle.scale, 64);
+    assert.equal(castle.y, 0);
+    assert.equal(castle.x, 12.2);
+    const disc = freshBackdrop(BACKDROP.DISC, 0, 0);
+    assert.equal(disc.y, defaultBackdropY(BACKDROP.DISC, disc.scale));
+    const poses = [castle, disc];
+    assert.equal(nearestBackdrop(poses, 12, -4), 0);
+    assert.equal(nearestBackdrop(poses, 400, 400), -1);
   });
 
   it('roundtrips garden tuples with an explicit huge pose', () => {

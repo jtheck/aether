@@ -3,7 +3,9 @@
 import { sameUserId } from '../lobby/ids.js';
 import { FIELD_SIZES, MODE_IDS, getMode, selectableAdventureChapters } from '../lobby/modes.js';
 import { aetherSteam } from './steam.js';
+import { stashSessionGarden, writeCampaignPack } from './gardenSession.js';
 import { formatWorkshopRef, isWorkshopRef } from './workshop.js';
+import { flattenCampaignChapters, formatPackRef, isCampaignBundle } from '../story/campaignPack.js';
 
 /**
  * @param {object} lobby
@@ -230,12 +232,24 @@ function workshopChapterLabel(item, garden) {
   return title;
 }
 
-export function chapterSelectOptions(workshopItems, current, search, hostname) {
+export function chapterSelectOptions(workshopItems, current, search, hostname, localChapters) {
   const official = selectableAdventureChapters(search, hostname)
     .filter((c) => c.garden)
     .map((c) => ({ id: c.id, name: c.name }));
+  const local = Array.isArray(localChapters) ? localChapters.filter((row) => row?.id) : [];
   const extra = [];
   for (const item of workshopItems || []) {
+    const packed = flattenCampaignChapters(item.campaign);
+    if (packed.length) {
+      const title = item.title || item.campaign?.name || item.id;
+      for (const ch of packed) {
+        extra.push({
+          id: formatWorkshopRef(item.id, ch.file),
+          name: packed.length > 1 ? `${title} — ${ch.episode} · ${ch.name || ch.file}` : title,
+        });
+      }
+      continue;
+    }
     for (const garden of item.gardens || []) {
       extra.push({
         id: formatWorkshopRef(item.id, garden.file),
@@ -244,10 +258,18 @@ export function chapterSelectOptions(workshopItems, current, search, hostname) {
     }
   }
   const cur = String(current || '');
-  if (cur && isWorkshopRef(cur) && !extra.some((row) => row.id === cur) && !official.some((row) => row.id === cur)) {
-    extra.unshift({ id: cur, name: 'Workshop map' });
+  const known = official.concat(local, extra);
+  if (cur && !known.some((row) => row.id === cur)) {
+    const name = cur.toLowerCase().startsWith('pack:')
+      ? 'Custom campaign'
+      : cur === 'session'
+        ? 'Custom map'
+        : isWorkshopRef(cur)
+          ? 'Workshop map'
+          : '';
+    if (name) extra.unshift({ id: cur, name });
   }
-  return official.concat(extra);
+  return official.concat(local, extra);
 }
 
 /**
@@ -311,6 +333,7 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
   let lastSig = '';
   let overlayParked = false;
   let workshopItems = [];
+  let localChapters = [];
   let lastWorkshopPull = 0;
 
   function pullWorkshopChapters() {
@@ -343,6 +366,7 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
       state?.settings?.fieldSize, state?.settings?.seed, state?.settings?.chapter,
       state?.loadingMap,
       workshopItems.flatMap((item) => (item.gardens || []).map((g) => `${item.id}:${g.file}`)).join(),
+      localChapters.map((row) => row.id).join(),
       JSON.stringify(state?.seats ?? []),
       JSON.stringify(state?.spectators ?? []),
       state?.watching,
@@ -441,13 +465,21 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
     const hostControls = state.hosting && state.phase === 'waiting';
     if (mode?.hasChapter) pullWorkshopChapters();
     fillSelect(fieldSelect, FIELD_SIZES, state.settings.fieldSize);
-    fillSelect(chapterSelect, chapterSelectOptions(workshopItems, state.settings.chapter), state.settings.chapter);
+    fillSelect(chapterSelect, chapterSelectOptions(
+      workshopItems,
+      state.settings.chapter,
+      undefined,
+      undefined,
+      localChapters,
+    ), state.settings.chapter);
     if (seedInput && document.activeElement !== seedInput && String(seedInput.value) !== String(state.settings.seed)) {
       seedInput.value = String(state.settings.seed);
     }
     if (fieldSelect) fieldSelect.disabled = !hostControls;
     if (seedInput) seedInput.disabled = !hostControls;
     if (chapterSelect) chapterSelect.disabled = !hostControls;
+    const loadMap = document.getElementById('match-lobby-load-map');
+    if (loadMap) loadMap.disabled = !hostControls;
     setHidden(fieldRow, Boolean(mode?.hasChapter));
     setHidden(seedRow, Boolean(mode?.hasChapter));
     setHidden(chapterRow, !mode?.hasChapter);
@@ -510,6 +542,37 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
 
   fieldSelect?.addEventListener('change', () => matchLobby.setSetting('fieldSize', fieldSelect.value));
   chapterSelect?.addEventListener('change', () => matchLobby.setSetting('chapter', chapterSelect.value));
+  document.getElementById('match-lobby-load-map')?.addEventListener('click', () => {
+    document.getElementById('match-lobby-map-file')?.click();
+  });
+  document.getElementById('match-lobby-map-file')?.addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const state = matchLobby.getState();
+    if (!state?.hosting) return;
+    file.text().then(async (text) => {
+      const data = JSON.parse(text);
+      if (isCampaignBundle(data)) {
+        await writeCampaignPack(text);
+        localChapters = flattenCampaignChapters(data).map((ch) => ({
+          id: formatPackRef(ch.file),
+          name: `${data.name || 'Campaign'} — ${ch.episode} · ${ch.name || ch.file}`,
+        }));
+        if (localChapters[0]) matchLobby.setSetting('chapter', localChapters[0].id);
+      } else if (data && typeof data === 'object' && (data.v | 0) >= 3 && (data.w | 0) > 0) {
+        await stashSessionGarden(text);
+        localChapters = [{ id: 'session', name: String(data.n || data.name || file.name || 'Custom map') }];
+        matchLobby.setSetting('chapter', 'session');
+      } else {
+        throw new Error('unrecognized map');
+      }
+      lastSig = '';
+      refresh();
+    }).catch((err) => {
+      console.error(err);
+    });
+  });
   seedInput?.addEventListener('change', () => matchLobby.setSetting('seed', seedInput.value));
 
   for (const el of drawersRoot.querySelectorAll('button, input, select')) {

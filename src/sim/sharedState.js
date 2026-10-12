@@ -4,7 +4,7 @@
 import { MAX_ENTITIES } from './world.js';
 import { MAX_PROJECTILES } from './projectiles.js';
 
-export const SHARED_LAYOUT_VERSION = 12;
+export const SHARED_LAYOUT_VERSION = 13;
 const HEADER_I32 = 6; // version, unitCount, tick, projectileActive, publishSeq, projectileHighWater
 
 export function simSharedByteSize() {
@@ -28,6 +28,7 @@ export function simSharedByteSize() {
     MAX_ENTITIES * 4 + // carriedAmt (gather load)
     MAX_ENTITIES + // carriedKind (0 = empty, else resource index + 1)
     MAX_ENTITIES + // gatherAct (0 none / 1 chop / 2 haul)
+    MAX_ENTITIES + // named (hero)
     MAX_PROJECTILES * 4 * 4 + // projectile px, py, vx, vy
     MAX_PROJECTILES * 4 + // projectile generation
     MAX_PROJECTILES * 2 * 2 + // projectile age, lifetime
@@ -74,6 +75,8 @@ export function mapSharedState(sab) {
   const carriedKind = new Uint8Array(sab, o, MAX_ENTITIES);
   o += MAX_ENTITIES;
   const gatherAct = new Uint8Array(sab, o, MAX_ENTITIES);
+  o += MAX_ENTITIES;
+  const named = new Uint8Array(sab, o, MAX_ENTITIES);
   o += MAX_ENTITIES;
 
   const projectilePx = new Int32Array(sab, o, MAX_PROJECTILES);
@@ -122,6 +125,7 @@ export function mapSharedState(sab) {
     carriedAmt,
     carriedKind,
     gatherAct,
+    named,
     projectiles: {
       px: projectilePx,
       py: projectilePy,
@@ -172,6 +176,9 @@ export function publishWorld(w, s) {
   }
   if (w.gatherAct && s.gatherAct) {
     s.gatherAct.set(w.gatherAct.subarray(0, n));
+  }
+  if (w.named && s.named) {
+    s.named.set(w.named.subarray(0, n));
   }
 }
 

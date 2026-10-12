@@ -10,7 +10,8 @@ import {
   scaleFarmHazardDamage,
 } from './buildingCombat.js';
 import { isBuildingAlive } from './buildings.js';
-import { lineClear, worldToTile, worldToTileZ } from './field.js';
+import { lineClear, TILE_SIZE_F, worldToTile, worldToTileZ } from './field.js';
+import { applyDamageDoor, damageDoorsInRadius, isDoorAlive } from './doorCombat.js';
 import { getProjectileDef, PROJECTILE } from './projectileTypes.js';
 import { isHostile } from './teams.js';
 import { applyTreeSplash, tileIsWater } from './trees.js';
@@ -69,6 +70,7 @@ export function createProjectileStore(capacity = MAX_PROJECTILES) {
     source: new Int32Array(capacity),
     target: new Int32Array(capacity),
     targetBuilding: new Int32Array(capacity).fill(-1),
+    targetDoor: new Int32Array(capacity).fill(-1),
     px: new Int32Array(capacity),
     py: new Int32Array(capacity),
     vx: new Int32Array(capacity),
@@ -95,6 +97,7 @@ export function spawnProjectile(w, {
   source,
   target,
   targetBuilding = -1,
+  targetDoor = -1,
   x,
   y,
   aimX,
@@ -124,6 +127,7 @@ export function spawnProjectile(w, {
   store.source[slot] = source;
   store.target[slot] = target;
   store.targetBuilding[slot] = targetBuilding | 0;
+  if (store.targetDoor) store.targetDoor[slot] = targetDoor | 0;
   store.px[slot] = x;
   store.py[slot] = y;
   const scatter = aimScatter !== undefined ? aimScatter : def.aimScatter;
@@ -321,6 +325,7 @@ function applySplash(w, slot, impactX, impactY, def, field) {
       if (applyDamageBuilding(w, field, bi, dmg) > 0) hit = true;
     }
   }
+  if (damageDoorsInRadius(w, field, impactX, impactY, radius, baseDamage) > 0) hit = true;
   if (def.ignitesTrees && field && applyTreeSplash(field, impactX, impactY, radius)) {
     hit = true;
   }
@@ -415,6 +420,9 @@ export function projectileSystem(w, field) {
     const bi = store.targetBuilding?.[slot] ?? -1;
     const b = bi >= 0 ? w.buildings?.[bi] : null;
     const buildingAlive = isBuildingAlive(b);
+    const di = store.targetDoor?.[slot] ?? -1;
+    const door = di >= 0 ? w.doors?.[di] : null;
+    const doorAlive = isDoorAlive(door);
 
     if (targetAlive && def.homing) {
       store.aimX[slot] = w.px[target];
@@ -422,6 +430,9 @@ export function projectileSystem(w, field) {
     } else if (buildingAlive && def.homing) {
       store.aimX[slot] = b.x;
       store.aimY[slot] = b.z;
+    } else if (doorAlive && def.homing) {
+      store.aimX[slot] = door.x;
+      store.aimY[slot] = door.z;
     }
 
     refreshWander(w, store, slot, def);
@@ -480,13 +491,23 @@ export function projectileSystem(w, field) {
             continue;
           }
         }
+      } else if (doorAlive) {
+        const reach = def.hitRadius + fx.fromFloat(TILE_SIZE_F);
+        if (fx.dist2(nextX, nextY, door.x, door.z) <= fx.mul(reach, reach)) {
+          applyDamageDoor(w, field, di, store.damage[slot]);
+          store.hitCount[slot]++;
+          if (store.hitCount[slot] >= def.pierce) {
+            freeProjectile(w, slot, PROJECTILE_DESPAWN.HIT);
+            continue;
+          }
+        }
       }
     }
 
     const reachedAim = dist <= flySpeed;
     if (
       store.age[slot] >= store.lifetime[slot] ||
-      (reachedAim && ((!targetAlive && !buildingAlive) || !def.homing || def.splashRadius > 0))
+      (reachedAim && ((!targetAlive && !buildingAlive && !doorAlive) || !def.homing || def.splashRadius > 0))
     ) {
       if (def.splashRadius > 0) {
         const ix = reachedAim ? store.aimX[slot] : nextX;
@@ -496,6 +517,9 @@ export function projectileSystem(w, field) {
       } else {
         if (buildingAlive && store.hitCount[slot] === 0 && reachedAim) {
           hitBuilding(w, field, bi, def, store.damage[slot], store.source[slot], store.owner[slot]);
+          store.hitCount[slot]++;
+        } else if (doorAlive && store.hitCount[slot] === 0 && reachedAim) {
+          applyDamageDoor(w, field, di, store.damage[slot]);
           store.hitCount[slot]++;
         }
         const hadHit = store.hitCount[slot] > 0;

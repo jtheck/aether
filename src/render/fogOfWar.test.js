@@ -2,11 +2,13 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fx from '../sim/fixed.js';
 import { PLACEABLE_BUILDINGS } from '../sim/buildings.js';
+import { TILE_SIZE_F, worldHalfFFromMap } from '../sim/field.js';
 import { UNIT } from '../sim/unitTypes.js';
 import {
   COVER_DECAY_MS,
   VISITED_ALPHA,
   createFogOfWar,
+  sealFogEdgePadding,
   structureKey,
   structureTouchesVision,
   visionTilesForBuilding,
@@ -177,6 +179,12 @@ describe('fogOfWar last-known buildings', () => {
     const enemy = { owner: 1, type: 'camp', x: 36, z: 36, yaw: 0, tracks: [{ id: 'warrior', count: 1 }] };
     fog.stamp({ world, field, localPlayerId: 0, enabled: true, buildings: [enemy], agoras: [] });
     assert.equal(fog.filterBuildings([enemy]).length, 0);
+    const mine = { owner: 0, type: 'village', x: 0, z: 0, simIndex: 1, built: 1 };
+    const hidden = { ...enemy, simIndex: 0, built: 1 };
+    const kept = fog.filterBuildings([hidden, mine]);
+    assert.equal(kept.length, 1);
+    assert.equal(kept[0], mine);
+    assert.equal(kept[0].simIndex, 1);
 
     const scouted = { ...enemy, x: 0, z: 0, tracks: [{ id: 'warrior', count: 1 }] };
     fog.stamp({ world, field, localPlayerId: 0, enabled: true, buildings: [scouted], agoras: [] });
@@ -701,5 +709,40 @@ describe('fogOfWar agoras', () => {
     const shown = fog.filterAgoras([enemyAgora]);
     assert.equal(shown.length, 1);
     assert.equal(shown[0], enemyAgora);
+  });
+});
+
+describe('fog on the board edge', () => {
+  it('repeats the rim tile just off the felt', () => {
+    const w = 40;
+    const field = fakeField(w, w);
+    const fog = createFogOfWar();
+    fog.reset(field);
+    const half = worldHalfFFromMap(w);
+    const x = -half + TILE_SIZE_F * 0.5;
+    const z = -half + TILE_SIZE_F * 0.5;
+    fog.stamp({
+      world: fakeWorld([{ owner: 0, type: UNIT.VILLAGER, x, z }]),
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [],
+      agoras: [],
+    });
+    assert.equal(fog.fogFactorAt(x, z), 0);
+    assert.equal(fog.fogFactorAt(-half - 2, z), 0);
+    assert.equal(fog.fogFactorAt(x, -half - 2), 0);
+    assert.equal(fog.fogFactorAt(half + 20, half + 20), 1);
+  });
+
+  it('copies the last fog texel across the width padding', () => {
+    const buf = new Uint8Array(8 * 2 * 4);
+    buf.fill(255);
+    buf[(0 * 8 + 4) * 4 + 3] = 10;
+    buf[(1 * 8 + 4) * 4 + 3] = 20;
+    sealFogEdgePadding(buf, 8, 2, 5, 2);
+    assert.equal(buf[(0 * 8 + 7) * 4 + 3], 10);
+    assert.equal(buf[(1 * 8 + 6) * 4 + 3], 20);
+    assert.equal(buf[(0 * 8 + 3) * 4 + 3], 255);
   });
 });

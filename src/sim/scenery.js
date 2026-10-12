@@ -103,6 +103,17 @@ export function rockFootprintRadius(kind) {
   return 0;
 }
 
+/**
+ * Tiles from the center that still show the mesh. Wider than the blocker
+ * disc, so an erase click on the visible rock finds the center.
+ */
+export function rockClearRadius(kind) {
+  if (kind === SCENERY.ROCK_SNOW) return 5;
+  if (kind === SCENERY.ROCK_MOSS) return 3;
+  if (kind === SCENERY.ROCK_PLAIN) return 1;
+  return 0;
+}
+
 export const ROCK_STAGE_MAX = 6;
 
 // Rock nodes yield stone/mineral. Small plain rocks give the rarer mineral;
@@ -239,11 +250,12 @@ function canUnblockRockTile(field, i, tx, tz, exceptTile) {
   if (field.activeMask && field.activeMask[i] === 0) return false;
   if (isSolidWaterTile(field, i)) return false;
   if (field.tableEdge?.[i]) return false;
+  if (field.wallBlock?.[i]) return false;
   if (otherRockCovers(field, tx, tz, exceptTile)) return false;
   return true;
 }
 
-/** Open tiles that left this rock's disc. Never unblocks water / table / other rocks. */
+/** Open tiles that left this rock's disc. Never unblocks water / table / walls / other rocks. */
 function shrinkRockFootprint(field, tile, prevRadius, nextRadius) {
   if (nextRadius >= prevRadius) return;
   const { tx, tz } = tileCenterOf(field, tile);
@@ -763,11 +775,20 @@ function stampClear(field, tx, tz) {
   return changed;
 }
 
-function clearSceneryCovering(field, tx, tz) {
+function clearSceneryCovering(field, tx, tz, dirty) {
   const { width, height } = field;
   if (tx < 0 || tz < 0 || tx >= width || tz >= height) return false;
-  let changed = stampClear(field, tx, tz);
-  const maxR = 2;
+  let changed = false;
+  const note = (x, z) => {
+    changed = true;
+    dirty?.push({ x, z });
+  };
+  if (stampClear(field, tx, tz)) note(tx, tz);
+  const maxR = Math.max(
+    rockClearRadius(SCENERY.ROCK_PLAIN),
+    rockClearRadius(SCENERY.ROCK_MOSS),
+    rockClearRadius(SCENERY.ROCK_SNOW),
+  );
   for (let dz = -maxR; dz <= maxR; dz++) {
     for (let dx = -maxR; dx <= maxR; dx++) {
       const cx = tx + dx;
@@ -775,8 +796,8 @@ function clearSceneryCovering(field, tx, tz) {
       if (cx < 0 || cz < 0 || cx >= width || cz >= height) continue;
       const kind = field.sceneryType[cz * width + cx];
       if (kind < SCENERY.ROCK_PLAIN) continue;
-      if (!tileInRockDisc(dx, dz, rockFootprintRadius(kind))) continue;
-      if (stampClear(field, cx, cz)) changed = true;
+      if (!tileInRockDisc(dx, dz, rockClearRadius(kind))) continue;
+      if (stampClear(field, cx, cz)) note(cx, cz);
     }
   }
   return changed;
@@ -798,6 +819,51 @@ export function clearSceneryAt(field, tx, tz) {
   if (!stampClear(field, tx, tz)) return false;
   applyAuthoredScenery(field);
   return true;
+}
+
+/**
+ * Trees, rocks, and their stock sit on tiles. A disabled chunk is not a tile
+ * anymore, so those stamps (and doodads) come off with it.
+ */
+export function clearOffTableScenery(field) {
+  const mask = field?.activeMask;
+  const types = field?.sceneryType;
+  let changed = false;
+  if (mask && types && types.length === mask.length) {
+    ensureSceneryArrays(field);
+    const width = field.width | 0;
+    for (let i = 0; i < types.length; i++) {
+      if (mask[i] !== 0) continue;
+      if (stampClear(field, i % width, (i / width) | 0)) changed = true;
+    }
+  }
+  const doodads = field?.doodadType;
+  if (mask && doodads && doodads.length === mask.length) {
+    for (let i = 0; i < doodads.length; i++) {
+      if (mask[i] !== 0 || !doodads[i]) continue;
+      doodads[i] = 0;
+      changed = true;
+    }
+  }
+  if (changed && field.sceneryType) applyAuthoredScenery(field);
+  return changed;
+}
+
+/** Wipe trees and rocks and keep the map authored, so play does not grow them back. */
+export function clearAllScenery(field) {
+  ensureSceneryArrays(field);
+  field.sceneryType.fill(SCENERY.NONE);
+  field.treeStock.fill(0);
+  field.treeBurn.fill(0);
+  field.burningTrees.length = 0;
+  field.treeDirty.length = 0;
+  field.treeStockHash = 0;
+  field.rockStock.fill(0);
+  field.rockDirty.length = 0;
+  field.rockStockHash = 0;
+  field.sceneryAuthored = true;
+  applyAuthoredScenery(field);
+  return field;
 }
 
 /** Recompute rock pass + tree slow from sceneryType / treeStock without regenerating. */
@@ -846,7 +912,7 @@ export function paintSceneryBrush(field, tx, tz, kind, radius = 0, opts = {}) {
       const i = z * field.width + x;
       if (field.activeMask?.[i] === 0) continue;
       if (kind === SCENERY.NONE) {
-        if (clearSceneryCovering(field, x, z)) dirty.push({ x, z });
+        clearSceneryCovering(field, x, z, dirty);
         continue;
       }
       if (kind === SCENERY.TREE) {

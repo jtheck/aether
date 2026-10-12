@@ -38,11 +38,14 @@ const FOOTING_H = 0.55;
 const PIER_CROWN = 0.4;
 /** Extra proud of the shaft so pier faces do not sit on the wall. */
 const PIER_MARGIN = 0.16;
-/** One ashlar block is ~1.6 wide; the texture holds four across and four tall. */
-const CASTLE_U = 1 / 6.4;
-const CASTLE_V = 1 / 3.2;
-const DUNGEON_U = 1 / 3.2;
-const DUNGEON_V = 1 / 1.6;
+// Square paintings. U and V share a scale so a block is not pulled wider than the art.
+// Castle courses are larger; dungeon stones repeat tighter.
+const CASTLE_UV = 1 / 3.2;
+const DUNGEON_UV = 1 / 1.6;
+const CASTLE_U = CASTLE_UV;
+const CASTLE_V = CASTLE_UV;
+const DUNGEON_U = DUNGEON_UV;
+const DUNGEON_V = DUNGEON_UV;
 let uvU = CASTLE_U;
 let uvV = CASTLE_V;
 
@@ -229,6 +232,45 @@ function pushOutwardQuad(dst, a, b, c, d, outward) {
   dst.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
 }
 
+function pushOutwardTri(dst, a, b, c, outward) {
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const abz = b.z - a.z;
+  const acx = c.x - a.x;
+  const acy = c.y - a.y;
+  const acz = c.z - a.z;
+  let nx = acy * abz - acz * aby;
+  let ny = acz * abx - acx * abz;
+  let nz = acx * aby - acy * abx;
+  const facing = nx * outward.x + ny * outward.y + nz * outward.z;
+  const verts = facing < 0 ? [a, c, b] : [a, b, c];
+  if (facing < 0) {
+    const b2 = verts[1];
+    const c2 = verts[2];
+    const abx2 = b2.x - a.x;
+    const aby2 = b2.y - a.y;
+    const abz2 = b2.z - a.z;
+    const acx2 = c2.x - a.x;
+    const acy2 = c2.y - a.y;
+    const acz2 = c2.z - a.z;
+    nx = acy2 * abz2 - acz2 * aby2;
+    ny = acz2 * abx2 - acx2 * abz2;
+    nz = acx2 * aby2 - acy2 * abx2;
+  }
+  const len = Math.hypot(nx, ny, nz);
+  if (len < 1e-8) return;
+  nx /= len;
+  ny /= len;
+  nz /= len;
+  const base = dst.pos.length / 3;
+  for (const v of verts) {
+    dst.pos.push(v.x, v.y, v.z);
+    dst.norm.push(nx, ny, nz);
+    dst.uv.push(v.u, v.v);
+  }
+  dst.idx.push(base, base + 1, base + 2);
+}
+
 function vert(p, y, u, v) {
   return { x: p.x, y, z: p.z, u, v };
 }
@@ -263,6 +305,25 @@ function boxCorners(x, z, axes, hx, hz) {
   ];
 }
 
+/** Five sides, one vertex aimed out of the wall. */
+const BAR_SIDES = 5;
+
+function barCorners(x, z, axes, radius) {
+  const { tx, tz, nx, nz } = axes;
+  const corners = [];
+  const spin = Math.PI / 2;
+  for (let i = 0; i < BAR_SIDES; i++) {
+    const a = spin + (i / BAR_SIDES) * Math.PI * 2;
+    const along = Math.cos(a) * radius;
+    const out = Math.sin(a) * radius;
+    corners.push({
+      x: x + tx * along + nx * out,
+      z: z + tz * along + nz * out,
+    });
+  }
+  return corners;
+}
+
 function pushPrism(dst, corners, y0, y1) {
   if (!(y1 > y0 + 1e-4)) return;
   const n = corners.length;
@@ -282,14 +343,26 @@ function pushPrism(dst, corners, y0, y1) {
       { x: dz, y: 0, z: -dx },
     );
   }
-  pushOutwardQuad(
-    dst,
-    { x: corners[0].x, y: y1, z: corners[0].z, u: corners[0].x * uvU, v: corners[0].z * uvU },
-    { x: corners[1].x, y: y1, z: corners[1].z, u: corners[1].x * uvU, v: corners[1].z * uvU },
-    { x: corners[2].x, y: y1, z: corners[2].z, u: corners[2].x * uvU, v: corners[2].z * uvU },
-    { x: corners[3].x, y: y1, z: corners[3].z, u: corners[3].x * uvU, v: corners[3].z * uvU },
-    { x: 0, y: 1, z: 0 },
-  );
+  if (n === 4) {
+    pushOutwardQuad(
+      dst,
+      { x: corners[0].x, y: y1, z: corners[0].z, u: corners[0].x * uvU, v: corners[0].z * uvU },
+      { x: corners[1].x, y: y1, z: corners[1].z, u: corners[1].x * uvU, v: corners[1].z * uvU },
+      { x: corners[2].x, y: y1, z: corners[2].z, u: corners[2].x * uvU, v: corners[2].z * uvU },
+      { x: corners[3].x, y: y1, z: corners[3].z, u: corners[3].x * uvU, v: corners[3].z * uvU },
+      { x: 0, y: 1, z: 0 },
+    );
+    return;
+  }
+  for (let i = 1; i < n - 1; i++) {
+    pushOutwardTri(
+      dst,
+      { x: corners[0].x, y: y1, z: corners[0].z, u: corners[0].x * uvU, v: corners[0].z * uvU },
+      { x: corners[i].x, y: y1, z: corners[i].z, u: corners[i].x * uvU, v: corners[i].z * uvU },
+      { x: corners[i + 1].x, y: y1, z: corners[i + 1].z, u: corners[i + 1].x * uvU, v: corners[i + 1].z * uvU },
+      { x: 0, y: 1, z: 0 },
+    );
+  }
 }
 
 function axisish(edge) {
@@ -584,6 +657,8 @@ function addDoorLeaf(dst, at, span, hole, ground, style) {
   const y0 = ground + 0.03;
   const y1 = ground + hole - 0.05;
   const centers = [-seam * 0.5 - leaf * 0.5, seam * 0.5 + leaf * 0.5];
+  const faceW = Math.max(0.4, leaf);
+  const faceH = Math.max(0.8, y1 - y0);
   for (const along of centers) {
     const x = at.x + at.tx * along;
     const z = at.z + at.tz * along;
@@ -592,43 +667,27 @@ function addDoorLeaf(dst, at, span, hole, ground, style) {
       boxCorners(x, z, at, leaf * 0.5, hz),
       y0,
       y1,
-      1 / 0.42,
-      1 / 0.85,
+      1 / faceW,
+      1 / faceH,
     );
   }
 }
 
 function addGateBars(dst, at, span, hole, ground, style) {
-  const margin = 0.06;
+  const margin = 0.08;
   const inner = Math.max(0.6, span - margin * 2);
-  const hz = Math.max(0.12, style.thickness * 0.32);
-  const y0 = ground + 0.03;
-  const y1 = ground + hole - 0.04;
-  const rail = 0.2;
-  const rails = [
-    { along: 0, hx: inner * 0.5, y0: y1 - rail, y1 },
-    { along: 0, hx: inner * 0.5, y0, y1: y0 + rail },
-  ];
-  for (const bar of rails) {
-    pushPrism(
-      dst,
-      boxCorners(at.x + at.tx * bar.along, at.z + at.tz * bar.along, at, bar.hx, hz),
-      bar.y0,
-      bar.y1,
-    );
-  }
   const count = Math.max(5, Math.round(inner / 0.7));
   const pitch = inner / count;
-  const hx = Math.min(0.13, pitch * 0.28);
-  const barY0 = y0 + rail * 0.35;
-  const barY1 = y1 - rail * 0.35;
+  const radius = Math.min(0.11, pitch * 0.22);
+  const y0 = ground - 0.95;
+  const y1 = ground + Math.max(style.height, hole) + Math.min(0.4, Math.max(0, style.merlonHeight));
   for (let i = 0; i < count; i++) {
     const along = -inner * 0.5 + pitch * (i + 0.5);
     pushPrism(
       dst,
-      boxCorners(at.x + at.tx * along, at.z + at.tz * along, at, hx, hz * 0.85),
-      barY0,
-      barY1,
+      barCorners(at.x + at.tx * along, at.z + at.tz * along, at, radius),
+      y0,
+      y1,
     );
   }
 }

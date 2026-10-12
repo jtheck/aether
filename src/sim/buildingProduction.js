@@ -7,7 +7,7 @@ import { ORDER, spawn } from './world.js';
 import { queuePath } from './path.js';
 import { clearEngagement } from './engagement.js';
 import { isFlyer, UNIT, getUnitCost } from './unitTypes.js';
-import { ownerAtPopSoftCap } from './pop.js';
+import { ownerAtPopSoftCap, ownerPopCap, ownerPopUsed } from './pop.js';
 import { spendResources } from './resources.js';
 import {
   BUILDING_SPAWN_LOCAL,
@@ -81,6 +81,27 @@ function spawnTrainedUnit(w, field, b, unitType) {
     queuePath(w, i, rx, rz, slowAware ? { slowAware: true } : null);
   }
   stampUnitRallyHops(w, i, b);
+}
+
+/**
+ * Fill fraction (0..1) of a village's auto-villager trickle. Accounts for the
+ * soft-cap slowdown (interval doubles at/over the cap). Returns 0 for anything
+ * that is not a completed village.
+ * @param {object} w
+ * @param {{ type?: string, owner?: number, built?: number, villageSpawnAcc?: number } | null | undefined} b
+ * @param {object[] | null | undefined} [buildings] defaults to `w.buildings` (pass the HUD snapshot)
+ * @param {object[] | null | undefined} [agoras]
+ * @returns {number}
+ */
+export function villageVillagerProgress(w, b, buildings, agoras) {
+  if (!w || !b || b.type !== 'village' || (b.built | 0) === 0) return 0;
+  const list = buildings ?? w.buildings;
+  const ag = agoras ?? w.agoras;
+  const atCap = ownerPopUsed(w, b.owner | 0, list) >= ownerPopCap(list, ag, b.owner | 0);
+  const need = atCap ? VILLAGE_VILLAGER_TICKS * 2 : VILLAGE_VILLAGER_TICKS;
+  if (need <= 0) return 0;
+  const acc = b.villageSpawnAcc | 0;
+  return Math.max(0, Math.min(1, acc / need));
 }
 
 /** Completed villages trickle a villager at UNIT_COST; half speed at/over the soft cap. */

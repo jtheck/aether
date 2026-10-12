@@ -34,6 +34,7 @@ import {
 } from './transport.js';
 import { beginRepair } from './repair.js';
 import { attackBuildingStandPointOnField } from './buildingCombat.js';
+import { attackDoorStandPointOnField, isDoorAlive, nearestShutDoor, DOOR_CLICK_REACH_F } from './doorCombat.js';
 import { isBuildingAlive } from './buildings.js';
 import {
   applyPlaceBuilding,
@@ -96,7 +97,7 @@ export function applyCommands(world, field, commands) {
         }
         break;
       case CMD.ATTACK:
-        applyAttack(world, field, cmd.entities, cmd.target, cmd.buildingIndex);
+        applyAttack(world, field, cmd.entities, cmd.target, cmd.buildingIndex, cmd.doorIndex);
         break;
       case CMD.ATTACK_MOVE:
         applyMove(world, field, cmd.entities, cmd.tx, cmd.ty, ORDER.ATTACK_MOVE);
@@ -219,6 +220,22 @@ function gatherJitter(entityId, maxFixed) {
 }
 
 function applyMove(world, field, ids, tx, ty, order) {
+  if (order === ORDER.ATTACK_MOVE && world.doors?.length && tx?.length) {
+    const di = nearestShutDoor(world, tx[0], ty[0], fx.fromFloat(DOOR_CLICK_REACH_F));
+    if (di >= 0) {
+      const attackers = [];
+      const rest = [];
+      for (let k = 0; k < ids.length; k++) {
+        const i = ids[k];
+        if (!world.alive[i] || isCarried(world, i)) continue;
+        if (unitAttacksBuildings(world.type[i])) attackers.push(i);
+        else rest.push(i);
+      }
+      if (attackers.length) applyAttack(world, field, attackers, -1, -1, di);
+      if (!rest.length) return;
+      ids = rest;
+    }
+  }
   stampSquadGroup(world, ids);
   let movers = 0;
   for (let k = 0; k < ids.length; k++) {
@@ -291,7 +308,31 @@ function applyMove(world, field, ids, tx, ty, order) {
   }
 }
 
-function applyAttack(world, field, ids, target, buildingIndex) {
+function applyAttack(world, field, ids, target, buildingIndex, doorIndex) {
+  const di = doorIndex != null ? doorIndex | 0 : -1;
+  if (di >= 0) {
+    const door = world.doors?.[di];
+    if (!isDoorAlive(door)) return;
+    stampSquadGroup(world, ids);
+    for (let k = 0; k < ids.length; k++) {
+      const i = ids[k];
+      if (!world.alive[i] || isCarried(world, i)) continue;
+      becomeBrigand(world, i);
+      if (!unitAttacksBuildings(world.type[i])) continue;
+      world.transportTarget[i] = -1;
+      clearUnitRallyHops(world, i);
+      world.order[i] = ORDER.ATTACK;
+      world.targetEntity[i] = -1;
+      if (world.targetBuilding) world.targetBuilding[i] = -1;
+      world.targetDoor[i] = di;
+      lockAttackFocus(world, i);
+      clearEngagement(world, i);
+      world.hasTarget[i] = 0;
+      const stand = attackDoorStandPointOnField(world, field, i, door);
+      queuePath(world, i, stand.x, stand.y);
+    }
+    return;
+  }
   const bi = buildingIndex != null ? buildingIndex | 0 : -1;
   if (bi >= 0) {
     const b = world.buildings?.[bi];
@@ -307,6 +348,7 @@ function applyAttack(world, field, ids, target, buildingIndex) {
       world.order[i] = ORDER.ATTACK;
       world.targetEntity[i] = -1;
       world.targetBuilding[i] = bi;
+      if (world.targetDoor) world.targetDoor[i] = -1;
       lockAttackFocus(world, i);
       clearEngagement(world, i);
       world.hasTarget[i] = 0;
@@ -335,6 +377,7 @@ function applyAttack(world, field, ids, target, buildingIndex) {
     world.order[i] = ORDER.ATTACK;
     world.targetEntity[i] = target;
     if (world.targetBuilding) world.targetBuilding[i] = -1;
+    if (world.targetDoor) world.targetDoor[i] = -1;
     lockAttackFocus(world, i);
     clearEngagement(world, i);
     world.hasTarget[i] = 0;

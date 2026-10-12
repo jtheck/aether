@@ -33,6 +33,7 @@ import {
 } from './controlGroups.js';
 import { MAX_ENTITIES, ORDER } from '../../sim/world.js';
 import { isMechanical, isTransport, UNIT, getUnitDef, isVillagerLine, unitAttacksBuildings } from '../../sim/unitTypes.js';
+import { NAMED_UNIT_SCALE } from '../../sim/namedUnit.js';
 import { isHostile } from '../../sim/teams.js';
 import { canRideTransport, passengerCount, assignNearestRidersToTransport, listPassengers, transportCapacityOf } from '../../sim/transport.js';
 import { playVillagerMove } from '../audio.js';
@@ -148,6 +149,7 @@ export function createGameInput(opts) {
     canIssueCommands,
     getAgoras,
     getBuildings,
+    getDoors,
     onBuildingSelected,
     getPlacingType,
     setPlacingType,
@@ -756,7 +758,7 @@ export function createGameInput(opts) {
       sp.x = posScratch.x;
       sp.y = posScratch.y;
       sp.z = posScratch.z;
-      sp.r = (def?.pickRadius ?? 1.8) * (renderer.unitZoomScale?.(def) ?? 1);
+      sp.r = (def?.pickRadius ?? 1.8) * (world.named?.[i] ? NAMED_UNIT_SCALE : 1) * (renderer.unitZoomScale?.(def) ?? 1);
       n++;
     }
     return n;
@@ -947,6 +949,17 @@ export function createGameInput(opts) {
       if (b.hp != null && (b.hp | 0) <= 0) continue;
       if (!structurePickable(b.owner, b.x, b.z)) continue;
       considerBuildingHit(ray, b.x, b.z, b.yaw, b.type, 'building', i, best);
+    }
+    const doors = getDoors?.() ?? [];
+    for (let i = 0; i < doors.length; i++) {
+      const door = doors[i];
+      if (!door || door.open || (door.hp | 0) <= 0) continue;
+      const gy = renderer.groundYAt?.(door.x, door.z) ?? 0;
+      const t = rayHitYawBox(ray, door.x, door.z, 0, 3.6, gy - 0.5, 3.6, gy + 6.5);
+      if (t == null || t >= best.t) continue;
+      best.t = t;
+      best.kind = 'door';
+      best.index = i;
     }
     if (best.index < 0) return null;
     return { kind: best.kind, index: best.index };
@@ -1651,7 +1664,7 @@ export function createGameInput(opts) {
    */
   async function orderAt(clientX, clientY, cmdType, preHit, epoch, preBld) {
     if (!canIssueOrders() || isPlacing()) return;
-    const ids = selectedIds();
+    let ids = selectedIds();
     if (ids.length === 0) return;
     if (epoch !== undefined && !clickCurrent(epoch)) return;
 
@@ -1669,6 +1682,32 @@ export function createGameInput(opts) {
       enqueueCommand({ type: CMD.ATTACK, entities: ids, target: hit });
       renderer.pingUnit?.(hit);
       return;
+    }
+
+    // Shut door — attack-move breaks it open. Force-move still walks past the click.
+    if (cmdType === CMD.ATTACK_MOVE && preBld?.kind === 'door') {
+      const door = getDoors?.()?.[preBld.index];
+      if (door && !door.open && (door.hp | 0) > 0) {
+        const attackers = [];
+        const rest = [];
+        for (let k = 0; k < ids.length; k++) {
+          const id = ids[k];
+          if (unitAttacksBuildings(world.type[id])) attackers.push(id);
+          else rest.push(id);
+        }
+        if (attackers.length > 0) {
+          if (epoch !== undefined && !clickCurrent(epoch)) return;
+          enqueueCommand({
+            type: CMD.ATTACK,
+            entities: attackers,
+            target: -1,
+            doorIndex: preBld.index,
+          });
+          renderer.pingBuilding?.(door.x, door.z);
+        }
+        if (rest.length === 0) return;
+        ids = rest;
+      }
     }
 
     // Hostile placeable — same hard attack + flash as a unit click.
@@ -2113,6 +2152,15 @@ export function createGameInput(opts) {
         selectedBuilding,
       );
     }
+    if (bld?.kind === 'door') {
+      if (hasOrderableSelection() && canIssueOrders() && !click.selectOnly) {
+        if (!clickCurrent(epoch)) return;
+        await orderAt(e.clientX, e.clientY, CMD.ATTACK_MOVE, -1, epoch, bld);
+        if (!clickCurrent(epoch)) return;
+        lastTap = { t: tapAt, x: e.clientX, y: e.clientY, kind: 'enemy' };
+      }
+      return;
+    }
     if (bld?.kind === 'rally') {
       lastTap = { t: tapAt, x: e.clientX, y: e.clientY, kind: 'rally' };
       const ptr = { clientX: e.clientX, clientY: e.clientY };
@@ -2496,6 +2544,13 @@ export function createGameInput(opts) {
     }
     if (!hasOrderableSelection()) return false;
     lastTap = null;
+    const ray = renderer.clientPickingRay?.(clientX, clientY) ?? null;
+    const doorHit = pickBuildingAtRay(ray);
+    if (doorHit?.kind === 'door') {
+      const epoch = ++worldClickEpoch;
+      void orderAt(clientX, clientY, CMD.ATTACK_MOVE, -1, epoch, doorHit);
+      return true;
+    }
     if (tryGatherAt(clientX, clientY)) return true;
     const epoch = ++worldClickEpoch;
     void orderAt(clientX, clientY, CMD.MOVE, -1, epoch);

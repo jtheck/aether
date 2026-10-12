@@ -150,6 +150,7 @@ export class SimClient {
       this._field = msg.field ?? null;
       this._agoras = msg.agoras ?? [];
       this._buildings = msg.buildings ?? [];
+      this._doors = msg.doors ?? [];
       this._tech = msg.tech ?? [];
       this._resources = msg.resources ?? [];
       this._initResolve?.({
@@ -157,6 +158,7 @@ export class SimClient {
         field: this._field,
         agoras: this._agoras,
         buildings: this._buildings,
+        doors: this._doors,
         tech: this._tech,
         resources: this._resources,
         checksum: msg.checksum,
@@ -169,6 +171,7 @@ export class SimClient {
         matchWinner: msg.matchWinner,
         buildings: msg.buildings,
         buildingsChanged: !!msg.buildingsChanged,
+        doorUpdates: msg.doorUpdates ?? null,
         agoras: msg.agoras,
         tech: msg.tech,
         techChanged: !!msg.techChanged,

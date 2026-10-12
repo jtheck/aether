@@ -8,6 +8,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildCampaign } from './story/campaignBuild.js';
+import { officialCampaignIndex } from './story/campaign.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const rootMaps = join(here, '..', 'maps');
@@ -16,6 +17,10 @@ mkdirSync(rootMaps, { recursive: true });
 mkdirSync(srcMaps, { recursive: true });
 
 const built = buildCampaign();
+const indexJson = `${JSON.stringify(officialCampaignIndex(), null, 2)}\n`;
+writeFileSync(join(rootMaps, 'campaign.json'), indexJson);
+writeFileSync(join(srcMaps, 'campaign.json'), indexJson);
+console.log('wrote campaign.json');
 for (const chapter of built) {
   const json = JSON.stringify(chapter.garden);
   const file = `${chapter.id}.garden`;

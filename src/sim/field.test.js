@@ -13,16 +13,20 @@ import {
   tileCenterX,
   tileCenterY,
   buildField,
+  drySpawnPads,
   applySeededHeight,
   composeHeightMap,
   createField,
   generateHeightMap,
   consumeWaterDirty,
+  HEIGHT_AMPLITUDE,
+  paintRegionLevel,
   paintRegionLift,
   rebuildWaterSurface,
   refreshTerrainDerived,
   terrainCornerCell,
   tileHeightWorld,
+  TILE_SIZE_F,
 } from './field.js';
 import { encodeGarden, fieldFromGarden } from './garden.js';
 import { applyTableSilhouette, createFullCellMask, createFullCellRadius, paintTerrainBrush, tableCenterVertex } from './tableShape.js';
@@ -300,6 +304,100 @@ describe('chunk-scale relief', () => {
     assert.ok(low > lowBefore);
     assert.ok(high - low < highBefore - lowBefore);
     assert.ok(Math.abs(tileHeightWorld(field, 2, 2) - outside) < 0.02);
+  });
+
+  function steppedField() {
+    const field = createField(1, { width: 16, height: 16 });
+    field.terrainTypes.fill(TERRAIN.GRASS);
+    field.detailHeight.fill(0.35);
+    field.regionLift.fill(0.2);
+    field.activeMask.fill(1);
+    field.regionLift[8 * 16 + 8] = 0.95;
+    field.regionLift[8 * 16 + 9] = 0.02;
+    field.regionLift[2 * 16 + 2] = 0.02;
+    composeHeightMap(field);
+    return field;
+  }
+
+  it('level paint pulls high and low tiles toward the clicked height', () => {
+    const field = steppedField();
+    const outside = tileHeightWorld(field, 2, 2);
+    const highBefore = tileHeightWorld(field, 8, 8);
+    const lowBefore = tileHeightWorld(field, 9, 8);
+    const plane = highBefore / HEIGHT_AMPLITUDE;
+    assert.ok(highBefore - lowBefore > 2);
+    for (let n = 0; n < 6; n++) paintRegionLevel(field, 8, 8, plane, 1, 1);
+    const high = tileHeightWorld(field, 8, 8);
+    const low = tileHeightWorld(field, 9, 8);
+    assert.ok(Math.abs(high - highBefore) < 1.2, `center left the clicked height (${high} vs ${highBefore})`);
+    assert.ok(low > lowBefore + (highBefore - lowBefore) * 0.45, `low tile stayed down (${low})`);
+    assert.ok(high - low < highBefore - lowBefore);
+    assert.ok(Math.abs(tileHeightWorld(field, 2, 2) - outside) < 0.02);
+    assert.equal(field.terrainTypes[8 * 16 + 8], TERRAIN.GRASS);
+  });
+
+  it('level paint can lower the high tile onto a clicked low height', () => {
+    const field = steppedField();
+    const highBefore = tileHeightWorld(field, 8, 8);
+    const lowBefore = tileHeightWorld(field, 9, 8);
+    const plane = lowBefore / HEIGHT_AMPLITUDE;
+    paintRegionLevel(field, 8, 8, plane, 1, 1);
+    const high = tileHeightWorld(field, 8, 8);
+    assert.ok(high < highBefore - 0.4, `high tile did not drop (${highBefore} -> ${high})`);
+    assert.ok(high > lowBefore - 0.2);
+  });
+
+  it('level paint eases at the brush rim and a light stamp moves less', () => {
+    const field = steppedField();
+    field.regionLift.fill(0.85);
+    composeHeightMap(field);
+    const plane = 0.2;
+    const planeY = plane * HEIGHT_AMPLITUDE;
+    const centerBefore = tileHeightWorld(field, 8, 8);
+    const rimBefore = tileHeightWorld(field, 10, 8);
+    const soft = paintRegionLevel(field, 8, 8, plane, 0.25, 2);
+    assert.ok(soft.length > 0);
+    const softDrop = centerBefore - tileHeightWorld(field, 8, 8);
+    field.regionLift.fill(0.85);
+    field.paintedLift.fill(0);
+    composeHeightMap(field);
+    paintRegionLevel(field, 8, 8, plane, 1, 2);
+    const hardDrop = centerBefore - tileHeightWorld(field, 8, 8);
+    const rimDrop = rimBefore - tileHeightWorld(field, 10, 8);
+    assert.ok(hardDrop > softDrop + 0.3, `strength did not scale (${softDrop} vs ${hardDrop})`);
+    assert.ok(hardDrop > rimDrop + 0.15, `rim did not ease (${rimDrop} vs ${hardDrop})`);
+    assert.ok(tileHeightWorld(field, 8, 8) > planeY);
+  });
+
+  it('level paint lifts water toward the land height it was given', () => {
+    const field = createField(1, { width: 24, height: 24 });
+    field.terrainTypes.fill(TERRAIN.GRASS);
+    field.detailHeight.fill(0.55);
+    field.regionLift.fill(0.4);
+    field.activeMask.fill(1);
+    const water = 12 * 24 + 12;
+    field.terrainTypes[water] = TERRAIN.WATER;
+    field.detailHeight[water] = 0.12;
+    composeHeightMap(field);
+    const landBefore = tileHeightWorld(field, 13, 12);
+    const waterBefore = tileHeightWorld(field, 12, 12);
+    assert.ok(landBefore - waterBefore > 1);
+    const plane = landBefore / HEIGHT_AMPLITUDE;
+    for (let n = 0; n < 4; n++) paintRegionLevel(field, 12, 12, plane, 1, 1);
+    const waterY = tileHeightWorld(field, 12, 12);
+    assert.equal(field.terrainTypes[water], TERRAIN.WATER);
+    assert.ok(waterY > waterBefore + (landBefore - waterBefore) * 0.55, `water stayed low (${waterY})`);
+  });
+
+  it('saves a level stroke with the garden', () => {
+    const field = buildField(1, { width: TINY_MAP_W, height: TINY_MAP_W });
+    fullSilhouette(field);
+    const plane = tileHeightWorld(field, 20, 20) / HEIGHT_AMPLITUDE;
+    paintRegionLevel(field, 20, 20, plane, 1, 2);
+    const again = fieldFromGarden(encodeGarden(field));
+    const i = 20 * TINY_MAP_W + 22;
+    assert.ok(Math.abs(again.heightMap[i] - field.heightMap[i]) < 0.02);
+    assert.ok(Math.abs(again.paintedLift[i] - field.paintedLift[i]) < 0.02);
   });
 
   it('lower paint flattens the brush onto the low tile', () => {
@@ -581,6 +679,29 @@ describe('terrain atlases', () => {
     assert.equal(field.atlasId[at(field, 5, 1)], ATLAS.DIRT_WATER);
   });
 
+  it('blends tile into gravel and leaves water beside them deep', () => {
+    const field = createField(1, { width: 4, height: 4 });
+    paintTerrain(field, TERRAIN.GRAVEL);
+    for (let x = 0; x < 4; x++) field.terrainTypes[at(field, x, 3)] = TERRAIN.TILE;
+    field.terrainTypes[at(field, 0, 0)] = TERRAIN.WATER;
+    refreshTerrainDerived(field);
+    const tile = at(field, 1, 3);
+    const gravelEdge = at(field, 1, 2);
+    const water = at(field, 0, 0);
+    assert.equal(field.atlasId[tile], ATLAS.TILE_GRAVEL);
+    assert.equal(field.tileType[tile], 6);
+    assert.equal(field.atlasId[gravelEdge], ATLAS.TILE_GRAVEL);
+    assert.equal(
+      field.tileType[gravelEdge],
+      terrainCornerCell(field.terrainTypes, 4, 4, 1, 2, TERRAIN.TILE),
+    );
+    assert.notEqual(field.tileType[gravelEdge], 12);
+    assert.equal(field.tileType[water], 12);
+    assert.equal(field.pass[water], 0);
+    assert.equal(field.pass[tile], 1);
+    assert.equal(field.pass[gravelEdge], 1);
+  });
+
   it('reports which corners a terrain touches', () => {
     const W = TERRAIN.WATER;
     const D = TERRAIN.DIRT;
@@ -595,6 +716,123 @@ describe('terrain atlases', () => {
     ]);
     assert.equal(cells.size, 3);
     assert.ok(![...cells].includes(12) && ![...cells].includes(6));
+  });
+});
+
+describe('seeded terrain variety', () => {
+  const seeds = [1, 2, 7, 42, 99, 404, 12345, 9001];
+
+  function survey(seed, width = 96, height = 96) {
+    const field = buildField(seed, { width, height });
+    const n = width * height;
+    let water = 0;
+    let grass = 0;
+    let dirt = 0;
+    let wx = 0;
+    let wz = 0;
+    let same = 0;
+    let edges = 0;
+    const types = field.terrainTypes;
+    for (let z = 0; z < height; z++) {
+      for (let x = 0; x < width; x++) {
+        const t = types[z * width + x];
+        if (t === TERRAIN.WATER) {
+          water++;
+          wx += x;
+          wz += z;
+        } else if (t === TERRAIN.DIRT) dirt++;
+        else grass++;
+        if (x + 1 < width) {
+          edges++;
+          if (types[z * width + x + 1] === t) same++;
+        }
+      }
+    }
+    return {
+      field,
+      types,
+      water: water / n,
+      grass: grass / n,
+      dirt: dirt / n,
+      blobs: same / edges,
+      waterAt: water ? [wx / water / width, wz / water / height] : null,
+    };
+  }
+
+  it('builds blobs of water and dirt that move with the seed', () => {
+    const maps = seeds.map((seed) => survey(seed));
+    for (const map of maps) {
+      assert.ok(map.water > 0.02 && map.water < 0.3, `water ${map.water}`);
+      assert.ok(map.dirt > 0.05 && map.dirt < 0.55, `dirt ${map.dirt}`);
+      assert.ok(map.grass > 0.25, `grass ${map.grass}`);
+      assert.ok(map.blobs > 0.84, `terrain broke into specks (${map.blobs})`);
+    }
+
+    let diff = 0;
+    let pairs = 0;
+    for (let i = 0; i < maps.length; i++) {
+      for (let j = i + 1; j < maps.length; j++) {
+        const a = maps[i].types;
+        const b = maps[j].types;
+        let changed = 0;
+        let seen = 0;
+        for (let k = 0; k < a.length; k += 3) {
+          seen++;
+          if (a[k] !== b[k]) changed++;
+        }
+        diff += changed / seen;
+        pairs++;
+      }
+    }
+    assert.ok(diff / pairs > 0.35, `seeds still share a layout (${diff / pairs})`);
+
+    let spread = 0;
+    for (let i = 0; i < maps.length; i++) {
+      for (let j = i + 1; j < maps.length; j++) {
+        const a = maps[i].waterAt;
+        const b = maps[j].waterAt;
+        if (!a || !b) continue;
+        const d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+        if (d > spread) spread = d;
+      }
+    }
+    assert.ok(spread > 0.25, `water sat in the same place on every seed (${spread})`);
+  });
+
+  it('keeps match spawn pads on land', () => {
+    const field = buildField(2, { width: 144, height: 144 });
+    const halfX = field.width * TILE_SIZE_F * 0.5;
+    const halfZ = field.height * TILE_SIZE_F * 0.5;
+    const inset = 0.6;
+    const spots = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, 1], [-1, 1], [1, -1]];
+    for (const [sx, sz] of spots) {
+      const tx = Math.floor((sx * inset * halfX + halfX) / TILE_SIZE_F);
+      const tz = Math.floor((sz * inset * halfZ + halfZ) / TILE_SIZE_F);
+      assert.notEqual(field.terrainTypes[tz * field.width + tx], TERRAIN.WATER, `${tx},${tz}`);
+    }
+  });
+
+  it('dries only the pads it is given', () => {
+    const field = createField(1, { width: 32, height: 32 });
+    field.terrainTypes.fill(TERRAIN.WATER);
+    drySpawnPads(field, [[0, 0]], 1);
+    const half = 16 * TILE_SIZE_F;
+    const tx = Math.floor(half / TILE_SIZE_F);
+    const tz = tx;
+    assert.equal(field.terrainTypes[tz * field.width + tx], TERRAIN.GRASS);
+    assert.equal(field.terrainTypes[0], TERRAIN.WATER);
+
+    const open = buildField(2, { width: 144, height: 144, spawnPads: [] });
+    const kept = buildField(2, { width: 144, height: 144 });
+    let dried = 0;
+    for (let i = 0; i < open.terrainTypes.length; i++) {
+      if (open.terrainTypes[i] === TERRAIN.WATER && kept.terrainTypes[i] !== TERRAIN.WATER) dried++;
+    }
+    assert.ok(dried > 0);
+    const halfX = open.width * TILE_SIZE_F * 0.5;
+    const cx = Math.floor(halfX / TILE_SIZE_F);
+    const cz = cx;
+    assert.equal(open.terrainTypes[cz * open.width + cx], kept.terrainTypes[cz * kept.width + cx]);
   });
 });
 

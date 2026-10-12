@@ -86,10 +86,44 @@ describe('lobby ui copy', () => {
     assert.equal(opts.find((o) => o.id === 'workshop:12/maps/02.garden')?.name, 'Workshop map');
   });
 
+  it('lists a workshop campaign in index order', () => {
+    const opts = chapterSelectOptions([
+      {
+        id: '7',
+        title: 'Siege',
+        campaign: {
+          v: 1,
+          kind: 'campaign',
+          name: 'Siege',
+          episodes: [{
+            name: 'The Siege',
+            chapters: [
+              { file: 'e1c1.garden', name: 'Breach' },
+              { file: 'e1c2.garden', name: 'Sally' },
+            ],
+          }],
+        },
+        gardens: [
+          { file: 'e1c2.garden', name: 'Sally' },
+          { file: 'e1c1.garden', name: 'Breach' },
+        ],
+      },
+    ], '');
+    const ids = opts.filter((row) => String(row.id).startsWith('workshop:')).map((row) => row.id);
+    assert.deepEqual(ids, ['workshop:7/e1c1.garden', 'workshop:7/e1c2.garden']);
+  });
+
   it('lists campaign chapters on localhost ?story=1', () => {
     const opts = chapterSelectOptions([], 'ch1', '?story=1', 'localhost');
     assert.equal(opts[0].id, 'ch1');
     assert.equal(opts.some((o) => o.id === 'e1c1'), true);
+  });
+
+  it('lists a loaded web pack ahead of workshop maps', () => {
+    const opts = chapterSelectOptions([], 'pack:sally.garden', '', 'localhost', [
+      { id: 'pack:sally.garden', name: 'Siege — Sally' },
+    ]);
+    assert.equal(opts.find((row) => row.id === 'pack:sally.garden')?.name, 'Siege — Sally');
   });
 });
 

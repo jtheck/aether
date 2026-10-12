@@ -47,6 +47,7 @@ export function checksum(w, field = null) {
     mix(w.order[i]);
     mix(w.targetEntity[i]);
     if (w.targetBuilding) mix(w.targetBuilding[i]);
+    if (w.targetDoor) mix(w.targetDoor[i]);
     if (w.attackFocus) mix(w.attackFocus[i]);
     mix(w.engagementTarget[i]);
     mix(w.engagementSlot[i]);
@@ -75,6 +76,7 @@ export function checksum(w, field = null) {
     mix(w.hp[i]);
     mix(w.type[i]);
     mix(w.owner[i]);
+    if (w.named) mix(w.named[i]);
     if (w.carriedBy) mix(w.carriedBy[i]);
     if (w.transportTarget) mix(w.transportTarget[i]);
     if (w.gatherTile) mix(w.gatherTile[i]);
@@ -98,6 +100,7 @@ export function checksum(w, field = null) {
     mix(p.source[i]);
     mix(p.target[i]);
     if (p.targetBuilding) mix(p.targetBuilding[i]);
+    if (p.targetDoor) mix(p.targetDoor[i]);
     mix(p.px[i]);
     mix(p.py[i]);
     mix(p.vx[i]);
@@ -124,6 +127,16 @@ export function checksum(w, field = null) {
   mixTechChecksum(h, mix, w);
   mixResourceChecksum(h, mix, w);
   mixFoodUpkeepChecksum(h, mix, w);
+  if (w.doors) {
+    mix(w.doors.length);
+    for (let d = 0; d < w.doors.length; d++) {
+      const door = w.doors[d];
+      mix(door.hp | 0);
+      mix(door.open ? 1 : 0);
+      mix(door.x | 0);
+      mix(door.z | 0);
+    }
+  }
   if (field) mixTreeChecksum(mix, field);
   if (field) mixRockChecksum(mix, field);
   mixFireZoneChecksum(mix, w);

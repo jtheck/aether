@@ -15,6 +15,7 @@ import {
   setBloomBuildingDamage,
 } from './sporeBloom.js';
 import { FIRE_ZONE_DAMAGE_INTERVAL } from './fireZones.js';
+import { damageDoorsInRadius } from './doorCombat.js';
 
 /** Gather / storage buildings — smash these last, and don't peel off a march for them. */
 const ECONOMY_BUILDING_TYPES = new Set(['camp', 'mine', 'farm', 'silo']);
@@ -149,9 +150,9 @@ function pushFarmInkDrips(w, b) {
 /** Buildings in the bloom (friendly fire); farms take extra and drip ink. */
 export function damageBuildingsInBloom(w, field, _owner, cx, cy, radius, amount = SPORE_BLOOM_DAMAGE) {
   const buildings = w.buildings;
-  if (!buildings?.length || !radius || radius <= 0) return 0;
+  if (!radius || radius <= 0) return 0;
   let hit = 0;
-  for (let bi = 0; bi < buildings.length; bi++) {
+  for (let bi = 0; bi < (buildings?.length ?? 0); bi++) {
     const b = buildings[bi];
     if (!isBuildingAlive(b)) continue;
     const reach = radius + buildingFootprintHalf(b.type);
@@ -161,6 +162,7 @@ export function damageBuildingsInBloom(w, field, _owner, cx, cy, radius, amount 
     hit++;
     if (b.type === 'farm') pushFarmInkDrips(w, b);
   }
+  if (damageDoorsInRadius(w, field, cx, cy, radius, amount) > 0) hit++;
   return hit;
 }
 
@@ -172,7 +174,6 @@ export function pulseFireZoneBuildings(w, field) {
   const store = w.fireZones;
   if (!store || store.activeCount === 0) return;
   const buildings = w.buildings;
-  if (!buildings?.length) return;
 
   for (let slot = 0; slot < store.highWater; slot++) {
     if (!store.alive[slot]) continue;
@@ -181,6 +182,8 @@ export function pulseFireZoneBuildings(w, field) {
     const cy = store.py[slot];
     const radius = store.radius[slot];
     const baseDamage = store.damage[slot];
+    damageDoorsInRadius(w, field, cx, cy, radius, baseDamage);
+    if (!buildings?.length) continue;
     for (let bi = 0; bi < buildings.length; bi++) {
       const b = buildings[bi];
       if (!isBuildingAlive(b)) continue;

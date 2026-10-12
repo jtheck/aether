@@ -1,7 +1,7 @@
 // Match-channel waiting room: host snapshot, ready, RTC mesh, countdown.
 
 import { sameUserId, senderUserId } from '../lobby/ids.js';
-import { defaultSettings, getMode } from '../lobby/modes.js';
+import { defaultSettings, getMode, chapterRefNeedsHostGarden } from '../lobby/modes.js';
 import {
   ANNOUNCE_MS,
   COUNTDOWN_MS,
@@ -35,7 +35,7 @@ import {
 import { getPlayerColor, getPlayerName, getUnitSkins } from './settings.js';
 import { localOwnedPacks, selectedSkins } from './dlcCatalog.js';
 import { aetherSteam } from './steam.js';
-import { parseWorkshopRef } from './workshop.js';
+import { loadGardenRef, parseWorkshopRef } from './workshop.js';
 import { CMD } from '../sim/commands.js';
 import { LOCKSTEP_STALL_UI_MS } from './simSession.js';
 
@@ -674,9 +674,11 @@ export function createMatchLobby({
 
   async function defaultLoadGarden(nextSettings) {
     if (typeof loadGarden === 'function') return loadGarden(nextSettings);
-    const parsed = parseWorkshopRef(nextSettings?.chapter);
-    if (!parsed) return null;
-    return aetherSteam.loadWorkshopGarden(parsed.id, parsed.file);
+    const chapter = String(nextSettings?.chapter || '');
+    if (!chapterRefNeedsHostGarden(chapter)) return null;
+    const parsed = parseWorkshopRef(chapter);
+    if (parsed) return aetherSteam.loadWorkshopGarden(parsed.id, parsed.file);
+    return loadGardenRef(chapter);
   }
 
   function beginCountdown() {
@@ -692,7 +694,7 @@ export function createMatchLobby({
   function requestStart() {
     if (!hosting || phase !== 'waiting' || startBusy) return false;
     if (!canStart(mode, seats)) return false;
-    if (mode === 'adventure' && parseWorkshopRef(settings.chapter)) {
+    if (mode === 'adventure' && chapterRefNeedsHostGarden(settings.chapter)) {
       const room = roomId;
       startBusy = true;
       emit();

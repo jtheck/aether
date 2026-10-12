@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { treeScaleForStage } from '../sim/trees.js';
 import { treeFireHeight } from './treeFire.js';
-import { treeBurnSinkDepth, treeBurnSinkDrop, treeTintRgb } from './scenery.js';
+import { billboardTreeGray, treeBurnSinkDepth, treeBurnSinkDrop, treeTintRgb } from './scenery.js';
 
 function luma(rgb) {
   return rgb[0] * 0.3 + rgb[1] * 0.59 + rgb[2] * 0.11;
@@ -39,6 +39,18 @@ describe('tree tint', () => {
     const toMature = Math.abs(luma(justOver) - luma(mature));
     const toGiant = Math.abs(luma(justOver) - luma(giant));
     assert.ok(toMature < toGiant, 'first extra stage still reads as a mature tree');
+  });
+});
+
+describe('billboard tree gray', () => {
+  it('keeps a rim giant darker than a mature card', () => {
+    const tile = 44;
+    const mature = luma(treeTintRgb(treeScaleForStage(6), tile));
+    const giant = luma(treeTintRgb(treeScaleForStage(12), tile));
+    const matureGray = billboardTreeGray(mature, 0);
+    const giantGray = billboardTreeGray(giant, 0);
+    assert.ok(giantGray < matureGray - 0.15, `rim card ${giantGray} lifted next to mature ${matureGray}`);
+    assert.ok(billboardTreeGray(mature, 0) > 0.6, 'mature cards stay where they were tuned');
   });
 });
 

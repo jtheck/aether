@@ -17,11 +17,13 @@ import {
   UNITS_PER_ARMY,
   buildWorldFromConfig,
   cornerBases,
+  agorasForMapType,
   defaultMatchAgoras,
   kothBases,
   laneBases,
   sideBases,
   spawnBases,
+  spawnPadsForMapType,
   spawnKothSlot,
   pickKothSpawnPoint,
   spawnCameraHomeXZ,
@@ -71,6 +73,29 @@ describe('spawn bases', () => {
     assert.equal(fx.toFloat(w.agoras[1].z), expected[1].z);
     assert.ok(expected[0].x < 0 && expected[0].z < 0);
     assert.ok(expected[1].x > 0 && expected[1].z > 0);
+  });
+
+  it('lays out generate starts from the map type', () => {
+    const half = worldHalfFFromMap(SKIRMISH_MAP_W);
+    const tiny = worldHalfFFromMap(TINY_MAP_W);
+    assert.deepEqual(
+      spawnPadsForMapType('onevsone', half, SKIRMISH_MAP_W),
+      sideBases(half).slice(0, 2),
+    );
+    assert.deepEqual(
+      spawnPadsForMapType('onevsone', tiny, TINY_MAP_W),
+      cornerBases(tiny).slice(0, 2),
+    );
+    assert.deepEqual(spawnPadsForMapType('teams', half, SKIRMISH_MAP_W), laneBases(half));
+    assert.deepEqual(spawnPadsForMapType('koth', half, SKIRMISH_MAP_W), kothBases(half));
+    assert.deepEqual(spawnPadsForMapType('adventure', half, SKIRMISH_MAP_W), []);
+    const teams = agorasForMapType('teams', half, SKIRMISH_MAP_W);
+    assert.equal(teams.length, 4);
+    assert.deepEqual([teams[0].x, teams[0].z], laneBases(half)[0]);
+    assert.equal(teams[3].owner, 3);
+    assert.deepEqual(agorasForMapType('koth', half, SKIRMISH_MAP_W), []);
+    assert.deepEqual(agorasForMapType('adventure', half, SKIRMISH_MAP_W), []);
+    assert.equal(agorasForMapType('1v1', half, SKIRMISH_MAP_W).length, 2);
   });
 });
 

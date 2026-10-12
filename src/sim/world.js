@@ -8,6 +8,7 @@
 
 import { makeRng } from './rng.js';
 import { getUnitDef } from './unitTypes.js';
+import { namedUnitHp } from './namedUnit.js';
 import { isManaCaster, MANA_MAX } from './mana.js';
 import { MAX_WAYPOINTS } from './path.js';
 import { createSpatialGrid } from './spatialGrid.js';
@@ -47,6 +48,7 @@ export const ORDER = {
 export function clearAttackFocus(w, i) {
   w.targetEntity[i] = -1;
   if (w.targetBuilding) w.targetBuilding[i] = -1;
+  if (w.targetDoor) w.targetDoor[i] = -1;
   if (w.attackFocus) w.attackFocus[i] = 0;
 }
 
@@ -122,6 +124,10 @@ export function createWorld(seed) {
     targetEntity: new Int32Array(MAX_ENTITIES), // -1 = none
     /** Placeable building index, or -1. Mutually exclusive with targetEntity. */
     targetBuilding: new Int32Array(MAX_ENTITIES).fill(-1),
+    /** Shut curtain door index, or -1. Mutually exclusive with the other targets. */
+    targetDoor: new Int32Array(MAX_ENTITIES).fill(-1),
+    doors: [],
+    doorsDirty: 0,
     /** 1 = CMD.ATTACK focus — acquireTargets must not rebalance off this target. */
     attackFocus: new Uint8Array(MAX_ENTITIES),
     buildings: [],
@@ -142,6 +148,8 @@ export function createWorld(seed) {
     gatherDefensive: new Uint8Array(MAX_ENTITIES),
     /** 0 none / 1 chop at node / 2 haul load back (see gather.js GATHER_ACT). */
     gatherAct: new Uint8Array(MAX_ENTITIES),
+    /** 1 = garden unit with a name. Bigger mesh, more hp, harder hits. */
+    named: new Uint8Array(MAX_ENTITIES),
     /** Building index this villager is constructing (ORDER.BUILD), or -1. */
     buildTarget,
 
@@ -235,7 +243,7 @@ export function createWorld(seed) {
   };
 }
 
-export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed } = {}) {
+export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed, faceX, faceY, named = false } = {}) {
   if (w.count >= MAX_ENTITIES) {
     throw new RangeError(`entity capacity exceeded (${MAX_ENTITIES})`);
   }
@@ -246,8 +254,14 @@ export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed } = {}) 
   w.vx[i] = 0;
   w.vy[i] = 0;
   // Default face +Y (matches common spawn look); first move eases from here.
-  w.faceX[i] = 0;
-  w.faceY[i] = 1 << 16; // fx.ONE without importing fixed here
+  // An authored yaw passes both components, including a zero.
+  if (faceX != null || faceY != null) {
+    w.faceX[i] = faceX | 0;
+    w.faceY[i] = faceY | 0;
+  } else {
+    w.faceX[i] = 0;
+    w.faceY[i] = 1 << 16; // fx.ONE without importing fixed here
+  }
   w.tx[i] = x;
   w.ty[i] = y;
   w.hasTarget[i] = 0;
@@ -255,6 +269,7 @@ export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed } = {}) 
   w.order[i] = ORDER.IDLE;
   w.targetEntity[i] = -1;
   if (w.targetBuilding) w.targetBuilding[i] = -1;
+  if (w.targetDoor) w.targetDoor[i] = -1;
   if (w.attackFocus) w.attackFocus[i] = 0;
   w.engagementTarget[i] = -1;
   w.engagementSlot[i] = -1;
@@ -309,7 +324,8 @@ export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed } = {}) 
   w.squadId[i] = 0;
   w.carriedBy[i] = -1;
   w.transportTarget[i] = -1;
-  w.hp[i] = hp ?? def.hp;
+  if (w.named) w.named[i] = named ? 1 : 0;
+  w.hp[i] = hp ?? (named ? namedUnitHp(def.hp) : def.hp);
   w.type[i] = type;
   w.owner[i] = owner;
   w.alive[i] = 1;

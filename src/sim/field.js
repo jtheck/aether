@@ -618,20 +618,32 @@ export function rebuildWaterSurface(field) {
   }
   relaxWaterSlope(field, level);
   if (prev) {
-    const dirty = [];
+    // Accumulates until consumed. Several brush stamps can land between two
+    // repaints, and each one can move a whole pond.
+    let mask = field.waterDirty;
+    if (!mask || mask.length !== n) {
+      mask = new Uint8Array(n);
+      field.waterDirty = mask;
+    }
     for (let i = 0; i < n; i++) {
       if (terrainTypes[i] !== TERRAIN.WATER) continue;
-      if (Math.abs(prev[i] - level[i]) > 1e-4) dirty.push({ x: i % width, z: (i / width) | 0 });
+      if (Math.abs(prev[i] - level[i]) > 1e-4) mask[i] = 1;
     }
-    field.waterDirty = dirty;
   }
   return level;
 }
 
-/** Tiles whose flat water level moved on the last rebuild. Clears the list. */
+/** Tiles whose flat water level moved since the last call. Clears them. */
 export function consumeWaterDirty(field) {
-  const dirty = field?.waterDirty || [];
-  if (field) field.waterDirty = null;
+  const mask = field?.waterDirty;
+  const dirty = [];
+  if (!mask) return dirty;
+  const { width } = field;
+  for (let i = 0; i < mask.length; i++) {
+    if (mask[i] === 0) continue;
+    dirty.push({ x: i % width, z: (i / width) | 0 });
+    mask[i] = 0;
+  }
   return dirty;
 }
 
@@ -1464,16 +1476,23 @@ export function generateHeightMap(field) {
   }
 }
 
-function seedRegionLift(field) {
-  ensureHeightLayers(field);
-  const { width, height, regionLift, seed } = field;
+/** Seeded chunk lift (0–1) as a standalone array — pure in (seed, width, height). */
+export function computeSeedRegionLift(seed, width, height) {
+  const out = new Float32Array(width * height);
   const cellSize = TABLE_CHUNK_TILES;
+  const s = seed >>> 0;
   for (let z = 0; z < height; z++) {
     for (let x = 0; x < width; x++) {
-      const relief = sampleChunkRelief(x, z, seed, width, height, cellSize);
-      regionLift[z * width + x] = relief * 0.5 + 0.5;
+      const relief = sampleChunkRelief(x, z, s, width, height, cellSize);
+      out[z * width + x] = relief * 0.5 + 0.5;
     }
   }
+  return out;
+}
+
+function seedRegionLift(field) {
+  ensureHeightLayers(field);
+  field.regionLift.set(computeSeedRegionLift(field.seed, field.width, field.height));
 }
 
 function isEdgeLockedTile(field, tx, tz) {

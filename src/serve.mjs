@@ -3,7 +3,7 @@
 // COOP/COEP required for SharedArrayBuffer / sim worker.
 
 import { createServer } from 'http';
-import { existsSync } from 'fs';
+import { existsSync, statSync } from 'fs';
 import { readFile, access } from 'fs/promises';
 import { extname, join, normalize } from 'path';
 import { fileURLToPath } from 'url';
@@ -45,11 +45,17 @@ function resolvePath(urlPath) {
   const safe = normalize(urlPath).replace(/^(\.\.[/\\])+/, '').replace(/\\/g, '/');
   // Shared asset library lives at repo root (forge <base href="../"> → /assets/).
   if (safe.startsWith('assets/')) return join(REPO, ...safe.split('/'));
-  // House maps live at repo-root maps/; fall back to src/maps/ for an un-restarted serve.
+  // House maps live at repo-root maps/; src/maps/ is the fallback.
+  // When both exist, the newer file wins so a Forge save into either folder is what the game loads.
   if (safe.startsWith('maps/')) {
     const repoPath = join(REPO, ...safe.split('/'));
-    if (existsSync(repoPath)) return repoPath;
-    return join(ROOT, ...safe.split('/'));
+    const srcPath = join(ROOT, ...safe.split('/'));
+    const repoOk = existsSync(repoPath);
+    const srcOk = existsSync(srcPath);
+    if (repoOk && srcOk) {
+      return statSync(srcPath).mtimeMs > statSync(repoPath).mtimeMs ? srcPath : repoPath;
+    }
+    return repoOk ? repoPath : srcPath;
   }
   // Soft-landing for no-WebGPU — serve src/axiom/ at /axiom/
   const axiomPath = resolveSrcDir(safe, 'axiom');

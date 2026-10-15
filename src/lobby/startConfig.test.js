@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { chapterLabelFor, gardenUrlForChapter, selectableAdventureChapters, showFullStoryPicker } from './modes.js';
+import { installAdventureCampaign } from './adventureCampaign.js';
+import { chapterLabelFor, gardenUrlForChapter, selectableAdventureChapters } from './modes.js';
 import { liveConfigFromLobby, teamByOwnerForMode } from './startConfig.js';
 
 const seats = [
@@ -72,8 +73,23 @@ describe('lobby start config', () => {
     }, 'host-id');
     assert.equal(cfg.localSolo, true);
     assert.equal(cfg.sharedVision, true);
+    installAdventureCampaign({
+      v: 1,
+      kind: 'campaign',
+      name: 'Adventure',
+      episodes: [{ name: 'Episode 1', chapters: [{ file: 'opening.garden', name: 'Opening' }] }],
+      gardens: { 'opening.garden': { v: 4, n: 'Opening', w: 8, h: 8 } },
+    });
     assert.equal(cfg.chapter, 'ch1');
-    assert.equal(cfg.gardenUrl, '/maps/chapter1.garden');
+    assert.equal(cfg.gardenUrl, '');
+    const fromFile = liveConfigFromLobby({
+      mode: 'adventure',
+      roomId: 'adv',
+      settings: { fieldSize: 'small', seed: 2, chapter: 'pack:opening.garden' },
+      seats: [seats[0]],
+    }, 'host-id');
+    assert.equal(fromFile.gardenUrl, 'pack:opening.garden');
+    assert.deepEqual(selectableAdventureChapters().map((c) => c.id), ['pack:opening.garden']);
   });
 
   it('passes workshop chapter refs through as gardenUrl', () => {
@@ -98,18 +114,24 @@ describe('chapterLabelFor', () => {
   });
 });
 
-describe('local story picker', () => {
-  it('keeps the 5-episode catalog off the public picker', () => {
-    assert.equal(showFullStoryPicker('', 'localhost'), false);
-    assert.equal(showFullStoryPicker('?story=1', 'aether.garden'), false);
-    assert.deepEqual(selectableAdventureChapters('', 'localhost').map((c) => c.id), ['ch1', 'ch2', 'ch3']);
-  });
-
-  it('unlocks campaign chapters on localhost ?story=1', () => {
-    assert.equal(showFullStoryPicker('?story=1', 'localhost'), true);
-    const ids = selectableAdventureChapters('?story=1', '127.0.0.1').map((c) => c.id);
-    assert.deepEqual(ids.slice(0, 3), ['ch1', 'ch2', 'ch3']);
-    assert.ok(ids.includes('e1c1'));
-    assert.equal(gardenUrlForChapter('e1c1'), '/maps/e1c1.garden');
+describe('adventure campaign picker', () => {
+  it('lists only live chapters from the installed campaign', () => {
+    installAdventureCampaign({
+      v: 1,
+      kind: 'campaign',
+      name: 'Adventure',
+      episodes: [
+        { name: 'Episode 1', chapters: [{ file: 'opening.garden', name: 'Opening' }] },
+        { name: 'Later', chapters: [{ file: 'wip.garden', name: 'WIP', live: false }] },
+      ],
+      gardens: {
+        'opening.garden': { v: 4, n: 'Opening', w: 8, h: 8 },
+        'wip.garden': { v: 4, n: 'WIP', w: 8, h: 8 },
+      },
+    });
+    assert.deepEqual(selectableAdventureChapters().map((c) => c.name), ['Opening']);
+    assert.deepEqual(selectableAdventureChapters().map((c) => c.episode), ['Episode 1']);
+    assert.equal(gardenUrlForChapter('e1c1'), '');
+    assert.equal(gardenUrlForChapter('pack:opening.garden'), 'pack:opening.garden');
   });
 });

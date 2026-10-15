@@ -134,10 +134,12 @@ function sanitizeCampaignData(data) {
       var ch = ep.chapters[c];
       var file = normalizeGardenRel(ch && ch.file);
       if (!file) continue;
-      chapters.push({
+      var row = {
         file: file,
         name: String((ch && ch.name) || '').slice(0, 80),
-      });
+      };
+      if (ch && ch.live === false) row.live = false;
+      chapters.push(row);
       count += 1;
     }
     if (!chapters.length) continue;

@@ -1,54 +1,18 @@
 // Pre-match lobby mode constraints. Same room shell; only seats / defaults change.
 
-import { CHAPTER_CATALOG } from '../story/campaign.js';
+import { adventureChapters } from './adventureCampaign.js';
 
 export const FIELD_SIZES = ['tiny', 'small', 'medium', 'large', 'huge'];
 
-/** Playable adventure chapters in the lobby. Full 5-episode campaign stays off the UI for now. */
-export const LEGACY_CHAPTERS = [
-  { id: 'ch1', name: 'Chapter 1', garden: '/maps/chapter1.garden' },
-  { id: 'ch2', name: 'Chapter 2', garden: '/maps/chapter2.garden' },
-  { id: 'ch3', name: 'Chapter 3', garden: '/maps/chapter3.garden' },
-];
-
-const CAMPAIGN_CHAPTER_OPTIONS = CHAPTER_CATALOG.map(({ id, name, garden }) => ({ id, name, garden }));
-
-/** Every official garden the sim can start — picker is a subset. */
-const KNOWN_CHAPTERS = [...LEGACY_CHAPTERS, ...CAMPAIGN_CHAPTER_OPTIONS];
-
-/** Selectable adventure chapters: the old grove three. */
-export const ADVENTURE_CHAPTERS = [...LEGACY_CHAPTERS];
-
-function pageHostname() {
-  return typeof location !== 'undefined' ? location.hostname : '';
-}
-
-function pageSearch() {
-  return typeof location !== 'undefined' ? location.search : '';
-}
-
-/** Same loopback gate as `?dlc=` — ignored on aether.garden. */
-export function isLocalStoryHost(hostname = pageHostname()) {
-  const host = String(hostname ?? '').replace(/^\[|\]$/g, '').toLowerCase();
-  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
-}
-
-/** Local `?story=1` unlocks the 5-episode catalog in the adventure picker. */
-export function showFullStoryPicker(search = pageSearch(), hostname = pageHostname()) {
-  if (!isLocalStoryHost(hostname)) return false;
-  const q = new URLSearchParams(search).get('story');
-  return q === '1' || q === 'all' || q === 'true';
-}
-
-export function selectableAdventureChapters(search = pageSearch(), hostname = pageHostname()) {
-  if (showFullStoryPicker(search, hostname)) return [...LEGACY_CHAPTERS, ...CAMPAIGN_CHAPTER_OPTIONS];
-  return ADVENTURE_CHAPTERS;
+/** Live chapters from maps/adventure.campaign. Empty until that file loads. */
+export function selectableAdventureChapters() {
+  return adventureChapters();
 }
 
 /** Official chapter id, a workshop ref, a web pack chapter, or the session garden. */
 export function gardenUrlForChapter(chapterId) {
   const raw = String(chapterId || '');
-  const ch = KNOWN_CHAPTERS.find((c) => c.id === raw);
+  const ch = adventureChapters().find((c) => c.id === raw);
   if (ch?.garden) return ch.garden;
   const lower = raw.toLowerCase();
   if (lower === 'session' || lower.startsWith('workshop:') || lower.startsWith('pack:')) return raw;
@@ -62,7 +26,7 @@ export function chapterRefNeedsHostGarden(chapterId) {
 }
 
 export function chapterIdForGardenUrl(url) {
-  return KNOWN_CHAPTERS.find((c) => c.garden === url)?.id || '';
+  return adventureChapters().find((c) => c.garden === url)?.id || '';
 }
 
 /** Corner mark for story mode — "Ch 1" from id, garden url, or name. */
@@ -70,11 +34,13 @@ export function chapterLabelFor(ref = {}) {
   const id = String(ref.chapter || '');
   const url = String(ref.gardenUrl || ref.url || '');
   const name = String(ref.name || ref.n || '');
-  const ch = KNOWN_CHAPTERS.find((c) => c.id === id || (url && c.garden === url));
-  const num = ch?.id.match(/\d+/)?.[0]
-    || name.match(/chapter\s*(\d+)/i)?.[1]
-    || url.match(/chapter(\d+)/i)?.[1];
+  const ch = adventureChapters().find((c) => c.id === id || (url && c.garden === url));
+  const label = ch?.name || name;
+  const num = label.match(/chapter\s*(\d+)/i)?.[1]
+    || String(ch?.id || id || url).match(/chapter(\d+)/i)?.[1]
+    || String(ch?.id || id).match(/^ch(\d+)$/i)?.[1];
   if (num) return `Ch ${num}`;
+  if (ch?.name) return ch.name;
   if (id.toLowerCase().startsWith('workshop:') || url.toLowerCase().startsWith('workshop:')) {
     return name.trim() || 'Workshop';
   }
@@ -180,6 +146,6 @@ export function defaultSettings(modeId, fieldSize) {
   return {
     fieldSize: fieldSize && FIELD_SIZES.includes(fieldSize) ? fieldSize : mode.defaultFieldSize,
     seed: (Math.random() * 0xffffffff) >>> 0,
-    chapter: mode.hasChapter ? ADVENTURE_CHAPTERS[0].id : '',
+    chapter: mode.hasChapter ? (adventureChapters()[0]?.id || '') : '',
   };
 }

@@ -41,6 +41,7 @@ import {
   createFullCellMask,
   createFullCellRadius,
   DEFAULT_CELL_RADIUS,
+  PLINTH_CELL_RADIUS,
   getCellRadius,
   isCellEnabled,
   maxCellRadius,
@@ -61,10 +62,16 @@ import {
   draftFromBundle,
   draftToBundle,
   draftToIndex,
+  locateChapter,
+  moveChapter,
+  moveEpisode,
   removeChapter,
+  removeEpisode,
   renameCampaign,
-  renameCurrentEpisode,
-  syncChapterGarden,
+  renameChapter,
+  renameEpisode,
+  setChapterLive,
+  setCurrentEpisode,
 } from './campaignDraft.js';
 import { firstChapterFile, flattenCampaignChapters, formatPackRef, isCampaignBundle } from '../story/campaignPack.js';
 import {
@@ -110,7 +117,7 @@ import { createStoryPlayer } from '../story/player.js';
 import { createStoryHud } from '../story/hud.js';
 import { createStorySpeech, narratorLines } from '../story/speech.js';
 import { findNamedUnit, mergeStoryParty, namedUnits, normalizeSpeaker, storyPartyPlacements } from '../story/cast.js';
-import { OBJ_KINDS, normalizeObjectives } from '../story/objectives.js';
+import { OBJ_KINDS, TERMINAL_KINDS, isTerminalObjective, normalizeObjectives } from '../story/objectives.js';
 import { createStorySheet } from './storySheet.js';
 import {
   WAVE_ERAS,
@@ -120,12 +127,17 @@ import {
   popWaveHop,
   removeWaveHopAt,
   replaceWaveHop,
+  setZoneAllies,
   setZoneEra,
+  setZoneKind,
+  setZoneParam,
+  setZoneTerminal,
   setZoneWaves,
   tileToWaveFrac,
   waveFracToTile,
   waveHopName,
   waveTargetObjective,
+  zoneTriggerSpec,
 } from './waveRoute.js';
 import {
   CELESTIAL_PRESETS,
@@ -146,7 +158,23 @@ import {
   nearestBackdrop,
 } from '../sim/backdrops.js';
 import { softDetachMesh } from '../render/meshLifecycle.js';
+import { OWNER_TINTS } from '../render/ownerTints.js';
 import { aetherSteam } from '../app/steam.js';
+
+/** One faction per resource-bank owner. King of the Hill uses the first five. */
+const FACTION_NAMES = [
+  'Blue', 'Red', 'Green', 'Yellow', 'Purple', 'Orange', 'Cyan', 'Pink',
+  'White', 'Brown', 'Teal', 'Magenta', 'Olive', 'Navy', 'Gold', 'Slate',
+];
+const FACTIONS = FACTION_NAMES.map((name, id) => ({ id, name }));
+/** Shared side A is 201, B is 202, … Own stores the faction's own id. */
+const SIDE_BASE = 201;
+const SIDE_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F'];
+
+function factionCss(id) {
+  const rgb = OWNER_TINTS[((id % OWNER_TINTS.length) + OWNER_TINTS.length) % OWNER_TINTS.length];
+  return `rgb(${Math.round(rgb[0] * 255)}, ${Math.round(rgb[1] * 255)}, ${Math.round(rgb[2] * 255)})`;
+}
 
 const DEFAULT_CHUNKS = SKIRMISH_MAP_CHUNKS;
 const DEFAULT_SIZE = forgeTilesForChunks(DEFAULT_CHUNKS);
@@ -183,6 +211,8 @@ const state = {
   mapName: '',
   /** Garden `mt`. Generate lays out starts for this type. */
   mapType: DEFAULT_MAP_TYPE,
+  /** Garden `tm`. Null until the author picks a side, so older maps keep the mode default. */
+  teamByOwner: null,
   painting: false,
   selected: [],
   units: [],
@@ -203,6 +233,8 @@ const state = {
   startingResources: { ...STARTING_RESOURCES },
   story: emptyStory(),
   storyClipId: null,
+  /** 'intro' plays at chapter start. 'ending' is the win reel. */
+  storyReelId: 'intro',
   /** 0 = follow the table. Positive world half-extent = custom pan/zoom box. */
   cameraHalfF: 0,
   /** Table panel: chunk silhouette, or off-board props. */
@@ -265,6 +297,7 @@ let holdPreviewCamera = false;
 let workshopPreviewJpeg = '';
 let workshopDescEdited = false;
 let campaignDraft = createCampaignDraft();
+let activeChapterFile = null;
 let storyPlayer = null;
 let storyHud = null;
 let storySpeech = null;
@@ -570,11 +603,11 @@ function selectedHop(edit, id, index, pending = false) {
   return !edit.pending && edit.id === id && edit.hopIndex === index;
 }
 
-function renderWaveEditor() {
+function renderWaveEditor(force = false) {
   const host = document.getElementById('wave-zone-list');
   if (!host || !field) return;
   const active = document.activeElement;
-  if (active && host.contains(active) && (active.tagName === 'INPUT' || active.tagName === 'SELECT')) return;
+  if (!force && active && host.contains(active) && (active.tagName === 'INPUT' || active.tagName === 'SELECT')) return;
   host.replaceChildren();
 
   const editingId = state.waveEdit?.id || null;
@@ -592,23 +625,32 @@ function renderWaveEditor() {
   if (!zones.length && !state.waveRoute.length) {
     const empty = document.createElement('p');
     empty.className = 'hint';
-    empty.textContent = 'No zones yet. Place one, then set how many groups attack it.';
+    empty.textContent = 'No zones yet. Place one, then select it here to set the trigger.';
     host.appendChild(empty);
   }
 
   for (const obj of zones) {
-    const head = addBtn(
-      `${obj.kind || 'zone'}${obj.label ? ` “${obj.label}”` : ''} · ${obj.tx | 0}, ${obj.tz | 0}`,
+    const ends = isTerminalObjective(obj) ? ' · ends' : '';
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.appendChild(addBtn(
+      `${obj.kind || 'zone'}${ends}${obj.label ? ` “${obj.label}”` : ''} · ${obj.tx | 0}, ${obj.tz | 0}`,
       { waveAct: 'select-zone', waveId: obj.id },
       { active: editingId === obj.id },
-    );
-    host.appendChild(head);
+    ));
+    row.appendChild(addBtn('Remove', { waveAct: 'remove-zone', waveId: obj.id }));
+    host.appendChild(row);
     if (editingId !== obj.id) continue;
-    const editing = document.createElement('p');
-    editing.className = 'hint';
-    editing.textContent = 'Groups and era edit this zone. 0 groups means it does not attack.';
-    host.appendChild(editing);
+    host.appendChild(triggerPanel(obj));
+    const attack = document.createElement('p');
+    attack.className = 'block-title';
+    attack.textContent = 'Attack';
+    host.appendChild(attack);
     host.appendChild(waveFields(obj));
+    const pathNote = document.createElement('p');
+    pathNote.className = 'field-note';
+    pathNote.textContent = 'Form up is where they appear. Later stops are the march. The zone is the last stop. No stops, and they appear in a ring around it.';
+    host.appendChild(pathNote);
     host.appendChild(hopList(obj.params?.route || [], obj.id, false));
   }
 
@@ -621,10 +663,197 @@ function renderWaveEditor() {
   }
   if (!editingId) {
     const next = document.createElement('p');
-    next.className = 'hint';
-    next.textContent = 'Groups and era apply to the next zone you place. 0 groups means the zone does not attack.';
+    next.className = 'block-title';
+    next.textContent = 'Attack on the next zone';
     host.appendChild(next);
     host.appendChild(waveFields(null));
+  }
+}
+
+function zoneInput(obj, field, value) {
+  const input = document.createElement('input');
+  input.dataset.zoneField = field;
+  input.dataset.zoneId = obj.id;
+  if (typeof value === 'number') {
+    input.type = 'number';
+    input.min = '0';
+    input.step = '1';
+    input.value = String(value);
+  } else {
+    input.type = 'text';
+    input.value = value == null ? '' : String(value);
+  }
+  return input;
+}
+
+function labeledZoneControl(text, control, note) {
+  const label = document.createElement('label');
+  label.className = 'field';
+  const name = document.createElement('span');
+  name.className = 'field-name';
+  name.textContent = text;
+  label.append(name, control);
+  if (note) {
+    const extra = document.createElement('span');
+    extra.className = 'field-note';
+    extra.textContent = note;
+    label.append(extra);
+  }
+  return label;
+}
+
+function triggerPanel(obj) {
+  const wrap = document.createElement('div');
+  const spec = zoneTriggerSpec(obj.kind);
+  const hint = document.createElement('p');
+  hint.className = 'hint';
+  hint.textContent = spec.hint;
+  wrap.appendChild(hint);
+
+  const kind = document.createElement('select');
+  kind.dataset.zoneField = 'kind';
+  kind.dataset.zoneId = obj.id;
+  for (const name of OBJ_KINDS) {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    kind.appendChild(opt);
+  }
+  kind.value = OBJ_KINDS.includes(obj.kind) ? obj.kind : 'reach';
+  wrap.appendChild(labeledZoneControl('Kind', kind));
+
+  const ends = document.createElement('select');
+  ends.dataset.zoneField = 'terminal';
+  ends.dataset.zoneId = obj.id;
+  for (const [value, text] of [['', 'No'], ['1', 'Yes']]) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = text;
+    ends.appendChild(opt);
+  }
+  const locked = TERMINAL_KINDS.includes(obj.kind);
+  ends.value = locked || obj.terminal === true ? '1' : '';
+  ends.disabled = locked;
+  wrap.appendChild(labeledZoneControl('Ends the chapter', ends, 'Yes wins the chapter when this zone finishes.'));
+
+  const radius = zoneInput(obj, 'radius', obj.r);
+  radius.min = '1';
+  wrap.appendChild(labeledZoneControl('Radius', radius, 'Tiles. The ring on the map is this wide.'));
+  const label = zoneInput(obj, 'label', obj.label || '');
+  wrap.appendChild(labeledZoneControl('Label', label, 'Short name for the objective.'));
+  const message = zoneInput(obj, 'message', obj.message || '');
+  wrap.appendChild(labeledZoneControl('Message', message, 'Shown when it completes.'));
+  const next = zoneInput(obj, 'next', obj.next || '');
+  next.placeholder = 'chapter file, or blank';
+  wrap.appendChild(labeledZoneControl('Next', next, 'A chapter file. Blank keeps campaign order.'));
+
+  for (const field of spec.fields) {
+    const input = zoneInput(obj, field.id, obj.params?.[field.param] ?? '');
+    input.dataset.zoneParam = field.param;
+    if (field.placeholder) input.placeholder = field.placeholder;
+    if (field.kind === 'number') {
+      input.type = 'number';
+      input.min = '0';
+      input.step = '1';
+    }
+    wrap.appendChild(labeledZoneControl(field.label, input));
+  }
+
+  wrap.appendChild(allyBlock(obj));
+  return wrap;
+}
+
+function allyBlock(obj) {
+  const wrap = document.createElement('div');
+  const title = document.createElement('p');
+  title.className = 'block-title';
+  title.textContent = 'Reinforcements';
+  wrap.appendChild(title);
+  const ally = obj.params?.allies?.[0];
+  const on = document.createElement('select');
+  on.dataset.zoneField = 'ally-on';
+  on.dataset.zoneId = obj.id;
+  for (const [value, text] of [['', 'Off'], ['1', 'On']]) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = text;
+    on.appendChild(opt);
+  }
+  on.value = ally ? '1' : '';
+  wrap.appendChild(labeledZoneControl('Friendly troops', on, 'They appear on From and march to To.'));
+  if (!ally || !field) return wrap;
+  const from = waveFracToTile(ally.from?.[0], ally.from?.[1], field.width, field.height);
+  const to = waveFracToTile(ally.to?.[0], ally.to?.[1], field.width, field.height);
+  const tiles = [
+    ['From X', 'ally-from-x', from.tx, 'Tile where they appear.'],
+    ['From Z', 'ally-from-z', from.tz, ''],
+    ['To X', 'ally-to-x', to.tx, 'Tile they march to.'],
+    ['To Z', 'ally-to-z', to.tz, ''],
+  ];
+  for (const [text, fieldName, value, note] of tiles) {
+    wrap.appendChild(labeledZoneControl(text, zoneInput(obj, fieldName, value), note));
+  }
+  wrap.appendChild(labeledZoneControl('Groups', zoneInput(obj, 'ally-waves', ally.waves | 0), 'How many friendly groups arrive.'));
+  wrap.appendChild(labeledZoneControl('Count', zoneInput(obj, 'ally-count', ally.count | 0), 'Troops in each group.'));
+  wrap.appendChild(labeledZoneControl('Delay', zoneInput(obj, 'ally-delay', ally.delay | 0), 'Seconds before the first group.'));
+  wrap.appendChild(labeledZoneControl('Interval', zoneInput(obj, 'ally-interval', ally.interval | 0), 'Seconds between groups.'));
+  return wrap;
+}
+
+function defaultAlly(obj) {
+  const w = field?.width || 1;
+  const h = field?.height || 1;
+  return {
+    from: tileToWaveFrac(obj.tx, Math.min(h - 1, (obj.tz | 0) + 8), w, h),
+    to: tileToWaveFrac(obj.tx, obj.tz, w, h),
+    waves: 1,
+    count: 3,
+    delay: 0,
+    interval: 14,
+  };
+}
+
+function patchAlly(obj, fieldName, raw) {
+  const ally = obj.params?.allies?.[0] || defaultAlly(obj);
+  const from = waveFracToTile(ally.from?.[0], ally.from?.[1], field.width, field.height);
+  const to = waveFracToTile(ally.to?.[0], ally.to?.[1], field.width, field.height);
+  const n = Math.max(0, Number(raw) || 0);
+  if (fieldName === 'ally-from-x') from.tx = n;
+  else if (fieldName === 'ally-from-z') from.tz = n;
+  else if (fieldName === 'ally-to-x') to.tx = n;
+  else if (fieldName === 'ally-to-z') to.tz = n;
+  setZoneAllies(obj, {
+    from: tileToWaveFrac(from.tx, from.tz, field.width, field.height),
+    to: tileToWaveFrac(to.tx, to.tz, field.width, field.height),
+    waves: fieldName === 'ally-waves' ? n : (ally.waves | 0),
+    count: fieldName === 'ally-count' ? n : (ally.count | 0),
+    delay: fieldName === 'ally-delay' ? n : (Number(ally.delay) || 0),
+    interval: fieldName === 'ally-interval' ? n : (ally.interval | 0),
+  });
+}
+
+function applyZoneField(obj, input) {
+  const fieldName = input.dataset.zoneField;
+  if (fieldName === 'kind') setZoneKind(obj, input.value);
+  else if (fieldName === 'terminal') setZoneTerminal(obj, input.value === '1');
+  else if (fieldName === 'radius') obj.r = Math.max(1, Number(input.value) || 1);
+  else if (fieldName === 'label' || fieldName === 'message' || fieldName === 'next') {
+    const text = String(input.value || '').trim();
+    if (text) obj[fieldName] = text;
+    else delete obj[fieldName];
+  } else if (fieldName === 'escort' || fieldName === 'branch' || fieldName === 'fail') {
+    setZoneParam(obj, input.dataset.zoneParam, String(input.value || '').trim());
+  } else if (fieldName === 'seconds' || fieldName === 'hold' || fieldName === 'detect') {
+    const n = Number(input.value);
+    setZoneParam(obj, input.dataset.zoneParam, n > 0 ? n : null);
+  } else if (fieldName === 'ally-on') {
+    if (input.value === '1') {
+      if (!obj.params?.allies?.[0]) setZoneAllies(obj, defaultAlly(obj));
+    } else {
+      setZoneAllies(obj, null);
+    }
+  } else if (fieldName?.startsWith('ally-')) {
+    patchAlly(obj, fieldName, input.value);
   }
 }
 
@@ -652,14 +881,8 @@ function waveFields(obj) {
     era.appendChild(opt);
   }
   era.value = String(currentEra);
-  const wavesLabel = document.createElement('label');
-  wavesLabel.textContent = 'Groups';
-  wavesLabel.appendChild(waves);
-  const eraLabel = document.createElement('label');
-  eraLabel.textContent = 'Era';
-  eraLabel.appendChild(era);
-  wrap.appendChild(wavesLabel);
-  wrap.appendChild(eraLabel);
+  wrap.appendChild(labeledZoneControl('Waves', waves, 'How many groups march on the zone. 0 means none.'));
+  wrap.appendChild(labeledZoneControl('Army', era, 'Which force. Default mix is the usual roster.'));
   return wrap;
 }
 
@@ -788,14 +1011,14 @@ function tileOpen(tx, tz) {
 }
 
 function grabReach(kind, item) {
-  if (kind === 'unit') return 2.4;
+  if (kind === 'unit') return TILE_SIZE_F;
   if (kind === 'objective') return Math.max(2, (item.r || 1) * 1.6);
   const fp = BUILDING_FOOTPRINTS[item?.type] || (kind === 'agora' ? BUILDING_FOOTPRINTS.agora : null);
   const half = ((fp?.w ?? 2) * TILE_SIZE_F) * 0.5;
   return Math.max(2.2, half * 0.72);
 }
 
-function hitPlacement(pos) {
+function hitPlacement(pos, kinds = ['unit', 'building', 'agora', 'objective']) {
   if (!pos) return null;
   let best = null;
   const consider = (kind) => {
@@ -809,10 +1032,7 @@ function hitPlacement(pos) {
       if (!best || d < best.d) best = { kind, index: i, d };
     }
   };
-  consider('unit');
-  consider('building');
-  consider('agora');
-  consider('objective');
+  for (const kind of kinds) consider(kind);
   return best;
 }
 
@@ -842,9 +1062,26 @@ function groupOrigins(picks = livePicks()) {
 function syncPlacePickUi() {
   const el = document.getElementById('place-pick-hint');
   const picks = livePicks();
+  const remove = document.getElementById('btn-place-remove');
+  if (remove) remove.disabled = picks.length === 0;
+  const canTurn = picks.some((p) => p.kind === 'unit' || p.kind === 'building');
+  const rotL = document.getElementById('place-rot-l');
+  const rotR = document.getElementById('place-rot-r');
+  if (rotL) rotL.disabled = !canTurn;
+  if (rotR) rotR.disabled = !canTurn;
+  const nameEl = document.getElementById('place-name');
+  const named = picks.length === 1 && picks[0].kind === 'unit'
+    ? placeList('unit')?.[picks[0].index]
+    : null;
+  if (nameEl) {
+    nameEl.disabled = picks.length > 0 && !named;
+    if (named && document.activeElement !== nameEl) nameEl.value = named.name || '';
+    else if (picks.length > 0 && document.activeElement !== nameEl) nameEl.value = '';
+  }
+  syncFactionUi(picks);
   if (picks.length > 1) {
     if (el) {
-      el.textContent = `${picks.length} selected. Drag to move the group. [ ] turns it. Right-click or Escape lets go.`;
+      el.textContent = `${picks.length} selected. Drag to move the group. [ ] turns it. Remove or Delete takes them off.`;
     }
     return;
   }
@@ -852,24 +1089,115 @@ function syncPlacePickUi() {
   const item = pick ? placeList(pick.kind)?.[pick.index] : null;
   if (!item) {
     if (el) {
-      el.textContent = 'Drag a box to select units. Click empty ground to place. Party, then click, stands the four heroes on that spot. [ ] turns a selection. Shift-click removes.';
+      el.textContent = 'Drag a box to select units and buildings. Click empty ground to place. Drag a selection to move it. Rotate turns it. Remove or Delete takes it off. Shift-click takes the one under the cursor.';
     }
     return;
   }
   if (pick.kind === 'unit') {
-    const nameEl = document.getElementById('place-name');
-    if (nameEl && document.activeElement !== nameEl) nameEl.value = item.name || '';
     if (el) {
       const who = item.name || 'Unit';
-      el.textContent = `${who} grabbed. Drag or click the ground to move. [ ] rotates. Right-click or Escape to let go.`;
+      el.textContent = `${who} selected. Drag to move. [ ] rotates. Remove or Delete takes it off.`;
     }
     return;
   }
   if (el) {
     const label = pick.kind === 'building' ? 'Building' : pick.kind === 'agora' ? 'Agora' : 'Zone';
     const turn = pick.kind === 'building' ? ' [ ] rotates.' : '';
-    el.textContent = `${label} grabbed. Drag or click the ground to move.${turn} Right-click or Escape to let go.`;
+    el.textContent = `${label} selected. Drag to move.${turn} Remove or Delete takes it off.`;
   }
+}
+
+function authoredTeam(id) {
+  if (state.teamByOwner) {
+    const t = state.teamByOwner[id];
+    return Number.isInteger(t) ? t : id;
+  }
+  if (state.mapType === 'adventure' && id < 4) return SIDE_BASE;
+  return id;
+}
+
+function displaySide(id) {
+  const team = authoredTeam(id);
+  if (team === id) return 'own';
+  const offset = team - SIDE_BASE;
+  if (offset >= 0 && offset < SIDE_LETTERS.length) return SIDE_LETTERS[offset];
+  const groups = [];
+  for (const f of FACTIONS) {
+    const t = authoredTeam(f.id);
+    if (t === f.id) continue;
+    const off = t - SIDE_BASE;
+    if (off >= 0 && off < SIDE_LETTERS.length) continue;
+    if (!groups.includes(t)) groups.push(t);
+  }
+  const idx = groups.indexOf(team);
+  return SIDE_LETTERS[idx >= 0 ? idx : 0];
+}
+
+function materializeTeams() {
+  if (state.teamByOwner) return;
+  state.teamByOwner = FACTIONS.map((f) => (
+    state.mapType === 'adventure' && f.id < 4 ? SIDE_BASE : f.id
+  ));
+}
+
+function allianceHint() {
+  if (state.teamByOwner) return 'Factions on the same side fight together. Own fights alone.';
+  if (state.mapType === 'adventure') {
+    return 'Nothing saved yet, so Blue, Red, Green, and Yellow fight together and every other faction fights alone. Pick a side to save it on this map.';
+  }
+  if (state.mapType === 'koth') {
+    return 'Nothing saved yet, so the five seats fight each other. Pick a side to save alliances on this map.';
+  }
+  return 'Nothing saved yet, so every faction fights alone. Pick a side to save alliances on this map.';
+}
+
+function renderAllianceEditor() {
+  const list = document.getElementById('alliance-list');
+  const hint = document.getElementById('alliance-hint');
+  if (hint) hint.textContent = allianceHint();
+  if (!list) return;
+  const options = ['own', ...SIDE_LETTERS];
+  list.innerHTML = FACTIONS.map((f) => {
+    const side = displaySide(f.id);
+    const opts = options.map((key) => {
+      const label = key === 'own' ? 'Own' : `Side ${key}`;
+      return `<option value="${key}"${key === side ? ' selected' : ''}>${label}</option>`;
+    }).join('');
+    return `<div class="row faction-row alliance-row">
+      <span class="faction-swatch" style="background:${factionCss(f.id)}"></span>
+      <span class="alliance-name">${f.name}</span>
+      <select data-alliance="${f.id}">${opts}</select>
+    </div>`;
+  }).join('');
+}
+
+function syncFactionUi(picks) {
+  const sel = document.getElementById('place-owner');
+  const swatch = document.getElementById('faction-swatch');
+  if (!sel) return;
+  const owners = [];
+  for (const pick of picks) {
+    const item = placeList(pick.kind)?.[pick.index];
+    if (item && item.owner != null) owners.push(item.owner | 0);
+  }
+  const same = owners.length > 0 && owners.every((n) => n === owners[0]);
+  const id = owners.length === 0 ? state.owner : (same ? owners[0] : -1);
+  let split = sel.querySelector('option[data-split]');
+  if (id < 0) {
+    if (!split) {
+      split = document.createElement('option');
+      split.value = '';
+      split.dataset.split = '1';
+      split.disabled = true;
+      split.textContent = '—';
+      sel.prepend(split);
+    }
+    sel.value = '';
+  } else {
+    split?.remove();
+    sel.value = String(id);
+  }
+  if (swatch) swatch.style.background = id < 0 ? 'transparent' : factionCss(id);
 }
 
 function writeUnitWorld(item, x, z) {
@@ -1007,6 +1335,26 @@ function rotatePlacePick(dir) {
   updatePlaceMarkers();
 }
 
+function removePlacementAt(kind, index) {
+  const list = placeList(kind);
+  if (!list || index < 0 || index >= list.length) return false;
+  list.splice(index, 1);
+  state.placePicks = state.placePicks.flatMap((p) => {
+    if (p.kind !== kind) return [p];
+    if (p.index === index) return [];
+    if (p.index > index) return [{ kind: p.kind, index: p.index - 1 }];
+    return [p];
+  });
+  placeDrag = null;
+  return true;
+}
+
+function removeHitPlacement(pos) {
+  const hit = hitPlacement(pos, ['unit', 'building', 'agora']);
+  if (!hit) return false;
+  return removePlacementAt(hit.kind, hit.index);
+}
+
 function deletePlacePick() {
   const grouped = { unit: [], building: [], agora: [], objective: [] };
   for (const p of state.placePicks) grouped[p.kind]?.push(p.index);
@@ -1030,16 +1378,19 @@ function placeStoryPartyAt(tx, tz) {
   state.units = mergeStoryParty(state.units, placed);
 }
 
-function unitsInBox(x0, z0, x1, z1) {
+function placementsInBox(x0, z0, x1, z1) {
   const minX = Math.min(x0, x1);
   const maxX = Math.max(x0, x1);
   const minZ = Math.min(z0, z1);
   const maxZ = Math.max(z0, z1);
   const picks = [];
-  for (let i = 0; i < state.units.length; i++) {
-    const p = placementWorld('unit', state.units[i]);
-    if (p.x >= minX && p.x <= maxX && p.z >= minZ && p.z <= maxZ) {
-      picks.push({ kind: 'unit', index: i });
+  for (const kind of ['unit', 'building', 'agora']) {
+    const list = placeList(kind) || [];
+    for (let i = 0; i < list.length; i++) {
+      const p = placementWorld(kind, list[i]);
+      if (p.x >= minX && p.x <= maxX && p.z >= minZ && p.z <= maxZ) {
+        picks.push({ kind, index: i });
+      }
     }
   }
   return picks;
@@ -1050,7 +1401,7 @@ function finishPlaceBox() {
   if (!box) return;
   placeBox = null;
   if (box.active) {
-    state.placePicks = unitsInBox(box.x0, box.z0, box.x1, box.z1);
+    state.placePicks = placementsInBox(box.x0, box.z0, box.x1, box.z1);
     syncPlacePickUi();
     updatePlaceMarkers();
     return;
@@ -1059,11 +1410,81 @@ function finishPlaceBox() {
   else applyPlace({ x: box.x0, z: box.z0 });
 }
 
+function hitZone(pos) {
+  if (!pos || !field) return null;
+  const half = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
+  let best = null;
+  for (let i = 0; i < state.objectives.length; i++) {
+    const obj = state.objectives[i];
+    const x = ((obj.tx | 0) + 0.5) * TILE_SIZE_F - half;
+    const z = ((obj.tz | 0) + 0.5) * TILE_SIZE_F - halfZ;
+    const reach = Math.max(TILE_SIZE_F, (Number(obj.r) || 4) * TILE_SIZE_F);
+    const d = Math.hypot(x - pos.x, z - pos.z);
+    if (d > reach) continue;
+    if (!best || d < best.d) best = { index: i, d };
+  }
+  return best;
+}
+
+function removeZoneById(id) {
+  const index = state.objectives.findIndex((obj) => obj.id === id);
+  if (index < 0) return false;
+  state.objectives.splice(index, 1);
+  if (state.waveEdit?.id === id) state.waveEdit = null;
+  state.placePicks = state.placePicks.filter((p) => p.kind !== 'objective');
+  placeDrag = null;
+  return true;
+}
+
+function disarmZoneStamp() {
+  if (state.placeKind !== 'objective') return;
+  state.placeKind = '';
+  document.querySelectorAll('[data-place="objective"]').forEach((el) => el.classList.remove('active'));
+}
+
+function selectZoneAt(index, pos, e) {
+  const obj = state.objectives[index];
+  state.waveEdit = obj ? { id: obj.id } : null;
+  state.placePicks = [{ kind: 'objective', index }];
+  beginGroupDrag(pos);
+  renderWaveEditor();
+  syncPlacePickUi();
+  updatePlaceMarkers();
+  try { canvas.setPointerCapture(e.pointerId); } catch { /* already gone */ }
+}
+
+function handleZonePointerDown(pos, e) {
+  if (!pos) return;
+  if (state.placeKind === 'wavehop') {
+    applyPlace(pos);
+    return;
+  }
+  if (e.shiftKey) {
+    const hit = hitZone(pos);
+    if (hit) removeZoneById(state.objectives[hit.index]?.id);
+    renderWaveEditor();
+    updatePlaceMarkers();
+    return;
+  }
+  const hit = hitZone(pos);
+  if (hit) {
+    disarmZoneStamp();
+    selectZoneAt(hit.index, pos, e);
+    return;
+  }
+  if (state.placeKind === 'objective') {
+    applyPlace(pos);
+    disarmZoneStamp();
+  }
+}
+
 function handlePlacePointerDown(pos, e) {
   if (!pos) return;
   if (e.shiftKey) {
-    applyPlace(pos, { remove: true });
-    clearPlacePick();
+    removeHitPlacement(pos);
+    syncPlacePickUi();
+    updatePlaceMarkers();
     return;
   }
   const hit = hitPlacement(pos);
@@ -1114,6 +1535,9 @@ function applyPlace(pos, { remove = false } = {}) {
       era: state.waveDraft.era | 0,
       route: state.waveRoute,
     });
+    const terminal = document.getElementById('place-obj-terminal')?.value === '1'
+      || kind === 'escape'
+      || kind === 'advance';
     const id = `obj-${state.objectives.length}`;
     state.objectives.push({
       id,
@@ -1124,6 +1548,7 @@ function applyPlace(pos, { remove = false } = {}) {
       label,
       message,
       next,
+      ...(terminal ? { terminal: true } : {}),
       ...(params ? { params } : {}),
     });
     if (params) state.waveRoute = [];
@@ -1174,6 +1599,17 @@ function removeNearestPlacement(pos) {
   } else {
     pickNear(state.buildings, (b) => ({ x: b.x, z: b.z }));
   }
+}
+
+function pushZoneRing(pos, idx, x, y, z, span) {
+  const edge = 0.55;
+  const lift = 0.28;
+  const half = span * 0.5;
+  pushBoxMarker(pos, idx, x, y, z - half, span + edge, lift, edge);
+  pushBoxMarker(pos, idx, x, y, z + half, span + edge, lift, edge);
+  pushBoxMarker(pos, idx, x - half, y, z, edge, lift, span + edge);
+  pushBoxMarker(pos, idx, x + half, y, z, edge, lift, span + edge);
+  pushBoxMarker(pos, idx, x, y, z, 1.1, 2.2, 1.1);
 }
 
 function pushBoxMarker(pos, idx, x, y, z, sx, sy, sz) {
@@ -1252,9 +1688,9 @@ function updatePlaceMarkers() {
     const wx = (obj.tx + 0.5) * TILE_SIZE_F - half;
     const wz = (obj.tz + 0.5) * TILE_SIZE_F - halfZ;
     const span = Math.max(4, (obj.r || 4) * TILE_SIZE_F * 2);
-    pushBoxMarker(oPos, oIdx, wx, groundY(wx, wz, 0.2), wz, span, 1.2, span);
+    pushZoneRing(oPos, oIdx, wx, groundY(wx, wz, 0.15), wz, span);
   }
-  addMarker('forge-objectives', oPos, oIdx, [0.35, 0.85, 1]);
+  addMarker('forge-objectives', oPos, oIdx, [0.15, 0.45, 0.72]);
   if (field) {
     const hopPos = [];
     const hopIdx = [];
@@ -2404,6 +2840,7 @@ function gardenExtras() {
     walls: wallsForGarden(),
     celestial: celestial?.getState?.() ?? null,
     mapType: state.mapType,
+    teamByOwner: state.teamByOwner,
   };
 }
 
@@ -2412,7 +2849,29 @@ function gardenPayload() {
 }
 
 function currentReel() {
+  const ending = state.storyReelId === 'ending';
+  const id = ending ? 'ending' : 'intro';
+  const found = state.story?.reels?.find((r) => r.id === id);
+  if (found) return activeReel(state.story, id);
+  if (ending) return { id: 'ending', when: 'win', clips: [], duration: 0 };
   return activeReel(state.story, 'intro');
+}
+
+function setStoryReel(id) {
+  state.storyReelId = id === 'ending' ? 'ending' : 'intro';
+  state.storyClipId = null;
+  storyPlayer?.setReel(currentReel());
+  storyPlayer?.toStart();
+  syncStoryEditor();
+}
+
+function applyStoryReveal(value) {
+  const reel = currentReel();
+  const next = { ...reel, clips: reel.clips.slice() };
+  if (value === 'all') next.reveal = 'all';
+  else if (value === 'enemy') next.reveal = [4];
+  else delete next.reveal;
+  commitReel(next);
 }
 
 function worldFromTile(tx, tz) {
@@ -2574,6 +3033,18 @@ function addStoryLine() {
   commitReel({ ...reel, clips: [...reel.clips, clip] });
 }
 
+function addStoryHold() {
+  const reel = currentReel();
+  const clip = {
+    id: newClipId(),
+    kind: CLIP_HOLD,
+    t: storyPlayer?.time() ?? 0,
+    dur: 1,
+  };
+  state.storyClipId = clip.id;
+  commitReel({ ...reel, clips: [...reel.clips, clip] });
+}
+
 function deleteStoryClip() {
   const reel = currentReel();
   const idx = reel.clips.findIndex((c) => c.id === state.storyClipId);
@@ -2647,9 +3118,12 @@ function syncStoryEditor() {
   const empty = document.getElementById('story-clip-empty');
   const camFields = document.getElementById('story-clip-camera');
   const lineFields = document.getElementById('story-clip-line');
+  const holdFields = document.getElementById('story-clip-hold');
   if (empty) empty.style.display = clip ? 'none' : 'block';
   if (camFields) camFields.style.display = clip?.kind === CLIP_CAMERA ? 'block' : 'none';
   if (lineFields) lineFields.style.display = clip?.kind === CLIP_LINE ? 'block' : 'none';
+  if (holdFields) holdFields.style.display = clip?.kind === CLIP_HOLD ? 'block' : 'none';
+  syncStoryReelUi();
   renderStoryClipList();
   if (clip?.kind === CLIP_CAMERA) {
     const set = (id, v) => { const el = document.getElementById(id); if (el && el !== document.activeElement) el.value = String(v); };
@@ -2680,10 +3154,28 @@ function syncStoryEditor() {
     set('story-line-text', clip.text);
     set('story-line-style', clip.style);
   }
+  if (clip?.kind === CLIP_HOLD) {
+    const set = (id, v) => { const el = document.getElementById(id); if (el && el !== document.activeElement) el.value = String(v); };
+    set('story-hold-t', clip.t);
+    set('story-hold-dur', clip.dur);
+  }
   fillCastControls();
   const playBtn = document.getElementById('story-play');
   if (playBtn && storyPlayer) playBtn.textContent = storyPlayer.rate() === 0 ? 'Play' : 'Stop';
   refreshStorySheet();
+}
+
+function syncStoryReelUi() {
+  const ending = state.storyReelId === 'ending';
+  document.getElementById('story-reel-intro')?.classList.toggle('active', !ending);
+  document.getElementById('story-reel-win')?.classList.toggle('active', ending);
+  const reveal = document.getElementById('story-reveal');
+  const reel = currentReel();
+  if (reveal && reveal !== document.activeElement) {
+    if (reel.reveal === 'all') reveal.value = 'all';
+    else if (Array.isArray(reel.reveal) && reel.reveal.length) reveal.value = 'enemy';
+    else reveal.value = '';
+  }
 }
 
 function fillCastControls() {
@@ -2771,7 +3263,13 @@ function bindStoryUi() {
   document.getElementById('story-next')?.addEventListener('click', () => storyPlayer?.nextClip());
   document.getElementById('story-add-camera')?.addEventListener('click', addStoryCamera);
   document.getElementById('story-add-line')?.addEventListener('click', addStoryLine);
+  document.getElementById('story-add-hold')?.addEventListener('click', addStoryHold);
   document.getElementById('story-delete')?.addEventListener('click', deleteStoryClip);
+  document.getElementById('story-reel-intro')?.addEventListener('click', () => setStoryReel('intro'));
+  document.getElementById('story-reel-win')?.addEventListener('click', () => setStoryReel('ending'));
+  document.getElementById('story-reveal')?.addEventListener('change', (e) => applyStoryReveal(e.target.value));
+  document.getElementById('story-hold-t')?.addEventListener('change', () => patchSelectedClip({ t: num('story-hold-t') }));
+  document.getElementById('story-hold-dur')?.addEventListener('change', () => patchSelectedClip({ dur: num('story-hold-dur') }));
   document.getElementById('story-cam-set-start')?.addEventListener('click', () => setCameraWaypoint('start'));
   document.getElementById('story-cam-set-end')?.addEventListener('click', () => setCameraWaypoint('end'));
   document.getElementById('story-cam-char')?.addEventListener('change', (e) => {
@@ -2813,15 +3311,17 @@ function gardenFileName() {
 
 function downloadGarden(json, name) {
   const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
+  a.href = url;
   a.download = name;
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(a.href);
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
 
-async function exportMap() {
-  const name = gardenFileName();
+async function saveTextFile(json, name, description, extension) {
   const picker = typeof globalThis.showSaveFilePicker === 'function'
     ? globalThis.showSaveFilePicker.bind(globalThis)
     : null;
@@ -2830,11 +3330,10 @@ async function exportMap() {
       const handle = await picker({
         suggestedName: name,
         types: [{
-          description: 'Garden map',
-          accept: { 'application/json': ['.garden'] },
+          description,
+          accept: { 'application/json': [extension] },
         }],
       });
-      const json = JSON.stringify(gardenPayload(), null, 0);
       const writable = await handle.createWritable();
       await writable.write(json);
       await writable.close();
@@ -2844,77 +3343,186 @@ async function exportMap() {
       console.error(err);
     }
   }
-  downloadGarden(JSON.stringify(gardenPayload(), null, 0), name);
+  downloadGarden(json, name);
+}
+
+async function exportMap() {
+  await saveTextFile(JSON.stringify(gardenPayload(), null, 0), gardenFileName(), 'Garden map', '.garden');
+}
+
+function iconButton(label, title, onClick, { disabled = false, active = false } = {}) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = label;
+  b.title = title;
+  if (disabled) b.disabled = true;
+  if (active) b.classList.add('active');
+  b.addEventListener('click', onClick);
+  return b;
 }
 
 function renderCampaignDraft() {
-  const list = document.getElementById('episode-list');
   const nameEl = document.getElementById('campaign-name');
-  const episodeEl = document.getElementById('episode-name');
   if (nameEl && document.activeElement !== nameEl) nameEl.value = campaignDraft.name;
-  const ep = campaignDraft.episodes[campaignDraft.episodeIndex] || campaignDraft.episodes[0];
-  if (episodeEl && document.activeElement !== episodeEl) episodeEl.value = ep?.name || '';
+  const list = document.getElementById('campaign-tree');
   if (!list) return;
   list.replaceChildren();
-  const chapters = [];
-  for (const episode of campaignDraft.episodes) {
-    for (const ch of episode.chapters) chapters.push({ episode: episode.name, ...ch });
-  }
-  if (!chapters.length) {
-    list.textContent = 'No chapters yet. Add this map to start an episode.';
-    return;
-  }
-  for (const ch of chapters) {
-    const row = document.createElement('div');
-    row.className = 'row';
-    const label = document.createElement('span');
-    label.textContent = `${ch.episode} · ${ch.name}`;
-    const remove = document.createElement('button');
-    remove.type = 'button';
-    remove.textContent = 'Remove';
-    remove.addEventListener('click', () => {
-      removeChapter(campaignDraft, ch.file);
-      renderCampaignDraft();
+  const eps = campaignDraft.episodes;
+  eps.forEach((episode, epIdx) => {
+    const head = document.createElement('div');
+    const noneLive = episode.chapters.length > 0 && episode.chapters.every((ch) => ch.live === false);
+    head.className = epIdx === campaignDraft.episodeIndex ? 'row ep current' : 'row ep';
+    if (noneLive) head.classList.add('idle');
+    const name = document.createElement('input');
+    name.type = 'text';
+    name.maxLength = 80;
+    name.value = episode.name;
+    name.title = 'Episode heading — focus to make new chapters land here';
+    name.addEventListener('focus', () => { setCurrentEpisode(campaignDraft, epIdx); head.classList.add('current'); });
+    name.addEventListener('input', () => renameEpisode(campaignDraft, epIdx, name.value));
+    name.addEventListener('change', () => renderCampaignDraft());
+    head.append(name);
+    head.append(iconButton('↑', 'Move episode up', () => { if (moveEpisode(campaignDraft, epIdx, -1)) renderCampaignDraft(); }, { disabled: epIdx === 0 }));
+    head.append(iconButton('↓', 'Move episode down', () => { if (moveEpisode(campaignDraft, epIdx, 1)) renderCampaignDraft(); }, { disabled: epIdx === eps.length - 1 }));
+    head.append(iconButton('✕', 'Delete episode and its chapters', () => {
+      if (!episode.chapters.length || confirm(`Delete "${episode.name}" and its ${episode.chapters.length} chapter(s)?`)) {
+        for (const ch of episode.chapters) if (ch.file === activeChapterFile) activeChapterFile = null;
+        if (removeEpisode(campaignDraft, epIdx)) renderCampaignDraft();
+      }
+    }, { disabled: eps.length <= 1 }));
+    list.append(head);
+
+    episode.chapters.forEach((ch, chIdx) => {
+      const row = document.createElement('div');
+      const on = ch.live !== false;
+      row.className = on ? 'row' : 'row off';
+      const num = document.createElement('span');
+      num.className = 'num';
+      num.textContent = `${chIdx + 1}.`;
+      const name = document.createElement('input');
+      name.type = 'text';
+      name.maxLength = 80;
+      name.value = ch.name;
+      name.title = 'Chapter name';
+      name.addEventListener('input', () => renameChapter(campaignDraft, ch.file, name.value));
+      row.append(iconButton(on ? 'On' : 'Off', on ? 'Players can play this chapter. Click to switch it off.' : 'Players skip this chapter. Click to switch it on.', () => {
+        setChapterLive(campaignDraft, ch.file, !on);
+        renderCampaignDraft();
+      }, { active: on }), num, name);
+      row.append(iconButton('✎', 'Load this chapter onto the table to edit it', () => editChapter(ch.file), { active: ch.file === activeChapterFile }));
+      row.append(iconButton('↑', 'Move up (into previous episode at the top)', () => { if (moveChapter(campaignDraft, ch.file, -1)) renderCampaignDraft(); }, { disabled: epIdx === 0 && chIdx === 0 }));
+      row.append(iconButton('↓', 'Move down (into next episode at the bottom)', () => { if (moveChapter(campaignDraft, ch.file, 1)) renderCampaignDraft(); }, { disabled: epIdx === eps.length - 1 && chIdx === episode.chapters.length - 1 }));
+      row.append(iconButton('✕', 'Remove chapter', () => {
+        if (ch.file === activeChapterFile) activeChapterFile = null;
+        removeChapter(campaignDraft, ch.file);
+        renderCampaignDraft();
+      }));
+      list.append(row);
     });
-    row.append(label, remove);
-    list.append(row);
-  }
+  });
 }
 
 function currentChapterTitle() {
-  return String(state.mapName || gardenPayload().n || '').trim() || 'Chapter';
+  return String(state.mapName || gardenPayload().n || '').trim();
+}
+
+function nextChapterName() {
+  const used = new Set();
+  for (const ep of campaignDraft.episodes) for (const ch of ep.chapters) used.add(ch.name);
+  let n = draftChapterCount(campaignDraft) + 1;
+  while (used.has(`Chapter ${n}`)) n += 1;
+  return `Chapter ${n}`;
+}
+
+/** Write the live editor state back into the chapter that is open for editing. */
+function flushActiveChapter() {
+  if (!activeChapterFile) return;
+  const loc = locateChapter(campaignDraft, activeChapterFile);
+  if (loc) loc.chapter.garden = gardenPayload();
+}
+
+/** Load a chapter's map into the forge, saving any edits to the previously open chapter first. */
+function editChapter(file) {
+  flushActiveChapter();
+  const loc = locateChapter(campaignDraft, file);
+  if (!loc) return;
+  activeChapterFile = file;
+  campaignDraft.episodeIndex = loc.epIndex;
+  applyGardenJson(JSON.parse(JSON.stringify(loc.chapter.garden)));
+  renderCampaignDraft();
+}
+
+function saveActiveChapter() {
+  if (!activeChapterFile) {
+    alert('Open a chapter first — press Edit on a chapter, make your changes, then Save.');
+    return;
+  }
+  flushActiveChapter();
+  renderCampaignDraft();
 }
 
 function addCurrentChapter() {
   const garden = gardenPayload();
-  const title = currentChapterTitle();
-  if (syncChapterGarden(campaignDraft, title, garden)) {
-    renderCampaignDraft();
-    return;
-  }
-  addChapter(campaignDraft, { name: title, garden });
+  const title = currentChapterTitle() || nextChapterName();
+  const chapter = addChapter(campaignDraft, { name: title, garden });
+  if (chapter) activeChapterFile = chapter.file;
   renderCampaignDraft();
 }
 
-function exportCampaign() {
-  syncChapterGarden(campaignDraft, currentChapterTitle(), gardenPayload());
+/** Import a .campaign (loads it as the whole list) or a .garden (adds it as a new chapter). */
+function importCampaignFile(file) {
+  flushActiveChapter();
+  file.text().then((text) => {
+    const data = JSON.parse(text);
+    if (isCampaignBundle(data)) {
+      const draft = draftFromBundle(data);
+      if (!draft) throw new Error('empty campaign');
+      campaignDraft = draft;
+      const first = draft.episodes.flatMap((ep) => ep.chapters)[0];
+      activeChapterFile = first?.file || null;
+      if (first) applyGardenJson(JSON.parse(JSON.stringify(data.gardens[first.file])));
+      renderCampaignDraft();
+      return;
+    }
+    const title = String(data?.n || '').trim() || nextChapterName();
+    const chapter = addChapter(campaignDraft, { name: title, garden: data });
+    if (chapter) {
+      activeChapterFile = chapter.file;
+      applyGardenJson(JSON.parse(JSON.stringify(data)));
+    }
+    renderCampaignDraft();
+  }).catch((err) => {
+    console.error(err);
+    alert('Could not import that file.');
+  });
+}
+
+async function exportCampaign() {
+  flushActiveChapter();
   const bundle = draftToBundle(campaignDraft);
   if (!bundle) {
     alert('Add a chapter before exporting a campaign.');
     return;
   }
   const name = `${(bundle.name || 'campaign').replace(/[^\w-]+/g, '_')}.campaign`;
-  downloadGarden(JSON.stringify(bundle), name);
+  await saveTextFile(JSON.stringify(bundle), name, 'Campaign', '.campaign');
 }
 
 function playCampaign() {
-  syncChapterGarden(campaignDraft, currentChapterTitle(), gardenPayload());
+  flushActiveChapter();
   const bundle = draftToBundle(campaignDraft);
   if (!bundle) {
     alert('Add a chapter before playing a campaign.');
     return;
   }
-  const first = formatPackRef(firstChapterFile(bundle));
+  const startFile = (activeChapterFile && locateChapter(campaignDraft, activeChapterFile))
+    ? activeChapterFile
+    : firstChapterFile(bundle);
+  if (!startFile) {
+    alert('Turn a chapter on before playing.');
+    return;
+  }
+  const first = formatPackRef(startFile);
   const url = `/?garden=${encodeURIComponent(first)}&solo=1`;
   writeCampaignPack(JSON.stringify(bundle)).then(() => {
     window.open(url, '_blank');
@@ -2957,6 +3565,7 @@ function applyGardenJson(json) {
   field = fieldFromGarden(json);
   state.mapName = g.name || '';
   state.mapType = g.mapType || DEFAULT_MAP_TYPE;
+  state.teamByOwner = g.teamByOwner || null;
   state.units = g.units;
   state.placePicks = [];
   placeDrag = null;
@@ -2988,6 +3597,7 @@ function applyGardenJson(json) {
   applyCameraBound();
   syncFormFromField();
   syncPlacePickUi();
+  renderAllianceEditor();
   syncStoryEditor();
   renderWaveEditor();
   rebuildTerrain();
@@ -2998,12 +3608,7 @@ function importFile(file) {
   file.text().then((text) => {
     const data = JSON.parse(text);
     if (isCampaignBundle(data)) {
-      const draft = draftFromBundle(data);
-      if (!draft) throw new Error('empty campaign');
-      campaignDraft = draft;
-      const first = flattenCampaignChapters(draftToIndex(draft))[0];
-      applyGardenJson(data.gardens[first.file]);
-      renderCampaignDraft();
+      alert('That\u2019s a campaign — open the Campaign tab and use its Import button.');
       return;
     }
     applyGardenJson(data);
@@ -3224,17 +3829,22 @@ async function publishWorkshopMap() {
   const btn = document.getElementById('btn-workshop-publish');
   if (btn) btn.disabled = true;
   try {
-    syncChapterGarden(campaignDraft, currentChapterTitle(), gardenPayload());
+    flushActiveChapter();
     const bundle = draftChapterCount(campaignDraft) ? draftToBundle(campaignDraft) : null;
     const description = document.getElementById('workshop-publish-desc')?.value.trim()
       || workshopDescriptionFor(bundle ? bundle.gardens[firstChapterFile(bundle)] : gardenPayload(), state.mapName);
+    const published = bundle ? draftToIndex(campaignDraft, { liveOnly: true }) : null;
+    if (bundle && !published) {
+      alert('Turn a chapter on before publishing.');
+      return;
+    }
     const body = bundle
       ? {
         title: bundle.name || state.mapName || 'Campaign',
         description,
         previewJpeg: workshopPreviewJpeg || undefined,
-        campaign: draftToIndex(campaignDraft),
-        files: flattenCampaignChapters(bundle).map((ch) => ({
+        campaign: published,
+        files: flattenCampaignChapters(published).map((ch) => ({
           file: ch.file,
           garden: bundle.gardens[ch.file],
         })),
@@ -3386,12 +3996,19 @@ function setLayer(layer) {
     b.classList.toggle('active', b.dataset.layer === layer);
   });
   document.getElementById('panel-file').style.display = layer === 'file' ? 'block' : 'none';
+  document.getElementById('panel-campaign').style.display = layer === 'campaign' ? 'block' : 'none';
   document.getElementById('panel-table').style.display = layer === 'table' ? 'block' : 'none';
   document.getElementById('panel-terrain').style.display = layer === 'terrain' ? 'block' : 'none';
   document.getElementById('panel-scenery').style.display = layer === 'scenery' ? 'block' : 'none';
   document.getElementById('panel-walls').style.display = layer === 'walls' ? 'block' : 'none';
   document.getElementById('panel-place').style.display = layer === 'place' ? 'block' : 'none';
+  const zonesPanel = document.getElementById('panel-zones');
+  if (zonesPanel) zonesPanel.style.display = layer === 'zones' ? 'block' : 'none';
   document.getElementById('panel-light').style.display = layer === 'light' ? 'block' : 'none';
+  if (layer === 'zones') {
+    if (state.placeKind !== 'wavehop') disarmZoneStamp();
+    renderWaveEditor();
+  }
   const storyPanel = document.getElementById('panel-story');
   if (storyPanel) storyPanel.style.display = layer === 'story' ? 'block' : 'none';
   storySheet?.setOpen(layer === 'story');
@@ -3445,11 +4062,13 @@ function mountUi() {
     <h1>Forge</h1>
     <div class="row">
       <button data-layer="file">File</button>
+      <button data-layer="campaign">Campaign</button>
       <button data-layer="table" class="active">Table</button>
       <button data-layer="terrain">Terrain</button>
       <button data-layer="scenery">Scenery</button>
       <button data-layer="walls">Walls</button>
-      <button data-layer="place">Place</button>
+      <button data-layer="place">Army</button>
+      <button data-layer="zones">Zones</button>
       <button data-layer="story">Story</button>
       <button data-layer="light">Light</button>
     </div>
@@ -3484,18 +4103,6 @@ function mountUi() {
         <button id="btn-import">Import</button>
         <button id="btn-play">Play</button>
       </div>
-      <label>Campaign</label>
-      <input id="campaign-name" type="text" maxlength="80" value="Campaign">
-      <label>Episode</label>
-      <input id="episode-name" type="text" maxlength="80" value="Episode 1">
-      <div class="row">
-        <button id="btn-episode-add" type="button">Add chapter</button>
-        <button id="btn-episode-new" type="button">New episode</button>
-        <button id="btn-episode-export" type="button">Export campaign</button>
-        <button id="btn-episode-play" type="button">Play campaign</button>
-      </div>
-      <div id="episode-list" class="hint">No chapters yet. Add this map to start an episode.</div>
-      <p class="hint">A campaign is an ordered list of chapters. Episodes are headings. Export a .campaign file for the web game, or publish the list to Workshop.</p>
       <label>Steam Workshop</label>
       <select id="workshop-maps">
         <option value="">Subscribed maps…</option>
@@ -3505,8 +4112,26 @@ function mountUi() {
         <a id="btn-workshop-browse" class="kakko" href="${workshopPageUrl()}" target="_blank" rel="noopener noreferrer">Browse Workshop</a>
         <button id="btn-workshop-publish" type="button">Publish to Workshop</button>
       </div>
-      <input id="import-file" type="file" accept=".garden,.campaign,.json" style="display:none">
+      <input id="import-file" type="file" accept=".garden,.json" style="display:none">
       <p class="hint" id="workshop-hint">Subscribe and publish from the Steam build. On the web, export a .garden or a .campaign, then Load it in Adventure. Play opens a solo match from this map.</p>
+    </div>
+    <div id="panel-campaign" class="panel" style="display:none">
+      <label>Campaign name</label>
+      <input id="campaign-name" type="text" maxlength="80" value="Campaign">
+      <div class="row">
+        <button id="btn-episode-new" type="button">Add episode</button>
+        <button id="btn-chapter-add" type="button">Add current map</button>
+        <button id="btn-chapter-new" type="button">New chapter</button>
+      </div>
+      <div class="row">
+        <button id="btn-chapter-save" type="button">Save chapter</button>
+        <button id="btn-campaign-import" type="button">Import</button>
+        <button id="btn-campaign-export" type="button">Export .campaign</button>
+        <button id="btn-campaign-play" type="button">Play</button>
+      </div>
+      <input id="campaign-import-file" type="file" accept=".garden,.campaign,.json" style="display:none">
+      <div id="campaign-tree"></div>
+      <p class="hint">Episodes are headings. On a chapter, players can play it. Off keeps it in the file and players skip it. An episode whose chapters are all Off is hidden from players. ✎ loads a chapter onto the table; ↑/↓ reorder; ✕ removes. New chapters land in the focused episode.</p>
     </div>
     <div id="workshop-publish-dlg">
       <label>Publish name</label>
@@ -3525,9 +4150,9 @@ function mountUi() {
       <p id="select-hint" class="hint">Click to select. Shift-click to add. Double-click to toggle on/off.</p>
       <label><input id="chunk-enabled" type="checkbox" checked disabled> Chunk enabled</label>
       <label>Radius <span id="radius-label">${DEFAULT_CELL_RADIUS}</span></label>
-      <input id="chunk-radius" type="range" min="0" max="32" value="${DEFAULT_CELL_RADIUS}" disabled>
+      <input id="chunk-radius" type="range" min="${PLINTH_CELL_RADIUS}" max="32" step="1" value="${DEFAULT_CELL_RADIUS}" disabled>
       <label><input id="center-plinth" type="checkbox"> Center plinth</label>
-      <p class="hint">0 = sharp corner + plinth. Raise radius to fillet that corner. Outer rails get matching side plinths. Odd boards can also plant a center plinth — check to put one in the middle.</p>
+      <p class="hint">-1 places a plinth. 0 is a sharp corner with none. Raise the radius to fillet that corner. Outer rails get matching side plinths. Odd boards can also plant a center plinth — check to put one in the middle.</p>
       <label>Camera bound <span id="camera-bound-label">100%</span></label>
       <input id="camera-bound" type="range" min="20" max="100" value="100">
       <p class="hint">Pan and zoom stay inside this box. 100% is the full table — lower it to keep a vista rim the camera cannot cross.</p>
@@ -3621,44 +4246,90 @@ function mountUi() {
       <p class="hint">Castle is large pale ashlar. Dungeon is the same wall in smaller grey stone. The choice sticks to the run you finish.</p>
     </div>
     <div id="panel-place" class="panel" style="display:none">
-      <label>Owner</label>
-      <input id="place-owner" type="number" min="0" max="4" value="0">
+      <p class="block-title">Selected</p>
+      <label>Faction</label>
+      <div class="row faction-row">
+        <span id="faction-swatch" class="faction-swatch" style="background:${factionCss(0)}"></span>
+        <select id="place-owner">
+          ${FACTIONS.map((f) => `<option value="${f.id}"${f.id === 0 ? ' selected' : ''}>${f.name}</option>`).join('')}
+        </select>
+      </div>
+      <p class="hint">The dash means this selection holds more than one faction. King of the Hill uses the first five.</p>
+      <p class="block-title">Alliances</p>
+      <p class="hint" id="alliance-hint"></p>
+      <div id="alliance-list"></div>
+      <div class="row">
+        <button id="place-rot-l" type="button" disabled>Rotate left</button>
+        <button id="place-rot-r" type="button" disabled>Rotate right</button>
+        <button id="btn-place-remove" type="button" disabled>Remove</button>
+      </div>
+      <p id="place-pick-hint" class="hint">Drag a box to select units and buildings. Click empty ground to place. Drag a selection to move it. Rotate turns it. Remove or Delete takes it off. Shift-click takes the one under the cursor.</p>
+      <label>Units</label>
       <label>Unit name</label>
       <input id="place-name" type="text" placeholder="Stumpey">
-      <label>Units</label>
       <div class="row">
         <button data-place="party" type="button">Party</button>
-        <button id="place-rot-l" type="button">Rotate left</button>
-        <button id="place-rot-r" type="button">Rotate right</button>
       </div>
       <div class="row">
         ${UNIT_DEFS.map((u) => `<button data-place="unit" data-type="${u.id}">${u.name}</button>`).join('')}
       </div>
-      <p id="place-pick-hint" class="hint">Drag a box to select units. Click empty ground to place. Party, then click, stands the four heroes on that spot. Drag a selection to move it. [ ] turns it.</p>
+      <p class="hint">Party stands the four heroes on the next click.</p>
       <label>Buildings</label>
       <div class="row">
         <button data-place="agora" data-type="agora">Agora</button>
         ${PLACEABLE_BUILDINGS.map((b) => `<button data-place="building" data-type="${b.id}">${b.name}</button>`).join('')}
       </div>
-      <label>Objectives</label>
+    </div>
+    <div id="panel-zones" class="panel" style="display:none">
+      <p class="hint">The blue ring on the map is a zone. Click Zone, then the ground, to place one. Click a ring to edit it. Remove on that zone takes it off. Shift-click the ring does the same.</p>
+      <p class="block-title">New zone</p>
       <div class="row">
         <button data-place="objective" data-type="objective">Zone</button>
       </div>
-      <label>Kind
+      <label class="field"><span class="field-name">Kind</span>
         <select id="place-obj-kind">
           ${OBJ_KINDS.map((k) => `<option value="${k}">${k}</option>`).join('')}
         </select>
+        <span class="field-note">What has to happen inside the ring.</span>
       </label>
-      <label>Radius (tiles) <input id="place-obj-r" type="number" min="1" step="1" value="5"></label>
-      <label>Label <input id="place-obj-label" type="text" placeholder="Reach the old road"></label>
-      <label>Message <input id="place-obj-message" type="text"></label>
-      <label>Next garden <input id="place-obj-next" type="text" placeholder="/maps/chapter2.garden"></label>
-      <p class="hint">Party is a stamp: click the ground and the four heroes stand in a row there. Click again to move that same row. Escape and advance load Next garden when a party unit enters the zone.</p>
-      <label>Enemy waves</label>
-      <p class="hint">Adventure maps only — not a skirmish army. A zone with a group count sends hostile waves at it, one every 12 seconds. Era is which army. Hops are their path: Form up is where they appear, later stops are the march, and the zone is the last stop. No hops and they appear in a ring around the zone. Click a hop, then the map, to move it.</p>
+      <label class="field"><span class="field-name">Ends the chapter</span>
+        <select id="place-obj-terminal">
+          <option value="">No</option>
+          <option value="1">Yes</option>
+        </select>
+        <span class="field-note">Yes wins the chapter when this zone finishes. Escape and advance always do.</span>
+      </label>
+      <label class="field"><span class="field-name">Radius</span>
+        <input id="place-obj-r" type="number" min="1" step="1" value="5">
+        <span class="field-note">Tiles. The ring is this wide.</span>
+      </label>
+      <label class="field"><span class="field-name">Label</span>
+        <input id="place-obj-label" type="text" placeholder="Reach the old road">
+        <span class="field-note">Short name for the objective.</span>
+      </label>
+      <label class="field"><span class="field-name">Message</span>
+        <input id="place-obj-message" type="text">
+        <span class="field-note">Shown when it completes.</span>
+      </label>
+      <label class="field"><span class="field-name">Next</span>
+        <input id="place-obj-next" type="text" placeholder="chapter file, or blank">
+        <span class="field-note">A chapter file. Blank keeps campaign order.</span>
+      </label>
+      <p class="block-title">Placed</p>
       <div id="wave-zone-list"></div>
     </div>
     <div id="panel-story" class="panel" style="display:none">
+      <div class="row">
+        <button id="story-reel-intro" type="button" class="active">Intro</button>
+        <button id="story-reel-win" type="button">Win</button>
+        <label>Reveal
+          <select id="story-reveal">
+            <option value="">Hidden</option>
+            <option value="enemy">Enemy</option>
+            <option value="all">Everyone</option>
+          </select>
+        </label>
+      </div>
       <div class="row">
         <button id="story-to-start" type="button">|&lt;</button>
         <button id="story-rew" type="button">&lt;&lt;</button>
@@ -3671,9 +4342,10 @@ function mountUi() {
       <div class="row">
         <button id="story-add-camera" type="button">Add camera</button>
         <button id="story-add-line" type="button">Add line</button>
+        <button id="story-add-hold" type="button">Add pause</button>
         <button id="story-delete" type="button">Delete clip</button>
       </div>
-      <p id="story-clip-empty" class="hint">Add a camera from the current view, or a line. Orbit, then Set start / Set end to confirm waypoints. Jump / Follow a named unit, or aim a camera clip at them. Click the map to aim the selected end look-at. Scrub the sheet to seek. Delete removes the clip selected in the list, including ones stacked at the start.</p>
+      <p id="story-clip-empty" class="hint">Intro plays at the start. Win plays when the chapter is won. Reveal opens sight for that reel. Add a camera, a line, or a pause, then pick it in the list.</p>
       <div id="story-clip-list"></div>
       <div id="story-cast"></div>
       <div id="story-clip-camera" style="display:none">
@@ -3682,28 +4354,71 @@ function mountUi() {
           <button id="story-cam-set-end" type="button">Set end from view</button>
         </div>
         <p id="story-cam-waypoints" class="hint"></p>
-        <label>Aim at
+        <p class="block-title">Look</p>
+        <label class="field"><span class="field-name">Aim at</span>
           <select id="story-cam-char">
-            <option value="">Tile</option>
+            <option value="">A tile</option>
           </select>
+          <span class="field-note">A named unit, or a tile on the map.</span>
         </label>
-        <label>Start <input id="story-cam-t" type="number" min="0" step="0.1"></label>
-        <label>Duration <input id="story-cam-dur" type="number" min="0.05" step="0.1"></label>
-        <label>Tile X <input id="story-cam-tx" type="number" step="1"></label>
-        <label>Tile Z <input id="story-cam-tz" type="number" step="1"></label>
-        <label>Radius <input id="story-cam-radius" type="number" min="8" step="1"></label>
-        <label>Alpha <input id="story-cam-alpha" type="number" step="0.05"></label>
+        <label class="field"><span class="field-name">Tile X</span>
+          <input id="story-cam-tx" type="number" step="1">
+        </label>
+        <label class="field"><span class="field-name">Tile Z</span>
+          <input id="story-cam-tz" type="number" step="1">
+        </label>
+        <label class="field"><span class="field-name">Distance</span>
+          <input id="story-cam-radius" type="number" min="8" step="1">
+          <span class="field-note">How far the camera sits from that spot.</span>
+        </label>
+        <label class="field"><span class="field-name">Orbit</span>
+          <input id="story-cam-alpha" type="number" step="0.05">
+          <span class="field-note">Which way the camera faces. Turn the view, then Set end.</span>
+        </label>
+        <p class="block-title">Timing</p>
+        <label class="field"><span class="field-name">Starts at</span>
+          <input id="story-cam-t" type="number" min="0" step="0.1">
+          <span class="field-note">Seconds into the reel.</span>
+        </label>
+        <label class="field"><span class="field-name">How long</span>
+          <input id="story-cam-dur" type="number" min="0.05" step="0.1">
+          <span class="field-note">Seconds this shot lasts.</span>
+        </label>
       </div>
       <div id="story-clip-line" style="display:none">
-        <label>Start <input id="story-line-t" type="number" min="0" step="0.1"></label>
-        <label>Duration <input id="story-line-dur" type="number" min="0.05" step="0.1"></label>
-        <label>Speaker <input id="story-line-speaker" type="text" list="story-cast-names"></label>
+        <p class="block-title">Dialogue</p>
+        <label class="field"><span class="field-name">Who</span>
+          <input id="story-line-speaker" type="text" list="story-cast-names">
+          <span class="field-note">A unit’s name. Blank means the narrator.</span>
+        </label>
         <datalist id="story-cast-names"></datalist>
-        <label>Line <input id="story-line-text" type="text"></label>
-        <label>Style
+        <label class="field"><span class="field-name">What they say</span>
+          <textarea id="story-line-text"></textarea>
+        </label>
+        <label class="field"><span class="field-name">Delivery</span>
           <select id="story-line-style">
             ${LINE_STYLES.map((s) => `<option value="${s}">${s}</option>`).join('')}
           </select>
+        </label>
+        <p class="block-title">Timing</p>
+        <label class="field"><span class="field-name">Starts at</span>
+          <input id="story-line-t" type="number" min="0" step="0.1">
+          <span class="field-note">Seconds into the reel.</span>
+        </label>
+        <label class="field"><span class="field-name">Stays up</span>
+          <input id="story-line-dur" type="number" min="0.05" step="0.1">
+          <span class="field-note">Seconds the line remains on screen.</span>
+        </label>
+      </div>
+      <div id="story-clip-hold" style="display:none">
+        <p class="block-title">Pause</p>
+        <label class="field"><span class="field-name">Starts at</span>
+          <input id="story-hold-t" type="number" min="0" step="0.1">
+          <span class="field-note">Seconds into the reel.</span>
+        </label>
+        <label class="field"><span class="field-name">How long</span>
+          <input id="story-hold-dur" type="number" min="0.05" step="0.1">
+          <span class="field-note">Seconds to hold before the next beat.</span>
         </label>
       </div>
     </div>
@@ -3805,16 +4520,33 @@ function mountUi() {
     });
   });
   ui.querySelector('[data-place="unit"]')?.classList.add('active');
-  document.getElementById('place-owner').addEventListener('input', (e) => {
-    state.owner = Math.max(0, Math.min(4, Number(e.target.value) || 0));
+  renderAllianceEditor();
+  document.getElementById('alliance-list').addEventListener('change', (e) => {
+    const sel = e.target.closest('select[data-alliance]');
+    if (!sel) return;
+    const id = Number(sel.dataset.alliance);
+    if (!Number.isInteger(id) || id < 0 || id >= FACTIONS.length) return;
+    const key = sel.value;
+    const team = key === 'own' ? id : SIDE_BASE + SIDE_LETTERS.indexOf(key);
+    if (!Number.isInteger(team) || team < 0) return;
+    materializeTeams();
+    state.teamByOwner[id] = team;
+    renderAllianceEditor();
+  });
+  document.getElementById('place-owner').addEventListener('change', (e) => {
+    if (e.target.value === '') return;
+    const n = Number(e.target.value);
+    if (!Number.isInteger(n) || n < 0 || n >= FACTIONS.length) return;
+    state.owner = n;
     let changed = false;
     for (const pick of state.placePicks) {
       const item = placeList(pick.kind)?.[pick.index];
       if (item && item.owner != null) {
-        item.owner = state.owner;
+        item.owner = n;
         changed = true;
       }
     }
+    syncFactionUi(livePicks());
     if (changed) updatePlaceMarkers();
   });
   document.getElementById('place-name')?.addEventListener('input', (e) => {
@@ -3825,6 +4557,10 @@ function mountUi() {
   });
   document.getElementById('place-rot-l')?.addEventListener('click', () => rotatePlacePick(-1));
   document.getElementById('place-rot-r')?.addEventListener('click', () => rotatePlacePick(1));
+  document.getElementById('btn-place-remove')?.addEventListener('click', () => {
+    if (!livePicks().length) return;
+    deletePlacePick();
+  });
   const waveList = document.getElementById('wave-zone-list');
   waveList?.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-wave-act]');
@@ -3852,6 +4588,8 @@ function mountUi() {
     } else if (act === 'remove-pending') {
       if (index >= 0 && index < state.waveRoute.length) state.waveRoute.splice(index, 1);
       if (state.waveEdit?.pending && state.waveEdit.hopIndex === index) state.waveEdit = null;
+    } else if (act === 'remove-zone') {
+      removeZoneById(id);
     }
     renderWaveEditor();
     updatePlaceMarkers();
@@ -3869,8 +4607,28 @@ function mountUi() {
       if (obj) setZoneEra(obj, n);
       else state.waveDraft.era = Math.max(0, Math.min(5, n | 0));
     }
-    renderWaveEditor();
+    renderWaveEditor(true);
+    updatePlaceMarkers();
   });
+  waveList?.addEventListener('change', (e) => {
+    const input = e.target.closest('[data-zone-field]');
+    if (!input || !waveList.contains(input)) return;
+    const obj = waveZoneById(input.dataset.zoneId || '');
+    if (!obj) return;
+    applyZoneField(obj, input);
+    renderWaveEditor(true);
+    updatePlaceMarkers();
+  });
+  const placeKind = document.getElementById('place-obj-kind');
+  const syncPlaceTerminal = () => {
+    const box = document.getElementById('place-obj-terminal');
+    if (!box) return;
+    const lock = placeKind?.value === 'escape' || placeKind?.value === 'advance';
+    box.disabled = lock;
+    if (lock) box.value = '1';
+  };
+  placeKind?.addEventListener('change', syncPlaceTerminal);
+  syncPlaceTerminal();
   renderWaveEditor();
   document.getElementById('btn-gen-scenery').addEventListener('click', () => {
     populateScenery(field, null, reservedFromPlacements(), { keepExisting: true });
@@ -3896,6 +4654,7 @@ function mountUi() {
   });
   document.getElementById('map-type').addEventListener('change', (e) => {
     state.mapType = normalizeMapType(e.target.value);
+    renderAllianceEditor();
   });
   for (const kind of RESOURCE_KINDS) {
     document.getElementById(`start-${kind}`).addEventListener('input', (e) => {
@@ -3909,7 +4668,8 @@ function mountUi() {
     applySelectedShape();
   });
   document.getElementById('chunk-radius').addEventListener('input', (e) => {
-    const r = Number(e.target.value) || 0;
+    const raw = Number(e.target.value);
+    const r = Number.isFinite(raw) ? raw : 0;
     document.getElementById('radius-label').textContent = String(r);
     if (!state.selected.length || !field.tableShape) return;
     for (const s of state.selected) setCellRadius(field.tableShape, s.cx, s.cz, r);
@@ -4043,6 +4803,7 @@ function mountUi() {
     propDrag = null;
     propReturnChunks = false;
     state.units = [];
+    state.teamByOwner = null;
     state.placePicks = [];
     placeDrag = null;
     placeBox = null;
@@ -4062,6 +4823,7 @@ function mountUi() {
     renderWaveEditor();
     syncFormFromField();
     syncPlacePickUi();
+    renderAllianceEditor();
     syncPropUi();
     rebuildTerrain();
   }
@@ -4073,20 +4835,33 @@ function mountUi() {
   });
   document.getElementById('btn-export').addEventListener('click', exportMap);
   document.getElementById('btn-play').addEventListener('click', playMap);
-  document.getElementById('btn-episode-add')?.addEventListener('click', addCurrentChapter);
+  document.getElementById('btn-chapter-add')?.addEventListener('click', addCurrentChapter);
+  document.getElementById('btn-chapter-new')?.addEventListener('click', () => {
+    flushActiveChapter();
+    generateFromSeed((Math.random() * 0x100000000) >>> 0);
+    const chapter = addChapter(campaignDraft, { name: nextChapterName(), garden: gardenPayload() });
+    if (chapter) activeChapterFile = chapter.file;
+    renderCampaignDraft();
+  });
+  document.getElementById('btn-chapter-save')?.addEventListener('click', saveActiveChapter);
   document.getElementById('btn-episode-new')?.addEventListener('click', () => {
     addEpisode(campaignDraft, '');
     renderCampaignDraft();
   });
-  document.getElementById('btn-episode-export')?.addEventListener('click', exportCampaign);
-  document.getElementById('btn-episode-play')?.addEventListener('click', () => { playCampaign(); });
+  document.getElementById('btn-campaign-export')?.addEventListener('click', exportCampaign);
+  document.getElementById('btn-campaign-play')?.addEventListener('click', () => { playCampaign(); });
+  document.getElementById('btn-campaign-import')?.addEventListener('click', () => {
+    document.getElementById('campaign-import-file').click();
+  });
+  document.getElementById('campaign-import-file')?.addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    if (file) importCampaignFile(file);
+    e.target.value = '';
+  });
   document.getElementById('campaign-name')?.addEventListener('input', (e) => {
     renameCampaign(campaignDraft, e.target.value);
   });
-  document.getElementById('episode-name')?.addEventListener('input', (e) => {
-    renameCurrentEpisode(campaignDraft, e.target.value);
-    renderCampaignDraft();
-  });
+  renderCampaignDraft();
   document.getElementById('btn-import').addEventListener('click', () => {
     document.getElementById('import-file').click();
   });
@@ -4300,6 +5075,8 @@ async function main() {
         }
       } else if (state.layer === 'place') {
         handlePlacePointerDown(pos, e);
+      } else if (state.layer === 'zones') {
+        handleZonePointerDown(pos, e);
       } else if (state.layer === 'table' && state.tableTool === 'props' && propGesture(pos)) {
         placeOrGrabProp(pos);
       } else {
@@ -4337,7 +5114,7 @@ async function main() {
         placeBox.z1 = pos.z;
         updatePlaceMarkers();
       }
-    } else if (placeDrag && state.layer === 'place' && (e.buttons & 1)) {
+    } else if (placeDrag && (state.layer === 'place' || state.layer === 'zones') && (e.buttons & 1)) {
       moveGroupDrag(pos);
     }
     const aiming = state.layer === 'walls' && (wallOpeningMode() || state.wallTool === 'erase' || e.shiftKey);
@@ -4428,6 +5205,13 @@ async function main() {
         deletePlacePick();
         return;
       }
+    }
+    if (state.layer === 'zones' && !typing && (e.key === 'Delete' || e.key === 'Backspace') && state.waveEdit?.id) {
+      e.preventDefault();
+      removeZoneById(state.waveEdit.id);
+      renderWaveEditor();
+      updatePlaceMarkers();
+      return;
     }
     if (storyDriving()) return;
     cam.handleKeyDown(e);

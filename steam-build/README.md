@@ -55,6 +55,8 @@ Launch-Aether.bat
 
 ## Steam upload
 
+Distribution is this upload, then the user sets the build live. Do not build a local-only package and treat it as shipped. Do not edit the Steam library install (`steamapps/common/Aether.Garden`, including `aether.url`, `package.nw`, or anything beside the exe). A local build or an install edit happens only after the user confirms that, more than once, in the same request.
+
 1. Create app + Windows/Linux depots on the partner site.
 2. Copy `steampipe/config.example.json` → `steampipe/config.json` and fill `appId` / depot IDs.
 3. Put the same App ID in `app/steam_appid.txt`.

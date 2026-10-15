@@ -8,6 +8,26 @@ let _teamOf = null;
 /** Packed (minTeam<<8)|maxTeam keys that are non-hostile. */
 let _neutral = null;
 
+/** Owners that can appear in a saved alliance table. Matches the resource banks. */
+export const TEAM_TABLE_OWNERS = 16;
+
+/**
+ * Owner → team id, length TEAM_TABLE_OWNERS. Missing entries stay their own team.
+ * Null when the garden did not author a table.
+ * @param {unknown} raw
+ * @param {number} [count]
+ */
+export function normalizeTeamByOwner(raw, count = TEAM_TABLE_OWNERS) {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const n = count | 0;
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const v = Number(raw[i]);
+    out.push(Number.isInteger(v) && v >= 0 && v <= 255 ? v : i);
+  }
+  return out;
+}
+
 export function normalizeNeutralTeams(raw) {
   if (!Array.isArray(raw) || !raw.length) return null;
   const out = [];

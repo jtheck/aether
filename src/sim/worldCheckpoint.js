@@ -237,6 +237,7 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   // Render-only queues — empty after restore.
   clearFxStore(w.lightningFx);
   clearFxStore(w.holyArmorFx);
+  clearFxStore(w.priestHealFx);
   clearSporeFx(w.sporeBloomFx);
   clearMonkFx(w.monkKickFx);
 

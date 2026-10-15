@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { chapterSelectOptions, formatCountdown, formatCreateLobbyLabel, formatMatchStatus, formatSeatName, formatStartLabel, formatTypeLobbyRow, setupLobbyUi } from './lobbyUi.js';
+import { chapterSelectOptions, formatCountdown, formatCreateLobbyLabel, formatMatchStatus, formatSeatName, formatStartLabel, formatTypeLobbyRow, groupSelectOptions, setupLobbyUi } from './lobbyUi.js';
 
 describe('lobby ui copy', () => {
   it('formats a type-list row', () => {
@@ -80,7 +80,7 @@ describe('lobby ui copy', () => {
     const opts = chapterSelectOptions([
       { id: '99', title: 'Grove', gardens: [{ file: 'map.garden', name: 'Grove' }] },
     ], 'workshop:12/maps/02.garden');
-    assert.equal(opts[0].id, 'ch1');
+    assert.equal(opts.some((o) => o.id === 'ch1'), false);
     assert.equal(opts.some((o) => o.id === 'e1c1'), false);
     assert.equal(opts.some((o) => o.id === 'workshop:99/map.garden'), true);
     assert.equal(opts.find((o) => o.id === 'workshop:12/maps/02.garden')?.name, 'Workshop map');
@@ -111,12 +111,57 @@ describe('lobby ui copy', () => {
     ], '');
     const ids = opts.filter((row) => String(row.id).startsWith('workshop:')).map((row) => row.id);
     assert.deepEqual(ids, ['workshop:7/e1c1.garden', 'workshop:7/e1c2.garden']);
+    assert.deepEqual(groupSelectOptions(opts).filter((row) => row.group), [
+      {
+        group: 'Siege — The Siege',
+        options: [
+          { id: 'workshop:7/e1c1.garden', name: 'Breach' },
+          { id: 'workshop:7/e1c2.garden', name: 'Sally' },
+        ],
+      },
+    ]);
   });
 
-  it('lists campaign chapters on localhost ?story=1', () => {
-    const opts = chapterSelectOptions([], 'ch1', '?story=1', 'localhost');
-    assert.equal(opts[0].id, 'ch1');
-    assert.equal(opts.some((o) => o.id === 'e1c1'), true);
+  it('skips chapters that are off, and an episode with none on', () => {
+    const opts = chapterSelectOptions([
+      {
+        id: '7',
+        title: 'Siege',
+        campaign: {
+          v: 1,
+          kind: 'campaign',
+          name: 'Siege',
+          episodes: [
+            {
+              name: 'The Siege',
+              chapters: [
+                { file: 'e1c1.garden', name: 'Breach' },
+                { file: 'e1c2.garden', name: 'Sally', live: false },
+              ],
+            },
+            {
+              name: 'Later',
+              chapters: [{ file: 'e2c1.garden', name: 'Unfinished', live: false }],
+            },
+          ],
+        },
+        gardens: [
+          { file: 'e1c1.garden', name: 'Breach' },
+          { file: 'e1c2.garden', name: 'Sally' },
+          { file: 'e2c1.garden', name: 'Unfinished' },
+        ],
+      },
+    ], '');
+    const workshop = opts.filter((row) => String(row.id).startsWith('workshop:'));
+    assert.deepEqual(workshop.map((row) => row.id), ['workshop:7/e1c1.garden']);
+    assert.equal(workshop.some((row) => String(row.name).includes('Later')), false);
+    assert.equal(workshop.some((row) => String(row.name).includes('Sally')), false);
+  });
+
+  it('does not list the generated catalog as adventure', () => {
+    const opts = chapterSelectOptions([], '', '?story=1', 'localhost');
+    assert.equal(opts.some((o) => o.id === 'ch1'), false);
+    assert.equal(opts.some((o) => o.id === 'e1c1'), false);
   });
 
   it('lists a loaded web pack ahead of workshop maps', () => {

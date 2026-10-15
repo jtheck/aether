@@ -8,9 +8,10 @@ import { VAT_UNIT_DEFS } from '../render/vatUnits.js';
 export const DLC_FIRST_RESPONDER = 'first_responder';
 export const DLC_FIRST_RESPONDER_APP_ID = 5217980;
 
-/** @typedef {{ url: string, scale?: number, idleClip?: string, walkClip?: string, carryClip?: string, chopClip?: string, attackClip?: string }} DlcSkin */
+/** @typedef {{ url?: string, label?: string, scale?: number, idleClip?: string, walkClip?: string, carryClip?: string, chopClip?: string, attackClip?: string }} DlcSkin */
 
-/** @type {Readonly<Record<string, { steamAppId: number, name: string, skins: Record<number, DlcSkin> }>>} */
+/** Unit skins key by UNIT id. Building skins (church, …) use `buildings`. */
+/** @type {Readonly<Record<string, { steamAppId: number, name: string, skins: Record<number, DlcSkin>, buildings?: Record<string, DlcSkin> }>>} */
 export const DLC_PACKS = {
   [DLC_FIRST_RESPONDER]: {
     steamAppId: DLC_FIRST_RESPONDER_APP_ID,
@@ -239,6 +240,131 @@ export function unitSkinLabel(typeId) {
   return getUnitDef(typeId)?.name ?? `Unit ${typeId}`;
 }
 
+/** @param {number | string} appId */
+export function steamStoreUrl(appId) {
+  return `https://store.steampowered.com/app/${Number(appId)}/`;
+}
+
+/**
+ * Looks the skins menu can show. Locked rows stay visible so a browser
+ * player can see the pack and the Steam purchase link.
+ * @param {string[]} [ownedPacks]
+ * @param {Record<number, string> | object} [savedUnits]
+ * @param {Record<string, string> | object} [savedBuildings]
+ */
+export function skinMenuModel(ownedPacks = [], savedUnits = {}, savedBuildings = {}) {
+  const owned = (ownedPacks ?? []).filter(isDlcPackId);
+  const unitPrefs = sanitizeSkins(savedUnits);
+  const buildingPrefs = sanitizeBuildingSkins(savedBuildings);
+  const auto = selectedSkins(owned, {});
+  /** @type {{ kind: 'unit' | 'building', id: number | string, label: string, unlocked: boolean, choices: { id: string, label: string }[] | null, value: string, offers: { id: string, name: string, storeUrl: string }[] }[]} */
+  const items = [];
+  /** @type {Set<string>} */
+  const seen = new Set();
+  for (const packId of DLC_PACK_ORDER) {
+    const pack = DLC_PACKS[packId];
+    if (!pack) continue;
+    for (const key of Object.keys(pack.skins ?? {})) {
+      const typeId = Number(key);
+      if (!Number.isInteger(typeId) || !pack.skins[typeId]?.url) continue;
+      const dedupe = `unit:${typeId}`;
+      if (seen.has(dedupe)) continue;
+      seen.add(dedupe);
+      const choices = skinChoicesForUnit(typeId, owned);
+      const unlocked = choices.length > 1;
+      items.push({
+        kind: 'unit',
+        id: typeId,
+        label: unitSkinLabel(typeId),
+        unlocked,
+        choices: unlocked ? choices : null,
+        value: unlocked
+          ? (Object.prototype.hasOwnProperty.call(unitPrefs, typeId)
+            ? unitPrefs[typeId]
+            : (auto[typeId] ?? DEFAULT_SKIN_ID))
+          : DEFAULT_SKIN_ID,
+        offers: offersFor('unit', typeId),
+      });
+    }
+    for (const buildingId of Object.keys(pack.buildings ?? {})) {
+      if (!pack.buildings[buildingId]?.url) continue;
+      const dedupe = `building:${buildingId}`;
+      if (seen.has(dedupe)) continue;
+      seen.add(dedupe);
+      const choices = skinChoicesForBuilding(buildingId, owned);
+      const unlocked = choices.length > 1;
+      items.push({
+        kind: 'building',
+        id: buildingId,
+        label: pack.buildings[buildingId].label || buildingId,
+        unlocked,
+        choices: unlocked ? choices : null,
+        value: unlocked
+          ? (Object.prototype.hasOwnProperty.call(buildingPrefs, buildingId)
+            ? (buildingPrefs[buildingId] || DEFAULT_SKIN_ID)
+            : (choices[1]?.id ?? DEFAULT_SKIN_ID))
+          : DEFAULT_SKIN_ID,
+        offers: offersFor('building', buildingId),
+      });
+    }
+  }
+  return items;
+}
+
+/** @param {'unit' | 'building'} kind @param {number | string} id */
+function offersFor(kind, id) {
+  const offers = [];
+  for (const packId of DLC_PACK_ORDER) {
+    const pack = DLC_PACKS[packId];
+    const skin = kind === 'unit' ? pack?.skins?.[id] : pack?.buildings?.[id];
+    if (!skin?.url) continue;
+    offers.push({
+      id: packId,
+      name: pack.name || packId,
+      storeUrl: steamStoreUrl(pack.steamAppId),
+    });
+  }
+  return offers;
+}
+
+/**
+ * @param {string} buildingId
+ * @param {string[]} [ownedPacks]
+ */
+export function skinChoicesForBuilding(buildingId, ownedPacks = []) {
+  const choices = [{ id: DEFAULT_SKIN_ID, label: 'Default' }];
+  for (const packId of DLC_PACK_ORDER) {
+    if (!ownedPacks.includes(packId)) continue;
+    const skin = DLC_PACKS[packId]?.buildings?.[buildingId];
+    if (!skin?.url) continue;
+    choices.push({ id: packId, label: DLC_PACKS[packId].name || packId });
+  }
+  return choices;
+}
+
+/**
+ * @param {unknown} raw
+ * @returns {Record<string, string>}
+ */
+export function sanitizeBuildingSkins(raw) {
+  /** @type {Record<string, string>} */
+  const out = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [key, value] of Object.entries(raw)) {
+    if (!key || key.length > 32) continue;
+    const defined = DLC_PACK_ORDER.some((id) => DLC_PACKS[id]?.buildings?.[key]?.url);
+    if (!defined) continue;
+    if (value === DEFAULT_SKIN_ID || value === 'default') {
+      out[key] = DEFAULT_SKIN_ID;
+      continue;
+    }
+    if (typeof value === 'string' && isDlcPackId(value) && DLC_PACKS[value].buildings?.[key]?.url) {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
 /**
  * Map Steam /info.dlc rows onto catalog pack ids.
  * @param {{ appId?: number, owned?: boolean, available?: boolean }[]} [dlcList]
@@ -282,11 +408,15 @@ export function resolveVatDef(typeId, packId) {
   };
 }
 
+function packCosmeticSkins(pack) {
+  return [...Object.values(pack?.skins ?? {}), ...Object.values(pack?.buildings ?? {})];
+}
+
 /** Static DLC GLBs for prebake / roster warm. */
 export function allDlcMeshUrls() {
   const urls = [];
   for (const pack of Object.values(DLC_PACKS)) {
-    for (const skin of Object.values(pack.skins)) {
+    for (const skin of packCosmeticSkins(pack)) {
       if (skin.url && !skin.idleClip) urls.push(skin.url);
     }
   }
@@ -297,7 +427,7 @@ export function allDlcMeshUrls() {
 export function allDlcVatDefs() {
   const defs = [];
   for (const pack of Object.values(DLC_PACKS)) {
-    for (const skin of Object.values(pack.skins)) {
+    for (const skin of packCosmeticSkins(pack)) {
       if (!skin.url || !skin.idleClip) continue;
       defs.push({
         url: skin.url,

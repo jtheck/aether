@@ -38,7 +38,7 @@ import {
   tileInTable,
   tileCenterWorld,
 } from './tableShape.js';
-import { encodeGarden, decodeCelestial, decodeGarden, fieldFromGarden, applyGardenPlacements } from './garden.js';
+import { encodeGarden, decodeCelestial, decodeGarden, encodeRle, fieldFromGarden, applyGardenPlacements } from './garden.js';
 import { clearAllScenery, populateScenery } from './scenery.js';
 import { buildTesterGarden, TESTER_STARTING_RESOURCES } from './testerGarden.js';
 import {
@@ -130,7 +130,7 @@ describe('table silhouette', () => {
     assert.equal(field.tableCenter, null);
     assert.equal(isPassable(field, 24, 24), true);
     assert.equal(isPassable(field, 24, 0), false);
-    assert.equal(field.tableCornerBlocks.length, 4);
+    assert.equal(field.tableCornerBlocks.length, 0);
   });
 
   it('places a block halfway along each table edge', () => {
@@ -148,10 +148,10 @@ describe('table silhouette', () => {
     assert.ok(mids.some((p) => p.x < -80 && Math.abs(p.z) < 1 && p.ox < 0));
     assert.ok(mids.some((p) => p.x > 80 && Math.abs(p.z) < 1 && p.ox > 0));
     assert.equal(field.tableEdgeBlocks.length, 4);
-    assert.equal(field.tableCornerBlocks.length, 4);
-    assert.equal(tableCornerPlinths(field).length, 4);
+    assert.equal(field.tableCornerBlocks.length, 0);
+    assert.equal(tableCornerPlinths(field).length, 0);
     assert.equal(isPassable(field, 0, 0), false);
-    assert.equal(isPassable(field, 3, 3), false);
+    assert.equal(isPassable(field, 3, 3), true);
     assert.equal(isPassable(field, 8, 8), true);
     assert.equal(isPassable(field, 24, 0), false);
     assert.equal(isPassable(field, 24, 4), false);
@@ -162,7 +162,7 @@ describe('table silhouette', () => {
   it('drops the corner plinth when that chunk is filleted', () => {
     const field = createField(1, { width: 48, height: 48 });
     field.terrainTypes.fill(TERRAIN.GRASS);
-    const cellRadius = createFullCellRadius(48, 48, 16, 0);
+    const cellRadius = createFullCellRadius(48, 48, 16, -1);
     cellRadius[0] = 12;
     applyTableSilhouette(field, {
       cellSize: 16,
@@ -171,6 +171,48 @@ describe('table silhouette', () => {
     });
     assert.equal(tableCornerPlinths(field).length, 3);
     assert.equal(field.tableCornerBlocks.length, 3);
+  });
+
+  it('leaves hole corners bare at radius 0 and plants them at -1', () => {
+    const field = createField(1, { width: 80, height: 80 });
+    field.terrainTypes.fill(TERRAIN.GRASS);
+    const chunksX = 5;
+    const cellMask = createFullCellMask(80, 80, 16);
+    cellMask[2 * chunksX + 2] = 0;
+    applyTableSilhouette(field, {
+      cellSize: 16,
+      cellMask,
+      cellRadius: createFullCellRadius(80, 80, 16, 0),
+    });
+    assert.equal(tableCornerPlinths(field).length, 0);
+
+    const cellRadius = createFullCellRadius(80, 80, 16, 0);
+    cellRadius[2 * chunksX + 2] = -1;
+    applyTableSilhouette(field, { cellSize: 16, cellMask, cellRadius });
+    const plinths = tableCornerPlinths(field);
+    assert.equal(plinths.length, 4);
+    assert.ok(plinths.some((p) => Math.abs(p.x + 32) < 0.1 && Math.abs(p.z + 32) < 0.1));
+  });
+
+  it('does not hang a plinth into a removed chunk at radius 0', () => {
+    const field = createField(1, { width: 80, height: 80 });
+    field.terrainTypes.fill(TERRAIN.GRASS);
+    const chunksX = 5;
+    const cellMask = createFullCellMask(80, 80, 16);
+    cellMask[2 * chunksX + 0] = 0;
+    applyTableSilhouette(field, {
+      cellSize: 16,
+      cellMask,
+      cellRadius: createFullCellRadius(80, 80, 16, 0),
+    });
+    assert.equal(tableCornerPlinths(field).length, 0);
+
+    const cellRadius = createFullCellRadius(80, 80, 16, 0);
+    cellRadius[1 * chunksX + 0] = -1;
+    applyTableSilhouette(field, { cellSize: 16, cellMask, cellRadius });
+    const plinths = tableCornerPlinths(field);
+    assert.equal(plinths.length, 1);
+    assert.ok(plinths.some((p) => Math.abs(p.x + 160) < 0.1 && Math.abs(p.z + 32) < 0.1));
   });
 
   it('keeps table-edge red/yellow after scenery populate', () => {
@@ -331,13 +373,43 @@ describe('garden codec', () => {
     assert.equal(json.mt, undefined);
     assert.equal(g.mapType, '');
 
+    cellRadius[1] = -1;
+    applyTableSilhouette(field, { cellSize: 16, cellMask, cellRadius });
+    const signed = decodeGarden(encodeGarden(field, { name: 'test' }));
+    assert.equal(signed.cellRadius[1], -1);
+    assert.ok(signed.cellRadius instanceof Int16Array);
+
     const again = fieldFromGarden(json);
     const json2 = encodeGarden(again);
     assert.equal(json2.cm, json.cm);
     assert.equal(json2.rr, json.rr);
     assert.equal(json2.t, json.t);
+    // Region lift is seed-derived here, so it is omitted and rebuilt on load.
+    assert.equal(json.rl, undefined);
+    assert.equal(json2.rl, undefined);
+  });
+
+  it('omits seed-derived region lift and decodes identically with or without it', () => {
+    const field = buildField(99, { width: 48, height: 48 });
+    const json = encodeGarden(field);
+    assert.equal(json.rl, undefined);
+    // Rebuild the explicit (seed-derived) rl the old encoder would have written.
+    const q = new Uint8Array(field.regionLift.length);
+    for (let i = 0; i < q.length; i++) q[i] = Math.round(field.regionLift[i] * 255);
+    const withRl = { ...json, rl: encodeRle(q) };
+    const a = fieldFromGarden(json);
+    const b = fieldFromGarden(withRl);
+    // Dropping rl must not change any gameplay-relevant mask.
+    assert.deepEqual(Array.from(a.terrainTypes), Array.from(b.terrainTypes));
+    assert.deepEqual(Array.from(a.pass), Array.from(b.pass));
+    assert.deepEqual(Array.from(a.slowMask), Array.from(b.slowMask));
+  });
+
+  it('still stores region lift when it diverges from the seed', () => {
+    const field = buildField(99, { width: 48, height: 48 });
+    field.regionLift[0] = field.regionLift[0] > 0.5 ? 0 : 1;
+    const json = encodeGarden(field);
     assert.equal(typeof json.rl, 'string');
-    assert.equal(json2.rl, json.rl);
   });
 
   it('stores the map type and defaults a missing one to blank', () => {
@@ -661,6 +733,16 @@ describe('garden codec', () => {
     const g = decodeGarden(json);
     assert.deepEqual(g.neutralTeams, [[0, 5], [0, 4]]);
     assert.equal(encodeGarden(field).nr, undefined);
+  });
+
+  it('roundtrips an authored alliance table and omits a missing one', () => {
+    const field = buildField(3, { width: 32, height: 32 });
+    const table = [201, 201, 2, 3, 4, 202, 202, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+    const json = encodeGarden(field, { teamByOwner: table });
+    assert.deepEqual(json.tm, table);
+    assert.deepEqual(decodeGarden(json).teamByOwner, table);
+    assert.equal(encodeGarden(field).tm, undefined);
+    assert.equal(decodeGarden(encodeGarden(field)).teamByOwner, null);
   });
 
   it('roundtrips procedural curtain walls and omits an empty list', () => {

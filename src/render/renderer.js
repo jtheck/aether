@@ -1854,6 +1854,36 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
   }
 
+  /** Soft gold rise on a priest heal. Not a smite slash. */
+  function emitPriestHeal(x, z) {
+    const ground = groundYAt(x, z);
+    const y = ground + 4.2;
+    particles.emit({
+      position: [x, y, z],
+      velocity: [0, 5.5, 0],
+      gravity: [0, 2.4, 0],
+      color: [1, 0.97, 0.78, 0.8],
+      lifetime: 0.5,
+      startSize: [1.7, 9],
+      endSize: [0.45, 2.4],
+      drag: 0.65,
+    });
+    for (let s = 0; s < 8; s++) {
+      const ang = (s / 8) * Math.PI * 2;
+      const along = (s / 7) * 6;
+      particles.emit({
+        position: [x + Math.cos(ang) * 0.35, ground + 1.1 + along, z + Math.sin(ang) * 0.35],
+        velocity: [Math.cos(ang) * 0.7, 6 + (s % 3) * 0.9, Math.sin(ang) * 0.7],
+        gravity: [0, 1.2, 0],
+        color: [1, 0.94, 0.7, 0.75],
+        lifetime: 0.55,
+        startSize: [0.35, 0.9],
+        endSize: [0.05, 0.15],
+        drag: 0.4,
+      });
+    }
+  }
+
   /** Bright Smite-style slash across the foe on holy-slash hit. */
   function emitHolySlashImpacts(prev, cur) {
     if (!cur) return;
@@ -5015,6 +5045,15 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     applyHolyArmorUpdates(updatesList) {
       unitAuras.applyHolyArmorUpdates(updatesList);
+    },
+
+    applyPriestHealUpdates(updatesList) {
+      if (!updatesList?.length) return;
+      for (let u = 0; u < updatesList.length; u++) {
+        const patch = updatesList[u];
+        const n = patch?.count | 0;
+        for (let i = 0; i < n; i++) emitPriestHeal(patch.x[i], patch.y[i]);
+      }
     },
 
     applyMonkKickUpdates(updatesList) {

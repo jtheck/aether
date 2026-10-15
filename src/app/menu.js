@@ -21,18 +21,13 @@ import {
   setShadowMode,
   setUnitSkin,
   getUnitSkins,
+  setBuildingSkin,
+  getBuildingSkins,
   shadowTier,
 } from './settings.js';
 import { setVolume } from './audio.js';
 import { aetherSteam } from './steam.js';
-import {
-  DEFAULT_SKIN_ID,
-  localOwnedPacks,
-  selectedSkins,
-  skinChoicesForUnit,
-  unitSkinLabel,
-  unitsWithUnlockedSkins,
-} from './dlcCatalog.js';
+import { localOwnedPacks, skinMenuModel } from './dlcCatalog.js';
 import {
   escapeMenuStep,
   fullscreenButtonLabel,
@@ -102,8 +97,7 @@ export function setupMenu({
   const aaEnabled = /** @type {HTMLInputElement | null} */ (drawer.querySelector('#aa_enabled'));
   const aaNote = /** @type {HTMLElement | null} */ (drawer.querySelector('#aa_note'));
   const hideHudBtn = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#hide_hud_b'));
-  const unitSkinsRow = /** @type {HTMLElement | null} */ (drawer.querySelector('#unit_skins_row'));
-  const unitSkinsHost = /** @type {HTMLElement | null} */ (drawer.querySelector('#unit_skins'));
+  const skinsBtn = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#skins_b'));
   const colorPicker = /** @type {HTMLSelectElement} */ (drawer.querySelector('#color_picker'));
   colorPicker.replaceChildren(
     ...PLAYER_COLORS.map((c) => {
@@ -215,52 +209,9 @@ export function setupMenu({
     onPlayerColorChange?.(hex);
   });
 
-  unitSkinsHost?.addEventListener('keydown', (e) => e.stopPropagation());
-
   aaEnabled?.addEventListener('change', () => {
     paintAa(setAaEnabled(aaEnabled.checked));
   });
-
-  function paintUnitSkins() {
-    if (!unitSkinsRow || !unitSkinsHost) return;
-    const owned = localOwnedPacks(aetherSteam.ownedPacks());
-    const units = unitsWithUnlockedSkins(owned);
-    unitSkinsRow.hidden = units.length === 0;
-    if (!units.length) {
-      unitSkinsHost.replaceChildren();
-      return;
-    }
-    const prefs = getUnitSkins();
-    const auto = selectedSkins(owned, {});
-    const frag = document.createDocumentFragment();
-    for (const typeId of units) {
-      const row = document.createElement('div');
-      row.className = 'row';
-      const selectId = `unit_skin_${typeId}`;
-      const label = document.createElement('label');
-      label.htmlFor = selectId;
-      label.textContent = unitSkinLabel(typeId);
-      const select = document.createElement('select');
-      select.id = selectId;
-      select.dataset.unitType = String(typeId);
-      for (const choice of skinChoicesForUnit(typeId, owned)) {
-        const opt = document.createElement('option');
-        opt.value = choice.id;
-        opt.textContent = choice.label;
-        select.appendChild(opt);
-      }
-      select.value = Object.prototype.hasOwnProperty.call(prefs, typeId)
-        ? prefs[typeId]
-        : (auto[typeId] ?? DEFAULT_SKIN_ID);
-      select.addEventListener('change', () => {
-        setUnitSkin(typeId, select.value);
-        onUnitSkinsChange?.();
-      });
-      row.append(label, select);
-      frag.appendChild(row);
-    }
-    unitSkinsHost.replaceChildren(frag);
-  }
 
   hideHudBtn?.addEventListener('click', () => {
     const next = !getHudLocked?.();
@@ -315,7 +266,7 @@ export function setupMenu({
   // Camera/hotkeys listen on window. Stop keydown so typing a name does not
   // pan or trip B/G/H. Leave keyup alone so a held pan key still releases.
   const keyStop = [
-    nameInput, colorPicker, aaEnabled, hideHudBtn, slider, fxSlider, volumeSlider, soloBtn, openReplayBtn, testerBtn, stressBtn,
+    nameInput, colorPicker, aaEnabled, hideHudBtn, skinsBtn, slider, fxSlider, volumeSlider, soloBtn, openReplayBtn, testerBtn, stressBtn,
     menuKothStart, menuKothClaim, menuKothLeave,
     menuMatchReady, menuMatchStart, menuMatchLeave,
     ...lobbyDrawerToggles,
@@ -342,7 +293,7 @@ export function setupMenu({
       aaEnabled.checked = enabled;
       paintAa(enabled);
     }
-    paintUnitSkins();
+    paintSkins();
     paintProfile();
   }
 
@@ -357,10 +308,93 @@ export function setupMenu({
   const helpBtn = /** @type {HTMLElement | null} */ (drawer.querySelector('#help_b'));
   const helpPop = /** @type {HTMLElement | null} */ (document.getElementById('help_pop'));
   const helpClose = /** @type {HTMLButtonElement | null} */ (document.getElementById('help_close'));
+  const skinsPop = /** @type {HTMLElement | null} */ (document.getElementById('skins_pop'));
+  const skinsClose = /** @type {HTMLButtonElement | null} */ (document.getElementById('skins_close'));
+  const skinsList = /** @type {HTMLElement | null} */ (document.getElementById('skins_list'));
+
+  function paintSkins() {
+    if (!skinsList) return;
+    const items = skinMenuModel(
+      localOwnedPacks(aetherSteam.ownedPacks()),
+      getUnitSkins(),
+      getBuildingSkins(),
+    );
+    const frag = document.createDocumentFragment();
+    if (!items.length) {
+      const empty = document.createElement('p');
+      empty.textContent = 'No alternate looks yet.';
+      frag.appendChild(empty);
+    }
+    for (const item of items) {
+      const block = document.createElement('div');
+      block.className = 'skin-item';
+      if (item.unlocked && item.choices) {
+        const selectId = `skin_${item.kind}_${item.id}`;
+        const row = document.createElement('div');
+        row.className = 'skin-row';
+        const label = document.createElement('label');
+        label.htmlFor = selectId;
+        label.textContent = item.label;
+        const select = document.createElement('select');
+        select.id = selectId;
+        for (const choice of item.choices) {
+          const opt = document.createElement('option');
+          opt.value = choice.id;
+          opt.textContent = choice.label;
+          select.appendChild(opt);
+        }
+        select.value = item.value;
+        select.addEventListener('change', () => {
+          if (item.kind === 'building') setBuildingSkin(String(item.id), select.value);
+          else setUnitSkin(Number(item.id), select.value);
+          onUnitSkinsChange?.();
+        });
+        select.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') return;
+          e.stopPropagation();
+        });
+        row.append(label, select);
+        block.appendChild(row);
+      } else {
+        const name = document.createElement('div');
+        name.className = 'skin-name';
+        name.textContent = item.label;
+        block.appendChild(name);
+        for (const offer of item.offers) {
+          const row = document.createElement('div');
+          row.className = 'skin-row';
+          const pack = document.createElement('span');
+          pack.textContent = offer.name;
+          const buy = document.createElement('a');
+          buy.className = 'btn';
+          buy.href = offer.storeUrl;
+          buy.target = '_blank';
+          buy.rel = 'noreferrer';
+          buy.textContent = 'Purchase on Steam';
+          row.append(pack, buy);
+          block.appendChild(row);
+        }
+        const note = document.createElement('p');
+        note.className = 'note';
+        note.textContent = 'Purchase on Steam to use this look.';
+        block.appendChild(note);
+      }
+      frag.appendChild(block);
+    }
+    skinsList.replaceChildren(frag);
+  }
+
+  function hidePop(pop, btn) {
+    if (!pop || pop.hidden) return;
+    pop.hidden = true;
+    btn?.classList.remove('is-on');
+    btn?.setAttribute('aria-expanded', 'false');
+  }
 
   function setHelpOpen(open, restoreFocus = false) {
     if (!helpPop) return;
     if (helpPop.hidden === !open) return;
+    if (open) hidePop(skinsPop, skinsBtn);
     helpPop.hidden = !open;
     helpBtn?.classList.toggle('is-on', open);
     helpBtn?.setAttribute('aria-expanded', open ? 'true' : 'false');
@@ -377,6 +411,29 @@ export function setupMenu({
     return true;
   }
 
+  function setSkinsOpen(open, restoreFocus = false) {
+    if (!skinsPop) return;
+    if (skinsPop.hidden === !open) return;
+    if (open) {
+      hidePop(helpPop, helpBtn);
+      paintSkins();
+    }
+    skinsPop.hidden = !open;
+    skinsBtn?.classList.toggle('is-on', open);
+    skinsBtn?.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) {
+      skinsClose?.focus();
+      return;
+    }
+    if (restoreFocus && drawer.classList.contains('is-open')) skinsBtn?.focus();
+  }
+
+  function closeSkins() {
+    if (!skinsPop || skinsPop.hidden) return false;
+    setSkinsOpen(false, true);
+    return true;
+  }
+
   function setOpen(open) {
     drawer.classList.toggle('is-open', open);
     button.classList.toggle('is-open', open);
@@ -384,7 +441,10 @@ export function setupMenu({
     button.setAttribute('aria-expanded', open ? 'true' : 'false');
     button.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
     button.title = open ? 'Close' : 'Menu';
-    if (!open) setHelpOpen(false);
+    if (!open) {
+      setHelpOpen(false);
+      setSkinsOpen(false);
+    }
     if (open) syncFromState();
   }
 
@@ -419,6 +479,7 @@ export function setupMenu({
   });
   gear.addEventListener('click', () => {
     setHelpOpen(false);
+    setSkinsOpen(false);
     const onSettings = activePage() === 'settings';
     showPage(onSettings ? 'main' : 'settings');
     if (!onSettings) syncFromState();
@@ -432,6 +493,11 @@ export function setupMenu({
   helpClose?.addEventListener('click', () => closeHelp());
   helpPop?.addEventListener('click', (e) => {
     if (e.target === helpPop) closeHelp();
+  });
+  skinsBtn?.addEventListener('click', () => setSkinsOpen(!!skinsPop?.hidden));
+  skinsClose?.addEventListener('click', () => closeSkins());
+  skinsPop?.addEventListener('click', (e) => {
+    if (e.target === skinsPop) closeSkins();
   });
   if (helpPop) mountHelpRoster(helpPop);
   const steamStoreLink = drawer.querySelector('#steam_store_a');
@@ -455,12 +521,17 @@ export function setupMenu({
     openMain,
     isOpen,
     closeHelp,
+    closeSkins,
     isHelpOpen() {
       return !!helpPop && !helpPop.hidden;
     },
-    /** Escape: help card, then open menu → settings → try leave F11 / fullscreen. */
+    isSkinsOpen() {
+      return !!skinsPop && !skinsPop.hidden;
+    },
+    /** Escape: skins or help card, then open menu → settings → try leave F11 / fullscreen. */
     async handleEscape() {
       if (button.hidden) return false;
+      if (closeSkins()) return true;
       if (closeHelp()) return true;
       const step = escapeMenuStep({ menuOpen: isOpen(), page: activePage() });
       if (step === 'open-menu') {

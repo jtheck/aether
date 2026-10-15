@@ -477,19 +477,19 @@
     #help_b:hover, #help_b:focus-visible,
     #help_b.is-on { stroke: aqua; opacity: 1; outline: none; }
     #settings_b:active, #help_b:active { stroke: darkmagenta; }
-    #help_pop {
+    #help_pop, #skins_pop {
       position: fixed; inset: 0; z-index: 10008;
       display: grid; place-items: center;
       background: rgba(12, 15, 20, .72);
     }
-    #help_pop[hidden] { display: none; }
-    #help_pop .help-card {
+    #help_pop[hidden], #skins_pop[hidden] { display: none; }
+    #help_pop .help-card, #skins_pop .help-card {
       position: relative; width: min(420px, 92vw); max-height: min(78vh, 560px);
       overflow: auto; box-sizing: border-box; margin: 0; padding: 16px 18px 18px;
       background: #0c0f14; border: 1px solid #2a3140; color: #fff;
       font: 13px/1.45 system-ui, sans-serif;
     }
-    #help_pop h3 { margin: 0 28px 10px 0; font-size: 15px; font-weight: 600; }
+    #help_pop h3, #skins_pop h3 { margin: 0 28px 10px 0; font-size: 15px; font-weight: 600; }
     #help_pop details { margin: 0 0 8px; }
     #help_pop summary {
       display: block; padding: 8px 10px; background: #161b24; color: inherit;
@@ -502,7 +502,7 @@
     #help_pop summary:active { border-color: darkmagenta; color: darkmagenta; }
     #help_pop details:not([open]) .help-body { display: none; }
     #help_pop .help-body { padding: 8px 2px 2px; }
-    #help_pop p { margin: 0 0 8px; }
+    #help_pop p, #skins_pop p { margin: 0 0 8px; }
     #help_pop .help-keys { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; margin: 0; }
     #help_pop .help-keys dt, #help_pop .help-keys dd { margin: 0; }
     #help_pop .help-keys dt { opacity: .8; }
@@ -522,12 +522,28 @@
     #help_pop .help-pips { display: inline-flex; gap: 3px; }
     #help_pop .help-pip { width: 10px; height: 10px; background: #161b24; border: 1px solid #2a3140; }
     #help_pop .help-pip.is-on { background: #cdd6e4; border-color: #cdd6e4; }
-    #help_close {
+    #help_close, #skins_close {
       position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; padding: 0;
       background: transparent; color: inherit; border: 0; font: 18px/1 system-ui, sans-serif;
       cursor: pointer; opacity: .7;
     }
-    #help_close:hover, #help_close:focus-visible { color: aqua; opacity: 1; outline: none; }
+    #help_close:hover, #help_close:focus-visible,
+    #skins_close:hover, #skins_close:focus-visible { color: aqua; opacity: 1; outline: none; }
+    #skins_pop .skin-item { margin: 0 0 14px; }
+    #skins_pop .skin-name { margin: 0 0 6px; font-weight: 600; }
+    #skins_pop .skin-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 8px; }
+    #skins_pop .skin-row label, #skins_pop .skin-row span { margin: 0; }
+    #skins_pop select {
+      margin: 0; padding: 4px 6px; background: #161b24; color: inherit;
+      border: 1px solid #2a3140; border-radius: 3px; font: inherit;
+    }
+    #skins_pop a.btn {
+      display: inline-block; margin: 0; padding: 6px 8px; background: #161b24; color: inherit;
+      border: 1px solid #2a3140; border-radius: 3px; font: inherit; text-decoration: none; white-space: nowrap;
+    }
+    #skins_pop a.btn:hover, #skins_pop a.btn:focus-visible { border-color: aqua; color: aqua; outline: none; }
+    #skins_pop a.btn:active { border-color: darkmagenta; color: darkmagenta; }
+    #skins_pop .note { margin: 0; font-size: 11px; color: #e0b050; }
     #side_menu .about { margin-top: 8px; line-height: 1.45; }
     #side_menu .about h4 { margin: 10px 0 8px; font-size: 13px; font-weight: 600; }
     #side_menu .about hr { width: 60%; border: 0; border-top: 1px solid #2a3140; margin: 14px 0; }
@@ -550,7 +566,7 @@
     body.screenshot-hud :is(
       #status, #resources, #resource-bank, #observer-data, #radial-prices,
       #koth-controls, #match-lobby-overlay, #header, #menu_b, #side_menu,
-      #boot-splash, #match-over, #version, #replay-watch, #help_pop
+      #boot-splash, #match-over, #version, #replay-watch, #help_pop, #skins_pop
     ),
     body.screenshot-hud .ble-root {
       visibility: hidden !important;
@@ -748,10 +764,9 @@
         <label for="color_picker">Colour</label>
         <select id="color_picker"></select>
       </div>
-      <div id="unit_skins_row" hidden>
-        <div class="note">Unit looks</div>
-        <div id="unit_skins"></div>
-        <div class="note">Unlocked cosmetics. New matches use this look.</div>
+      <div class="row">
+        <button type="button" class="btn" id="skins_b" aria-controls="skins_pop" aria-expanded="false">Skins</button>
+        <div class="note">Alternate looks for units and buildings.</div>
       </div>
       <div class="row">
         <button type="button" class="btn" id="hide_hud_b">Hide HUD</button>
@@ -839,7 +854,7 @@
             <dt>Screen side edges</dt><dd>Zoom</dd>
             <dt>Screen top/bottom edges</dt><dd>Rotate</dd>
             <dt>Top stats</dt><dd>Population, Game Clock, FPS, Ping</dd>
-            <dt>Bottom icons</dt><dd>Resources - Wood, Stone, Minerals, Food</dd>
+            <dt>Bottom resources</dt><dd>Wood, Stone, Minerals, Food</dd>
           </dl>
         </div>
       </details>
@@ -942,6 +957,14 @@
           <div class="help-grid" id="help-upgrades"></div>
         </div>
       </details>
+    </div>
+  </div>
+  <div id="skins_pop" hidden>
+    <div class="help-card" role="dialog" aria-modal="true" aria-labelledby="skins_title">
+      <button type="button" id="skins_close" aria-label="Close skins">×</button>
+      <h3 id="skins_title">Skins</h3>
+      <p>Alternate looks for units and buildings.</p>
+      <div id="skins_list"></div>
     </div>
   </div>
   <div id="replay-watch" hidden>

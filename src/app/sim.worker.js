@@ -5,7 +5,7 @@ import { applyTableSilhouette } from '../sim/tableShape.js';
 import { populateScenery } from '../sim/scenery.js';
 import { applyGardenPlacements, decodeGarden, fieldFromGarden } from '../sim/garden.js';
 import { setupWaveSpawners } from '../sim/waveSpawner.js';
-import { setTeamNeutralPairs } from '../sim/teams.js';
+import { setTeamAssignments, setTeamNeutralPairs } from '../sim/teams.js';
 import { armStoryProtectFromGarden } from '../sim/storyProtect.js';
 import { buildWorldFromConfig, spawnBases, stressReservedPoints } from '../sim/worldSetup.js';
 import { step } from '../sim/step.js';
@@ -25,6 +25,7 @@ import { takeFireZoneUpdates } from '../sim/fireZones.js';
 import { takeFrogUpdates } from '../sim/frogs.js';
 import { takeLightningUpdates } from '../sim/lightning.js';
 import { takeHolyArmorUpdates } from '../sim/holyArmor.js';
+import { takePriestHealUpdates } from '../sim/priestHeal.js';
 import { takeSporeBloomUpdates } from '../sim/sporeBloom.js';
 import { takeMonkKickUpdates } from '../sim/monkKick.js';
 import {
@@ -124,6 +125,7 @@ self.onmessage = (e) => {
         || (msg.config.animStressPerSide | 0) > 0;
       if (garden) applyGardenPlacements(world, field, garden);
       if (garden?.objectives?.length) setupWaveSpawners(world, field, garden.objectives);
+      if (garden?.teamByOwner) setTeamAssignments(garden.teamByOwner);
       setTeamNeutralPairs(garden?.neutralTeams ?? null);
       armStoryProtectFromGarden(world, garden);
       if (!garden) {
@@ -213,6 +215,7 @@ self.onmessage = (e) => {
       const frogUpdates = takeFrogUpdates(world);
       const lightningUpdates = takeLightningUpdates(world);
       const holyArmorUpdates = takeHolyArmorUpdates(world);
+      const priestHealUpdates = takePriestHealUpdates(world);
       const sporeBloomUpdates = takeSporeBloomUpdates(world);
       const monkKickUpdates = takeMonkKickUpdates(world);
       const buildingsChanged = !!world.buildingsDirty;
@@ -256,6 +259,7 @@ self.onmessage = (e) => {
         frogUpdates,
         lightningUpdates,
         holyArmorUpdates,
+        priestHealUpdates,
         sporeBloomUpdates,
         monkKickUpdates,
       });

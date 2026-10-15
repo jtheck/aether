@@ -46,7 +46,8 @@ import { PAGE_BUCKET_BASE, createTerrainMaterials, loadTerrainAtlas } from './te
 import * as fx from '../sim/fixed.js';
 
 const UV_SCALE = 1 / ATLAS_GRID;
-const UV_INSET = 0.01;
+/** Only keeps the shader's cell lookup off the border. atlasGrid stops the bleed. */
+const UV_INSET = 1e-4;
 /** Same upsample + bilinear as fog — spec fades across tile borders. */
 const SPEC_TEX_SCALE = 2;
 const SPEC_TEXEL_ALIGN = 64;

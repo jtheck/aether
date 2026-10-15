@@ -1,0 +1,91 @@
+{
+  "sourceUrl": "/assets/models/engineer.glb",
+  "bakeClipName": "Idle",
+  "idleName": "Idle",
+  "walkName": "Idle",
+  "carryName": null,
+  "chopName": null,
+  "attackName": null,
+  "idleClip": {
+    "fromRow": 0,
+    "frameCount": 4,
+    "fps": 60
+  },
+  "walkClip": {
+    "fromRow": 0,
+    "frameCount": 4,
+    "fps": 60
+  },
+  "chopClip": null,
+  "attackClip": null,
+  "carryClip": null,
+  "carryIdleClip": null,
+  "carryWalkClip": null,
+  "prims": [
+    {
+      "boneCount": 23,
+      "frameCount": 4,
+      "clips": {
+        "Idle": {
+          "fromRow": 0,
+          "frameCount": 4,
+          "fps": 60
+        }
+      },
+      "byteOffset": 0,
+      "floatCount": 1472
+    },
+    {
+      "boneCount": 23,
+      "frameCount": 4,
+      "clips": {
+        "Idle": {
+          "fromRow": 0,
+          "frameCount": 4,
+          "fps": 60
+        }
+      },
+      "byteOffset": 5888,
+      "floatCount": 1472
+    },
+    {
+      "boneCount": 23,
+      "frameCount": 4,
+      "clips": {
+        "Idle": {
+          "fromRow": 0,
+          "frameCount": 4,
+          "fps": 60
+        }
+      },
+      "byteOffset": 11776,
+      "floatCount": 1472
+    },
+    {
+      "boneCount": 23,
+      "frameCount": 4,
+      "clips": {
+        "Idle": {
+          "fromRow": 0,
+          "frameCount": 4,
+          "fps": 60
+        }
+      },
+      "byteOffset": 17664,
+      "floatCount": 1472
+    },
+    {
+      "boneCount": 23,
+      "frameCount": 4,
+      "clips": {
+        "Idle": {
+          "fromRow": 0,
+          "frameCount": 4,
+          "fps": 60
+        }
+      },
+      "byteOffset": 23552,
+      "floatCount": 1472
+    }
+  ]
+}

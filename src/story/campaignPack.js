@@ -35,7 +35,9 @@ export function normalizeCampaignIndex(raw) {
       const ch = ep.chapters[c];
       const file = safeGardenFile(ch && ch.file);
       if (!file) continue;
-      chapters.push({ file, name: clip(ch && ch.name, 80) });
+      const chapter = { file, name: clip(ch && ch.name, 80) };
+      if (ch && ch.live === false) chapter.live = false;
+      chapters.push(chapter);
       count += 1;
     }
     if (!chapters.length) continue;
@@ -58,11 +60,11 @@ export function isCampaignIndex(raw) {
   return !!normalizeCampaignIndex(raw);
 }
 
-/** Index plus embedded gardens, one per chapter file. */
+/** Index plus embedded gardens, one per chapter file — including chapters that are off. */
 export function isCampaignBundle(raw) {
   const index = normalizeCampaignIndex(raw);
   if (!index || !raw.gardens || typeof raw.gardens !== 'object') return false;
-  for (const ch of flattenCampaignChapters(index)) {
+  for (const ch of allCampaignChapters(index)) {
     const garden = raw.gardens[ch.file];
     if (!garden || typeof garden !== 'object' || !(garden.v | 0)) return false;
   }
@@ -82,27 +84,49 @@ export function campaignIndex(name, episodes) {
   });
 }
 
-/** Ordered chapters: `{ file, name, episode, theme }`. */
-export function flattenCampaignChapters(index) {
+function chapterRows(index) {
   const doc = normalizeCampaignIndex(index);
   if (!doc) return [];
   const out = [];
   for (const ep of doc.episodes) {
     for (const ch of ep.chapters) {
-      out.push({ file: ch.file, name: ch.name, episode: ep.name, theme: ep.theme });
+      out.push({
+        file: ch.file,
+        name: ch.name,
+        episode: ep.name,
+        theme: ep.theme,
+        live: ch.live !== false,
+      });
     }
   }
   return out;
 }
 
-/** Successor file in index order. '' at the end or when `file` is unknown. */
+/** Every chapter in the file, including ones switched off. */
+export function allCampaignChapters(index) {
+  return chapterRows(index);
+}
+
+/** Chapters players see. An episode with none of these is omitted. */
+export function flattenCampaignChapters(index) {
+  return chapterRows(index).filter((ch) => ch.live);
+}
+
+/**
+ * Next live chapter after `file`. A chapter that is off is not a stop,
+ * and finishing one continues at the next chapter that is on.
+ * '' at the end or when `file` is unknown.
+ */
 export function nextChapterFile(index, file) {
-  const chapters = flattenCampaignChapters(index);
+  const chapters = chapterRows(index);
   const want = campaignFileOfRef(file) || safeGardenFile(file);
   if (!want) return '';
   const i = chapters.findIndex((ch) => ch.file === want || campaignFileOfRef(ch.file) === want);
-  if (i < 0 || i + 1 >= chapters.length) return '';
-  return chapters[i + 1].file;
+  if (i < 0) return '';
+  for (let j = i + 1; j < chapters.length; j++) {
+    if (chapters[j].live) return chapters[j].file;
+  }
+  return '';
 }
 
 export function firstChapterFile(index) {
@@ -134,7 +158,7 @@ export function bundleCampaign(index, gardensByFile) {
   const doc = normalizeCampaignIndex(index);
   if (!doc) return null;
   const gardens = {};
-  for (const ch of flattenCampaignChapters(doc)) {
+  for (const ch of allCampaignChapters(doc)) {
     const garden = gardensByFile?.[ch.file];
     if (!garden || typeof garden !== 'object') return null;
     gardens[ch.file] = garden;

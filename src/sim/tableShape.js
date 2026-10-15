@@ -1,7 +1,8 @@
 // Table silhouette — 16-tile chunks with per-chunk corner radius.
 // Play / Forge boards use an odd chunk count so the origin sits in a center chunk.
 // A chunk's radius fillets its outside corners (convex) or inside corners
-// (concave / punched hole). Radius 0 stays sharp and plants a corner plinth.
+// (concave / punched hole). Radius 0 stays sharp with no plinth.
+// Radius -1 stays sharp and plants a corner plinth.
 
 import {
   TILE_SIZE_F,
@@ -16,8 +17,10 @@ import {
 } from './field.js';
 
 export const DEFAULT_CELL_SIZE = 16;
-/** Sharp corners + plinths. Raise a chunk's radius in Forge to fillet it. */
+/** Sharp corner, no plinth. Use -1 to plant a plinth. Raise the radius to fillet. */
 export const DEFAULT_CELL_RADIUS = 0;
+/** Sharp corner with a plinth on every corner that chunk owns. */
+export const PLINTH_CELL_RADIUS = -1;
 /** World size of the leftover r=0 closer on non-silhouette frames. */
 export const CORNER_BLOCK_SIZE = 11.55;
 const ARC_SEGMENTS = 16;
@@ -58,6 +61,14 @@ export function maxCellRadius(cellSize = DEFAULT_CELL_SIZE) {
   return (Math.max(1, cellSize | 0) * TILE_SIZE_F) * 0.5 - EPS;
 }
 
+/** -1 is a plinth. Anything else clamps to a sharp corner or a fillet. */
+export function clampCellRadius(radius, cellSize = DEFAULT_CELL_SIZE) {
+  const n = Number(radius);
+  if (!Number.isFinite(n)) return DEFAULT_CELL_RADIUS;
+  if (n < 0) return PLINTH_CELL_RADIUS;
+  return Math.min(maxCellRadius(cellSize), n);
+}
+
 export function createFullCellMask(width, height, cellSize = DEFAULT_CELL_SIZE) {
   const { chunksX, chunksZ } = cellCounts(width, height, cellSize);
   const mask = new Uint8Array(chunksX * chunksZ);
@@ -67,9 +78,8 @@ export function createFullCellMask(width, height, cellSize = DEFAULT_CELL_SIZE) 
 
 export function createFullCellRadius(width, height, cellSize = DEFAULT_CELL_SIZE, value = DEFAULT_CELL_RADIUS) {
   const { chunksX, chunksZ } = cellCounts(width, height, cellSize);
-  const radii = new Uint8Array(chunksX * chunksZ);
-  const maxR = maxCellRadius(cellSize);
-  radii.fill(Math.max(0, Math.min(maxR, Number(value) || 0)));
+  const radii = new Int16Array(chunksX * chunksZ);
+  radii.fill(clampCellRadius(value, cellSize));
   return radii;
 }
 
@@ -94,16 +104,15 @@ export function normalizeTableShape(field, opts = {}) {
   } else {
     cellMask = cellMask instanceof Uint8Array ? cellMask.slice() : Uint8Array.from(cellMask);
   }
-  const maxR = maxCellRadius(cellSize);
   let cellRadius = opts.cellRadius ?? field.tableShape?.cellRadius;
   if (!cellRadius || cellRadius.length !== expected) {
-    const fallback = Number(opts.cornerRadius ?? DEFAULT_CELL_RADIUS) || 0;
-    cellRadius = createFullCellRadius(field.width, field.height, cellSize, fallback);
+    cellRadius = createFullCellRadius(
+      field.width, field.height, cellSize, opts.cornerRadius ?? DEFAULT_CELL_RADIUS,
+    );
   } else {
-    cellRadius = cellRadius instanceof Uint8Array ? cellRadius.slice() : Uint8Array.from(cellRadius);
-    for (let i = 0; i < cellRadius.length; i++) {
-      cellRadius[i] = Math.max(0, Math.min(maxR, cellRadius[i]));
-    }
+    const clamped = new Int16Array(expected);
+    for (let i = 0; i < expected; i++) clamped[i] = clampCellRadius(cellRadius[i], cellSize);
+    cellRadius = clamped;
   }
   return { cellSize, chunksX, chunksZ, cellMask, cellRadius };
 }
@@ -125,8 +134,10 @@ export function getCellRadius(shape, cx, cz) {
 
 export function setCellRadius(shape, cx, cz, radius) {
   if (cx < 0 || cz < 0 || cx >= shape.chunksX || cz >= shape.chunksZ) return;
-  const maxR = maxCellRadius(shape.cellSize);
-  shape.cellRadius[cz * shape.chunksX + cx] = Math.max(0, Math.min(maxR, Number(radius) || 0));
+  if (!(shape.cellRadius instanceof Int16Array)) {
+    shape.cellRadius = Int16Array.from(shape.cellRadius);
+  }
+  shape.cellRadius[cz * shape.chunksX + cx] = clampCellRadius(radius, shape.cellSize);
 }
 
 export function tileCellCoords(tx, tz, cellSize) {
@@ -484,11 +495,11 @@ function isOuterTableEdge(ax, az, bx, bz, ox, oz, bounds) {
     || mz < bounds.minZ - 0.05 || mz > bounds.maxZ + 0.05;
 }
 
-/** r=0 convex corners get the same plinth as center / rail mids. Filleted corners skip it. */
+/** Radius -1 plants a plinth on sharp corners that chunk owns, including hole corners. */
 export function tableCornerPlinths(field, shape = field.tableShape) {
   if (!field || !shape) return [];
-  return convexCorners(field, shape)
-    .filter((c) => c.r <= 0)
+  return silhouetteCorners(field, shape)
+    .filter((c) => c.r < 0)
     .map((c) => ({ x: c.x, z: c.z }));
 }
 

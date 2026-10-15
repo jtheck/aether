@@ -189,18 +189,41 @@ function currentHref(win) {
   }
 }
 
+function urlsMatch(a, b) {
+  try {
+    const ua = new URL(a);
+    const ub = new URL(b);
+    const pathA = ua.pathname.replace(/\/+$/, '');
+    const pathB = ub.pathname.replace(/\/+$/, '');
+    return ua.origin === ub.origin && pathA === pathB;
+  } catch (_err) {
+    return a === b;
+  }
+}
+
 function applyStartUrl(win) {
   const startUrl = resolveStartUrl();
-  if (!startUrl || currentHref(win) === startUrl) return;
+  if (!startUrl) return;
+  const current = currentHref(win);
+  if (current && urlsMatch(current, startUrl)) return;
+  if (win._aetherNavigatedTo === startUrl) return;
   try {
     if (typeof win.navigate === 'function') {
+      win._aetherNavigatedTo = startUrl;
       win.navigate(startUrl);
       return;
     }
-  } catch (_nav) { /* fall through */ }
+  } catch (_nav) {
+    win._aetherNavigatedTo = '';
+  }
   try {
-    if (win.window && win.window.location) win.window.location.href = startUrl;
-  } catch (_loc) { /* first paint */ }
+    if (win.window && win.window.location) {
+      win._aetherNavigatedTo = startUrl;
+      win.window.location.href = startUrl;
+    }
+  } catch (_loc) {
+    win._aetherNavigatedTo = '';
+  }
 }
 
 function wireWindow(win) {

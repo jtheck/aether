@@ -125,6 +125,7 @@ export function clearSessionTableState(session) {
   session.pendingFrogUpdates = null;
   session.pendingLightningUpdates = null;
   session.pendingHolyArmorUpdates = null;
+  session.pendingPriestHealUpdates = null;
   session.pendingSporeBloomUpdates = null;
   session.pendingMonkKickUpdates = null;
 }
@@ -256,6 +257,8 @@ export class SimSession {
     this.pendingLightningUpdates = null;
     /** @type {Array<object> | null} */
     this.pendingHolyArmorUpdates = null;
+    /** @type {Array<object> | null} */
+    this.pendingPriestHealUpdates = null;
     /** @type {Array<object> | null} */
     this.pendingSporeBloomUpdates = null;
     /** @type {Array<object> | null} */
@@ -924,6 +927,10 @@ export class SimSession {
         if (!this.pendingHolyArmorUpdates) this.pendingHolyArmorUpdates = [];
         this.pendingHolyArmorUpdates.push(extra.holyArmorUpdates);
       }
+      if (extra?.priestHealUpdates) {
+        if (!this.pendingPriestHealUpdates) this.pendingPriestHealUpdates = [];
+        this.pendingPriestHealUpdates.push(extra.priestHealUpdates);
+      }
       if (extra?.sporeBloomUpdates) {
         if (!this.pendingSporeBloomUpdates) this.pendingSporeBloomUpdates = [];
         this.pendingSporeBloomUpdates.push(extra.sporeBloomUpdates);
@@ -1005,6 +1012,13 @@ export class SimSession {
   takePendingHolyArmorUpdates() {
     const out = this.pendingHolyArmorUpdates;
     this.pendingHolyArmorUpdates = null;
+    return out;
+  }
+
+  /** Drain priest heal pulses for the renderer. */
+  takePendingPriestHealUpdates() {
+    const out = this.pendingPriestHealUpdates;
+    this.pendingPriestHealUpdates = null;
     return out;
   }
 

@@ -9,9 +9,14 @@ import {
   popWaveHop,
   removeWaveHopAt,
   replaceWaveHop,
+  setZoneAllies,
   setZoneEra,
+  setZoneKind,
+  setZoneParam,
+  setZoneTerminal,
   setZoneWaves,
   tileToWaveFrac,
+  zoneTriggerSpec,
   waveFracToTile,
   waveTargetObjective,
 } from './waveRoute.js';
@@ -69,5 +74,61 @@ describe('forge wave route', () => {
     assert.equal(appendWaveHop(obj, [0.5, 0.7], { waves: 4, era: 1 }), true);
     assert.equal(obj.params.waves, 4);
     assert.equal(obj.params.era, 1);
+  });
+
+  it('flags a zone as the chapter ending, and locks escape and advance on', () => {
+    const hold = { kind: 'hold' };
+    setZoneTerminal(hold, true);
+    assert.equal(hold.terminal, true);
+    setZoneTerminal(hold, false);
+    assert.equal(hold.terminal, undefined);
+    const exit = { kind: 'reach', params: { escort: 'Wagon', waves: 2 } };
+    setZoneKind(exit, 'escape');
+    assert.equal(exit.kind, 'escape');
+    assert.equal(exit.terminal, true);
+    assert.equal(exit.params.escort, undefined);
+    assert.equal(exit.params.waves, 2);
+    setZoneTerminal(exit, false);
+    assert.equal(exit.terminal, true);
+    setZoneKind(exit, 'reach');
+    assert.equal(exit.terminal, undefined);
+  });
+
+  it('stores escort, choice, and clock params, and drops blanks so the match default applies', () => {
+    const zone = { kind: 'escort', params: { waves: 2 } };
+    setZoneParam(zone, 'escort', 'Wagon');
+    assert.equal(zone.params.escort, 'Wagon');
+    assert.equal(zone.params.waves, 2);
+    setZoneParam(zone, 'escort', '');
+    assert.equal(zone.params.escort, undefined);
+    assert.equal(zone.params.waves, 2);
+    setZoneParam(zone, 'seconds', 45);
+    assert.equal(zone.params.seconds, 45);
+    setZoneParam(zone, 'seconds', null);
+    assert.equal(zone.params.seconds, undefined);
+    assert.equal(zoneTriggerSpec('choice').fields.some((f) => f.param === 'branch'), true);
+    assert.equal(zoneTriggerSpec('race').fields.some((f) => f.param === 'failMessage'), true);
+  });
+
+  it('writes one allied reinforcement and clears it when the group count is zero', () => {
+    const zone = { kind: 'survive' };
+    setZoneAllies(zone, {
+      from: [0.2, 0.8],
+      to: [0.5, 0.3],
+      waves: 2,
+      count: 4,
+      delay: 5,
+      interval: 14,
+    });
+    assert.deepEqual(zone.params.allies, [{
+      from: [0.2, 0.8],
+      to: [0.5, 0.3],
+      waves: 2,
+      count: 4,
+      delay: 5,
+      interval: 14,
+    }]);
+    setZoneAllies(zone, { from: [0.2, 0.8], to: [0.5, 0.3], waves: 0 });
+    assert.equal(zone.params, undefined);
   });
 });

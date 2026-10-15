@@ -17,6 +17,7 @@ import { createFireZoneStore } from './fireZones.js';
 import { createFrogStore } from './frogs.js';
 import { createLightningFxStore, createPendingLightningStore } from './lightning.js';
 import { createHolyArmorFxStore } from './holyArmor.js';
+import { createPriestHealFxStore } from './priestHeal.js';
 import {
   createSporeBloomFxStore,
   createSporeGrowthStore,
@@ -84,6 +85,7 @@ export function createWorld(seed) {
     lightningFx: createLightningFxStore(),
     pendingLightning: createPendingLightningStore(),
     holyArmorFx: createHolyArmorFxStore(),
+    priestHealFx: createPriestHealFxStore(),
     sporeBloomFx: createSporeBloomFxStore(),
     treeGrowth: createSporeGrowthStore(),
     monkKickFx: createMonkKickFxStore(),

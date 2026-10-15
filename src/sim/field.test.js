@@ -513,6 +513,23 @@ describe('chunk-scale relief', () => {
     assert.ok(dirty.some((t) => t.x >= 24 && t.z === 8), 'far water releveled without a rebuild mark');
   });
 
+  it('water marks survive a second rebuild before the repaint reads them', () => {
+    const field = createField(1, { width: 32, height: 16 });
+    field.terrainTypes.fill(TERRAIN.GRASS);
+    field.detailHeight.fill(0.5);
+    field.regionLift.fill(0.3);
+    field.activeMask.fill(1);
+    for (let x = 4; x <= 28; x++) field.terrainTypes[8 * 32 + x] = TERRAIN.WATER;
+    composeHeightMap(field);
+    consumeWaterDirty(field);
+    field.heightMap[8 * 32 + 4] += 0.25;
+    rebuildWaterSurface(field);
+    rebuildWaterSurface(field);
+    const dirty = consumeWaterDirty(field);
+    assert.ok(dirty.some((t) => t.x >= 24 && t.z === 8), 'second rebuild dropped the first one\'s marks');
+    assert.equal(consumeWaterDirty(field).length, 0);
+  });
+
   it('raise paint keeps terrain types and lifts the felt', () => {
     const field = buildField(1, { width: TINY_MAP_W, height: TINY_MAP_W });
     fullSilhouette(field);

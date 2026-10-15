@@ -16,9 +16,29 @@
     #forge-ui h1 { margin: 0 0 8px; font-size: 16px; }
     #forge-ui label { display: block; margin: 6px 0 2px; color: #aaa; }
     #forge-ui input, #forge-ui select, #forge-ui textarea { width: 100%; box-sizing: border-box; }
+    #forge-ui textarea { min-height: 72px; resize: vertical; }
+    #forge-ui .block-title { margin: 14px 0 4px; color: #9cc; font-size: 12px; }
+    #forge-ui .field-name { display: block; color: #ddd; }
+    #forge-ui .field-note { display: block; color: #777; font-size: 11px; font-weight: normal; margin-top: 2px; }
+    #forge-ui .faction-row { align-items: center; flex-wrap: nowrap; }
+    #forge-ui .faction-swatch { width: 16px; height: 16px; flex: 0 0 auto; border: 1px solid #555; }
+    #forge-ui .faction-row select { flex: 1; width: auto; }
+    #forge-ui .alliance-name { flex: 1; min-width: 0; }
+    #forge-ui .alliance-row select { flex: 0 0 88px; }
     #forge-ui button { margin: 2px 2px 2px 0; }
     .row { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
     .row button.active { outline: 1px solid #ccc; }
+    #campaign-tree { margin: 4px 0; }
+    #campaign-tree .row { flex-wrap: nowrap; align-items: center; gap: 2px; margin: 1px 0; }
+    #campaign-tree input { flex: 1; min-width: 0; border: 0; background: transparent; color: #ddd; padding: 1px 3px; }
+    #campaign-tree input:hover, #campaign-tree input:focus { background: #1c2228; outline: none; }
+    #campaign-tree button { margin: 0; padding: 0 5px; }
+    #campaign-tree .ep { margin-top: 7px; }
+    #campaign-tree .ep input { font-weight: 600; color: #9bb; }
+    #campaign-tree .ep.current input { color: #cfe; }
+    #campaign-tree .row.off { opacity: 0.55; }
+    #campaign-tree .ep.idle input { color: #677; }
+    #campaign-tree .num { color: #777; min-width: 15px; text-align: right; }
     /* v1 kakko links — corner brackets, aqua / darkmagenta */
     #forge-ui a.kakko {
       text-decoration: none; color: #fff; white-space: nowrap; font-size: .8em;

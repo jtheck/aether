@@ -312,6 +312,8 @@ export function createTerrainMaterials(atlas, specTexture) {
     mat.specularPower = TERRAIN_SPECULAR_POWER;
     mat.specularCoordIndex = 1;
     mat.diffuseTexture = diffuse;
+    // Sheets, composite pages, and look maps share this grid. See build-lite.mjs.
+    mat.atlasGrid = ATLAS_GRID;
     // Atlas only. Rails and haul props leave this unset and stay at full grade.
     mat.diffuseLevel = TERRAIN_DIFFUSE_LEVEL;
     mat.backFaceCulling = true;

@@ -5,7 +5,7 @@ import { FIELD_SIZES, MODE_IDS, getMode, selectableAdventureChapters } from '../
 import { aetherSteam } from './steam.js';
 import { stashSessionGarden, writeCampaignPack } from './gardenSession.js';
 import { formatWorkshopRef, isWorkshopRef } from './workshop.js';
-import { flattenCampaignChapters, formatPackRef, isCampaignBundle } from '../story/campaignPack.js';
+import { flattenCampaignChapters, formatPackRef, isCampaignBundle, normalizeCampaignIndex } from '../story/campaignPack.js';
 
 /**
  * @param {object} lobby
@@ -209,19 +209,52 @@ function paintSeats(container, seats, { teams, localId, compact, spectators, hos
   });
 }
 
+function optionEl(id, name) {
+  const opt = document.createElement('option');
+  opt.value = id;
+  opt.textContent = name;
+  return opt;
+}
+
+/** Flat options, with a `group` field gathered under that episode header. */
+export function groupSelectOptions(values, labelOf = (v) => v) {
+  const rows = [];
+  let current = null;
+  for (const v of values || []) {
+    const id = typeof v === 'string' ? v : v.id;
+    const name = typeof v === 'string' ? labelOf(v) : (v.name || id);
+    const group = typeof v === 'string' ? '' : String(v.group || '');
+    if (group && current?.group === group) {
+      current.options.push({ id, name });
+      continue;
+    }
+    if (group) {
+      current = { group, options: [{ id, name }] };
+      rows.push(current);
+      continue;
+    }
+    current = null;
+    rows.push({ id, name });
+  }
+  return rows;
+}
+
 function fillSelect(select, values, current, labelOf = (v) => v) {
   if (!select) return;
-  const ids = values.map((v) => (typeof v === 'string' ? v : v.id)).join('\0');
-  if (select.dataset.optSig !== ids) {
-    select.dataset.optSig = ids;
-    select.replaceChildren(
-      ...values.map((v) => {
-        const opt = document.createElement('option');
-        opt.value = typeof v === 'string' ? v : v.id;
-        opt.textContent = typeof v === 'string' ? labelOf(v) : v.name;
-        return opt;
-      }),
-    );
+  const sig = (values || []).map((v) => (typeof v === 'string' ? v : `${v.group || ''}\0${v.id}\0${v.name || ''}`)).join('\n');
+  if (select.dataset.optSig !== sig) {
+    select.dataset.optSig = sig;
+    select.replaceChildren();
+    for (const row of groupSelectOptions(values, labelOf)) {
+      if (row.group) {
+        const heading = document.createElement('optgroup');
+        heading.label = row.group;
+        for (const opt of row.options) heading.appendChild(optionEl(opt.id, opt.name));
+        select.appendChild(heading);
+      } else {
+        select.appendChild(optionEl(row.id, row.name));
+      }
+    }
   }
   if (current != null && select.value !== String(current)) select.value = String(current);
 }
@@ -235,17 +268,19 @@ function workshopChapterLabel(item, garden) {
 export function chapterSelectOptions(workshopItems, current, search, hostname, localChapters) {
   const official = selectableAdventureChapters(search, hostname)
     .filter((c) => c.garden)
-    .map((c) => ({ id: c.id, name: c.name }));
+    .map((c) => ({ id: c.id, name: c.name, group: c.episode || '' }));
   const local = Array.isArray(localChapters) ? localChapters.filter((row) => row?.id) : [];
   const extra = [];
   for (const item of workshopItems || []) {
-    const packed = flattenCampaignChapters(item.campaign);
-    if (packed.length) {
+    const index = normalizeCampaignIndex(item.campaign);
+    if (index) {
+      const packed = flattenCampaignChapters(index);
       const title = item.title || item.campaign?.name || item.id;
       for (const ch of packed) {
         extra.push({
           id: formatWorkshopRef(item.id, ch.file),
-          name: packed.length > 1 ? `${title} — ${ch.episode} · ${ch.name || ch.file}` : title,
+          name: packed.length > 1 ? (ch.name || ch.file) : title,
+          group: packed.length > 1 ? [title, ch.episode].filter(Boolean).join(' — ') : '',
         });
       }
       continue;
@@ -557,7 +592,8 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
         await writeCampaignPack(text);
         localChapters = flattenCampaignChapters(data).map((ch) => ({
           id: formatPackRef(ch.file),
-          name: `${data.name || 'Campaign'} — ${ch.episode} · ${ch.name || ch.file}`,
+          name: ch.name || ch.file,
+          group: ch.episode || data.name || 'Campaign',
         }));
         if (localChapters[0]) matchLobby.setSetting('chapter', localChapters[0].id);
       } else if (data && typeof data === 'object' && (data.v | 0) >= 3 && (data.w | 0) > 0) {

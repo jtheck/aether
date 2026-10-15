@@ -42,6 +42,7 @@ import { villageVillagerProgress } from '../sim/buildingProduction.js';
 import { decodeCelestial, decodeGarden } from '../sim/garden.js';
 import { loadGardenRef, resolveNextGardenRef } from './workshop.js';
 import { continuationGardenRef, loadPlayIndex } from './campaignPlay.js';
+import { loadAdventureCampaign } from '../lobby/adventureCampaign.js';
 import { packFilesOf } from '../story/campaignPack.js';
 import { TESTER_GARDEN_URL } from '../sim/testerGarden.js';
 import {
@@ -179,7 +180,7 @@ import {
 import { createExitMarks } from '../story/exits.js';
 import { liveConfigKeepsAdventure, resetAdventureRuntime } from '../story/adventureRuntime.js';
 import { CHAPTER_FLUSH_MS, chapterVotesReady, gardenFromChapterVotes, pickCanonicalChapter } from '../story/chapterSync.js';
-import { getTeamAssignments, getTeamNeutralPairs, isAlly, setTeamAssignments, setTeamNeutralPairs } from '../sim/teams.js';
+import { getTeamAssignments, getTeamNeutralPairs, isAlly, normalizeTeamByOwner, setTeamAssignments, setTeamNeutralPairs } from '../sim/teams.js';
 import { aetherSteam } from './steam.js';
 import {
   localOwnedPacks,
@@ -505,6 +506,12 @@ async function main() {
       shareVisionWith: stressShareVisionOwners(),
       fog: fogOverrideFromSearch() ?? true,
     };
+  }
+
+  try {
+    await loadAdventureCampaign();
+  } catch (err) {
+    console.warn('[adventure] campaign file failed', err);
   }
 
   ctx = await bootGame(canvas, bootCfg, { stress, animStress, armyPerSide: bootCfg.armyPerSide ?? armyPerSide, kothShard, solo });
@@ -3107,8 +3114,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   screenshotHudRef.current = screenshotHud;
 
   window.addEventListener('keydown', (e) => {
-    if (sideMenu.isHelpOpen?.() && e.code !== 'Escape') {
-      e.preventDefault();
+    if ((sideMenu.isHelpOpen?.() || sideMenu.isSkinsOpen?.()) && e.code !== 'Escape') {
+      const inSkinControl = sideMenu.isSkinsOpen?.()
+        && e.target instanceof Element
+        && e.target.closest('#skins_pop select, #skins_pop a, #skins_pop button');
+      if (!inSkinControl) e.preventDefault();
       return;
     }
     if (inputApi.handleControlGroupKeyDown?.(e)) return;
@@ -3144,6 +3154,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     if (e.code === 'Escape') {
       e.preventDefault();
+      if (sideMenu.closeSkins?.()) return;
       if (sideMenu.closeHelp?.()) return;
       if (screenshotHud.isHidden()) return;
       if (placingType) {
@@ -4257,6 +4268,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
       const holyArmorUpdates = session.takePendingHolyArmorUpdates?.();
       if (holyArmorUpdates?.length) renderer.applyHolyArmorUpdates?.(holyArmorUpdates);
+      const priestHealUpdates = session.takePendingPriestHealUpdates?.();
+      if (priestHealUpdates?.length) renderer.applyPriestHealUpdates?.(priestHealUpdates);
       const sporeBloomUpdates = session.takePendingSporeBloomUpdates?.();
       if (sporeBloomUpdates?.length) {
         renderer.applySporeBloomUpdates?.(sporeBloomUpdates, world.tick);
@@ -4472,7 +4485,8 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
   // Stay quiet through session.reset; onWorldRebuilt force-stamps after setField.
   liveConfigQuietFog = true;
   try {
-    setTeamAssignments(cfg.teamByOwner ?? null);
+    const authoredTeams = normalizeTeamByOwner(cfg.garden?.tm ?? cfg.garden?.teamByOwner);
+    setTeamAssignments(authoredTeams ?? cfg.teamByOwner ?? null);
     setTeamNeutralPairs(cfg.garden?.nr ?? cfg.garden?.neutralTeams ?? cfg.neutralTeams ?? null);
     ctx.session.setRole(cfg.role ?? 'player');
     if (cfg.localPlayerId != null) {

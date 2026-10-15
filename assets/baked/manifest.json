@@ -27,6 +27,7 @@
     "patronage",
     "perch",
     "priest",
+    "props_castle",
     "props_disc",
     "prospecting",
     "rocks_moss",
@@ -49,6 +50,8 @@
   ],
   "vat": [
     "villager",
-    "warrior"
+    "warrior",
+    "monk",
+    "engineer"
   ]
 }

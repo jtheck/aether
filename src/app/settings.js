@@ -1,4 +1,4 @@
-import { DEFAULT_SKIN_ID, isDlcPackId, sanitizeSkins } from './dlcCatalog.js';
+import { DEFAULT_SKIN_ID, isDlcPackId, sanitizeBuildingSkins, sanitizeSkins } from './dlcCatalog.js';
 
 // Player + graphics preferences, following v1's paradigm: one localStorage key
 // per setting holding a plain string, read back through a getter with a default.
@@ -12,6 +12,7 @@ const VOLUME_KEY = 'volumeLevel';
 const NAME_KEY = 'playerName';
 const COLOR_KEY = 'playerColor';
 const UNIT_SKINS_KEY = 'unitSkins';
+const BUILDING_SKINS_KEY = 'buildingSkins';
 
 /** v1 label set, kept verbatim so the slider reads the same in both versions. */
 export const SHADOW_LABELS = ['Off', 'Low', 'Med', 'Full'];
@@ -445,4 +446,26 @@ export function setUnitSkin(typeId, packId) {
   else delete next[id];
   write(UNIT_SKINS_KEY, JSON.stringify(next));
   return next;
+}
+
+/** Saved per-building cosmetic picks. Explicit Default is `''`. */
+export function getBuildingSkins() {
+  try {
+    return sanitizeBuildingSkins(JSON.parse(read(BUILDING_SKINS_KEY) || '{}'));
+  } catch {
+    return {};
+  }
+}
+
+/** @param {string} buildingId @param {string} packId */
+export function setBuildingSkin(buildingId, packId) {
+  const next = { ...getBuildingSkins() };
+  const id = String(buildingId || '');
+  if (!id) return next;
+  if (packId === DEFAULT_SKIN_ID || packId === 'default') next[id] = DEFAULT_SKIN_ID;
+  else if (isDlcPackId(packId)) next[id] = packId;
+  else delete next[id];
+  const clean = sanitizeBuildingSkins(next);
+  write(BUILDING_SKINS_KEY, JSON.stringify(clean));
+  return clean;
 }

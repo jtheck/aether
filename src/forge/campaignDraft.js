@@ -4,7 +4,6 @@
 import {
   bundleCampaign,
   campaignIndex,
-  flattenCampaignChapters,
   normalizeCampaignIndex,
 } from '../story/campaignPack.js';
 
@@ -44,6 +43,72 @@ export function renameCurrentEpisode(draft, name) {
   if (ep) ep.name = String(name || '').trim() || 'Episode';
 }
 
+export function renameEpisode(draft, index, name) {
+  const ep = draft?.episodes?.[index];
+  if (ep) ep.name = String(name || '').trim() || `Episode ${index + 1}`;
+}
+
+export function setCurrentEpisode(draft, index) {
+  if (!draft?.episodes?.length) return;
+  draft.episodeIndex = Math.max(0, Math.min(draft.episodes.length - 1, index | 0));
+}
+
+export function removeEpisode(draft, index) {
+  const eps = draft?.episodes;
+  if (!eps || eps.length <= 1 || index < 0 || index >= eps.length) return false;
+  eps.splice(index, 1);
+  draft.episodeIndex = Math.max(0, Math.min(eps.length - 1, draft.episodeIndex > index ? draft.episodeIndex - 1 : draft.episodeIndex));
+  return true;
+}
+
+export function moveEpisode(draft, index, dir) {
+  const eps = draft?.episodes;
+  const j = index + dir;
+  if (!eps || index < 0 || index >= eps.length || j < 0 || j >= eps.length) return false;
+  const current = eps[draft.episodeIndex];
+  [eps[index], eps[j]] = [eps[j], eps[index]];
+  draft.episodeIndex = eps.indexOf(current);
+  return true;
+}
+
+/** Find a chapter by file, returning its episode/chapter indices. */
+export function locateChapter(draft, file) {
+  const eps = draft?.episodes || [];
+  for (let e = 0; e < eps.length; e += 1) {
+    const c = eps[e].chapters.findIndex((ch) => ch.file === file);
+    if (c >= 0) return { epIndex: e, chIndex: c, episode: eps[e], chapter: eps[e].chapters[c] };
+  }
+  return null;
+}
+
+export function renameChapter(draft, file, name) {
+  const loc = locateChapter(draft, file);
+  if (!loc) return false;
+  loc.chapter.name = String(name || '').trim() || loc.chapter.name;
+  return true;
+}
+
+/** Move a chapter up (dir -1) or down (dir +1); crosses into the neighbouring episode at an edge. */
+export function moveChapter(draft, file, dir) {
+  const loc = locateChapter(draft, file);
+  if (!loc) return false;
+  const eps = draft.episodes;
+  const { epIndex, chIndex } = loc;
+  const chapters = eps[epIndex].chapters;
+  if (dir < 0) {
+    if (chIndex > 0) {
+      [chapters[chIndex - 1], chapters[chIndex]] = [chapters[chIndex], chapters[chIndex - 1]];
+    } else if (epIndex > 0) {
+      eps[epIndex - 1].chapters.push(chapters.splice(chIndex, 1)[0]);
+    } else return false;
+  } else if (chIndex < chapters.length - 1) {
+    [chapters[chIndex + 1], chapters[chIndex]] = [chapters[chIndex], chapters[chIndex + 1]];
+  } else if (epIndex < eps.length - 1) {
+    eps[epIndex + 1].chapters.unshift(chapters.splice(chIndex, 1)[0]);
+  } else return false;
+  return true;
+}
+
 export function addEpisode(draft, name) {
   draft.episodes.push({ name: String(name || '').trim() || `Episode ${draft.episodes.length + 1}`, theme: '', chapters: [] });
   draft.episodeIndex = draft.episodes.length - 1;
@@ -54,12 +119,23 @@ export function addEpisode(draft, name) {
 export function addChapter(draft, { name, garden }) {
   const ep = currentEpisode(draft);
   if (!ep || !garden || typeof garden !== 'object') return null;
-  const used = new Set(flattenCampaignChapters(draftToIndex(draft)).map((ch) => ch.file));
+  const used = new Set();
+  for (const episode of draft.episodes || []) {
+    for (const ch of episode.chapters || []) used.add(ch.file);
+  }
   const title = String(name || garden.n || '').trim() || 'Chapter';
   const file = safeFile(title, used);
-  const chapter = { file, name: title, garden };
+  const chapter = { file, name: title, garden, live: true };
   ep.chapters.push(chapter);
   return chapter;
+}
+
+/** Players skip a chapter while `live` is false. The map stays in the file. */
+export function setChapterLive(draft, file, live) {
+  const loc = locateChapter(draft, file);
+  if (!loc) return false;
+  loc.chapter.live = live !== false;
+  return true;
 }
 
 export function removeChapter(draft, file) {
@@ -89,11 +165,17 @@ export function syncChapterGarden(draft, name, garden) {
   return hit;
 }
 
-export function draftToIndex(draft) {
+export function draftToIndex(draft, { liveOnly = false } = {}) {
   return campaignIndex(draft?.name || 'Campaign', (draft?.episodes || []).map((ep) => ({
     name: ep.name,
     theme: ep.theme || '',
-    chapters: (ep.chapters || []).map((ch) => ({ file: ch.file, name: ch.name })),
+    chapters: (ep.chapters || [])
+      .filter((ch) => !liveOnly || ch.live !== false)
+      .map((ch) => {
+        const row = { file: ch.file, name: ch.name };
+        if (ch.live === false) row.live = false;
+        return row;
+      }),
   })));
 }
 
@@ -117,6 +199,7 @@ export function draftFromBundle(bundle) {
       chapters: ep.chapters.map((ch) => ({
         file: ch.file,
         name: ch.name,
+        live: ch.live !== false,
         garden: bundle.gardens[ch.file],
       })),
     })),
@@ -125,5 +208,7 @@ export function draftFromBundle(bundle) {
 }
 
 export function draftChapterCount(draft) {
-  return flattenCampaignChapters(draftToIndex(draft)).length;
+  let n = 0;
+  for (const ep of draft?.episodes || []) n += ep.chapters?.length || 0;
+  return n;
 }

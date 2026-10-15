@@ -185,6 +185,7 @@ export class SimClient {
         frogUpdates: msg.frogUpdates ?? null,
         lightningUpdates: msg.lightningUpdates ?? null,
         holyArmorUpdates: msg.holyArmorUpdates ?? null,
+        priestHealUpdates: msg.priestHealUpdates ?? null,
         sporeBloomUpdates: msg.sporeBloomUpdates ?? null,
         monkKickUpdates: msg.monkKickUpdates ?? null,
       };

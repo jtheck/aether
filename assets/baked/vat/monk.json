@@ -1,0 +1,76 @@
+{
+  "sourceUrl": "/assets/models/monk.glb",
+  "bakeClipName": "Idle",
+  "idleName": "Idle",
+  "walkName": "Walk",
+  "carryName": null,
+  "chopName": null,
+  "attackName": "Attack",
+  "idleClip": {
+    "fromRow": 0,
+    "frameCount": 61,
+    "fps": 60
+  },
+  "walkClip": {
+    "fromRow": 61,
+    "frameCount": 63,
+    "fps": 60
+  },
+  "chopClip": null,
+  "attackClip": {
+    "fromRow": 124,
+    "frameCount": 61,
+    "fps": 60
+  },
+  "carryClip": null,
+  "carryIdleClip": null,
+  "carryWalkClip": null,
+  "prims": [
+    {
+      "boneCount": 27,
+      "frameCount": 185,
+      "clips": {
+        "Idle": {
+          "fromRow": 0,
+          "frameCount": 61,
+          "fps": 60
+        },
+        "Walk": {
+          "fromRow": 61,
+          "frameCount": 63,
+          "fps": 60
+        },
+        "Attack": {
+          "fromRow": 124,
+          "frameCount": 61,
+          "fps": 60
+        }
+      },
+      "byteOffset": 0,
+      "floatCount": 79920
+    },
+    {
+      "boneCount": 27,
+      "frameCount": 185,
+      "clips": {
+        "Idle": {
+          "fromRow": 0,
+          "frameCount": 61,
+          "fps": 60
+        },
+        "Walk": {
+          "fromRow": 61,
+          "frameCount": 63,
+          "fps": 60
+        },
+        "Attack": {
+          "fromRow": 124,
+          "frameCount": 61,
+          "fps": 60
+        }
+      },
+      "byteOffset": 319680,
+      "floatCount": 79920
+    }
+  ]
+}

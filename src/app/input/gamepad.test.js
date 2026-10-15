@@ -753,6 +753,33 @@ describe('createGamepadAdapter', () => {
     pad.dispose();
   });
 
+  it('B closes the skins popup and leaves the side menu open', () => {
+    const { doc, side } = menuDoc();
+    const skins = el('div', { id: 'skins_pop', hidden: false });
+    const close = el('button', { id: 'skins_close' });
+    attach(skins, close);
+    close.click = () => { skins.hidden = true; };
+    side.classList.add('is-open');
+    const inner = doc.getElementById;
+    doc.getElementById = (id) => {
+      if (id === 'skins_pop') return skins;
+      if (id === 'skins_close') return close;
+      return inner(id);
+    };
+    const b = [];
+    b[PAD.B] = btn(true);
+    const pad = createGamepadAdapter({
+      camera: {},
+      root: doc,
+      getGamepads: () => [stdPad({ buttons: b })],
+      autoStart: false,
+    });
+    pad.tick();
+    assert.equal(skins.hidden, true);
+    assert.equal(side.classList.contains('is-open'), true);
+    pad.dispose();
+  });
+
   it('B closes the help popup and leaves the side menu open', () => {
     const { doc, side } = menuDoc();
     const help = el('div', { id: 'help_pop', hidden: false });

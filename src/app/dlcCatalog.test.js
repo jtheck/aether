@@ -16,6 +16,7 @@ import {
   resolveVatDef,
   selectedSkins,
   skinChoicesForUnit,
+  skinMenuModel,
 } from './dlcCatalog.js';
 
 describe('dlcCatalog', () => {
@@ -76,5 +77,24 @@ describe('dlcCatalog', () => {
     assert.equal(choices[0].id, DEFAULT_SKIN_ID);
     assert.equal(choices.length, 2);
     assert.equal(choices[1].id, DLC_FIRST_RESPONDER);
+  });
+
+  it('lists priest for players who do not own the pack, with a Steam purchase link', () => {
+    const locked = skinMenuModel([]);
+    assert.equal(locked.length, 1);
+    assert.equal(locked[0].kind, 'unit');
+    assert.equal(locked[0].label, 'Priest');
+    assert.equal(locked[0].unlocked, false);
+    assert.equal(locked[0].choices, null);
+    assert.equal(locked[0].offers[0].id, DLC_FIRST_RESPONDER);
+    assert.equal(locked[0].offers[0].storeUrl, 'https://store.steampowered.com/app/5217980/');
+
+    const owned = skinMenuModel([DLC_FIRST_RESPONDER], {});
+    assert.equal(owned[0].unlocked, true);
+    assert.equal(owned[0].value, DLC_FIRST_RESPONDER);
+    assert.equal(owned[0].choices.length, 2);
+
+    const off = skinMenuModel([DLC_FIRST_RESPONDER], { [UNIT.PRIEST]: DEFAULT_SKIN_ID });
+    assert.equal(off[0].value, DEFAULT_SKIN_ID);
   });
 });

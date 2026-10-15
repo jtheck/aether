@@ -171,6 +171,8 @@ function bakeSourceGeometry(source, world) {
     normals,
     indices,
     uvs: source._cpuUvs ? new Float32Array(source._cpuUvs) : null,
+    // Second UV set (lightmap/AO channel) — only present on models that bake one.
+    uv2: source._cpuUv2 ? new Float32Array(source._cpuUv2) : null,
     material: source.material,
     reverseWinding: true,
   };
@@ -227,6 +229,7 @@ export async function bakeGltfParts(engine, url) {
  *   normals: Float32Array,
  *   indices: Uint32Array,
  *   uvs: Float32Array | null,
+ *   uv2: Float32Array | null,
  *   material: object | null,
  *   reverseWinding: boolean,
  * }} CpuMeshPart
@@ -281,6 +284,7 @@ async function loadCpuMeshPackage(engine, url) {
               normals: float32Slice(bin, part.normals),
               indices: uint32Slice(bin, part.indices),
               uvs: part.uvs ? float32Slice(bin, part.uvs) : null,
+              uv2: part.uv2 ? float32Slice(bin, part.uv2) : null,
               reverseWinding: part.reverseWinding !== false,
               materialIndex: part.materialIndex ?? 0,
               materialName: part.materialName,
@@ -299,6 +303,7 @@ async function loadCpuMeshPackage(engine, url) {
               normals: part.normals,
               indices: part.indices,
               uvs: part.uvs,
+              uv2: part.uv2 ?? null,
               material: materials[part.materialIndex] ?? materials[0] ?? null,
               reverseWinding: part.reverseWinding !== false,
               boundMin: part.boundMin,
@@ -360,6 +365,7 @@ function cpuPackageFromLive(baked, sockets) {
     normals: p.normals,
     indices: p.indices instanceof Uint32Array ? p.indices : new Uint32Array(p.indices),
     uvs: p.uvs,
+    uv2: p.uv2 ?? null,
     material: p.material,
     reverseWinding: p.reverseWinding,
     materialName: p.material?.name,
@@ -381,6 +387,7 @@ function meshesFromCpuPackage(engine, url, pkg) {
       part.normals,
       part.indices,
       part.uvs ?? undefined,
+      part.uv2 ?? undefined,
     );
     mesh.material = part.material;
     mesh.pickable = false;
@@ -440,17 +447,20 @@ export async function loadBakedUnitMesh(engine, url) {
   let vertCount = 0;
   let indexCount = 0;
   let hasUvs = false;
+  let hasUv2 = false;
   const cpu = pkg.parts;
   for (const part of cpu) {
     vertCount += part.positions.length / 3;
     indexCount += part.indices.length;
     if (part.uvs) hasUvs = true;
+    if (part.uv2) hasUv2 = true;
   }
 
   const positions = new Float32Array(vertCount * 3);
   const normals = new Float32Array(vertCount * 3);
   const indices = new Uint32Array(indexCount);
   const uvs = hasUvs ? new Float32Array(vertCount * 2) : undefined;
+  const uv2 = hasUv2 ? new Float32Array(vertCount * 2) : undefined;
   let vBase = 0;
   let iBase = 0;
   for (const part of cpu) {
@@ -465,13 +475,14 @@ export async function loadBakedUnitMesh(engine, url) {
         }
       }
     }
+    if (uv2 && part.uv2) uv2.set(part.uv2, vBase * 2);
     const idx = part.indices;
     for (let i = 0; i < idx.length; i++) indices[iBase + i] = idx[i] + vBase;
     vBase += part.positions.length / 3;
     iBase += idx.length;
   }
 
-  const mesh = createMeshFromData(engine, url, positions, normals, indices, uvs);
+  const mesh = createMeshFromData(engine, url, positions, normals, indices, uvs, uv2);
   mesh.material = cpu[0]?.material ?? null;
   mesh.pickable = false;
   mesh._reverseWinding = cpu.some((p) => p.reverseWinding);

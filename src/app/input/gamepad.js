@@ -65,7 +65,7 @@ export const NAV_REPEAT_MS = 160;
 const ROT_SENS = 0.023;
 const ZOOM_SENS = 0.85;
 
-export const MENU_FOCUS_SEL = 'button, input, select, textarea, summary, #settings_b, #help_b';
+export const MENU_FOCUS_SEL = 'button, input, select, textarea, summary, a.btn, #settings_b, #help_b';
 
 /**
  * @param {unknown} pads
@@ -513,6 +513,8 @@ export function activeMenuRoot(doc) {
   if (!doc?.getElementById) return null;
   const kbd = osKbdRoot(doc) ?? doc.getElementById(OS_KBD_ID);
   if (kbd && !kbd.hidden) return kbd;
+  const skins = doc.getElementById('skins_pop');
+  if (skins && !skins.hidden) return skins;
   const help = doc.getElementById('help_pop');
   if (help && !help.hidden) return help;
   const side = doc.getElementById('side_menu');
@@ -845,9 +847,10 @@ export function createGamepadAdapter(opts = {}) {
       }
       return;
     }
-    if (menuRoot?.id === 'help_pop' && (edges[PAD.B] || edges[PAD.START] || edges[PAD.BACK])) {
+    if ((menuRoot?.id === 'help_pop' || menuRoot?.id === 'skins_pop') && (edges[PAD.B] || edges[PAD.START] || edges[PAD.BACK])) {
       blurInside(menuRoot, root);
-      root.getElementById('help_close')?.click?.();
+      const closeId = menuRoot.id === 'skins_pop' ? 'skins_close' : 'help_close';
+      root.getElementById(closeId)?.click?.();
       return;
     }
     if (edges[PAD.START] || edges[PAD.BACK]) {

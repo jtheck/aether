@@ -144,6 +144,19 @@ describe('workshopMaps subscribed list', () => {
         'e1c1.garden',
         'e1c2.garden',
       ]);
+      fs.writeFileSync(path.join(dir, 'campaign.json'), JSON.stringify({
+        kind: 'campaign',
+        name: 'Siege',
+        episodes: [{
+          name: 'The Siege',
+          chapters: [
+            { file: 'e1c1.garden', name: 'Breach' },
+            { file: 'e1c2.garden', name: 'Sally', live: false },
+          ],
+        }],
+      }));
+      const again = maps.listSubscribedMaps(workshop);
+      assert.equal(again[0].campaign.episodes[0].chapters[1].live, false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

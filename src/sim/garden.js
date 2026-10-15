@@ -8,7 +8,7 @@
 // them while editing; a match stamps them onto the field and renders that copy.
 
 import { applyTableSilhouette, createFullCellMask, createFullCellRadius, normalizeTableShape } from './tableShape.js';
-import { applySeededHeight, buildField, composeHeightMap, createField, generateHeightMap, PAINTED_LIFT_MAX, PAINTED_LIFT_MIN, refreshTerrainDerived, TILE_SIZE_F, tileCenterX, tileCenterY, worldToTile, worldToTileZ } from './field.js';
+import { applySeededHeight, buildField, composeHeightMap, computeSeedRegionLift, createField, generateHeightMap, PAINTED_LIFT_MAX, PAINTED_LIFT_MIN, refreshTerrainDerived, TILE_SIZE_F, tileCenterX, tileCenterY, worldToTile, worldToTileZ } from './field.js';
 import { applyAuthoredScenery, clearOffTableScenery, SCENERY } from './scenery.js';
 import { ensureDoodadArrays, hasAuthoredDoodads } from './doodads.js';
 import { cloneBackdrops, encodeBackdrops, normalizeBackdrops } from './backdrops.js';
@@ -19,7 +19,7 @@ import { grantStartingResources, RESOURCE_KINDS, STARTING_RESOURCES } from './re
 import { encodeStory, normalizeStory } from '../story/timeline.js';
 import { encodeObjectives, normalizeObjectives } from '../story/objectives.js';
 import * as fx from './fixed.js';
-import { normalizeNeutralTeams } from './teams.js';
+import { normalizeNeutralTeams, normalizeTeamByOwner } from './teams.js';
 import { applyWallOccupancy, decodeWalls, encodeWalls } from './walls.js';
 import { normalizeMapType } from './mapType.js';
 import { isNamedUnit } from './namedUnit.js';
@@ -64,6 +64,23 @@ export function decodeRle(str, length = 0) {
     return out;
   }
   return Uint8Array.from(arr);
+}
+
+/** Cell radii are signed: -1 is a plinth. Uint8 RLE would wrap that to 255. */
+function decodeSignedRle(str, length) {
+  const out = new Int16Array(Math.max(0, length | 0));
+  if (!str) return out;
+  let i = 0;
+  const runs = String(str).split(',');
+  for (let r = 0; r < runs.length && i < out.length; r++) {
+    if (!runs[r]) continue;
+    const parts = runs[r].split(':');
+    const val = Number(parts[0]);
+    const count = Number(parts[1]);
+    if (!Number.isFinite(val) || !(count > 0)) continue;
+    for (let n = 0; n < count && i < out.length; n++, i++) out[i] = val;
+  }
+  return out;
 }
 
 function encodeCellBits(mask) {
@@ -339,6 +356,25 @@ function encodeStartingResources(raw) {
   return RESOURCE_KINDS.map((k) => n[k] | 0);
 }
 
+/**
+ * The region heightmap is purely seed-derived (no editor touches it), so when it
+ * matches what the seed reconstructs we skip storing it — it rebuilds for free on
+ * load. This is ~90% of a generated map's bytes. Compared at quantization
+ * granularity so a re-saved (already-quantized) map still counts as a match.
+ */
+function regionLiftMatchesSeed(field) {
+  const n = field.width * field.height;
+  if (!field.regionLift || field.regionLift.length !== n) return false;
+  const seedLift = computeSeedRegionLift(field.seed >>> 0, field.width, field.height);
+  const a = field.regionLift;
+  for (let i = 0; i < n; i++) {
+    const qa = Math.max(0, Math.min(255, Math.round(a[i] * 255)));
+    const qb = Math.max(0, Math.min(255, Math.round(seedLift[i] * 255)));
+    if (qa !== qb) return false;
+  }
+  return true;
+}
+
 export function encodeGarden(field, extras = {}) {
   const shape = normalizeTableShape(field, field.tableShape ?? {});
   const units = normalizeUnits(extras.units);
@@ -357,7 +393,7 @@ export function encodeGarden(field, extras = {}) {
   };
   if (extras.omitTerrain !== true) {
     out.t = encodeRle(field.terrainTypes);
-    if (field.regionLift?.length === field.width * field.height) {
+    if (field.regionLift?.length === field.width * field.height && !regionLiftMatchesSeed(field)) {
       out.rl = encodeQuantized01(field.regionLift);
     }
     if (field.paintedLift?.length === field.width * field.height) {
@@ -411,6 +447,8 @@ export function encodeGarden(field, extras = {}) {
   if (packedWalls) out.wl = packedWalls;
   const neutrals = normalizeNeutralTeams(extras.neutralTeams);
   if (neutrals) out.nr = neutrals;
+  const teams = normalizeTeamByOwner(extras.teamByOwner);
+  if (teams) out.tm = teams;
   if (extras.mapType != null && String(extras.mapType).trim() !== '') {
     out.mt = normalizeMapType(extras.mapType);
   }
@@ -464,7 +502,7 @@ export function decodeGarden(data) {
       ? decodeCellBits(data.cm, expected)
       : createFullCellMask(width, height, cellSize),
     cellRadius: data.rr
-      ? decodeRle(data.rr, expected)
+      ? decodeSignedRle(data.rr, expected)
       : createFullCellRadius(width, height, cellSize, Number(data.cr) || 0),
     terrainTypes: data.t != null && data.t !== '' ? decodeRle(data.t, n) : new Uint8Array(0),
     sceneryType: data.sc ? decodeRle(data.sc, n) : null,
@@ -486,6 +524,7 @@ export function decodeGarden(data) {
     objectives: normalizeObjectives(data.obj),
     cameraHalfF: Number(data.ch) > 0 ? Number(data.ch) : 0,
     neutralTeams: normalizeNeutralTeams(data.nr),
+    teamByOwner: normalizeTeamByOwner(data.tm),
     walls: decodeWalls(data.wl),
     mapType: data.mt != null && String(data.mt).trim() !== '' ? normalizeMapType(data.mt) : '',
   };

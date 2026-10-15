@@ -1,7 +1,7 @@
 // Combat — acquire targets, chase, deal damage on cooldown.
 
 import * as fx from './fixed.js';
-import { ATTACK_DELIVERY, getUnitDef, unitAttacksBuildings, unitIdleHunts } from './unitTypes.js';
+import { ATTACK_DELIVERY, getUnitDef, UNIT, unitAttacksBuildings, unitIdleHunts } from './unitTypes.js';
 import { unitAttackDamage } from './namedUnit.js';
 import { revertBrigand } from './brigand.js';
 import { isHostile } from './teams.js';
@@ -20,6 +20,7 @@ import {
   spatialCellId,
 } from './spatialGrid.js';
 import { tickHolyArmorShields } from './holyArmor.js';
+import { tryPriestHeal } from './priestHeal.js';
 import { tickMana } from './mana.js';
 import {
   applyDamageBuilding,
@@ -248,6 +249,12 @@ function resolveAttacks(w, field) {
   for (let i = 0; i < w.count; i++) {
     if (!w.alive[i]) continue;
     if (w.carriedBy?.[i] >= 0) continue;
+    // Idle priests may top off the huddle. A fight only swaps the shot they
+    // are about to fire, and only when most of that heal would land.
+    if (w.order[i] === w.ORDER.IDLE) {
+      if (w.type[i] === UNIT.PRIEST) tryPriestHeal(w, i, true);
+      continue;
+    }
     if (w.order[i] !== w.ORDER.ATTACK) continue;
     // Distracted units don't pick new fights, but a frog-confused unit may
     // already be locked onto an ally — let that swing through.
@@ -302,7 +309,9 @@ function resolveAttacks(w, field) {
       // Keep hasTarget — it marks a pending attack-move destination to resume.
       clearPath(w, i);
       if (w.attackCd[i] <= 0) {
-        if (unitOk) {
+        if (w.type[i] === UNIT.PRIEST && tryPriestHeal(w, i, false)) {
+          // Shared attack cooldown spent on the heal. Smite waits.
+        } else if (unitOk) {
           if (def.attackDelivery === ATTACK_DELIVERY.PROJECTILE) {
             spawnProjectile(w, {
               type: def.projectileType,

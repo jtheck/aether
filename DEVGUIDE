@@ -35,7 +35,8 @@ JS is two bundles (main + worker) — not hundreds of Lite chunks.
 Obfuscation off by default; opt-in: PACKAGE_OBFUSCATE=1 (main + sim worker — both are fully bundled).
 Do not open index.html from disk (file:// / CORS / SAB).
 
-To deploy:
+To deploy (this is the only ship path):
+ - Do not build a local-only package and call it deployed. Do not edit a Steam library install, `aether.url`, or anything beside the installed exe. A local build or an install edit happens only after the user confirms that, more than once, in the same request.
  - Upload the *contents* of DEPLOY/ to the S3 bucket root (not the DEPLOY folder name)
  - CloudFront → Distributions → Invalidation "/*"
  - CloudFront MUST send these on HTML (ideally all responses) or the game stays a black/fallback screen:

@@ -325,6 +325,29 @@ const LITE_PATCHES = [
     to: 'const textureLevel = (features & 127) !== 0 ? (mat.diffuseLevel ?? 1) : 0;',
   },
   {
+    // Atlas materials set atlasGrid to their cells per side. The shader keeps
+    // each sample's filter footprint inside the cell, so a tile can show its
+    // whole cell without mip and anisotropic taps reaching the neighbour cell.
+    file: /standard-pipeline\.js$/,
+    from: 'data[21] = mat.reflectionCoordMode;',
+    to: 'data[21] = mat.reflectionCoordMode;\n\tdata[22] = mat.atlasGrid ?? 0;',
+  },
+  {
+    file: /standard-template\.js$/,
+    from: 'const helpers = _disableLighting ? "" : LIGHTING_FN;',
+    to: 'const helpers = (_disableLighting ? "" : LIGHTING_FN) + (_needsUV ? "fn stdAtlasCell(t:texture_2d<f32>,s:sampler,uv:vec2<f32>,grid:f32)->vec4<f32>{let dx=dpdx(uv);let dy=dpdy(uv);let size=vec2<f32>(textureDimensions(t));let ax=length(dx*size);let ay=length(dy*size);let lod=clamp(log2(max(min(ax,ay),max(ax,ay)*0.125)),0.0,f32(textureNumLevels(t)-1u));let cell=1.0/grid;let pad=min(0.5*(abs(dx)+abs(dy))+exp2(lod)/size,vec2<f32>(0.5*cell));let lo=floor(uv*grid)*cell;return textureSampleGrad(t,s,clamp(uv,lo+pad,lo+cell-pad),dx,dy);}" : "");',
+  },
+  {
+    file: /standard-template\.js$/,
+    from: 'let _ds=textureSample(dT,dS,${_diffuseUsesUV2 ? "input.vv" : "input.vu"});',
+    to: 'var _ds:vec4<f32>;if(mat._0>0.0){_ds=stdAtlasCell(dT,dS,${_diffuseUsesUV2 ? "input.vv" : "input.vu"},mat._0);}else{_ds=textureSample(dT,dS,${_diffuseUsesUV2 ? "input.vv" : "input.vu"});}',
+  },
+  {
+    file: /std-emissive-fragment\.js$/,
+    from: 'emissiveContrib=mat.ec+textureSample(eT,eS,input.vu).rgb*mat.tl;',
+    to: 'if(mat._0>0.0){emissiveContrib=mat.ec+stdAtlasCell(eT,eS,input.vu,mat._0).rgb*mat.tl;}else{emissiveContrib=mat.ec+textureSample(eT,eS,input.vu).rgb*mat.tl;}',
+  },
+  {
     // The XR frame only runs scene._update and the eye tasks. The shadow
     // task lives in the canvas frame graph, which is stopped in XR, so the
     // maps froze on the last desktop frame.
@@ -357,7 +380,7 @@ function liteGameplayPatches() {
   return {
     name: 'aether-lite-patches',
     setup(build) {
-      build.onLoad({ filter: /csm-shadow-task-hooks\.js$|csm-shadow-fragment-core\.js$|csm-directional-shadow-generator\.js$|standard-group-builder\.js$|standard-template\.js$|standard-renderable\.js$|xr-session\.js$|material-shadow-bindings\.js$|pbr-geometry-view-.*\.js$/ }, (args) => {
+      build.onLoad({ filter: /csm-shadow-task-hooks\.js$|csm-shadow-fragment-core\.js$|csm-directional-shadow-generator\.js$|standard-group-builder\.js$|standard-template\.js$|standard-renderable\.js$|standard-pipeline\.js$|std-emissive-fragment\.js$|xr-session\.js$|material-shadow-bindings\.js$|pbr-geometry-view-.*\.js$/ }, (args) => {
         const patches = LITE_PATCHES.filter((p) => p.file.test(args.path));
         if (!patches.length) return null;
         let src = readFileSync(args.path, 'utf8');

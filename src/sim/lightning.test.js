@@ -8,6 +8,12 @@ import { createField, TILE_SIZE_F, WORLD_HALF_F } from './field.js';
 import { SCENERY } from './scenery.js';
 import { TREE_WOOD_PER_STAGE } from './trees.js';
 import { checksum } from './checksum.js';
+import { createBuilding } from './buildings.js';
+import {
+  FARM_FIRE_DAMAGE_MUL,
+  LIGHTNING_BUILDING_BURN_DAMAGE,
+  LIGHTNING_BUILDING_BURN_TICKS,
+} from './buildingCombat.js';
 import {
   LIGHTNING_HIT,
   LIGHTNING_IMPACT_SCATTER,
@@ -212,6 +218,130 @@ function radiusConstantIsSane() {
   assert.ok(!picks.has(3));
 }
 
+function placeBuilding(w, owner, type, x, z) {
+  const b = createBuilding({
+    owner,
+    type,
+    x: fx.toFloat(x),
+    z: fx.toFloat(z),
+  });
+  w.buildings.push(b);
+  return b;
+}
+
+function castIgnitesHostileBuilding() {
+  const field = createField(1);
+  const w = createWorld(44);
+  const wizard = spawn(w, {
+    x: 0,
+    y: 0,
+    type: UNIT.WIZARD,
+    owner: 0,
+  });
+  const camp = placeBuilding(w, 1, 'camp', fx.fromInt(80), 0);
+  const hp = camp.hp;
+
+  step(w, field, [{
+    type: CMD.CAST,
+    entities: [wizard],
+    tx: camp.x,
+    ty: camp.z,
+  }]);
+
+  assert.ok(camp.hp < hp, 'bolt damages the building');
+  assert.equal(camp.fireTicks, LIGHTNING_BUILDING_BURN_TICKS - 1, 'building catches fire');
+  const fxPatch = takeLightningUpdates(w);
+  assert.equal(fxPatch.kind[0], LIGHTNING_HIT.BUILDING);
+
+  const afterBolt = camp.hp;
+  for (let t = 0; t < 20; t++) step(w, field, []);
+  assert.equal(
+    afterBolt - camp.hp,
+    LIGHTNING_BUILDING_BURN_DAMAGE * 2,
+    'burn pulses chip the building',
+  );
+  assert.ok(camp.fireTicks > 0, 'still burning');
+}
+
+function castBurnCooksFarmsFaster() {
+  const field = createField(1);
+  const w = createWorld(45);
+  spawn(w, { x: 0, y: 0, type: UNIT.WIZARD, owner: 0 });
+  const farm = placeBuilding(w, 1, 'farm', fx.fromInt(80), 0);
+  step(w, field, [{
+    type: CMD.CAST,
+    entities: [0],
+    tx: farm.x,
+    ty: farm.z,
+  }]);
+  const afterBolt = farm.hp;
+  for (let t = 0; t < 20; t++) step(w, field, []);
+  assert.equal(
+    afterBolt - farm.hp,
+    LIGHTNING_BUILDING_BURN_DAMAGE * FARM_FIRE_DAMAGE_MUL * 2,
+    'farm takes the fire multiplier while it burns',
+  );
+}
+
+function castDoesNotIgniteAllyBuilding() {
+  const field = createField(1);
+  const w = createWorld(46);
+  const wizard = spawn(w, { x: 0, y: 0, type: UNIT.WIZARD, owner: 0 });
+  const camp = placeBuilding(w, 0, 'camp', fx.fromInt(80), 0);
+  const hp = camp.hp;
+  step(w, field, [{
+    type: CMD.CAST,
+    entities: [wizard],
+    tx: camp.x,
+    ty: camp.z,
+  }]);
+  assert.equal(camp.hp, hp, 'own buildings are not struck');
+  assert.equal(camp.fireTicks | 0, 0, 'own buildings do not catch fire');
+  assert.equal(takeLightningUpdates(w).kind[0], LIGHTNING_HIT.GROUND);
+}
+
+function castHitsUnitAndStillIgnitesBuilding() {
+  const field = createField(1);
+  const w = createWorld(47);
+  const wizard = spawn(w, { x: 0, y: 0, type: UNIT.WIZARD, owner: 0 });
+  const camp = placeBuilding(w, 1, 'camp', fx.fromInt(80), 0);
+  const foe = spawn(w, {
+    x: camp.x + fx.fromInt(4),
+    y: camp.z,
+    type: UNIT.WARRIOR,
+    owner: 1,
+  });
+  const hpUnit = w.hp[foe];
+  const hpCamp = camp.hp;
+  step(w, field, [{
+    type: CMD.CAST,
+    entities: [wizard],
+    tx: camp.x,
+    ty: camp.z,
+  }]);
+  assert.ok(w.hp[foe] < hpUnit, 'hostile unit still takes the bolt');
+  assert.equal(camp.hp, hpCamp, 'burn has not pulsed yet');
+  assert.equal(camp.fireTicks, LIGHTNING_BUILDING_BURN_TICKS - 1);
+  assert.equal(takeLightningUpdates(w).kind[0], LIGHTNING_HIT.UNIT);
+}
+
+function buildingBeatsTree() {
+  const { field, i, tx, tz } = fieldWithTree(60, 50);
+  const { x, y } = tileWorld(tx, tz);
+  const w = createWorld(48);
+  spawn(w, { x: x - fx.fromInt(40), y, type: UNIT.WIZARD, owner: 0 });
+  const camp = placeBuilding(w, 1, 'camp', x, y);
+  step(w, field, [{
+    type: CMD.CAST,
+    entities: [0],
+    tx: x,
+    ty: y,
+  }]);
+  assert.ok(camp.fireTicks > 0, 'building is the strike');
+  assert.equal(field.treeBurn[i] | 0, 0, 'tree is left alone');
+  assert.equal(takeLightningUpdates(w).kind[0], LIGHTNING_HIT.BUILDING);
+}
+
 function impactIsScatteredOffTargetCenter() {
   const field = createField(1);
   const w = createWorld(77);
@@ -247,6 +377,11 @@ function impactIsScatteredOffTargetCenter() {
 castStrikesRandomHostile();
 castIgnitesTreeWhenNoUnits();
 castGroundStrikeWhenEmpty();
+castIgnitesHostileBuilding();
+castBurnCooksFarmsFaster();
+castDoesNotIgniteAllyBuilding();
+castHitsUnitAndStillIgnitesBuilding();
+buildingBeatsTree();
 cooldownBlocksRecast();
 strikePickIsDeterministic();
 radiusConstantIsSane();

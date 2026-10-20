@@ -47,6 +47,12 @@ export function flameScale(intensity) {
   return 0.30 + a * 0.40;
 }
 
+/** Lightning burn. Camp hearths sit near inherent × 3; this is that column. */
+export function blazeScale(intensity) {
+  const a = Math.max(0, Math.min(1, intensity));
+  return 3.4 + a * 1.8;
+}
+
 export function maxPatchesForType(type) {
   const fp = BUILDING_FOOTPRINTS[type];
   const tiles = Math.max(fp?.w ?? 2, fp?.h ?? 2);
@@ -107,7 +113,8 @@ export function createBuildingFire(opts = {}) {
    *   type: string,
    *   hidden: boolean,
    *   seen: boolean,
-   *   patches: { ox: number, oz: number, yOff: number, heat: number, seed: number }[],
+   *   onFire: boolean,
+   *   patches: { ox: number, oz: number, yOff: number, heat: number, seed: number, blaze?: boolean }[],
    * }>} */
   const states = new Map();
 
@@ -127,14 +134,56 @@ export function createBuildingFire(opts = {}) {
   function describePatch(st, p) {
     const world = patchWorld(st, p);
     const intensity = liveIntensity(st, p);
+    const blaze = p.blaze === true;
     return {
       x: world.x,
       z: world.z,
       yOff: p.yOff,
       intensity,
-      scale: flameScale(intensity),
+      scale: blaze ? blazeScale(intensity) : flameScale(intensity),
+      blaze,
       hidden: st.hidden,
     };
+  }
+
+  /** Tall tongues up the walls, pulled in off the footprint edge. */
+  function makeBlazePatch(type) {
+    const { hx, hz } = footprintHalf(type);
+    const off = perimeterOffset(hx, hz, random());
+    const inset = 0.42 + random() * 0.4;
+    return {
+      ox: off.x * inset,
+      oz: off.z * inset,
+      yOff: 0.6 + random() * 4.8,
+      heat: 0.94,
+      seed: random(),
+      blaze: true,
+    };
+  }
+
+  function blazeCount(type) {
+    return Math.min(BUILDING_FIRE_MAX_PATCHES, Math.max(4, maxPatchesForType(type)));
+  }
+
+  /** Hold a lightning burn: camp-sized flames up the building, not candles. */
+  function sustainBurn(st, type) {
+    st.heat = Math.max(st.heat, 0.9);
+    const sparked = [];
+    const cap = blazeCount(type);
+    while (st.patches.length < cap) {
+      const p = makeBlazePatch(type);
+      st.patches.push(p);
+      sparked.push(describePatch(st, p));
+    }
+    for (let i = 0; i < st.patches.length; i++) {
+      const p = st.patches[i];
+      p.heat = Math.max(p.heat, 0.85);
+      if (!p.blaze) {
+        p.blaze = true;
+        p.yOff = 0.6 + (p.seed % 1) * 4.8;
+      }
+    }
+    return sparked;
   }
 
   function applyHit(st, type, ratio) {
@@ -194,6 +243,7 @@ export function createBuildingFire(opts = {}) {
       const hidden = flags.hidden?.(b, i) === true;
       let st = states.get(i);
       const ratio = maxHp > 0 ? hp / maxHp : 1;
+      const onFire = (b.fireTicks | 0) > 0 && built === 1 && !hidden;
       if (!st) {
         st = {
           lastHp: hp,
@@ -205,9 +255,14 @@ export function createBuildingFire(opts = {}) {
           type: b.type || '',
           hidden,
           seen: true,
+          onFire,
           patches: [],
         };
         states.set(i, st);
+        if (onFire) {
+          const born = sustainBurn(st, b.type);
+          for (let k = 0; k < born.length; k++) sparked.push(born[k]);
+        }
         continue;
       }
       st.seen = true;
@@ -217,6 +272,11 @@ export function createBuildingFire(opts = {}) {
       st.type = b.type || st.type;
       st.hidden = hidden;
       st.ratio = ratio;
+      st.onFire = onFire;
+      if (onFire) {
+        const born = sustainBurn(st, b.type);
+        for (let k = 0; k < born.length; k++) sparked.push(born[k]);
+      }
       const dropped = hp < st.lastHp;
       if (dropped && built === 1 && !hidden && maxHp > 0) {
         const born = applyHit(st, b.type, ratio);
@@ -232,6 +292,8 @@ export function createBuildingFire(opts = {}) {
     const dt = Number(dtSec);
     if (!(dt > 0)) return;
     for (const [i, st] of states) {
+      if (!st.seen) st.onFire = false;
+      if (st.onFire) continue;
       decayState(st, dt, st.seen ? st.ratio : BUILDING_FIRE_HP_GATE);
       if (!st.seen && st.patches.length === 0 && st.heat <= 0) states.delete(i);
     }

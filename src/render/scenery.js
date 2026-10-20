@@ -14,7 +14,7 @@ import {
   setThinInstances,
   setThinInstanceColors,
 } from '../vendor/lite/liteVendor.js';
-import { SCENERY, rockScaleForStage, rockStageFromStock } from '../sim/scenery.js';
+import { SCENERY, ROCK_MESH_WIDTH, rockLayerScale, rockStackCount } from '../sim/scenery.js';
 import { TILE_SIZE_F, worldHalfFFromField, worldHalfZFFromField } from '../sim/field.js';
 import {
   TREE_BURN_DAMAGE,
@@ -274,7 +274,8 @@ const VARIANTS = [
     name: 'rocks-plain',
     cell: 1,
     modelUrl: '/assets/models/rocks_plain.glb',
-    modelScale: 3,
+    modelScale: ROCK_MESH_WIDTH[SCENERY.ROCK_PLAIN],
+    stackLift: ROCK_MESH_WIDTH[SCENERY.ROCK_PLAIN] * 0.42,
     billboardScale: 3,
     billboardYOffset: -0.8,
     lodDistance: SCENERY_LOD_ROCK,
@@ -284,7 +285,8 @@ const VARIANTS = [
     name: 'rocks-moss',
     cell: 2,
     modelUrl: '/assets/models/rocks_moss.glb',
-    modelScale: 7.5,
+    modelScale: ROCK_MESH_WIDTH[SCENERY.ROCK_MOSS],
+    stackLift: ROCK_MESH_WIDTH[SCENERY.ROCK_MOSS] * 0.42,
     billboardScale: 5.9,
     billboardYOffset: -0.8,
     lodDistance: SCENERY_LOD_ROCK,
@@ -294,7 +296,8 @@ const VARIANTS = [
     name: 'rocks-snow',
     cell: 3,
     modelUrl: '/assets/models/rocks_snow.glb',
-    modelScale: 11.5,
+    modelScale: ROCK_MESH_WIDTH[SCENERY.ROCK_SNOW],
+    stackLift: ROCK_MESH_WIDTH[SCENERY.ROCK_SNOW] * 0.42,
     billboardScale: 7.5,
     billboardYOffset: -0.8,
     lodDistance: SCENERY_LOD_ROCK,
@@ -373,6 +376,8 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
   /** Trees + rocks, for gather-click flashes. */
   /** @type {Map<number, { batch: object, index: number }>} */
   const instanceByTile = new Map();
+  /** tile → every layer of a stacked rock, bottom first. */
+  const rockLayers = new Map();
   /** tile → start time (ms). */
   /** @type {Map<number, number>} */
   const harvestPings = new Map();
@@ -473,7 +478,15 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       }
     } else {
       for (let i = 0; i < live.length; i++) {
-        instanceByTile.set(instances[i].tileIndex, { batch, index: i });
+        const tile = instances[i].tileIndex;
+        const ref = { batch, index: i };
+        let list = rockLayers.get(tile);
+        if (!list) {
+          list = [];
+          rockLayers.set(tile, list);
+          instanceByTile.set(tile, ref);
+        }
+        list.push(ref);
       }
     }
     if (notify) {
@@ -561,7 +574,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     return field.rockStock?.[tileIndex] | 0;
   }
 
-  function placeAuthoredInstance(p, kind, tileIndex, stock) {
+  function placeAuthoredInstance(p, kind, tileIndex, stock, layer = 0) {
     const width = field.width;
     const tz = Math.floor(tileIndex / width);
     const tx = tileIndex - tz * width;
@@ -569,12 +582,15 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     const x = (tx + 0.5) * TILE_SIZE_F - worldHalfFFromField(field) + placement.offsetX;
     const z = (tz + 0.5) * TILE_SIZE_F - worldHalfZFFromField(field) + placement.offsetZ;
     const groundY = surfaceHeightAt(field, x, z);
+    const variant = variantForKind(kind);
     const stockScale = kind === SCENERY.TREE
       ? treeScaleForStage(treeStageFromStock(stock))
-      : rockScaleForStage(rockStageFromStock(kind, stock));
+      : rockLayerScale(kind, stock, layer);
+    const lift = kind >= SCENERY.ROCK_PLAIN ? (variant?.stackLift || 0) * layer : 0;
     p.tileIndex = tileIndex;
+    p.layer = layer;
     p.x = x;
-    p.y = groundY;
+    p.y = groundY + lift;
     p.z = z;
     p.yaw = placement.yaw;
     p.stock = stock;
@@ -595,10 +611,19 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     const { batch, index } = ref;
     const p = batch.instances[index];
     const tile = p.tileIndex;
-    if (tile >= 0) {
-      instanceByTile.delete(tile);
-      if (batch.variant.kind === SCENERY.TREE) treeByTile.delete(tile);
+    const mates = rockLayers.get(tile);
+    if (mates) {
+      const next = mates.filter((m) => m.batch !== batch || m.index !== index);
+      if (next.length) rockLayers.set(tile, next);
+      else rockLayers.delete(tile);
     }
+    const mapped = instanceByTile.get(tile);
+    if (mapped && mapped.batch === batch && mapped.index === index) {
+      const left = rockLayers.get(tile);
+      if (left?.length) instanceByTile.set(tile, left[0]);
+      else instanceByTile.delete(tile);
+    }
+    if (batch.variant.kind === SCENERY.TREE) treeByTile.delete(tile);
     const blank = makeEmptyTreeInstance();
     for (const key of Object.keys(blank)) p[key] = blank[key];
     writeHiddenMatrix(batch.billboardMatrices, index);
@@ -608,7 +633,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     batch.dirty = true;
   }
 
-  function claimAuthoredSlot(kind, tileIndex, stock) {
+  function claimAuthoredSlot(kind, tileIndex, stock, layer = 0) {
     const variant = variantForKind(kind);
     if (!variant || disposed) return null;
     let batch = batchByKind.get(kind);
@@ -617,17 +642,105 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     if (batch.freeSlots.length === 0) return null;
     const index = batch.freeSlots.pop();
     const p = batch.instances[index];
-    placeAuthoredInstance(p, kind, tileIndex, stock);
+    placeAuthoredInstance(p, kind, tileIndex, stock, layer);
     const ref = { batch, index };
-    instanceByTile.set(tileIndex, ref);
-    if (kind === SCENERY.TREE) treeByTile.set(tileIndex, ref);
+    if (kind >= SCENERY.ROCK_PLAIN) {
+      const list = rockLayers.get(tileIndex);
+      if (list) list.push(ref);
+      else rockLayers.set(tileIndex, [ref]);
+      instanceByTile.set(tileIndex, rockLayers.get(tileIndex)[0]);
+    } else {
+      instanceByTile.set(tileIndex, ref);
+      if (kind === SCENERY.TREE) treeByTile.set(tileIndex, ref);
+    }
     writeFogColor(batch, index);
     flushBatchColors(batch);
     batch.dirty = true;
     return ref;
   }
 
+  function syncRockTile(tileIndex, animate) {
+    const kind = field.sceneryType?.[tileIndex] ?? SCENERY.NONE;
+    const stock = field.rockStock?.[tileIndex] | 0;
+    const count = kind >= SCENERY.ROCK_PLAIN ? rockStackCount(kind, stock) : 0;
+    if (count === 0) {
+      const refs = (rockLayers.get(tileIndex) || []).slice();
+      while (refs.length > 1) releaseAuthoredInstance(refs.pop());
+      const last = refs[0];
+      if (!last) return;
+      const p = last.batch.instances[last.index];
+      const prevScale = p.stockScale ?? 0;
+      p.stock = 0;
+      p.fellDelayMs = 0;
+      if (prevScale <= 0.001 && !p.scaling) {
+        releaseAuthoredInstance(last);
+        return;
+      }
+      beginScaleAnim(p, 0, TREE_SHRINK_MS, 'stageDrop');
+      last.batch.dirty = true;
+      return;
+    }
+    const existing = rockLayers.get(tileIndex) || [];
+    while (existing.length > count) {
+      releaseAuthoredInstance(existing.pop());
+    }
+    while ((rockLayers.get(tileIndex)?.length || 0) < count) {
+      const layer = rockLayers.get(tileIndex)?.length || 0;
+      if (!claimAuthoredSlot(kind, tileIndex, stock, layer)) break;
+    }
+    const refs = rockLayers.get(tileIndex) || [];
+    for (let layer = 0; layer < refs.length; layer++) {
+      const ref = refs[layer];
+      const p = ref.batch.instances[ref.index];
+      const scale = rockLayerScale(kind, stock, layer);
+      const top = layer === refs.length - 1;
+      if (animate && top) {
+        const prevScale = p.stockScale ?? 0;
+        placeAuthoredInstance(p, kind, tileIndex, stock, layer);
+        p.stockScale = prevScale;
+        p.scaling = false;
+        if (stock <= 0) {
+          p.stock = 0;
+          p.fellDelayMs = 0;
+          if (prevScale <= 0.001) {
+            releaseAuthoredInstance(ref);
+            continue;
+          }
+          beginScaleAnim(p, 0, TREE_SHRINK_MS, 'stageDrop');
+        } else if (Math.abs(scale - prevScale) > 0.001) {
+          p.fellDelayMs = 0;
+          beginScaleAnim(
+            p,
+            scale,
+            scale < prevScale ? TREE_SHRINK_MS : TREE_GROW_IN_MS,
+            scale < prevScale ? 'stageDrop' : 'lerp',
+          );
+        }
+      } else {
+        placeAuthoredInstance(p, kind, tileIndex, stock, layer);
+      }
+      writeFogColor(ref.batch, ref.index);
+      flushBatchColors(ref.batch);
+      ref.batch.dirty = true;
+    }
+  }
+
   function syncAuthoredTile(tileIndex) {
+    const raw = field.sceneryType?.[tileIndex] ?? SCENERY.NONE;
+    if (raw >= SCENERY.ROCK_PLAIN) {
+      syncRockTile(tileIndex, false);
+      return;
+    }
+    // A tree painted over a rock used to stop here: the rock slot was still
+    // recorded, so the rock mesh was dropped and the tree was never claimed.
+    if (rockLayers.has(tileIndex)) {
+      if (raw === SCENERY.NONE) {
+        syncRockTile(tileIndex, false);
+        return;
+      }
+      const refs = (rockLayers.get(tileIndex) || []).slice();
+      for (let i = 0; i < refs.length; i++) releaseAuthoredInstance(refs[i]);
+    }
     const kind = authoredKindAt(tileIndex);
     let ref = instanceByTile.get(tileIndex);
     if (kind === SCENERY.NONE) {
@@ -954,39 +1067,8 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
 
   function applyRockUpdates(updates) {
     if (!updates?.tiles?.length) return;
-    const { tiles, stock } = updates;
-    for (let i = 0; i < tiles.length; i++) {
-      const tile = tiles[i];
-      const nextStock = stock[i] | 0;
-      const ref = findInstanceRef(tile);
-      if (!ref) continue;
-      const p = ref.batch.instances[ref.index];
-      const kind = ref.batch.variant.kind;
-      const prevScale = p.stockScale ?? 0;
-      p.stock = nextStock;
-      const nextTarget = nextStock <= 0
-        ? 0
-        : rockScaleForStage(rockStageFromStock(kind, nextStock));
-      if (nextStock <= 0) {
-        p.fellDelayMs = 0;
-        if (prevScale <= 0.001 && !p.scaling) {
-          releaseAuthoredInstance(ref);
-          continue;
-        }
-        beginScaleAnim(p, 0, TREE_SHRINK_MS, 'stageDrop');
-      } else if (Math.abs(nextTarget - (p.targetScale ?? prevScale)) > 0.001) {
-        p.fellDelayMs = 0;
-        beginScaleAnim(
-          p,
-          nextTarget,
-          nextTarget < prevScale ? TREE_SHRINK_MS : TREE_GROW_IN_MS,
-          nextTarget < prevScale ? 'stageDrop' : 'lerp',
-        );
-      } else {
-        p.targetScale = nextTarget;
-      }
-      ref.batch.dirty = true;
-    }
+    const { tiles } = updates;
+    for (let i = 0; i < tiles.length; i++) syncRockTile(tiles[i], true);
   }
 
   update(camera, LOD_UPDATE_MS, true);
@@ -1188,6 +1270,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
 function makeEmptyTreeInstance() {
   return {
     tileIndex: -1,
+    layer: 0,
     x: 0,
     y: 0,
     z: 0,
@@ -1509,36 +1592,41 @@ function collectInstances(field, variant, surfaceHeightAt) {
       const x = (tx + 0.5) * TILE_SIZE_F - worldHalfFFromField(field) + placement.offsetX;
       const z = (tz + 0.5) * TILE_SIZE_F - worldHalfZFFromField(field) + placement.offsetZ;
       const groundY = surfaceHeightAt(field, x, z);
-      const stockScale = variant.kind === SCENERY.TREE
-        ? treeScaleForStage(treeStageFromStock(stock))
-        : rockScaleForStage(rockStageFromStock(variant.kind, stock));
-      out.push({
-        tileIndex: i,
-        x,
-        y: groundY,
-        z,
-        yaw: placement.yaw,
-        stock,
-        burn: 0,
-        stockScale,
-        targetScale: stockScale,
-        scaleFrom: stockScale,
-        scaleT: 1,
-        scaleDur: TREE_SHRINK_MS,
-        scaleMode: 'lerp',
-        scaling: false,
-        fellDelayMs: 0,
-        sinking: false,
-        sinkT: 0,
-        sink: 0,
-        sinkDepth: 0,
-        lean: 0,
-        char: 0,
-        burnT: 0,
-        burnLeanSign: 0,
-        burnLeanMax: 0,
-        burnDurMs: 0,
-      });
+      const layers = variant.kind === SCENERY.TREE ? 1 : rockStackCount(variant.kind, stock);
+      const lift = variant.stackLift || 0;
+      for (let layer = 0; layer < layers; layer++) {
+        const stockScale = variant.kind === SCENERY.TREE
+          ? treeScaleForStage(treeStageFromStock(stock))
+          : rockLayerScale(variant.kind, stock, layer);
+        out.push({
+          tileIndex: i,
+          layer,
+          x,
+          y: groundY + lift * layer,
+          z,
+          yaw: placement.yaw,
+          stock,
+          burn: 0,
+          stockScale,
+          targetScale: stockScale,
+          scaleFrom: stockScale,
+          scaleT: 1,
+          scaleDur: TREE_SHRINK_MS,
+          scaleMode: 'lerp',
+          scaling: false,
+          fellDelayMs: 0,
+          sinking: false,
+          sinkT: 0,
+          sink: 0,
+          sinkDepth: 0,
+          lean: 0,
+          char: 0,
+          burnT: 0,
+          burnLeanSign: 0,
+          burnLeanMax: 0,
+          burnDurMs: 0,
+        });
+      }
     }
   }
   return out;

@@ -1,19 +1,21 @@
 import { setXrEyeFromPose } from '../render/xrEye.js';
 
-// Quest 1 Touch (oculus-touch). The browser reports 6 buttons and 4 axes:
-//   buttons[0] trigger   buttons[1] grip
-//   buttons[2] stick click
-//   buttons[3] X / A     buttons[4] Y / B
-//   buttons[5] thumbrest
+// Quest Touch. Trigger and grip are always the first two buttons.
+// An `xr-standard` pad (current Quest browser) is:
+//   buttons[2] touchpad   buttons[3] stick click
+//   buttons[4] X / A      buttons[5] Y / B
+// Older Quest 1 reports put the stick click at 2 and the faces at 3 and 4.
 //   axes[0], axes[1] are the unused touchpad slot
 //   axes[2], axes[3] are the stick (push forward is negative y)
 
 const STICK_DEAD = 0.35;
 const STICK_SMOOTH = 10;
+/** A jump stands this many head heights back from the target, so it sits ahead and below. */
+const JUMP_BACK = 0.8;
 
 function buttonAt(gamepad, index) {
   const b = gamepad?.buttons?.[index];
-  return { value: b?.value || 0, pressed: !!b?.pressed };
+  return { value: b?.value || 0, pressed: !!b?.pressed, touched: !!(b?.touched || b?.pressed) };
 }
 
 /** Stick pair. Four axes means the touchpad slot is first and the stick is second. */
@@ -23,15 +25,22 @@ export function stickAxes(axes) {
   return [axes[0] || 0, axes[1] || 0];
 }
 
-/** Named Quest 1 controls off an XR input source's gamepad. Missing buttons stay released. */
+/** Face-button slots. X / A is primary, Y / B is secondary. */
+function faceButtons(gamepad) {
+  if (gamepad?.mapping === 'xr-standard') return { stick: 3, primary: 4, secondary: 5 };
+  return { stick: 2, primary: 3, secondary: 4 };
+}
+
+/** Named Quest controls off an XR input source's gamepad. Missing buttons stay released. */
 export function readQuestTouch(gamepad) {
   const [stickX, stickY] = stickAxes(gamepad?.axes);
+  const face = faceButtons(gamepad);
   return {
     trigger: buttonAt(gamepad, 0),
     grip: buttonAt(gamepad, 1),
-    stickClick: buttonAt(gamepad, 2),
-    primary: buttonAt(gamepad, 3),
-    secondary: buttonAt(gamepad, 4),
+    stickClick: buttonAt(gamepad, face.stick),
+    primary: buttonAt(gamepad, face.primary),
+    secondary: buttonAt(gamepad, face.secondary),
     stickX,
     stickY,
   };
@@ -133,20 +142,45 @@ function hand(sources, handedness) {
 /**
  * Headset rig for the match. The first frame parks the head on the desktop
  * camera. After that the left stick slides and the right stick yaws and lifts.
+ * While `rightStickBusy()` is true only the left stick flies.
  * @param {[number, number, number]} eye desktop camera world position
+ * @param {object | null} [bounds]
+ * @param {{ rightStickBusy?: () => boolean }} [opts]
  */
-export function createXrRig(eye, bounds = null) {
+export function createXrRig(eye, bounds = null, opts = {}) {
   const speed = Math.max(16, Math.hypot(eye[0], eye[2]) * 0.35);
   return {
     eye,
     bounds,
+    rightStickBusy: opts.rightStickBusy ?? null,
     speed,
     seeded: false,
     lastTime: 0,
     hands: null,
+    /** @type {{ x: number, z: number } | null} pending jumpXrRig target */
+    jump: null,
     logged: false,
     smooth: { mx: 0, my: 0, yaw: 0, lift: 0 },
   };
+}
+
+/** Fly the head to look over (x, z) on the next frame, keeping its height and facing. */
+export function jumpXrRig(rig, x, z) {
+  if (Number.isFinite(x) && Number.isFinite(z)) rig.jump = { x, z };
+}
+
+/**
+ * Head spot for a jump: `back` head heights behind the target along the
+ * flat forward, at the current height, then clamped into the bounds.
+ * @param {[number, number, number]} head
+ * @param {[number, number]} forward unit flat forward (x, z)
+ * @param {{ x: number, z: number }} target
+ */
+export function xrJumpHead(head, forward, target, bounds = null) {
+  const floor = bounds?.floor?.(target.x, target.z);
+  const above = Math.max(4, head[1] - (Number.isFinite(floor) ? floor : 0));
+  const back = above * JUMP_BACK;
+  return clampXrHead([target.x - forward[0] * back, head[1], target.z - forward[1] * back], bounds);
 }
 
 export function stepXrRig(rig, ctx, frame, time) {
@@ -159,6 +193,17 @@ export function stepXrRig(rig, ctx, frame, time) {
       new XRRigidTransform(referenceOffset(head, rig.eye)),
     );
     rig.seeded = true;
+    rig.lastTime = time;
+    return;
+  }
+  if (rig.jump) {
+    const dest = xrJumpHead(head, flatBasis(pose.transform.matrix).forward, rig.jump, rig.bounds);
+    rig.jump = null;
+    ctx._referenceSpace = ctx.referenceSpace.getOffsetReferenceSpace(
+      new XRRigidTransform(referenceOffset(head, dest)),
+    );
+    const s = rig.smooth;
+    s.mx = s.my = s.yaw = s.lift = 0;
     rig.lastTime = time;
     return;
   }
@@ -182,7 +227,7 @@ export function stepXrRig(rig, ctx, frame, time) {
   if (dt === 0) return;
 
   const [rawMx, rawMy] = shapeStick(left.stickX, -left.stickY);
-  const [rawYaw, rawLift] = shapeStick(right.stickX, -right.stickY);
+  const [rawYaw, rawLift] = rig.rightStickBusy?.() ? [0, 0] : shapeStick(right.stickX, -right.stickY);
   const s = rig.smooth;
   if (rawMx === 0 && rawMy === 0 && rawYaw === 0 && rawLift === 0) {
     s.mx = s.my = s.yaw = s.lift = 0;

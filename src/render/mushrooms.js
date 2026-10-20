@@ -17,6 +17,30 @@ const CLUSTER_COUNT = 9;
 const GROW_IN_MS = 900;
 /** Shrink away after sprout while trees grow over them (~tree grow-in). */
 const FADE_OUT_MS = 1600;
+/** How long a finished spore shot stays findable after its projectile ends. */
+export const SPORE_SHOT_HOLD_MS = 700;
+
+/**
+ * Archive shots the projectile renderer did not see this frame, and drop
+ * archives whose flight ended more than `holdMs` ago.
+ * @param {Map<string, { seen: number, ended?: number }>} live
+ * @param {{ seen: number, ended?: number }[]} recent
+ * @param {number} frame
+ * @param {number} now
+ * @param {number} [holdMs]
+ */
+export function retireUnseenSporeShots(live, recent, frame, now, holdMs = SPORE_SHOT_HOLD_MS) {
+  for (const [token, shot] of live) {
+    if (shot.seen === frame) continue;
+    shot.ended = now;
+    recent.push(shot);
+    live.delete(token);
+  }
+  const keep = now - holdMs;
+  for (let i = recent.length - 1; i >= 0; i--) {
+    if (recent[i].ended < keep) recent.splice(i, 1);
+  }
+}
 
 function setThinInstanceCount(mesh, count) {
   const ti = mesh.thinInstances;
@@ -121,6 +145,10 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
     return {
       spawnCluster() { return false; },
       spawnHead() { return false; },
+      spawnAttackLine() { return 0; },
+      beginSporePaths() {},
+      noteSporePath() {},
+      endSporePaths() {},
       noteHeadPose() {},
       clearGrown() {},
       clear() {},
@@ -152,19 +180,42 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
    * }>}
    */
   const heads = [];
+  /**
+   * Ground mushrooms that pop up and sink back along a myco shot.
+   * @type {Array<{
+   *   x: number, z: number, yaw: number, scale: number,
+   *   startAt: number, growT: number, shrinkT: number, age: number, slot: number,
+   * }>}
+   */
+  const trails = [];
+  /** @type {Map<string, { ox: number, oz: number, x: number, z: number, since: number, traveled: number, born: number, zoom: number, seen: number }>} */
+  const sporeShots = new Map();
+  /** Shots whose projectile already ended, kept so the hit can finish the line. */
+  const recentShots = [];
   /** @type {Map<number, { x: number, y: number, z: number, yaw: number, radius: number, height: number }>} */
   const hostPoses = new Map();
-  const HEAD_GROW_MS = 380;
-  const HEAD_LIVE_HOLD_MS = 720;
-  const HEAD_LIVE_FADE_MS = 560;
-  const HEAD_KILL_HOLD_MS = 1650;
+  const HEAD_GROW_MS = 220;
+  const HEAD_LIVE_HOLD_MS = 980;
+  const HEAD_LIVE_FADE_MS = 520;
+  const HEAD_KILL_HOLD_MS = 1700;
   const HEAD_KILL_FADE_MS = 900;
-  const HEAD_MAX_PER_HOST = 8;
+  const HEAD_MAX_PER_HOST = 16;
   const DEFAULT_BODY_RADIUS = 1.25;
   const DEFAULT_BODY_HEIGHT = 2.05;
+  /** mushroom.glb height at scale 1, so attack sprouts can be sized in world units. */
+  const MUSHROOM_MESH_HEIGHT = 0.37;
+  const TRAIL_SPACING = 3.4;
+  const TRAIL_STAGGER_MS = 67;
+  const TRAIL_GROW_MS = 200;
+  const TRAIL_HOLD_MS = 120;
+  const TRAIL_FADE_MS = 290;
+  const TRAIL_MAX = 280;
   let dirty = true;
   let simTick = 0;
   let previousDraw = 0;
+  let clockMs = 0;
+  let sporeFrame = 0;
+  let lineSerial = 0;
 
   function keyOf(x, z) {
     return `${x.toFixed(2)},${z.toFixed(2)}`;
@@ -261,7 +312,7 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
       const rad = r * Math.sqrt(0.15 + Math.random() * 0.85);
       const ox = Math.cos(ang) * rad;
       const oz = Math.sin(ang) * rad;
-      const oy = h * (0.08 + Math.random() * 0.86);
+      const oy = h * (0.02 + Math.random() * 0.62);
       let sep = 99;
       for (let i = 0; i < avoid.length; i++) {
         const a = avoid[i];
@@ -311,6 +362,140 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
     heads.splice(oldest, 1);
   }
 
+  function scaleForHeight(worldHeight) {
+    return Math.max(0.2, worldHeight / MUSHROOM_MESH_HEIGHT);
+  }
+
+  function placeTrail(x, z, traveled, born, zoom) {
+    if (trails.length >= TRAIL_MAX) return;
+    const slot = allocSlot();
+    if (slot < 0) return;
+    const mixed = (
+      Math.imul(Math.round(x * 17) + 1, 2654435761) ^
+      Math.imul(Math.round(z * 17) + Math.round(traveled * 10) + 1, 1597334677)
+    ) >>> 0;
+    const jx = ((mixed & 1023) / 1023 - 0.5) * 0.85;
+    const jz = (((mixed >>> 10) & 1023) / 1023 - 0.5) * 0.85;
+    const worldH = (0.70 + ((mixed >>> 16) % 100) / 100 * 0.32) * (zoom > 0.2 ? zoom : 1.25);
+    trails.push({
+      x: x + jx,
+      z: z + jz,
+      yaw: (mixed % 628) / 100,
+      scale: scaleForHeight(worldH),
+      startAt: born + (traveled / TRAIL_SPACING) * TRAIL_STAGGER_MS,
+      growT: 0,
+      shrinkT: 0,
+      age: 0,
+      slot,
+    });
+    dirty = true;
+  }
+
+  function advanceShot(shot, x, z) {
+    const dx = x - shot.x;
+    const dz = z - shot.z;
+    const seg = Math.hypot(dx, dz);
+    if (seg < 1e-4) return;
+    const ux = dx / seg;
+    const uz = dz / seg;
+    let at = TRAIL_SPACING - shot.since;
+    while (at <= seg + 1e-3) {
+      placeTrail(shot.x + ux * at, shot.z + uz * at, shot.traveled + at, shot.born, shot.zoom);
+      at += TRAIL_SPACING;
+    }
+    shot.traveled += seg;
+    shot.since += seg;
+    while (shot.since >= TRAIL_SPACING) shot.since -= TRAIL_SPACING;
+    shot.x = x;
+    shot.z = z;
+  }
+
+  function considerShot(best, shot, toX, toZ) {
+    const td = Math.hypot(shot.x - toX, shot.z - toZ);
+    if (td > 10) return best;
+    if (!best || td < best.td - 0.5 || (td <= best.td + 0.5 && shot.born > best.shot.born)) {
+      return { shot, td };
+    }
+    return best;
+  }
+
+  function findShot(toX, toZ) {
+    let best = null;
+    for (const shot of sporeShots.values()) best = considerShot(best, shot, toX, toZ);
+    for (let i = 0; i < recentShots.length; i++) best = considerShot(best, recentShots[i], toX, toZ);
+    return best?.shot ?? null;
+  }
+
+  function beginSporePaths() {
+    sporeFrame++;
+  }
+
+  function noteSporePath(slot, generation, x, z, zoom = 1.25) {
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+    const token = `${slot | 0}:${generation >>> 0}`;
+    let shot = sporeShots.get(token);
+    if (!shot) {
+      shot = {
+        ox: x,
+        oz: z,
+        x,
+        z,
+        since: 0,
+        traveled: 0,
+        born: clockMs,
+        zoom: zoom > 0.2 ? zoom : 1.25,
+        seen: sporeFrame,
+      };
+      sporeShots.set(token, shot);
+      placeTrail(x, z, 0, shot.born, shot.zoom);
+      return;
+    }
+    shot.seen = sporeFrame;
+    advanceShot(shot, x, z);
+  }
+
+  function endSporePaths() {
+    retireUnseenSporeShots(sporeShots, recentShots, sporeFrame, clockMs);
+  }
+
+  /**
+   * Pop a line from the caster to the target. Returns ms until the line
+   * reaches the target, so the body cluster can follow it.
+   */
+  function spawnAttackLine(fromX, fromZ, toX, toZ, zoom = 1.25) {
+    if (!Number.isFinite(fromX) || !Number.isFinite(fromZ) || !Number.isFinite(toX) || !Number.isFinite(toZ)) {
+      return 0;
+    }
+    let shot = findShot(toX, toZ);
+    if (shot) {
+      const at = recentShots.indexOf(shot);
+      if (at >= 0) recentShots.splice(at, 1);
+    } else {
+      const z = zoom > 0.2 ? zoom : 1.25;
+      shot = {
+        ox: fromX,
+        oz: fromZ,
+        x: fromX,
+        z: fromZ,
+        since: 0,
+        traveled: 0,
+        born: clockMs,
+        zoom: z,
+        seen: sporeFrame,
+      };
+      sporeShots.set(`line:${lineSerial++}`, shot);
+      placeTrail(fromX, fromZ, 0, shot.born, shot.zoom);
+    }
+    advanceShot(shot, toX, toZ);
+    const dist = Math.hypot(toX - shot.ox, toZ - shot.oz);
+    if (shot.since > 0.85) {
+      placeTrail(toX, toZ, dist, shot.born, shot.zoom);
+      shot.since = 0;
+    }
+    const arrive = shot.born + (dist / TRAIL_SPACING) * TRAIL_STAGGER_MS;
+    return Math.max(0, arrive - clockMs);
+  }
+
   function spawnHead(entity, x, z, killed, body) {
     const id = entity | 0;
     let existing = hostHeads(id);
@@ -353,7 +538,9 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
       killed: !!killed,
       slot,
       yaw: ((mixed % 628) / 100),
-      scale: killed ? 1.55 + Math.random() * 0.35 : 0.72 + Math.random() * 0.7,
+      scale: scaleForHeight(
+        pose.height * (killed ? 0.62 : 0.48) * (0.88 + Math.random() * 0.28),
+      ),
     };
     heads.push(h);
     dirty = true;
@@ -393,7 +580,13 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
       const h = heads[i];
       const growEase = 1 - (1 - Math.min(1, h.growT)) ** 3;
       const shrinkEase = 1 - (1 - Math.min(1, h.shrinkT)) ** 3;
-      if ((0.15 + 0.85 * growEase) * (1 - shrinkEase) > 0.001) needed += 1;
+      if (growEase * (1 - shrinkEase) > 0.001) needed += 1;
+    }
+    for (let i = 0; i < trails.length; i++) {
+      const t = trails[i];
+      const growEase = 1 - (1 - Math.min(1, t.growT)) ** 3;
+      const shrinkEase = 1 - (1 - Math.min(1, t.shrinkT)) ** 3;
+      if (growEase * (1 - shrinkEase) > 0.001) needed += 1;
     }
     ensureCapacity(needed);
 
@@ -426,10 +619,22 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
       applyHostPose(h);
       const growEase = 1 - (1 - Math.min(1, h.growT)) ** 3;
       const shrinkEase = 1 - (1 - Math.min(1, h.shrinkT)) ** 3;
-      const size = (0.15 + 0.85 * growEase) * (1 - shrinkEase) * h.scale;
+      const size = growEase * (1 - shrinkEase) * h.scale;
       if (size <= 0.001) continue;
       for (let b = 0; b < batches.length; b++) {
         writeMatrix(batches[b].matrices, drawCount, h.x, h.y, h.z, h.yaw, size);
+      }
+      drawCount++;
+    }
+    for (let i = 0; i < trails.length; i++) {
+      const t = trails[i];
+      const growEase = 1 - (1 - Math.min(1, t.growT)) ** 3;
+      const shrinkEase = 1 - (1 - Math.min(1, t.shrinkT)) ** 3;
+      const size = growEase * (1 - shrinkEase) * t.scale;
+      if (size <= 0.001) continue;
+      const gy = groundYAt(t.x, t.z);
+      for (let b = 0; b < batches.length; b++) {
+        writeMatrix(batches[b].matrices, drawCount, t.x, gy, t.z, t.yaw, size);
       }
       drawCount++;
     }
@@ -442,9 +647,14 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
     previousDraw = drawCount;
   }
 
+  function releaseTrail(t) {
+    freeSlots.push(t.slot);
+  }
+
   function update(deltaMs, tick) {
     if (Number.isFinite(tick)) simTick = tick;
     const dt = Math.min(100, Math.max(0, deltaMs));
+    clockMs += dt;
     let animating = false;
     for (const [key, c] of clusters) {
       if (c.growT < 1) {
@@ -486,6 +696,29 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
         }
       }
     }
+    for (let i = trails.length - 1; i >= 0; i--) {
+      const t = trails[i];
+      const age = clockMs - t.startAt;
+      if (age < 0) {
+        animating = true;
+        continue;
+      }
+      t.age = age;
+      if (t.growT < 1) {
+        t.growT = Math.min(1, age / TRAIL_GROW_MS);
+        animating = true;
+      }
+      const holdEnd = TRAIL_GROW_MS + TRAIL_HOLD_MS;
+      if (age >= holdEnd) {
+        t.shrinkT = Math.min(1, (age - holdEnd) / TRAIL_FADE_MS);
+        animating = true;
+        if (t.shrinkT >= 1) {
+          releaseTrail(t);
+          trails.splice(i, 1);
+          dirty = true;
+        }
+      }
+    }
     if (animating || dirty) {
       rebuild();
       dirty = false;
@@ -503,6 +736,10 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
     clusters.clear();
     for (let i = 0; i < heads.length; i++) releaseHead(heads[i]);
     heads.length = 0;
+    for (let i = 0; i < trails.length; i++) releaseTrail(trails[i]);
+    trails.length = 0;
+    sporeShots.clear();
+    recentShots.length = 0;
     hostPoses.clear();
     for (let i = 0; i < previousDraw; i++) {
       for (let b = 0; b < batches.length; b++) hideMatrix(batches[b].matrices, i);
@@ -518,6 +755,10 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
   return {
     spawnCluster,
     spawnHead,
+    spawnAttackLine,
+    beginSporePaths,
+    noteSporePath,
+    endSporePaths,
     noteHeadPose,
     clearGrown,
     clear,

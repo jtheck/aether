@@ -527,7 +527,19 @@ export function createControlGroupHud(engine, scene, screen = {}) {
       return;
     }
 
-    const rects = layoutControlGroups(vw, vh);
+    const toHud = screen.hudPoint || ((x, y) => ({ x, y }));
+    const hudScale = screen.hudScale?.() ?? 1;
+    const layout = layoutControlGroups(vw, vh);
+    const rects = layout.map((r) => {
+      const c = toHud(r.x + r.w * 0.5, r.y + r.h * 0.5);
+      return {
+        ...r,
+        x: c.x - r.w * hudScale * 0.5,
+        y: c.y - r.h * hudScale * 0.5,
+        w: r.w * hudScale,
+        h: r.h * hudScale,
+      };
+    });
     hitRects = rects;
     /** @type {Set<number>} */
     const shown = new Set();

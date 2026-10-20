@@ -1,6 +1,13 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { clampXrHead, readQuestTouch, referenceOffset, shapeStick, stickAxes } from './xrRig.js';
+import {
+  clampXrHead,
+  readQuestTouch,
+  referenceOffset,
+  shapeStick,
+  stickAxes,
+  xrJumpHead,
+} from './xrRig.js';
 
 describe('readQuestTouch', () => {
   it('names the Quest 1 trigger, grip, stick, and face buttons', () => {
@@ -22,6 +29,19 @@ describe('readQuestTouch', () => {
     assert.equal(touch.secondary.pressed, false);
     assert.equal(touch.stickX, 0.5);
     assert.equal(touch.stickY, -0.8);
+  });
+
+  it('reads X/A and Y/B from an xr-standard pad', () => {
+    const buttons = [0, 1, 2, 3, 4, 5].map(() => ({ pressed: false, value: 0 }));
+    buttons[3].pressed = true;
+    buttons[4].pressed = true;
+    const touch = readQuestTouch({ mapping: 'xr-standard', buttons, axes: [0, 0, 0, 0] });
+    assert.equal(touch.stickClick.pressed, true);
+    assert.equal(touch.primary.pressed, true);
+    assert.equal(touch.secondary.pressed, false);
+    buttons[5].pressed = true;
+    const cancel = readQuestTouch({ mapping: 'xr-standard', buttons, axes: [0, 0, 0, 0] });
+    assert.equal(cancel.secondary.pressed, true);
   });
 
   it('reads the stick from axes 2 and 3 when the touchpad slot is present', () => {
@@ -70,6 +90,20 @@ describe('clampXrHead', () => {
     const far = clampXrHead([30, 12, 0], bounds);
     assert.ok(Math.hypot(far[0], far[2]) <= 20.001);
     assert.equal(far[1], 12);
+  });
+});
+
+describe('xrJumpHead', () => {
+  it('keeps the height and stands back along the facing so the target is ahead', () => {
+    const dest = xrJumpHead([0, 50, 0], [0, 1], { x: 100, z: 100 }, { floor: () => 0, maxY: 400, maxRange: 1000 });
+    assert.equal(dest[1], 50);
+    assert.equal(dest[0], 100);
+    assert.ok(dest[2] < 100 && dest[2] > 40);
+  });
+
+  it('clamps into the play bounds', () => {
+    const dest = xrJumpHead([0, 50, 0], [1, 0], { x: 500, z: 0 }, { floor: () => 0, maxY: 400, maxRange: 200 });
+    assert.ok(Math.hypot(dest[0], dest[2]) <= 200.001);
   });
 });
 

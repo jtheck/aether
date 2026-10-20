@@ -13,6 +13,7 @@ export const MSG = {
   SPECTATE: 'lobby_spectate',
   LEAVE: 'lobby_leave',
   READY: 'lobby_ready',
+  REPLAY: 'lobby_replay',
   SETTING: 'lobby_setting',
   START: 'lobby_start',
   ABORT: 'lobby_abort',

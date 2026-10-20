@@ -275,6 +275,8 @@ export function createCameraController(camera, canvas, opts = {}) {
   let zoomInputThisTick = false;
   let lastZoomSign = 0;
   let zoomTend = false;
+  /** Player pan/zoom/rotate — distinct from a followed pose we applied. */
+  let userAimed = false;
   /** Hit min radius — stay there until a zoom-out. Stops the wall bounce. */
   let zoomFloored = false;
   let zoomOutThisTick = false;
@@ -332,6 +334,17 @@ export function createCameraController(camera, canvas, opts = {}) {
 
   function markNudged() {
     nudged = true;
+  }
+
+  function noteUserAim() {
+    userAimed = true;
+    markNudged();
+  }
+
+  function takeUserAim() {
+    const aimed = userAimed;
+    userAimed = false;
+    return aimed;
   }
 
   function getTarget() {
@@ -510,6 +523,7 @@ export function createCameraController(camera, canvas, opts = {}) {
 
   function nudgePan(dx, dz) {
     if (!dx && !dz) return;
+    noteUserAim();
     breakFollowForPan();
     markNudged();
     velocity.panX += dx;
@@ -523,6 +537,7 @@ export function createCameraController(camera, canvas, opts = {}) {
 
   function applyLookPan(panX, panZ) {
     if (!panX && !panZ) return;
+    noteUserAim();
     breakFollowForPan();
     markNudged();
     const { rightX, rightZ, forwardX, forwardZ } = groundAxes();
@@ -730,6 +745,7 @@ export function createCameraController(camera, canvas, opts = {}) {
 
   /** @param {{ x: number, y: number }} [screen] client coords (cursor or pinch centroid) */
   function applyZoomInput(delta, screen) {
+    noteUserAim();
     markNudged();
     zoomTend = false;
     zoomIdleMs = 0;
@@ -764,7 +780,7 @@ export function createCameraController(camera, canvas, opts = {}) {
 
   /** Yaw stays on the current look target. */
   function applyRotateInput(deltaAlpha) {
-    markNudged();
+    noteUserAim();
     velocity.alpha += deltaAlpha;
   }
 
@@ -775,14 +791,14 @@ export function createCameraController(camera, canvas, opts = {}) {
   /** Immediate yaw — rim drag tracks the finger. Does not bank coast velocity. */
   function rotateBy(deltaAlpha) {
     if (!deltaAlpha) return;
-    markNudged();
+    noteUserAim();
     camera.alpha += deltaAlpha;
   }
 
   /** Immediate radius — rim drag tracks the finger. Does not bank coast velocity. */
   function zoomBy(delta) {
     if (!delta) return;
-    markNudged();
+    noteUserAim();
     zoomTend = false;
     zoomIdleMs = 0;
     zoomInputThisTick = true;
@@ -861,6 +877,7 @@ export function createCameraController(camera, canvas, opts = {}) {
   /** Shared by RMB drag and touch centroid-pan — same feel, one formula. */
   function panByScreenDelta(screenDx, screenDy, sensBase) {
     if (!screenDx && !screenDy) return;
+    noteUserAim();
     breakFollowForPan();
     const { wx, wz } = screenDeltaToGroundPan(screenDx, screenDy);
     const panSens = sensBase * panZoomFactor();
@@ -952,7 +969,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     if (!CAMERA_KEYS.has(key)) return;
     e.preventDefault();
     keyStates[key] = true;
-    markNudged();
+    noteUserAim();
     if (key === 's' || key === 'pageup') {
       camera.alpha += KEY_ROT_SPEED;
     } else if (key === 'f' || key === 'pagedown') {
@@ -1182,6 +1199,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     zoomInputThisTick = false;
     zoomOutThisTick = false;
     zoomFloored = false;
+    userAimed = false;
     clearZoomFocus();
     camera.alpha = DEFAULT_ALPHA;
     camera.radius = RESET_RADIUS;
@@ -1235,5 +1253,6 @@ export function createCameraController(camera, canvas, opts = {}) {
     tick,
     reset,
     markNudged,
+    takeUserAim,
   };
 }

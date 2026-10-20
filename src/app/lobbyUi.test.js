@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { chapterSelectOptions, formatCountdown, formatCreateLobbyLabel, formatMatchStatus, formatSeatName, formatStartLabel, formatTypeLobbyRow, groupSelectOptions, setupLobbyUi } from './lobbyUi.js';
+import { chapterSelectOptions, customMapSelectOptions, formatCountdown, formatCreateLobbyLabel, formatMatchStatus, formatSeatName, formatStartLabel, formatTypeLobbyRow, groupSelectOptions, setupLobbyUi } from './lobbyUi.js';
 
 describe('lobby ui copy', () => {
   it('formats a type-list row', () => {
@@ -25,6 +25,27 @@ describe('lobby ui copy', () => {
     });
     assert.equal(row.title, 'Open lobby');
     assert.equal(row.meta, '1/2');
+  });
+
+  it('labels a 1v1 or teams custom map in the lobby list', () => {
+    const row = formatTypeLobbyRow({
+      roomId: 'lobby-abc-deadbeef',
+      hostName: 'Blind',
+      mode: 'teams',
+      playerCount: 2,
+      maxPlayers: 4,
+      settings: { fieldSize: 'small', chapter: 'session' },
+    });
+    assert.equal(row.meta, '2/4  ·  custom map');
+    const story = formatTypeLobbyRow({
+      roomId: 'lobby-abc-deadbeef',
+      hostName: 'Blind',
+      mode: 'adventure',
+      playerCount: 1,
+      maxPlayers: 4,
+      settings: { fieldSize: 'small', chapter: 'pack:opening.garden' },
+    });
+    assert.equal(story.meta, '1/4  ·  small');
   });
 
   it('describes hosted versus joined match status', () => {
@@ -193,6 +214,7 @@ class FakeEl {
         else parts.delete(name);
         this.className = [...parts].join(' ');
       },
+      contains: (name) => this.className.split(/\s+/).includes(name),
     };
   }
 
@@ -304,6 +326,39 @@ function waitingState(mode = 'adventure') {
     settings: { fieldSize: 'small', seed: 1, chapter: 'ch1' },
   };
 }
+
+describe('custom map picker', () => {
+  it('lists loaded and fitting maps, not a generated field', () => {
+    const opts = customMapSelectOptions([
+      {
+        id: '10',
+        title: 'Duel',
+        gardens: [{ file: 'map.garden', name: 'Duel', mapType: 'onevsone' }],
+      },
+      {
+        id: '11',
+        title: 'Lanes',
+        gardens: [{ file: 'map.garden', name: 'Lanes', mapType: 'teams' }],
+      },
+      {
+        id: '12',
+        title: 'Tale',
+        campaign: {
+          kind: 'campaign',
+          episodes: [{ chapters: [{ file: 'opening.garden', name: 'Opening' }] }],
+        },
+        gardens: [{ file: 'opening.garden', name: 'Opening' }],
+      },
+      {
+        id: '13',
+        title: 'Open',
+        gardens: [{ file: 'map.garden', name: 'Open' }],
+      },
+    ], 'session', [{ id: 'session', name: 'My map' }], 'onevsone');
+    assert.deepEqual(opts.map((row) => row.name), ['My map', 'Duel', 'Open']);
+    assert.equal(opts[0].id, 'session');
+  });
+});
 
 describe('match lobby overlay', () => {
   it('closes the side menu when a regular lobby opens', () => {
@@ -446,12 +501,15 @@ describe('match lobby overlay', () => {
       });
       assert.equal(dom.overlay.hidden, false);
       assert.equal(dom.overlay.className.includes('is-parked'), false);
+      assert.equal(dom.min.textContent, '−');
       dom.min.click();
       assert.equal(dom.overlay.className.includes('is-parked'), true);
       assert.equal(dom.min.getAttribute('aria-label'), 'Expand lobby');
+      assert.equal(dom.min.textContent, '+');
       dom.min.click();
       assert.equal(dom.overlay.className.includes('is-parked'), false);
       assert.equal(dom.min.getAttribute('aria-label'), 'Minimize lobby');
+      assert.equal(dom.min.textContent, '−');
     } finally {
       restore();
     }

@@ -18,6 +18,8 @@ const textures = new WeakMap();
 const brickTextures = new WeakMap();
 const woodTextures = new WeakMap();
 const paintedTextures = new WeakMap();
+const paintedReady = new WeakMap();
+const meshesByMaterial = new WeakMap();
 
 function clamp8(n) {
   const v = n < 0 ? 0 : n > 255 ? 255 : n;
@@ -246,24 +248,64 @@ function loadWallPaint(engine) {
     texture.sampler = sampler;
     return texture;
   });
-  pending = Promise.all([load(CASTLE_URL), load(DUNGEON_URL)]).then(([castle, dungeon]) => ({
-    castle,
-    dungeon,
-  }));
+  pending = Promise.all([load(CASTLE_URL), load(DUNGEON_URL)]).then(([castle, dungeon]) => {
+    const paint = { castle, dungeon };
+    paintedReady.set(engine, paint);
+    return paint;
+  });
   paintedTextures.set(engine, pending);
   pending.catch(() => paintedTextures.delete(engine));
   return pending;
 }
 
+function trackWallMesh(material, mesh) {
+  if (!material || !mesh) return;
+  let bound = meshesByMaterial.get(material);
+  if (!bound) {
+    bound = new Set();
+    meshesByMaterial.set(material, bound);
+  }
+  bound.add(mesh);
+}
+
+/**
+ * The bind group keeps the texture it saw when the mesh was first drawn.
+ * Swapping diffuseTexture on that same material leaves the generated stone
+ * on screen, so a mesh that already exists gets a new material.
+ */
 function usePaint(mat, texture) {
-  if (!mat || !texture) return;
+  if (!mat || !texture || mat.diffuseTexture === texture) return;
   mat.diffuseTexture = texture;
   markMaterialUboDirty?.(mat);
+  const bound = meshesByMaterial.get(mat);
+  if (!bound?.size) return;
+  const next = stoneMaterial(texture, mat.alpha < 1, mat.diffuseColor.slice());
+  next.ambientColor = mat.ambientColor;
+  next.emissiveColor = mat.emissiveColor;
+  next.specularColor = mat.specularColor;
+  next.specularPower = mat.specularPower;
+  next.alpha = mat.alpha;
+  next.backFaceCulling = mat.backFaceCulling;
+  for (const mesh of bound) {
+    if (mesh.visible === false) {
+      bound.delete(mesh);
+      continue;
+    }
+    if (mesh.material !== mat) continue;
+    mesh.material = next;
+  }
+  if (!bound.size) {
+    meshesByMaterial.delete(mat);
+    return;
+  }
+  meshesByMaterial.delete(mat);
+  meshesByMaterial.set(next, bound);
 }
 
 export function createWallMaterials(engine) {
-  const castleTex = stoneTexture(engine);
-  const dungeonTex = brickTexture(engine);
+  const ready = paintedReady.get(engine);
+  const castleTex = ready?.castle ?? stoneTexture(engine);
+  const dungeonTex = ready?.dungeon ?? brickTexture(engine);
   const mats = {
     castle: stoneMaterial(castleTex, false, [1, 1, 1]),
     dungeon: stoneMaterial(dungeonTex, false, [1, 1, 1]),
@@ -272,14 +314,16 @@ export function createWallMaterials(engine) {
     wood: stoneMaterial(doorWoodTexture(engine), false, [0.92, 0.78, 0.58]),
     iron: flatMaterial([0.34, 0.36, 0.38], [0.12, 0.13, 0.14], [0.28, 0.28, 0.3]),
   };
-  loadWallPaint(engine).then((paint) => {
-    usePaint(mats.castle, paint.castle);
-    usePaint(mats.castleGhost, paint.castle);
-    usePaint(mats.dungeon, paint.dungeon);
-    usePaint(mats.dungeonGhost, paint.dungeon);
-  }).catch((err) => {
-    console.warn('[walls] castle/dungeon textures failed', err);
-  });
+  if (!ready) {
+    loadWallPaint(engine).then((paint) => {
+      usePaint(mats.castle, paint.castle);
+      usePaint(mats.castleGhost, paint.castle);
+      usePaint(mats.dungeon, paint.dungeon);
+      usePaint(mats.dungeonGhost, paint.dungeon);
+    }).catch((err) => {
+      console.warn('[walls] castle/dungeon textures failed', err);
+    });
+  }
   return mats;
 }
 
@@ -296,6 +340,7 @@ export function createWallMesh(engine, name, geometry, material, { shadows = fal
   mesh.material = material;
   mesh.pickable = false;
   mesh.receiveShadows = shadows;
+  trackWallMesh(material, mesh);
   return mesh;
 }
 
@@ -313,9 +358,14 @@ const WALL_PARTS = [
  * @param {object | null | undefined} field
  * @param {(x: number, z: number) => number} [sampleHeight]
  */
-export function createCurtainWalls(engine, scene, field, sampleHeight) {
+export async function createCurtainWalls(engine, scene, field, sampleHeight) {
   const runs = field?.walls?.runs;
   if (!engine || !runs?.length) return { meshes: [], dispose() {} };
+  try {
+    await loadWallPaint(engine);
+  } catch (err) {
+    console.warn('[walls] castle/dungeon textures failed', err);
+  }
   const geom = buildWallGeometry(runs, field.walls.style, sampleHeight);
   const mats = createWallMaterials(engine);
   const meshes = [];

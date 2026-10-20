@@ -1,6 +1,7 @@
 // Building action menu — tilted ring framing a selected placeable
 // (empty hub stays on the building). Thin outer chrome for units, upgrades,
-// and a fixed bottom Pause | Cancel pair; options pick on pads/icons only.
+// building upgrades, and a fixed bottom Pause | Cancel pair; options pick
+// on pads/icons only.
 // Pad rings show progress; badges show queue counts.
 
 import {
@@ -24,8 +25,8 @@ import { loadIdleIconMeshes } from './vatUnits.js';
 import { formatGameNumber } from '../sim/formatGameNumber.js';
 import { localHudSkin, resolveUnitModelUrl } from '../app/dlcCatalog.js';
 import {
-  BUILDING_MENUS,
   BUILDING_MENU_UNITS,
+  BUILDING_MODEL_URLS,
   UPGRADE_MODEL_URLS,
   getBuildingMenu,
   capActionMenu,
@@ -42,14 +43,18 @@ import {
   radialHudPremulRgba,
   radialIconAnchor,
   radialIconBounds,
+  radialIconFitScale,
 } from './radialPose.js';
+import { createRadialIconMaterial, syncRadialIconShade } from './radialIconMaterial.js';
 import { formatResourceCost } from '../sim/resources.js';
 import {
   ensureRadialPriceHud,
+  formatRadialPriceText,
   hideRadialPrice,
   hideRadialPricesWithPrefix,
   setRadialPrice,
 } from './radialPriceHud.js';
+import { xrEye } from './xrEye.js';
 import { menuGateState } from '../sim/menuGate.js';
 
 /** Static or VAT unit GLB for radial icons. */
@@ -80,6 +85,8 @@ const PAD_H = 0.22;
 const PAD_LIFT = 1.35;
 const ICON_LIFT = 0.85;
 const OPTION_SCALE = 1.8;
+/** Units stay at OPTION_SCALE; derrick-class meshes shrink to this box. */
+const ICON_FIT_EXTENT = PAD_OUTER * 1.55;
 /** Tight to the visible pad / unit — not a pie-slice halo into the yard. */
 const ICON_PICK_R = 5.2;
 /** Min arc for units/upgrades when sharing the usable band (~100°). */
@@ -156,7 +163,7 @@ const AUTO_PAD_COLOR = [0.5, 0.56, 0.62];
 const AUTO_PAD_EMISSIVE = [0.14, 0.17, 0.2];
 const AUTO_PAD_ALPHA = 0.62;
 
-/** @typedef {'unit' | 'upgrade' | 'pause' | 'cancel'} ActionCategoryId */
+/** @typedef {'unit' | 'upgrade' | 'building' | 'pause' | 'cancel'} ActionCategoryId */
 /** @typedef {null | 'cancel'} ArmedId */
 
 const CATEGORIES = /** @type {const} */ ({
@@ -175,6 +182,14 @@ const CATEGORIES = /** @type {const} */ ({
     emissive: [0.12, 0.5, 0.58],
     pad: [0.38, 0.86, 0.9],
     padEm: [0.12, 0.52, 0.56],
+  },
+  building: {
+    id: 'building',
+    name: 'Buildings',
+    color: [0.55, 0.78, 0.34],
+    emissive: [0.28, 0.48, 0.12],
+    pad: [0.66, 0.86, 0.42],
+    padEm: [0.3, 0.5, 0.12],
   },
   pause: {
     id: 'pause',
@@ -674,33 +689,8 @@ function makeRingMaterial(diffuse, emissive, alpha = 1) {
   return mat;
 }
 
-function previewColorFromMaterial(mat) {
-  const color =
-    mat?.baseColorFactor ??
-    mat?._baseColorFactor ??
-    mat?.diffuseColor;
-  if (color?.length >= 3) {
-    return [
-      Math.max(0.12, Math.min(1, color[0])),
-      Math.max(0.12, Math.min(1, color[1])),
-      Math.max(0.12, Math.min(1, color[2])),
-    ];
-  }
-  return [0.72, 0.75, 0.8];
-}
-
 function makeIconPreviewMaterial(source) {
-  const color = previewColorFromMaterial(source);
-  const mat = createStandardMaterial();
-  mat.name = `${source?.name ?? 'action'}-radial`;
-  mat.diffuseColor = color;
-  mat.emissiveColor = [0.82, 0.82, 0.82];
-  mat.alpha = RADIAL_HUD_BLEND_ALPHA;
-  mat._radialBaseAlpha = 1;
-  if (mat.specularColor) mat.specularColor = [0, 0, 0];
-  disableRadialHudDepthWrite(mat);
-  markMaterialUboDirty(mat);
-  return mat;
+  return createRadialIconMaterial(source);
 }
 
 function rayHitPlane(ray, px, py, pz, nx, ny, nz) {
@@ -764,53 +754,60 @@ function hideMesh(mesh) {
 }
 
 /**
- * Pause (left) + Cancel (right) sit at screen-bottom (+π/2). Units/upgrades
- * share the remaining band above them. Arcs abut on separator rays; ARC_GAP
- * is parallel mesh channels.
+ * Pause (left) + Cancel (right) sit at screen-bottom (+π/2). Units, upgrades,
+ * and building upgrades share the remaining band above them, in that order.
+ * Arcs abut on separator rays; ARC_GAP is parallel mesh channels.
+ * Two-category menus (units + upgrades, no buildings) keep the previous split.
  * @param {number} unitCount
  * @param {number} upgradeCount
+ * @param {number} [buildingCount]
  */
-function computeArcs(unitCount, upgradeCount) {
+function computeArcs(unitCount, upgradeCount, buildingCount = 0) {
   const hasU = unitCount > 0;
   const hasG = upgradeCount > 0;
+  const hasB = buildingCount > 0;
 
   const utilStart = Math.PI / 2 - UTILITY_SPAN * 0.5;
   const pause = { start: utilStart, span: PAUSE_SPAN };
   const cancel = { start: utilStart + PAUSE_SPAN, span: CANCEL_SPAN };
-  if (!hasU && !hasG) {
-    return { units: null, upgrades: null, pause, cancel };
-  }
+  const arcs = { units: null, upgrades: null, buildings: null, pause, cancel };
+  /** @type {['units' | 'upgrades' | 'buildings', number][]} */
+  const sides = [];
+  if (hasU) sides.push(['units', unitCount]);
+  if (hasG) sides.push(['upgrades', upgradeCount]);
+  if (hasB) sides.push(['buildings', buildingCount]);
+  if (!sides.length) return arcs;
+
   const usableStart = utilStart + UTILITY_SPAN;
   const usableSpan = Math.PI * 2 - UTILITY_SPAN;
-
-  if (hasU && !hasG) {
-    return {
-      units: { start: usableStart, span: usableSpan },
-      upgrades: null,
-      pause,
-      cancel,
-    };
+  if (sides.length === 1) {
+    arcs[sides[0][0]] = { start: usableStart, span: usableSpan };
+    return arcs;
   }
-  if (!hasU && hasG) {
-    return {
-      units: null,
-      upgrades: { start: usableStart, span: usableSpan },
-      pause,
-      cancel,
-    };
+  if (sides.length === 2 && !hasB) {
+    const minSide = Math.min(MIN_ARC, usableSpan * 0.42);
+    const spare = Math.max(0, usableSpan - 2 * minSide);
+    const totalN = unitCount + upgradeCount;
+    const arcU = minSide + spare * (unitCount / totalN);
+    arcs.units = { start: usableStart, span: arcU };
+    arcs.upgrades = { start: usableStart + arcU, span: usableSpan - arcU };
+    return arcs;
   }
 
-  const minSide = Math.min(MIN_ARC, usableSpan * 0.42);
-  const spare = Math.max(0, usableSpan - 2 * minSide);
-  const totalN = unitCount + upgradeCount;
-  const arcU = minSide + spare * (unitCount / totalN);
-  const arcG = usableSpan - arcU;
-  return {
-    units: { start: usableStart, span: arcU },
-    upgrades: { start: usableStart + arcU, span: arcG },
-    pause,
-    cancel,
-  };
+  const minSide = Math.min(MIN_ARC, (usableSpan / sides.length) * 0.85);
+  const floor = Math.min(minSide, usableSpan / sides.length);
+  const spare = Math.max(0, usableSpan - floor * sides.length);
+  const totalN = sides.reduce((n, side) => n + side[1], 0) || 1;
+  let cursor = usableStart;
+  for (let i = 0; i < sides.length; i++) {
+    const [id, count] = sides[i];
+    const span = i === sides.length - 1
+      ? usableStart + usableSpan - cursor
+      : floor + spare * (count / totalN);
+    arcs[id] = { start: cursor, span };
+    cursor += span;
+  }
+  return arcs;
 }
 
 function trackKey(kind, id) {
@@ -830,7 +827,7 @@ function trackKey(kind, id) {
  */
 export async function createBuildingActionRadial(engine, scene, groundYAt, screen = {}) {
   void ensureRadialPriceHud();
-  /** @type {Map<'unit' | 'upgrade' | 'pause' | 'cancel', { mesh: object | null, mat: object, startAng: number, endAng: number }>} */
+  /** @type {Map<'unit' | 'upgrade' | 'building' | 'pause' | 'cancel', { mesh: object | null, mat: object, startAng: number, endAng: number }>} */
   const arcRings = new Map([
     [
       'unit',
@@ -852,6 +849,19 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
         mat: makeRingMaterial(
           CATEGORIES.upgrade.color,
           CATEGORIES.upgrade.emissive,
+          MENU_RING_ALPHA,
+        ),
+        startAng: 0,
+        endAng: 0,
+      },
+    ],
+    [
+      'building',
+      {
+        mesh: null,
+        mat: makeRingMaterial(
+          CATEGORIES.building.color,
+          CATEGORIES.building.emissive,
           MENU_RING_ALPHA,
         ),
         startAng: 0,
@@ -889,7 +899,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   const arcMeshByKey = new Map();
 
   /**
-   * @param {'unit' | 'upgrade' | 'pause' | 'cancel'} id
+   * @param {'unit' | 'upgrade' | 'building' | 'pause' | 'cancel'} id
    * @param {number} startAng
    * @param {number} endAng
    */
@@ -1100,6 +1110,9 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     for (const item of menu.upgrades ?? []) {
       await loadIcon(`upgrade:${item.id}`, UPGRADE_MODEL_URLS[item.id]);
     }
+    for (const item of menu.buildings ?? []) {
+      await loadIcon(`building:${item.id}`, BUILDING_MODEL_URLS[item.id]);
+    }
   }
 
   /** @type {{ data: object, layer: object, text: string }[]} */
@@ -1236,7 +1249,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
 
   /**
    * @type {{
-   *   kind: 'unit' | 'upgrade' | 'pause' | 'cancel',
+   *   kind: 'unit' | 'upgrade' | 'building' | 'pause' | 'cancel',
    *   id: string,
    *   name: string,
    *   costText: string,
@@ -1260,7 +1273,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
    *   cancel: { start: number, span: number } | null,
    * }}
    */
-  let arcs = { units: null, upgrades: null, pause: null, cancel: null };
+  let arcs = { units: null, upgrades: null, buildings: null, pause: null, cancel: null };
   /** Cancel pad world pose (separate from unit/upgrade slots). */
   let cancelSlot = /** @type {{ ang: number, x: number, y: number, z: number } | null} */ (
     null
@@ -1299,7 +1312,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   let hz = 1;
   /** @type {string | null} */
   let activeBuildingType = null;
-  /** @type {{ units?: any[], upgrades?: any[] } | null} */
+  /** @type {{ units?: any[], upgrades?: any[], buildings?: any[] } | null} */
   let activeMenu = null;
   /** @type {string} */
   let activeMenuKey = '';
@@ -1307,7 +1320,8 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   function menuKeyOf(menu) {
     const u = (menu?.units ?? []).map((i) => i.id).join(',');
     const g = (menu?.upgrades ?? []).map((i) => i.id).join(',');
-    return `${u}|${g}`;
+    const b = (menu?.buildings ?? []).map((i) => i.id).join(',');
+    return `${u}|${g}|${b}`;
   }
 
   /** Pause is live while a queue/research track is running; Cancel also for sites. */
@@ -1443,6 +1457,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     mat._radialBaseAlpha = base;
     mat.alpha = radialHudFadeAlpha(base, edgeOpacity);
     markMaterialUboDirty(mat);
+    syncRadialIconShade(mat);
   }
 
   function refreshMatAlpha(mat) {
@@ -1450,6 +1465,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     if (mat._radialBaseAlpha == null) mat._radialBaseAlpha = mat.alpha ?? 1;
     mat.alpha = radialHudFadeAlpha(mat._radialBaseAlpha, edgeOpacity);
     markMaterialUboDirty(mat);
+    syncRadialIconShade(mat);
   }
 
   function applyEdgeFade() {
@@ -1710,13 +1726,14 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     cancelSlot = null;
     pauseSlot = null;
     if (!menu) {
-      arcs = { units: null, upgrades: null, pause: null, cancel: null };
+      arcs = { units: null, upgrades: null, buildings: null, pause: null, cancel: null };
       return;
     }
     const shown = capActionMenu(menu, MAX_OPTIONS);
-    arcs = computeArcs(shown.units.length, shown.upgrades.length);
+    arcs = computeArcs(shown.units.length, shown.upgrades.length, shown.buildings.length);
     pushSlotsForArc(shown.units, 'unit', arcs.units);
     pushSlotsForArc(shown.upgrades, 'upgrade', arcs.upgrades);
+    pushSlotsForArc(shown.buildings, 'building', arcs.buildings);
     for (const slot of slots) slot.gate = gateForSlot(slot);
     if (arcs.pause) {
       pauseSlot = {
@@ -1859,7 +1876,9 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   function redrawSlot(i) {
     const s = slots[i];
     if (!s) return;
-    const iconScale = OPTION_SCALE * hudScale;
+    const iconScale =
+      radialIconFitScale(s.iconKey ? icons.get(s.iconKey) : null, ICON_FIT_EXTENT, OPTION_SCALE)
+      * hudScale;
     const lift = ICON_LIFT * hudScale;
     const iconX = s.x + nx * lift;
     const iconY = s.y + ny * lift;
@@ -1999,7 +2018,6 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   function redrawPrice(i) {
     const price = prices[i];
     const slot = slots[i];
-    hideLabel(price);
     const worldToScreen = screen.worldToScreen;
     const getViewport = screen.getViewport;
     if (!slot?.costText || !open || !worldToScreen || !getViewport) {
@@ -2010,17 +2028,31 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     const owned = slotResearched(slot);
     const down = PRICE_DOWN * hudScale;
     const lift = LABEL_LIFT * hudScale;
-    const origin = worldToScreen(
-      slot.x + tx * down + nx * lift,
-      slot.y + ty * down + ny * lift,
-      slot.z + tz * down + nz * lift,
-    );
+    const worldX = slot.x + tx * down + nx * lift;
+    const worldY = slot.y + ty * down + ny * lift;
+    const worldZ = slot.z + tz * down + nz * lift;
+    const origin = worldToScreen(worldX, worldY, worldZ);
     const viewport = getViewport();
     if (!origin || !viewport?.width || !viewport?.height) {
       hidePrice(i);
       return;
     }
     const wash = owned ? DULL_TEXT_COLOR : (PRICE_WASH[slot.gate ?? 'ok'] ?? PRICE_WASH.ok);
+    if (xrEye() && price) {
+      hideRadialPrice(`action-${i}`);
+      price.text = formatRadialPriceText(slot.cost);
+      placeScreenText(
+        price,
+        worldX,
+        worldY,
+        worldZ,
+        PRICE_SCREEN_SCALE * (hovered ? 1.05 : 1),
+        owned ? 0.72 : hovered ? 0.95 : 0.8,
+        wash,
+      );
+      return;
+    }
+    hideLabel(price);
     setRadialPrice(`action-${i}`, {
       cost: slot.cost,
       x: origin.x,
@@ -2144,6 +2176,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     for (const side of [
       { id: /** @type {const} */ ('unit'), arc: arcs.units },
       { id: /** @type {const} */ ('upgrade'), arc: arcs.upgrades },
+      { id: /** @type {const} */ ('building'), arc: arcs.buildings },
       { id: /** @type {const} */ ('pause'), arc: arcs.pause },
       { id: /** @type {const} */ ('cancel'), arc: arcs.cancel },
     ]) {
@@ -2343,10 +2376,10 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
    * @param {number} z
    * @param {string} buildingType
    * @param {object | null} [camera]
-   * @param {{ units?: any[], upgrades?: any[] } | null} [menuOverride]
+   * @param {{ units?: any[], upgrades?: any[], buildings?: any[] } | null} [menuOverride]
    */
   function showAt(x, z, buildingType, camera = null, menuOverride = null) {
-    const menu = menuOverride ?? getBuildingMenu(buildingType) ?? { units: [], upgrades: [] };
+    const menu = menuOverride ?? getBuildingMenu(buildingType) ?? { units: [], upgrades: [], buildings: [] };
     anchorX = x;
     anchorZ = z;
     activeBuildingType = buildingType;
@@ -2370,7 +2403,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     const want = activeMenuKey;
     void ensureMenuIcons(menu).then(() => {
       if (open && activeMenuKey === want) {
-        rebuildSlots(activeMenu ?? { units: [], upgrades: [] });
+        rebuildSlots(activeMenu ?? { units: [], upgrades: [], buildings: [] });
         layout();
       }
     });
@@ -2409,7 +2442,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     slots = [];
     cancelSlot = null;
     pauseSlot = null;
-    arcs = { units: null, upgrades: null, pause: null, cancel: null };
+    arcs = { units: null, upgrades: null, buildings: null, pause: null, cancel: null };
     hoverIndex = -1;
     cancelHovered = false;
     pauseHovered = false;
@@ -2533,7 +2566,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
    * Pads and icons only — the outer ring is decorative chrome, not an option.
    * Dull Pause / Cancel do not pick so the world stays clickable under them.
    * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null | undefined} ray
-   * @returns {{ kind: 'unit' | 'upgrade' | 'pause' | 'cancel', id?: string } | null}
+   * @returns {{ kind: 'unit' | 'upgrade' | 'building' | 'pause' | 'cancel', id?: string } | null}
    */
   function pickOptionAtRay(ray) {
     if (!open || !ray || !edgePickable()) return null;

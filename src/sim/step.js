@@ -18,6 +18,7 @@ import { applyCommands } from './commands.js';
 import { buildingProductionSystem } from './buildingProduction.js';
 import { waveSpawnerSystem } from './waveSpawner.js';
 import { combatSystem } from './combat.js';
+import { releaseLeashDrop } from './leash.js';
 import { towerCombatSystem } from './towerCombat.js';
 import {
   movementGoal,
@@ -33,7 +34,7 @@ import {
 } from './path.js';
 import { getUnitDef, UNIT_DEFS, UNIT, unitFootprint, unitSteer, unitAccel, unitDecel, unitSlowMul, isFlyer } from './unitTypes.js';
 import { ORDER } from './world.js';
-import { continueRallyHop } from './buildings.js';
+import { continueRallyHop, tickBuildingMorphs } from './buildings.js';
 import { worldToTile, worldToTileZ, isPassable, isSlowTile } from './field.js';
 import { kothMetaStep } from './kothMeta.js';
 import { matchWipeStep } from './matchEnd.js';
@@ -44,7 +45,7 @@ import { treeBurnSystem } from './trees.js';
 import { groveGrowthSystem } from './grove.js';
 import { fireZoneSystem } from './fireZones.js';
 import { pendingLightningSystem } from './lightning.js';
-import { pulseFireZoneBuildings } from './buildingCombat.js';
+import { pulseFireZoneBuildings, tickBuildingFires } from './buildingCombat.js';
 import { frogSystem } from './frogs.js';
 import { flushMycoDeathBursts, sporeGrowthSystem } from './sporeBloom.js';
 import { monkKickSystem, isLobbing } from './monkKick.js';
@@ -68,6 +69,7 @@ import { constructionSystem, constructionAssignSystem } from './construction.js'
 import { idleWanderSystem, isIdleWander, IDLE_WANDER_SPEED } from './idleWander.js';
 import { tickCombatStatus, FROST_MOVE_MUL } from './combatStatus.js';
 import { tickFoodUpkeep } from './foodUpkeep.js';
+import { brigandIdleSystem } from './brigand.js';
 
 /** Extra slow while gawking at frogs (stacks with terrain slow). */
 const DISTRACT_MOVE_MUL = fx.fromFloat(0.55);
@@ -173,9 +175,14 @@ export function step(world, field, commands) {
   phase('foodUpkeep', () => tickFoodUpkeep(world));
   phase('constructAssign', () => constructionAssignSystem(world, field));
   phase('construct', () => constructionSystem(world, field));
+  phase('morph', () => tickBuildingMorphs(world));
   phase('combat', () => combatSystem(world, field));
+  phase('brigandIdle', () => brigandIdleSystem(world));
   phase('idleWander', () => idleWanderSystem(world, field));
-  phase('lightning', () => pendingLightningSystem(world, field));
+  phase('lightning', () => {
+    pendingLightningSystem(world, field);
+    tickBuildingFires(world, field);
+  });
   phase('towers', () => towerCombatSystem(world));
   phase('projectiles', () => projectileSystem(world, field));
   phase('status', () => tickCombatStatus(world, field));
@@ -483,6 +490,7 @@ function finishMove(w, i) {
   w.hasTarget[i] = 0;
   // IDLE still auto-acquires; keeps render facing from treating sep nudges as walks.
   w.order[i] = ORDER.IDLE;
+  releaseLeashDrop(w, i);
 }
 
 /** Bleed speed along current velocity (IDLE arrive coast / turn-in-place). */

@@ -71,6 +71,7 @@ function buildStressGardenInner() {
   return encodeGarden(field, {
     name: STRESS_GARDEN_NAME,
     cameraHalfF: STRESS_CAMERA_HALF_F,
+    mapType: 'stress',
     omitTerrain: true,
     units,
   });

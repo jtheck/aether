@@ -83,7 +83,16 @@ function peekGardenMeta(text) {
   var name = '';
   if (typeof data.n === 'string') name = data.n;
   else if (typeof data.name === 'string') name = data.name;
-  return { ok: true, garden: data, name: name, version: version, width: width, height: height };
+  var mapType = typeof data.mt === 'string' ? data.mt.trim().toLowerCase() : '';
+  return {
+    ok: true,
+    garden: data,
+    name: name,
+    version: version,
+    width: width,
+    height: height,
+    mapType: mapType,
+  };
 }
 
 function walkGardenRels(folder, fsImpl) {
@@ -194,6 +203,7 @@ function describeInstall(folder, fsImpl) {
     gardens.push({
       file: rel,
       name: meta.name || rel.replace(/\.garden$/i, ''),
+      mapType: meta.mapType || '',
     });
   }
   return gardens;

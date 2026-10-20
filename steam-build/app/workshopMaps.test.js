@@ -40,6 +40,8 @@ describe('workshopMaps paths', () => {
     const ok = maps.peekGardenMeta(TINY);
     assert.equal(ok.ok, true);
     assert.equal(ok.name, 'Grove');
+    assert.equal(ok.mapType, '');
+    assert.equal(maps.peekGardenMeta('{"v":4,"n":"Lanes","w":8,"h":8,"mt":"Teams"}').mapType, 'teams');
     assert.equal(maps.peekGardenMeta('{"v":2,"w":8,"h":8}').ok, false);
     assert.equal(maps.peekGardenMeta('not-json').ok, false);
   });

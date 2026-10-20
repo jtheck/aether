@@ -153,7 +153,10 @@ try {
   }
   console.log('WebGPU:', gpuOk.reason);
 
-  await page.goto(`http://localhost:${PORT}/prebake/prebake.html?auto=1`, {
+  const vatQuery = process.env.PREBAKE_VAT
+    ? `&vat=${encodeURIComponent(process.env.PREBAKE_VAT)}`
+    : '';
+  await page.goto(`http://localhost:${PORT}/prebake/prebake.html?auto=1${vatQuery}`, {
     waitUntil: 'networkidle',
     timeout: 120_000,
   });

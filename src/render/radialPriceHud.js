@@ -77,6 +77,20 @@ function costKey(cost) {
   return parts.map((p) => `${p.kind}:${p.amount}`).join('|');
 }
 
+/**
+ * Headset line. The icon row is monitor HTML, so the eye gets the kind in words.
+ * Amounts stay in the same hex as the rest of the match HUD.
+ * @param {Record<string, number> | null | undefined} cost
+ */
+export function formatRadialPriceText(cost) {
+  return resourceCostParts(cost)
+    .map((p) => {
+      const kind = p.kind ? p.kind.charAt(0).toUpperCase() + p.kind.slice(1) : '';
+      return `${formatGameNumber(p.amount)} ${kind}`;
+    })
+    .join(' · ');
+}
+
 function readPaint(el) {
   return {
     cost: el.dataset.cost ? JSON.parse(el.dataset.cost) : null,

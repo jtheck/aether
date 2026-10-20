@@ -49,7 +49,7 @@ describe('campaign chapter build', () => {
     const g = decodeGarden(json);
     const heroes = g.units.filter((u) => u.name);
     assert.equal(heroes.length, 4);
-    assert.deepEqual(heroes.map((u) => u.name), ['Stumpey', 'Goblin', 'Lady', 'Doc']);
+    assert.deepEqual(heroes.map((u) => u.name), ['Stumpey', 'Goblin', 'Idra', 'Doc']);
     assert.equal(g.story.reels.length, 2);
     assert.ok(g.objectives.some(isTerminalObjective));
     const terminal = g.objectives.find(isTerminalObjective);

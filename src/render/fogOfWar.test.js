@@ -6,8 +6,12 @@ import { TILE_SIZE_F, worldHalfFFromMap } from '../sim/field.js';
 import { UNIT } from '../sim/unitTypes.js';
 import {
   COVER_DECAY_MS,
+  FOG_SORT_PUSH,
+  FOG_UNSEEN_ORDER,
+  FOG_VISITED_ORDER,
   VISITED_ALPHA,
   createFogOfWar,
+  fogSortOrigin,
   sealFogEdgePadding,
   structureKey,
   structureTouchesVision,
@@ -48,6 +52,32 @@ function fakeWorld(units) {
   }
   return world;
 }
+
+describe('fog overlay sort origin', () => {
+  function depthAlong(eye, axis, point) {
+    return (
+      (point[0] - eye[0]) * axis[0] +
+      (point[1] - eye[1]) * axis[1] +
+      (point[2] - eye[2]) * axis[2]
+    );
+  }
+
+  it('stays farther along the camera axis than a menu on either side of the board', () => {
+    assert.ok(FOG_VISITED_ORDER > FOG_UNSEEN_ORDER);
+    const eye = [12, 48, -90];
+    const axis = [0.2, -0.35, 0.91];
+    const origin = fogSortOrigin(eye[0], eye[1], eye[2], axis[0], axis[1], axis[2]);
+    const fogDepth = depthAlong(eye, axis, [origin.x, origin.y, origin.z]);
+    assert.equal(fogDepth, (axis[0] ** 2 + axis[1] ** 2 + axis[2] ** 2) * FOG_SORT_PUSH);
+    for (const menu of [
+      [480, 6, 40],
+      [-420, 8, -30],
+      [20, 4, 360],
+    ]) {
+      assert.ok(fogDepth > depthAlong(eye, axis, menu));
+    }
+  });
+});
 
 describe('fogOfWar vision radii', () => {
   it('gives civilians a short circle and military a larger one', () => {

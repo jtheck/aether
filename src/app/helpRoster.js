@@ -27,7 +27,9 @@ export function helpPips(value, max) {
 
 const UNIT_NOTE = {
   [UNIT.VILLAGER]: 'Gathers and builds. Comes from the Village.',
-  [UNIT.WARRIOR]: 'Melee. Trained at the Barracks.',
+  [UNIT.BRIGAND]: 'Temporary torch fighter. Ability or pointed attack; reverts when idle or sent to work.',
+  [UNIT.WARRIOR]: 'Melee. Trained at the Barracks. Becomes a Champion after five wounded enemies fall nearby.',
+  [UNIT.CHAMPION]: 'Melee. A warrior who was still nearby when five wounded enemies fell.',
   [UNIT.ARCHER]: 'Ranged. Trained at the Barracks.',
   [UNIT.WARLOCK]: 'Ranged. Fireball. Trained at the Tavern.',
   [UNIT.PRIEST]: 'Ranged. Holy armor. Does not attack buildings. Trained at the Church.',
@@ -46,7 +48,7 @@ const BUILDING_NOTE = {
   village: 'Villagers gather here. Trains Engineers and Monks.',
   silo: 'Extra storage beside a camp, mine, or farm.',
   farm: 'Food.',
-  mine: 'Stone and mineral.',
+  mine: 'Stone and mineral. Upgrades to a Well.',
   tower: 'Trains Wizards. Needs a Camp.',
   tavern: 'Trains Warlocks. Researches Patronage. Needs a Camp.',
   lab: 'Researches Artillery. Needs a Camp.',
@@ -70,7 +72,7 @@ const UPGRADE_NOTE = {
 };
 
 function listedUnits() {
-  return UNIT_DEFS.filter((def) => def.id !== UNIT.BRIGAND);
+  return UNIT_DEFS;
 }
 
 export function helpUnitCards() {

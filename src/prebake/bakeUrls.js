@@ -1,4 +1,5 @@
 // Canonical GLB URL list for offline prebake (mesh + sockets). VAT is separate.
+// A file in assets/models/ is not baked until something below names its URL.
 
 import { UNIT_MODEL_URLS } from '../render/unitModels.js';
 import { VAT_UNIT_DEFS } from '../render/vatUnits.js';

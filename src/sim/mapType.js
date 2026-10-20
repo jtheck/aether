@@ -1,6 +1,6 @@
 // Map type stored on a .garden (`mt`). Forge uses it when generating starts.
 
-/** @typedef {'onevsone' | 'teams' | 'koth' | 'adventure'} MapTypeId */
+/** @typedef {'onevsone' | 'teams' | 'koth' | 'adventure' | 'stress'} MapTypeId */
 
 /** @type {Array<{ id: MapTypeId, name: string, players: number, laneBases: boolean, placeAgoras: boolean, koth: boolean }>} */
 export const MAP_TYPES = [
@@ -8,6 +8,7 @@ export const MAP_TYPES = [
   { id: 'teams', name: 'Teams', players: 4, laneBases: true, placeAgoras: true, koth: false },
   { id: 'koth', name: 'King of the Hill', players: 5, laneBases: false, placeAgoras: false, koth: true },
   { id: 'adventure', name: 'Adventure', players: 0, laneBases: false, placeAgoras: false, koth: false },
+  { id: 'stress', name: 'Stressful Situation', players: 0, laneBases: false, placeAgoras: false, koth: false },
 ];
 
 export const DEFAULT_MAP_TYPE = 'adventure';

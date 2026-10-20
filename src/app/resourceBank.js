@@ -83,7 +83,10 @@ export function createResourceBank(host) {
         const on = vis === SLOT_VIS.ON;
         el.classList.toggle('is-on', on);
         // A prior 7/A hint flash must not keep a now-filled icon at opacity 0.
-        if (on) el.classList.remove('is-flash');
+        if (on) {
+          el.classList.remove('is-flash');
+          el.classList.remove('is-flash-short');
+        }
       }
       const countEl = counts?.[kind];
       if (countEl) {
@@ -96,7 +99,7 @@ export function createResourceBank(host) {
   /**
    * One-shot pop per wasted return: yellow on the next locked slot (7 / a).
    * A full stack (no hint) is a no-op — don't wash the whole kind.
-   * @param {{ owner: number, kind: string, hint?: string | null }[] | null | undefined} events
+   * @param {{ owner: number, kind: string, hint?: string | null, tone?: string }[] | null | undefined} events
    * @param {number} owner
    */
   function flashOverflow(events, owner) {
@@ -105,7 +108,8 @@ export function createResourceBank(host) {
     for (let i = 0; i < events.length; i++) {
       const ev = events[i];
       if ((ev.owner | 0) !== o || !ev.hint) continue;
-      bumpFlash(icons[ev.kind]?.[ev.hint], 'is-flash');
+      const cls = ev.tone === 'short' ? 'is-flash-short' : 'is-flash';
+      bumpFlash(icons[ev.kind]?.[ev.hint], cls);
     }
   }
 

@@ -122,6 +122,21 @@ export function radialClickKind(h) {
 }
 
 /**
+ * Agora pads and action-radial building upgrades both emit kind: 'building'.
+ * The open menu decides which one it is — do not let upgrade handling run
+ * first or agora clicks no-op when no production building is selected.
+ * @param {{ kind?: string, id?: string } | string | null | undefined} picked
+ * @param {{ buildRadialOpen?: boolean }} [ctx]
+ * @returns {'place' | 'upgradeBuilding' | 'other'}
+ */
+export function radialBuildingPickAction(picked, ctx = {}) {
+  if (!picked) return 'other';
+  if (typeof picked === 'string') return 'place';
+  if (picked.kind !== 'building') return 'other';
+  return ctx.buildRadialOpen ? 'place' : 'upgradeBuilding';
+}
+
+/**
  * While ghost-placing, an agora mesh click exits place mode. Hub / chrome
  * only apply if a radial is still claiming hits (rally).
  * @param {'pick' | 'hub' | 'chrome' | 'world'} radialKind

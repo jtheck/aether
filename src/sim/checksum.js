@@ -49,6 +49,10 @@ export function checksum(w, field = null) {
     if (w.targetBuilding) mix(w.targetBuilding[i]);
     if (w.targetDoor) mix(w.targetDoor[i]);
     if (w.attackFocus) mix(w.attackFocus[i]);
+    if (w.leashActive) mix(w.leashActive[i]);
+    if (w.leashX) mix(w.leashX[i]);
+    if (w.leashY) mix(w.leashY[i]);
+    if (w.leashDrop) mix(w.leashDrop[i]);
     mix(w.engagementTarget[i]);
     mix(w.engagementSlot[i]);
     mix(w.targetLoad[i]);
@@ -84,6 +88,7 @@ export function checksum(w, field = null) {
     if (w.carriedAmt) mix(w.carriedAmt[i]);
     if (w.gatherCd) mix(w.gatherCd[i]);
     if (w.gatherDefensive) mix(w.gatherDefensive[i]);
+    if (w.manualHold) mix(w.manualHold[i]);
   }
 
   const p = w.projectiles;

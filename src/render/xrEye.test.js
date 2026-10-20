@@ -1,6 +1,16 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { eyeReach, xrFitFov, xrShadowCover } from './xrEye.js';
+import {
+  XR_HUD_CHROME_TAN,
+  XR_HUD_EDGE_TAN,
+  eyeReach,
+  xrFitFov,
+  xrHudChromeScale,
+  xrHudEdgeScale,
+  xrHudLayoutPoint,
+  xrHudProjection,
+  xrShadowCover,
+} from './xrEye.js';
 
 /** GL-style projection for tangents l, r, b, t at the unit plane. */
 function proj(l, r, b, t) {
@@ -25,6 +35,61 @@ describe('eyeReach', () => {
 
   it('falls back to 90 degrees without views', () => {
     assert.deepEqual(eyeReach([]), { h: 1, v: 1 });
+  });
+});
+
+describe('xrHudProjection', () => {
+  it('maps canvas NDC onto the eye tangents', () => {
+    const p = xrHudProjection({ h: 1.2, v: 0.8 });
+    assert.ok(Math.abs(p.aspect - 1.5) < 1e-6);
+    assert.ok(Math.abs(Math.tan(p.fov / 2) - 0.8) < 1e-6);
+    assert.ok(Math.abs(Math.tan(p.fov / 2) * p.aspect - 1.2) < 1e-6);
+  });
+});
+
+describe('xrHudEdgeScale', () => {
+  it('leaves a narrow eye alone', () => {
+    assert.equal(xrHudEdgeScale({ h: 0.3, v: 0.3 }), 1);
+  });
+
+  it('pulls canvas edges inside the comfortable tangent', () => {
+    const eyes = { h: 1.4, v: 1.1 };
+    const s = xrHudEdgeScale(eyes);
+    assert.ok(s < 1);
+    assert.ok(s * eyes.h <= XR_HUD_EDGE_TAN + 1e-9);
+    assert.ok(s * eyes.v <= XR_HUD_EDGE_TAN + 1e-9);
+  });
+
+  it('is limited by the wider axis', () => {
+    const s = xrHudEdgeScale({ h: 2, v: 0.4 });
+    assert.ok(Math.abs(s - XR_HUD_EDGE_TAN / 2) < 1e-9);
+  });
+
+  it('pulls the other chrome closer than the control pads', () => {
+    const eyes = { h: 1.4, v: 1.1 };
+    const pads = xrHudEdgeScale(eyes);
+    const chrome = xrHudChromeScale(eyes);
+    assert.ok(chrome < pads);
+    assert.ok(chrome * eyes.h <= XR_HUD_CHROME_TAN + 1e-9);
+    assert.ok(chrome * eyes.v <= XR_HUD_CHROME_TAN + 1e-9);
+  });
+});
+
+describe('xrHudLayoutPoint', () => {
+  it('is identity at scale 1', () => {
+    assert.deepEqual(xrHudLayoutPoint(12, 40, 200, 100, 1), { x: 12, y: 40 });
+  });
+
+  it('pulls a corner halfway to center', () => {
+    const p = xrHudLayoutPoint(0, 0, 200, 100, 0.5);
+    assert.equal(p.x, 50);
+    assert.equal(p.y, 25);
+    const q = xrHudLayoutPoint(200, 100, 200, 100, 0.5);
+    assert.equal(q.x, 150);
+    assert.equal(q.y, 75);
+    const mid = xrHudLayoutPoint(100, 50, 200, 100, 0.5);
+    assert.equal(mid.x, 100);
+    assert.equal(mid.y, 50);
   });
 });
 

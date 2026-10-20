@@ -1,5 +1,6 @@
 
-// Network-first for app HTML/JS/CSS. Offline fallback for navigations.
+// Network-first for app HTML/JS/CSS and the shipped adventure campaign.
+// An online response replaces the cache; offline play uses the last copy.
 // Each `npm run package` rewrites CACHE to aether-<mainHash>.
 // Never intercept or cache.put the worker script itself.
 
@@ -17,6 +18,16 @@ function workerScriptPath(url) {
 function isWorkerScript(url) {
   const path = workerScriptPath(url);
   return /\/sw-[^/]*\.js$/i.test(path) || /\/serviceworker\.js$/i.test(path);
+}
+
+// Keep in step with ADVENTURE_CAMPAIGN_URL. The worker is copied as-is
+// (not bundled), so it cannot import that constant.
+function isAdventureCampaign(request) {
+  try {
+    return new URL(request.url).pathname === "/maps/adventure.campaign";
+  } catch {
+    return false;
+  }
 }
 
 function isAppHtmlJsCss(request) {
@@ -54,7 +65,10 @@ async function networkFirst(request) {
 self.addEventListener("install", (event) => {
   self.skipWaiting();
   event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.add(offlineFallbackPage)).catch(() => {}),
+    caches.open(CACHE).then(async (cache) => {
+      await cache.add(offlineFallbackPage).catch(() => {});
+      await cache.add("/maps/adventure.campaign").catch(() => {});
+    }),
   );
 });
 
@@ -80,7 +94,7 @@ self.addEventListener("fetch", (event) => {
   if (!/^https?:$/.test(url.protocol) || url.origin !== self.location.origin) return;
   // Never intercept the worker script — no respondWith, no cache.put.
   if (isWorkerScript(event.request.url)) return;
-  if (!isAppHtmlJsCss(event.request)) return;
+  if (!isAppHtmlJsCss(event.request) && !isAdventureCampaign(event.request)) return;
 
   event.respondWith(networkFirst(event.request));
 });

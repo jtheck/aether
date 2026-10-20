@@ -2,7 +2,7 @@
 // Sim owns the layout because rocks affect passability and trees affect speed.
 
 import * as fx from './fixed.js';
-import { TERRAIN, worldToTile, worldToTileZ, applyTerrainSlow, isTerrainSlowTile, tableRimDistAt } from './field.js';
+import { TERRAIN, TILE_SIZE_F, worldToTile, worldToTileZ, applyTerrainSlow, isTerrainSlowTile, tableRimDistAt } from './field.js';
 import { DEFAULT_SLOW_MUL } from './unitTypes.js';
 import { applyTableEdgeOccupancy, refreshTableTerrain } from './tableShape.js';
 import {
@@ -81,10 +81,19 @@ export const SPAWN_CLEAR_RADIUS_TILES = 6;
 const ROCK_RATE = 0.03;
 const TREE_GRASS_RATE = 0.2;
 const TREE_DIRT_RATE = 0.05;
-/** Painted trees keep a two-tile Chebyshev moat so crowns do not stack. */
-export const TREE_PAINT_CLEARANCE = 2;
-/** Extra tiles between painted rock centers beyond the collision discs. */
+/** Extra tiles between rock centers when a paint call does not ask for mesh-tight packing. */
 export const ROCK_PAINT_PAD = 1;
+/**
+ * Mesh width in world units. The forge packs rocks until these touch.
+ * Keep in step with the scenery renderer's modelScale.
+ */
+export const ROCK_MESH_WIDTH = {
+  [SCENERY.ROCK_PLAIN]: 3,
+  [SCENERY.ROCK_MOSS]: 7.5,
+  [SCENERY.ROCK_SNOW]: 11.5,
+};
+/** Cap on layers at one center. Paint places a single rock; older maps may still hold a pile. */
+export const ROCK_STACK_MAX = 4;
 
 /** Exact v1 tile hash, isolated from the simulation RNG stream. */
 export function sceneryTileHash(x, z, seed) {
@@ -95,6 +104,19 @@ export function sceneryTileHash(x, z, seed) {
   hash = (hash ^ (hash >>> 13)) * 0xc2b2ae35;
   hash = hash ^ (hash >>> 16);
   return Math.abs(hash >>> 0) / 4294967296;
+}
+
+/**
+ * Whether a brush tile accepts a stamp or an erase. 1 keeps every tile.
+ * `salt` is the stroke. The same stroke keeps the same tiles, so a drag
+ * does not fill in. A new stroke picks a new subset of what is still empty.
+ */
+export function sceneryDensityAllows(tx, tz, seed, density = 1, salt = 0) {
+  const d = Number(density);
+  if (!Number.isFinite(d) || d >= 1) return true;
+  if (d <= 0) return false;
+  const mix = ((seed >>> 0) ^ (salt >>> 0)) + 9000;
+  return sceneryTileHash(tx, tz, mix) < d;
 }
 
 export function rockFootprintRadius(kind) {
@@ -134,6 +156,29 @@ export function rockResourceKind(kind) {
 /** Opening stock for a freshly placed rock center (0 if not a rock). */
 export function rockYield(kind) {
   return ROCK_YIELD[kind] ?? 0;
+}
+
+/** Half-width of the mesh, in tiles. Painted rocks may sit this close. */
+export function rockMeshRadiusTiles(kind) {
+  const width = ROCK_MESH_WIDTH[kind] ?? ROCK_MESH_WIDTH[SCENERY.ROCK_PLAIN];
+  return width / (2 * TILE_SIZE_F);
+}
+
+/** How many rocks this stock represents. The top one holds the remainder. */
+export function rockStackCount(kind, stock) {
+  const unit = rockYield(kind);
+  if (unit <= 0 || stock <= 0) return 0;
+  return Math.min(ROCK_STACK_MAX, Math.ceil(stock / unit));
+}
+
+/** Visual scale of one layer. Lower layers stay full; the top shrinks as it is mined. */
+export function rockLayerScale(kind, stock, layer) {
+  const unit = rockYield(kind);
+  const count = rockStackCount(kind, stock);
+  if (unit <= 0 || layer < 0 || layer >= count) return 0;
+  if (layer < count - 1) return 1;
+  const into = stock - layer * unit;
+  return rockScaleForStage(rockStageFromStock(kind, into));
 }
 
 export function rockStockPerStage(kind) {
@@ -658,54 +703,66 @@ function isPaintLand(field, i) {
   return terrain === TERRAIN.GRASS || terrain === TERRAIN.DIRT;
 }
 
-function tileCoveredByRock(field, tx, tz) {
-  const { width, height } = field;
-  const maxR = 2;
-  for (let dz = -maxR; dz <= maxR; dz++) {
-    for (let dx = -maxR; dx <= maxR; dx++) {
-      const cx = tx + dx;
-      const cz = tz + dz;
-      if (cx < 0 || cz < 0 || cx >= width || cz >= height) continue;
-      const kind = field.sceneryType[cz * width + cx];
-      if (kind < SCENERY.ROCK_PLAIN) continue;
-      if (tileInRockDisc(dx, dz, rockFootprintRadius(kind))) return true;
-    }
-  }
-  return false;
-}
-
-function hasNearbyTree(field, tx, tz, clearance) {
-  const { width, height } = field;
-  for (let dz = -clearance; dz <= clearance; dz++) {
-    for (let dx = -clearance; dx <= clearance; dx++) {
-      if (dx === 0 && dz === 0) continue;
-      const x = tx + dx;
-      const z = tz + dz;
-      if (x < 0 || z < 0 || x >= width || z >= height) continue;
-      if (tileHasTree(field, x, z)) return true;
-    }
-  }
-  return false;
-}
-
-function canPaintTreeAt(field, tx, tz) {
+function canPaintTreeLand(field, tx, tz) {
   const { width, height } = field;
   if (tx < 0 || tz < 0 || tx >= width || tz >= height) return false;
   const i = tz * width + tx;
   if (field.activeMask?.[i] === 0) return false;
   if (field.tableEdge?.[i]) return false;
-  if (!isPaintLand(field, i)) return false;
-  if (field.sceneryType[i] !== SCENERY.NONE) return false;
-  if ((field.treeStock?.[i] ?? 0) > 0) return false;
-  if (tileCoveredByRock(field, tx, tz)) return false;
-  if (hasNearbyTree(field, tx, tz, TREE_PAINT_CLEARANCE)) return false;
-  return true;
+  return isPaintLand(field, i);
 }
 
-function rockCentersOverlap(field, cx, cz, kind, pad = 0) {
+/** Drop scenery a new rock covers. Rocks this stroke just placed stay put. */
+function replaceSceneryForRock(field, cx, cz, kind, dirty, placed) {
+  const { width, height } = field;
+  const radius = rockFootprintRadius(kind);
+  const wipe = (x, z) => {
+    const id = z * width + x;
+    if (placed.has(id)) return;
+    if (!stampClear(field, x, z)) return;
+    dirty.push({ x, z });
+  };
+  for (let dz = -radius; dz <= radius; dz++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      if (!tileInRockDisc(dx, dz, radius)) continue;
+      const tx = cx + dx;
+      const tz = cz + dz;
+      if (tx < 0 || tz < 0 || tx >= width || tz >= height) continue;
+      const id = tz * width + tx;
+      if (placed.has(id)) continue;
+      const there = field.sceneryType[id];
+      if (there === SCENERY.TREE || (field.treeStock?.[id] > 0)) wipe(tx, tz);
+      else if (there >= SCENERY.ROCK_PLAIN && there !== kind) wipe(tx, tz);
+    }
+  }
+  const under = rockUnderTile(field, cx, cz);
+  if (under && under.kind !== kind) wipe(under.tx, under.tz);
+}
+
+function rockCentersOverlap(field, cx, cz, kind, pad = 0, tight = false, ignoreOther = false, spacing = 1) {
+  const { width, height } = field;
+  const gap = spacing > 0 ? spacing : 1;
+  if (tight) {
+    const reach = rockMeshRadiusTiles(kind);
+    const span = gap * (reach + rockMeshRadiusTiles(SCENERY.ROCK_SNOW));
+    const search = Math.min(32, Math.max(4, Math.ceil(span) + 1));
+    for (let dz = -search; dz <= search; dz++) {
+      for (let dx = -search; dx <= search; dx++) {
+        if (dx === 0 && dz === 0) continue;
+        const ox = cx + dx;
+        const oz = cz + dz;
+        if (ox < 0 || oz < 0 || ox >= width || oz >= height) continue;
+        const other = field.sceneryType[oz * width + ox];
+        if (other < SCENERY.ROCK_PLAIN) continue;
+        if (ignoreOther && other !== kind) continue;
+        const sep = gap * (reach + rockMeshRadiusTiles(other));
+        if (Math.hypot(dx, dz) + 1e-4 < sep) return true;
+      }
+    }
+    return false;
+  }
   const radius = rockFootprintRadius(kind);
   const search = radius + 2 + (pad | 0);
-  const { width, height } = field;
   for (let dz = -search; dz <= search; dz++) {
     for (let dx = -search; dx <= search; dx++) {
       if (dx === 0 && dz === 0) continue;
@@ -714,13 +771,14 @@ function rockCentersOverlap(field, cx, cz, kind, pad = 0) {
       if (ox < 0 || oz < 0 || ox >= width || oz >= height) continue;
       const other = field.sceneryType[oz * width + ox];
       if (other < SCENERY.ROCK_PLAIN) continue;
+      if (ignoreOther && other !== kind) continue;
       if (Math.hypot(dx, dz) < radius + rockFootprintRadius(other) + 1 + pad) return true;
     }
   }
   return false;
 }
 
-function rockFootprintOpen(field, cx, cz, kind, { requireLand = false, pad = 0 } = {}) {
+function rockFootprintOpen(field, cx, cz, kind, { requireLand = false, pad = 0, tight = false, ignoreOtherScenery = false, spacing = 1 } = {}) {
   const { width, height } = field;
   if (cx < 0 || cz < 0 || cx >= width || cz >= height) return false;
   const radius = rockFootprintRadius(kind);
@@ -734,11 +792,12 @@ function rockFootprintOpen(field, cx, cz, kind, { requireLand = false, pad = 0 }
       if (field.activeMask?.[i] === 0) return false;
       if (field.tableEdge?.[i]) return false;
       if (requireLand && !isPaintLand(field, i)) return false;
+      if (ignoreOtherScenery) continue;
       if (field.sceneryType[i] !== SCENERY.NONE) return false;
       if ((field.treeStock?.[i] ?? 0) > 0) return false;
     }
   }
-  return !rockCentersOverlap(field, cx, cz, kind, pad);
+  return !rockCentersOverlap(field, cx, cz, kind, pad, tight, ignoreOtherScenery, spacing);
 }
 
 function stampRockCenter(field, tx, tz, kind, opts = {}) {
@@ -754,6 +813,28 @@ function stampRockCenter(field, tx, tz, kind, opts = {}) {
     field.rockStockHash = mixRockHash(field.rockStockHash | 0, i, field.rockStock[i]);
   }
   return true;
+}
+
+/** Rock whose collision disc covers this tile, nearest center first. */
+function rockUnderTile(field, tx, tz) {
+  const { width, height } = field;
+  let best = null;
+  let bestD = Infinity;
+  for (let dz = -2; dz <= 2; dz++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      const cx = tx + dx;
+      const cz = tz + dz;
+      if (cx < 0 || cz < 0 || cx >= width || cz >= height) continue;
+      const kind = field.sceneryType[cz * width + cx];
+      if (kind < SCENERY.ROCK_PLAIN) continue;
+      if (!tileInRockDisc(dx, dz, rockFootprintRadius(kind))) continue;
+      const d = dx * dx + dz * dz;
+      if (d >= bestD) continue;
+      bestD = d;
+      best = { tx: cx, tz: cz, kind };
+    }
+  }
+  return best;
 }
 
 function stampClear(field, tx, tz) {
@@ -811,6 +892,44 @@ export function placeRockAt(field, tx, tz, kind = SCENERY.ROCK_PLAIN) {
   return true;
 }
 
+/**
+ * Drop trees, rocks, and doodads sitting on water in a brush.
+ * A rock goes when its collision disc covers a water tile, even if the
+ * center is still on land. Returns tiles whose scenery meshes changed.
+ */
+export function clearSceneryOnWater(field, tx, tz, radius = 0) {
+  const types = field?.terrainTypes;
+  if (!types) return [];
+  const r = Math.max(0, radius | 0);
+  const r2 = r * r;
+  const dirty = [];
+  const hasScenery = !!field.sceneryType;
+  if (hasScenery) ensureSceneryArrays(field);
+  for (let dz = -r; dz <= r; dz++) {
+    for (let dx = -r; dx <= r; dx++) {
+      if (dx * dx + dz * dz > r2) continue;
+      const x = tx + dx;
+      const z = tz + dz;
+      if (x < 0 || z < 0 || x >= field.width || z >= field.height) continue;
+      const i = z * field.width + x;
+      if (field.activeMask?.[i] === 0) continue;
+      if (types[i] !== TERRAIN.WATER) continue;
+      if (hasScenery) {
+        if (stampClear(field, x, z)) dirty.push({ x, z });
+        const under = rockUnderTile(field, x, z);
+        if (under && stampClear(field, under.tx, under.tz)) {
+          dirty.push({ x: under.tx, z: under.tz });
+        }
+      }
+      if (field.doodadType?.[i]) {
+        field.doodadType[i] = 0;
+        dirty.push({ x, z });
+      }
+    }
+  }
+  return dirty;
+}
+
 /** Remove a tree or rock at a tile. */
 export function clearSceneryAt(field, tx, tz) {
   const { width, height } = field;
@@ -866,7 +985,21 @@ export function clearAllScenery(field) {
   return field;
 }
 
-/** Recompute rock pass + tree slow from sceneryType / treeStock without regenerating. */
+/** Keep forge stacks loaded from a garden. Tiles with no saved stock stay at one yield. */
+export function applySavedRockStock(field, saved) {
+  if (!field?.sceneryType || !saved) return field;
+  ensureRockArrays(field);
+  if (saved.length !== field.rockStock.length) return field;
+  field.rockStockHash = 0;
+  for (let i = 0; i < field.sceneryType.length; i++) {
+    const kind = field.sceneryType[i];
+    if (kind < SCENERY.ROCK_PLAIN) continue;
+    const stock = saved[i] | 0;
+    if (stock > 0) field.rockStock[i] = stock;
+    field.rockStockHash = mixRockHash(field.rockStockHash | 0, i, field.rockStock[i]);
+  }
+  return field;
+}
 export function applyAuthoredScenery(field) {
   const { width, height } = field;
   const n = width * height;
@@ -874,6 +1007,7 @@ export function applyAuthoredScenery(field) {
   refreshTableTerrain(field);
   const occupied = new Uint8Array(n);
   ensureRockArrays(field);
+  const kept = field.rockStock.length === n ? field.rockStock.slice() : null;
   field.rockStock.fill(0);
   field.rockStockHash = 0;
   for (let tz = 0; tz < height; tz++) {
@@ -882,8 +1016,11 @@ export function applyAuthoredScenery(field) {
       const kind = field.sceneryType[i];
       if (kind < SCENERY.ROCK_PLAIN) continue;
       markFootprint(field, occupied, field.pass, tx, tz, rockFootprintRadius(kind));
-      field.rockStock[i] = rockYield(kind);
-      field.rockStockHash = mixRockHash(field.rockStockHash | 0, i, field.rockStock[i]);
+      const base = rockYield(kind);
+      const prev = kept?.[i] | 0;
+      const stock = prev > base ? Math.min(prev, base * ROCK_STACK_MAX) : base;
+      field.rockStock[i] = stock;
+      field.rockStockHash = mixRockHash(field.rockStockHash | 0, i, stock);
     }
   }
   applyRockSlowBorder(field, occupied);
@@ -903,6 +1040,7 @@ export function paintSceneryBrush(field, tx, tz, kind, radius = 0, opts = {}) {
   const r = Math.max(0, radius | 0);
   const r2 = r * r;
   const dirty = [];
+  const placed = new Set();
   for (let dz = -r; dz <= r; dz++) {
     for (let dx = -r; dx <= r; dx++) {
       if (dx * dx + dz * dz > r2) continue;
@@ -911,17 +1049,40 @@ export function paintSceneryBrush(field, tx, tz, kind, radius = 0, opts = {}) {
       if (x < 0 || z < 0 || x >= field.width || z >= field.height) continue;
       const i = z * field.width + x;
       if (field.activeMask?.[i] === 0) continue;
+      if (!sceneryDensityAllows(x, z, field.seed, opts.density, opts.salt)) continue;
       if (kind === SCENERY.NONE) {
-        clearSceneryCovering(field, x, z, dirty);
+        const thin = Number(opts.density) < 1;
+        if (thin) {
+          if (stampClear(field, x, z)) dirty.push({ x, z });
+        } else {
+          clearSceneryCovering(field, x, z, dirty);
+        }
         continue;
       }
       if (kind === SCENERY.TREE) {
-        if (!canPaintTreeAt(field, x, z)) continue;
+        if (!canPaintTreeLand(field, x, z) || tileHasTree(field, x, z)) continue;
+        const underTree = rockUnderTile(field, x, z);
+        if (underTree && stampClear(field, underTree.tx, underTree.tz)) {
+          dirty.push({ x: underTree.tx, z: underTree.tz });
+        }
+        if (field.sceneryType[i] !== SCENERY.NONE && stampClear(field, x, z)) dirty.push({ x, z });
         const stock = defaultTreeStock(x, z, field.seed, field);
         if (growTreeAt(field, i, stock)) dirty.push({ x, z });
         continue;
       }
-      if (stampRockCenter(field, x, z, kind, { requireLand: true, pad: ROCK_PAINT_PAD })) dirty.push({ x, z });
+      const covered = rockUnderTile(field, x, z);
+      if (covered?.kind === kind) continue;
+      const rockOpts = {
+        requireLand: true,
+        pad: opts.tight ? 0 : ROCK_PAINT_PAD,
+        tight: !!opts.tight,
+      };
+      if (!rockFootprintOpen(field, x, z, kind, { ...rockOpts, ignoreOtherScenery: true })) continue;
+      replaceSceneryForRock(field, x, z, kind, dirty, placed);
+      if (stampRockCenter(field, x, z, kind, rockOpts)) {
+        dirty.push({ x, z });
+        placed.add(i);
+      }
     }
   }
   if (dirty.length && opts.refresh !== false) applyAuthoredScenery(field);

@@ -16,6 +16,8 @@ import { getUnitDef, UNIT } from './unitTypes.js';
 import { createBuilding } from './buildings.js';
 import { FARM_FIRE_DAMAGE_MUL, FARM_LOCUST_DAMAGE_MUL } from './buildingCombat.js';
 import {
+  FROST_DURATION,
+  FROST_MOVE_MUL,
   LOCUST_DOT_DAMAGE,
   LOCUST_DOT_DURATION,
   LOCUST_DOT_MAX_STACKS,
@@ -532,6 +534,10 @@ function sporeStreamHitsOnlyTarget() {
   const fx = takeSporeBloomUpdates(w);
   assert.ok(fx?.headCount >= 1, 'hit publishes a head mushroom');
   assert.equal(fx.headKill[0], 0);
+  assert.ok(
+    Math.hypot(fx.headFromX[0], fx.headFromY[0]) < 1.5,
+    'attack line starts at the myco',
+  );
 }
 
 function stampGrassAround(field, wx, wy, r = 4) {
@@ -550,6 +556,36 @@ function stampGrassAround(field, wx, wy, r = 4) {
       field.treeStock[i] = 0;
     }
   }
+}
+
+function sporeStreamSidestepMisses() {
+  const field = openField();
+  const w = createWorld(37);
+  const myco = spawn(w, { x: 0, y: 0, type: UNIT.MYCO, owner: 0 });
+  const foe = spawn(w, {
+    x: fx.fromInt(20),
+    y: 0,
+    type: UNIT.WARRIOR,
+    owner: 1,
+  });
+  const hp = w.hp[foe];
+  spawnProjectile(w, {
+    type: PROJECTILE.SPORE_STREAM,
+    owner: 0,
+    source: myco,
+    target: foe,
+    x: 0,
+    y: 0,
+    aimX: w.px[foe],
+    aimY: w.py[foe],
+    damage: 5,
+  });
+  w.py[foe] = fx.fromInt(8);
+  for (let t = 0; t < 40 && w.projectiles.activeCount; t++) {
+    projectileSystem(w, field);
+  }
+  assert.equal(w.projectiles.activeCount, 0, 'the stream still finishes its line');
+  assert.equal(w.hp[foe], hp, 'stepping off the mushroom line dodges');
 }
 
 function sporeHeadKillSeedsATree() {
@@ -641,7 +677,9 @@ function iceBoltAppliesFrost() {
   for (let t = 0; t < 20 && w.projectiles.activeCount; t++) {
     projectileSystem(w, field);
   }
-  assert.ok(w.frostTicks[foe] > 0, 'ice bolt applies frost');
+  assert.equal(w.frostTicks[foe], FROST_DURATION, 'ice bolt applies a full frost slow');
+  assert.equal(FROST_DURATION, 80);
+  assert.ok(Math.abs(fx.toFloat(FROST_MOVE_MUL) - 0.28) < 1e-4);
 }
 
 function locustSwarmDistracts() {
@@ -899,6 +937,7 @@ fireballBlastDistanceIsRandom();
 castCommandSpawnsFireball();
 fireballAimScatterGrowsWithRange();
 sporeStreamHitsOnlyTarget();
+sporeStreamSidestepMisses();
 sporeHeadKillSeedsATree();
 shadowBoltAppliesDot();
 iceBoltAppliesFrost();

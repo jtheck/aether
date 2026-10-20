@@ -117,6 +117,21 @@ export function createObserverData(host) {
   let ready = false;
   /** @type {Map<number, { name: HTMLElement, counts: Record<string, HTMLElement>, pop: HTMLElement }>} */
   const rows = new Map();
+  let followOwner = null;
+  let followable = false;
+  /** @type {((owner: number) => void) | null} */
+  let onFollow = null;
+
+  if (root) {
+    root.addEventListener('click', (event) => {
+      if (!followable) return;
+      const name = event.target instanceof Element ? event.target.closest('[data-owner]') : null;
+      if (!name) return;
+      const owner = Number(name.dataset.owner);
+      if (!Number.isFinite(owner)) return;
+      onFollow?.(owner | 0);
+    });
+  }
 
   async function mount() {
     if (!root || ready) return ready;
@@ -175,6 +190,13 @@ export function createObserverData(host) {
       const label = observerOwnerName(owner, state.names, state.computers);
       if (rec.name.textContent !== label) rec.name.textContent = label;
       rec.name.style.color = tintCss(ownerTint(owner));
+      const following = followable && followOwner === owner;
+      if (followable) rec.name.dataset.owner = String(owner);
+      else delete rec.name.dataset.owner;
+      rec.name.style.pointerEvents = followable ? 'auto' : 'none';
+      rec.name.style.cursor = followable ? 'pointer' : '';
+      rec.name.style.textDecoration = following ? 'underline' : '';
+      rec.name.title = followable ? (following ? 'Following' : 'Follow') : '';
       const bank = ownerResourcesFrom(state.resources, owner);
       for (let k = 0; k < RESOURCE_KINDS.length; k++) {
         const kind = RESOURCE_KINDS[k];
@@ -188,7 +210,21 @@ export function createObserverData(host) {
     }
   }
 
-  return { mount, paint, get ready() { return ready; } };
+  /**
+   * @param {{ owner?: number | null, enabled?: boolean }} state
+   */
+  function setFollowTarget(state) {
+    followOwner = state?.enabled && state.owner != null ? state.owner | 0 : null;
+    followable = Boolean(state?.enabled);
+  }
+
+  return {
+    mount,
+    paint,
+    setFollowTarget,
+    setFollowHandler(fn) { onFollow = fn; },
+    get ready() { return ready; },
+  };
 }
 
 /** @param {Record<string, SVGSVGElement> | null} icons */

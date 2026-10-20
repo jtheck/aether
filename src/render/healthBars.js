@@ -6,14 +6,12 @@
 // Casters show up to 3 ready-mana dots under that line, each with a ring
 // brighter on the right and bottom;
 // vehicles reuse the dots (no ring) for filled passenger seats. HP is green
-// above 66%, yellow above 33%, then red. Agora rows are o-o-o-o-o (dots on
-// both ends, rectangles between).
+// above 66%, yellow above 33%, then red. Agora capture is five dots, no bars.
 // Contest (still owned) walks right → left and inks each pip. Unlock pauses,
 // melts the whole row right → left, then seed-builds it left → right. After
-// that the pad is neutral — anyone can fight — and gaining walks left → right
-// with make-a-wish seeds. A stalled tug mixes ink and seeds until a side
-// wins. Victory waits for the last pip, then every dot wishes together.
-// Four dashes cover the first four pips; the last pip has no extra rectangle.
+// that the pad is neutral — anyone can fight — and gaining walks left → right.
+// Losing the owner drips ink. A new owner gets the menu-logo wish.
+// A stalled tug coughs both until a side wins. Victory wishes on every dot.
 
 import {
   addBillboardSprite,
@@ -28,6 +26,7 @@ import {
   updateBillboardSprite,
 } from '../vendor/lite/liteVendor.js';
 import { CAMERA_BASE_FOV, CAMERA_CLOSE_SPAN, cameraZoomNormalized } from './cameraController.js';
+import { agoraCaptureDotMul, agoraFxSizeMul, stampAgoraFx } from './flagScale.js';
 import { HEALTH_BAR_CAPACITY } from './overlayLod.js';
 import { ownerTint } from './ownerTints.js';
 import {
@@ -45,18 +44,19 @@ export const BUILDING_CHIP_COUNT = 9;
 export const AGORA_CHIP_COUNT = 5;
 /** Same as the dot count — contest and gain both use all five. */
 export const AGORA_LARGE_CHIP_COUNT = AGORA_CHIP_COUNT;
-/** Four rectangle connectors between the five dots (o-o-o-o-o). */
+/** Leftover meter segments. The row no longer draws the bars between dots. */
 export const AGORA_DASH_COUNT = AGORA_CHIP_COUNT - 1;
-/** Milestone segments — one per dot, not per dash. */
+/** Milestone segments — one per dot. */
 export const AGORA_SEG_COUNT = AGORA_CHIP_COUNT;
 export const AGORA_FX_INK = 'ink';
 export const AGORA_FX_DANDELION = 'dandelion';
 export const AGORA_FX_MIX = 'mix';
-/** Dots + dash tracks + dash fills. */
-export const AGORA_SPRITE_COUNT = AGORA_CHIP_COUNT + AGORA_DASH_COUNT * 2;
-/** Sentinel — tug large chips that are not yet claimed. */
+/** Capture row is the five dots. */
+export const AGORA_SPRITE_COUNT = AGORA_CHIP_COUNT;
+/** Sentinel — a dot that has left its owner, or is not yet claimed. */
 export const AGORA_TINT_NEUTRAL = -2;
-export const AGORA_NEUTRAL_RGB = [0.26, 0.26, 0.28];
+/** Mid gray. Dark enough to sit under a team swatch, light enough to not read as ink. */
+export const AGORA_NEUTRAL_RGB = [0.58, 0.6, 0.63];
 const CHIP_COUNT_MAX = Math.max(BUILDING_CHIP_COUNT, AGORA_SPRITE_COUNT);
 /** Ready-mana bank / max vehicle seats drawn under the HP line. */
 export const UNDER_DOT_MAX = 6;
@@ -101,7 +101,11 @@ export const CHIP_TEAM_FILL_ALPHA = 1;
 export const NORMAL_DOT_DIAMETER = 0.4;
 /** Main-dot size in CSS pixels — world size scales with distance to hold this. */
 export const TARGET_DOT_PX = 8;
-/** Agora capture chips stay a bit larger than unit HP pips. */
+/**
+ * Agora capture chips at the flag's reference distance.
+ * Screen size then follows the ownership flag, so the row grows as the camera pulls back
+ * instead of fading out with the unit-chip horizon shrink.
+ */
 export const TARGET_AGORA_DOT_PX = 14;
 const DOT_DIAMETER_MAIN_MUL = 0.88;
 /** First HP pip — a tick larger than the other chips. */
@@ -164,19 +168,22 @@ export const DOT_DIAMETER_AGORA_DASH_W_MUL = 0.98;
 export const DOT_DIAMETER_AGORA_DASH_H_MUL = 0.86;
 /** Leftover name — dash height vs the old small-circle size. */
 export const DOT_DIAMETER_AGORA_SMALL_MUL = DOT_DIAMETER_AGORA_DASH_H_MUL;
-/** Center-to-center pitch of neighboring dots (dot + gaps + dash). */
-export const DOT_SPACING_AGORA_MUL = 3.08;
+/** Gap between capture dots, as a fraction of the dot diameter. */
+export const AGORA_DOT_GAP_MUL = 0.38;
+/** Center-to-center pitch of neighboring capture dots, in normal-dot units. */
+export const DOT_SPACING_AGORA_MUL = DOT_DIAMETER_AGORA_LARGE_MUL * (1 + AGORA_DOT_GAP_MUL);
 export const AGORA_DASH_INNER_GAP_MUL = 0.22;
 export const AGORA_DASH_TRACK_ALPHA = 0.42;
-/** Extra size on the contested blink peak. */
-export const AGORA_LEAD_PULSE_MUL = 0.46;
+/** Extra size on the live pip. A small swell, not a pop. */
+export const AGORA_LEAD_PULSE_MUL = 0.14;
 export const AGORA_CONTESTED_RGB = [1, 1, 1];
 export const AGORA_INK_RGB = [0, 0, 0];
 /** Empty dash track / live fill — ink and paper, not team swatches. */
 export const AGORA_DASH_TRACK_RGB = [0, 0, 0];
 export const AGORA_DASH_FILL_RGB = [1, 1, 1];
-/** Full white-on / rest-color-off cycle. */
-export const AGORA_BLINK_PERIOD_MS = 280;
+/** Live pip wink. Slow, and only a short slice of the cycle is the flash color. */
+export const AGORA_BLINK_PERIOD_MS = 640;
+export const AGORA_BLINK_DUTY = 0.22;
 /** Black drip → new color. */
 export const AGORA_FLIP_MS = 560;
 export const AGORA_FLIP_INK_END = 0;
@@ -190,8 +197,6 @@ export const AGORA_UNLOCK_BUILD_GAP_MS = 60;
 export const AGORA_FINALE_WISH_AT_MS = AGORA_FLIP_MS + 90;
 /** How often a stalled tug coughs mixed ink + seeds. */
 export const AGORA_MIX_MS = 400;
-/** Mix capturer chip RGB toward white so occupy reads hotter than the owner row. */
-export const AGORA_CAPTURER_LIFT = 0.28;
 const HOLY_RING_VS_NORMAL = 1.04;
 const ARMOR_RING_VS_NORMAL = 1.26;
 /** Lift above pick-sphere chest so the row sits over the head. */
@@ -925,7 +930,7 @@ export function agoraChipLeadIndex(state = {}) {
 }
 
 export function agoraLeadBlinkBlack(nowMs = 0) {
-  return (((Math.max(0, nowMs) / AGORA_BLINK_PERIOD_MS) % 1) < 0.5);
+  return ((Math.max(0, nowMs) / AGORA_BLINK_PERIOD_MS) % 1) < AGORA_BLINK_DUTY;
 }
 
 /** Contested lead swells on the white half, then eases back. */
@@ -1025,22 +1030,10 @@ export function agoraUnlockDotBeat(index, elapsedMs) {
   return { kind: 'ready', t: 1, fx: null };
 }
 
-function liftCapturerRgb(rgb) {
-  const t = AGORA_CAPTURER_LIFT;
-  return [
-    rgb[0] + (1 - rgb[0]) * t,
-    rgb[1] + (1 - rgb[1]) * t,
-    rgb[2] + (1 - rgb[2]) * t,
-  ];
-}
-
 function agoraChipRestRgb(index, state = {}) {
   const tint = agoraChipTintOwner(index, state);
   if (tint === AGORA_TINT_NEUTRAL) return AGORA_NEUTRAL_RGB;
-  const rgb = ownerTint(tint);
-  const capturer = state.capturer;
-  if (capturer == null || (capturer | 0) < 0 || tint !== (capturer | 0)) return rgb;
-  return liftCapturerRgb(rgb);
+  return ownerTint(tint);
 }
 
 export function agoraChipRgb(index, state = {}, nowMs = 0) {
@@ -1080,8 +1073,8 @@ export function agoraPropTint(state = {}) {
 }
 
 /**
- * Contest: capturer inks in from the right over the owner.
- * Neutral tug: dots stay grey until claimed from the left.
+ * Owned pad: dots lost from the right go gray. The owner keeps the rest.
+ * Neutral fight: dots claimed from the left take that side; the rest stay gray.
  * @param {number} index
  * @param {{ phase?: number, progress?: number, tug?: number, owner?: number, founder?: number, capturer?: number, count?: number }} state
  */
@@ -1094,29 +1087,22 @@ export function agoraChipTintOwner(index, state = {}) {
     if (capturer >= 0 && index < filled) return capturer;
     return AGORA_TINT_NEUTRAL;
   }
-  if (capturer >= 0 && index >= count - filled) return capturer;
+  if (filled > 0 && index >= count - filled) return AGORA_TINT_NEUTRAL;
   return owner;
 }
 
-/** Centered o-o-o-o-o: dots on both ends, rectangles in the gaps. */
+/** Five capture dots with a small gap. No bars between them. */
 export function agoraRowLayout(normalDot) {
   const n = Math.max(1e-3, normalDot);
   const dotD = n * DOT_DIAMETER_AGORA_LARGE_MUL;
-  const dashW = n * DOT_DIAMETER_AGORA_DASH_W_MUL;
-  const dashH = n * DOT_DIAMETER_AGORA_DASH_H_MUL;
-  const gap = n * AGORA_DASH_INNER_GAP_MUL;
-  const pitch = dotD + gap + dashW + gap;
+  const pitch = dotD * (1 + AGORA_DOT_GAP_MUL);
   const groupW = (AGORA_CHIP_COUNT - 1) * pitch + dotD;
   const left = -groupW * 0.5;
-  const dashAlong = [];
   const dotAlong = [];
   for (let i = 0; i < AGORA_CHIP_COUNT; i++) {
     dotAlong.push(left + dotD * 0.5 + i * pitch);
   }
-  for (let i = 0; i < AGORA_DASH_COUNT; i++) {
-    dashAlong.push(left + dotD + gap + dashW * 0.5 + i * pitch);
-  }
-  return { dashAlong, dotAlong, dashW, dashH, dotD };
+  return { dotAlong, dotD, pitch };
 }
 
 /** Shift a width-scaled dash so it grows from the invade (right) or tug (left) end. */
@@ -1132,14 +1118,15 @@ function agoraFlipKey(x, z) {
 }
 
 /** Warlock-style ink beads: hang, swell, then fall (alpha + hard disc). */
-export function emitAgoraInkDrips(emit, px, py, pz, size, gy, count) {
+export function emitAgoraInkDrips(emit, px, py, pz, size, gy, count, dist = 0) {
   if (!emit) return 0;
   const n = Number.isFinite(count) ? Math.max(0, count | 0) : 5 + ((Math.random() * 3) | 0);
   const killY = (Number.isFinite(gy) ? gy : py - 8) - 0.5;
+  const motion = agoraFxSizeMul(dist);
   for (let i = 0; i < n; i++) {
     const hang = 0.1 + Math.random() * 0.18;
     const peak = size * (0.45 + Math.random() * 0.35);
-    emit({
+    emit(stampAgoraFx({
       blend: 'alpha',
       hard: true,
       fadeOut: false,
@@ -1162,7 +1149,7 @@ export function emitAgoraInkDrips(emit, px, py, pz, size, gy, count) {
       peakSize: peak,
       endSize: peak * 0.75,
       drag: 0.1,
-    });
+    }, 1, motion));
   }
   return n;
 }
@@ -1178,52 +1165,133 @@ export function pickAgoraWind() {
   };
 }
 
-/** Logo-style clock: white seeds dart with the wind, not a radial burst. */
-export function emitAgoraDandelion(emit, px, py, pz, size, wind) {
-  if (!emit) return 0;
-  const wdir = wind ?? pickAgoraWind();
-  const n = 8 + ((Math.random() * 4) | 0);
-  for (let i = 0; i < n; i++) {
-    const along = 0.82 + Math.random() * 0.42;
-    const flutter = 0.32;
-    const seed = size * (0.09 + Math.random() * 0.12);
-    const star = i % 3 === 0;
-    emit({
-      blend: 'alpha',
-      hard: !star,
-      shape: star ? 'star' : undefined,
-      fadeOut: true,
-      position: [
-        px + (Math.random() - 0.5) * size * 0.1,
-        py + size * 0.04,
-        pz + (Math.random() - 0.5) * size * 0.1,
-      ],
-      velocity: [
-        wdir.x * along + (Math.random() - 0.5) * flutter,
-        wdir.y * (0.52 + Math.random() * 0.5),
-        wdir.z * along + (Math.random() - 0.5) * flutter,
-      ],
-      gravity: [wdir.x * 0.1, 0.22 + Math.random() * 0.32, wdir.z * 0.1],
-      color: [1, 1, 1, 1],
-      hangTime: 0.01 + Math.random() * 0.04,
-      lifetime: 0.7 + Math.random() * 0.35,
-      startSize: star ? seed * 1.15 : [seed, seed * (0.45 + Math.random() * 0.25)],
-      peakSize: seed * 1.15,
-      endSize: seed * 0.26,
-      drag: 0.16 + Math.random() * 0.14,
-      spin: (Math.random() - 0.5) * 10,
-    });
+/** Menu-logo seeds: pale cyan discs with a soft glow. */
+const AGORA_SEED_RGB = [236 / 255, 1, 1, 1];
+const AGORA_SEED_GLOW = [0.78, 1, 1, 0.5];
+
+/**
+ * Screen-right and screen-up for the gust. `right` from the chip camera is
+ * XZ only; a 3-vector is used as given. Without axes, follow `wind` and lift.
+ * @param {{ right?: number[], up?: number[] } | null} axes
+ * @param {{ x: number, y: number, z: number } | null} wind
+ */
+function agoraGustBasis(axes, wind) {
+  const up = axes?.up;
+  if (axes?.right && up && up.length >= 3) {
+    const r = axes.right;
+    const flat = r.length < 3;
+    let rx = r[0] ?? 1;
+    let ry = flat ? 0 : (r[1] ?? 0);
+    let rz = flat ? (r[1] ?? 0) : (r[2] ?? 0);
+    const rl = Math.hypot(rx, ry, rz) || 1;
+    rx /= rl;
+    ry /= rl;
+    rz /= rl;
+    const ul = Math.hypot(up[0], up[1], up[2]) || 1;
+    return { rx, ry, rz, ux: up[0] / ul, uy: up[1] / ul, uz: up[2] / ul };
   }
+  const w = wind ?? pickAgoraWind();
+  const wl = Math.hypot(w.x, w.y, w.z) || 1;
+  return { rx: w.x / wl, ry: 0, rz: w.z / wl, ux: 0, uy: 1, uz: 0 };
+}
+
+/**
+ * Menu-logo wish: seeds bloom around the dot, then the wind catches them
+ * and carries them right. The pull collapses that bloom onto one stream, and each
+ * seed takes the current at its own speed so they string out along it.
+ */
+export function emitAgoraSeedGust(emit, px, py, pz, size, dist = 0, axes = null, wind = null) {
+  if (!emit) return 0;
+  const motion = agoraFxSizeMul(dist);
+  const s = Math.max(1e-3, size);
+  const { rx, ry, rz, ux, uy, uz } = agoraGustBasis(axes, wind);
+  const seeds = 14;
+  const motes = 6;
+  const drag = 4.2;
+  const liftShare = 0.5;
+  let ax = rx + ux * liftShare;
+  let ay = ry + uy * liftShare;
+  let az = rz + uz * liftShare;
+  const al = Math.hypot(ax, ay, az) || 1;
+  ax /= al;
+  ay /= al;
+  az /= al;
+  const origin = [px, py, pz];
+  const axis = [ax, ay, az];
+  let n = 0;
+  const spawn = (mote) => {
+    const ang = Math.random() * Math.PI * 2;
+    const spread = (mote ? 8 : 12) + Math.random() * 5;
+    const along = Math.cos(ang) * spread;
+    const across = Math.sin(ang) * spread;
+    const vel = [
+      rx * along + ux * across,
+      ry * along + uy * across,
+      rz * along + uz * across,
+    ];
+    const speed = (mote ? 12 : 16) * (0.62 + Math.random() * 0.7);
+    const grav = [ax * speed * drag, ay * speed * drag, az * speed * drag];
+    const stream = { origin, axis, k: 32, delay: 0.1 };
+    const jitter = s * 0.05;
+    const core = s * (mote ? 0.09 + Math.random() * 0.05 : 0.16 + Math.random() * 0.08);
+    const pos = [
+      px + (Math.random() - 0.5) * jitter,
+      py + (Math.random() - 0.5) * jitter,
+      pz + (Math.random() - 0.5) * jitter,
+    ];
+    const life = (mote ? 1.2 : 1.55) + Math.random() * 0.3;
+    const velGlow = [vel[0], vel[1], vel[2]];
+    const gravGlow = [grav[0], grav[1], grav[2]];
+    emit(stampAgoraFx({
+      blend: 'alpha',
+      fadeOut: true,
+      position: pos,
+      velocity: vel,
+      gravity: grav,
+      color: AGORA_SEED_RGB,
+      lifetime: life,
+      startSize: core,
+      endSize: core * 0.16,
+      drag,
+      spin: (Math.random() - 0.5) * 5,
+      stream,
+    }, 1, motion));
+    n += 1;
+    if (mote) return;
+    emit(stampAgoraFx({
+      blend: 'additive',
+      fadeOut: true,
+      position: [pos[0], pos[1], pos[2]],
+      velocity: velGlow,
+      gravity: gravGlow,
+      color: AGORA_SEED_GLOW,
+      lifetime: life,
+      startSize: core * 2.3,
+      endSize: core * 0.4,
+      drag,
+      stream,
+    }, 1, motion));
+    n += 1;
+  };
+  for (let i = 0; i < seeds; i++) spawn(false);
+  for (let i = 0; i < motes; i++) spawn(true);
   return n;
 }
 
-export function emitAgoraFlipFx(kind, emit, px, py, pz, size, gy, wind) {
+/** Wish gust for a new owner. */
+export function emitAgoraDandelion(emit, px, py, pz, size, wind, dist = 0, axes = null) {
+  return emitAgoraSeedGust(emit, px, py, pz, size, dist, axes, wind);
+}
+
+/** Ink when the owner is losing the pad; wish when a new side is taking it. */
+export function emitAgoraFlipFx(kind, emit, px, py, pz, size, gy, wind, dist = 0, axes = null) {
   if (kind === AGORA_FX_MIX) {
-    emitAgoraInkDrips(emit, px, py, pz, size, gy, 3);
-    return emitAgoraDandelion(emit, px, py, pz, size, wind);
+    emitAgoraInkDrips(emit, px, py, pz, size, gy, 3, dist);
+    return emitAgoraSeedGust(emit, px, py, pz, size, dist, axes, wind);
   }
-  if (kind === AGORA_FX_DANDELION) return emitAgoraDandelion(emit, px, py, pz, size, wind);
-  return emitAgoraInkDrips(emit, px, py, pz, size, gy);
+  if (kind === AGORA_FX_DANDELION) return emitAgoraSeedGust(emit, px, py, pz, size, dist, axes, wind);
+  if (kind === AGORA_FX_INK) return emitAgoraInkDrips(emit, px, py, pz, size, gy, undefined, dist);
+  return 0;
 }
 
 function ringDotIndices(count) {
@@ -1450,12 +1518,13 @@ export function createHealthBars(engine, scene, opts = {}) {
      */
     write(x, y, z, _unitSize, ratio, flags = {}) {
       if (used >= capacity) return;
-      if (horizonScale <= HORIZON_HIDE_EPS) return;
+      const agora = !!flags.agora;
+      // Unit and building chips vanish at max zoom. Capture dots stay, and grow with the flag.
+      if (!agora && horizonScale <= HORIZON_HIDE_EPS) return;
       const slot = slots[used++];
       const r = Math.max(0, Math.min(1, ratio));
       const armor = !!flags.armor;
       const holy = !!flags.holy;
-      const agora = !!flags.agora;
       const count = agora ? AGORA_CHIP_COUNT : flags.building ? BUILDING_CHIP_COUNT : UNIT_CHIP_COUNT;
       const targetPx = agora ? TARGET_AGORA_DOT_PX : TARGET_DOT_PX;
 
@@ -1467,7 +1536,7 @@ export function createHealthBars(engine, scene, opts = {}) {
       const baseDot = dist > 1e-3
         ? worldSizeForScreenPx(targetPx, dist, viewH, fov)
         : NORMAL_DOT_DIAMETER * (targetPx / TARGET_DOT_PX);
-      const normalDot = baseDot * sizeScale;
+      const normalDot = agora ? baseDot * agoraCaptureDotMul(dist) : baseDot * sizeScale;
       const spacing = normalDot * (agora ? DOT_SPACING_AGORA_MUL : DOT_SPACING_MUL);
       const totalWidth = (count - 1) * spacing;
       const [rx, rz] = cameraRight();
@@ -1587,7 +1656,7 @@ export function createHealthBars(engine, scene, opts = {}) {
         hideSprite(slot.line);
         for (let i = 0; i < UNDER_DOT_MAX; i++) hideSprite(slot.under[i]);
         const row = agoraRowLayout(normalDot);
-        const trackRgb = AGORA_DASH_TRACK_RGB;
+        const gustAxes = { right: viewRight, up: viewUp };
         const meter = agoraMeterState(flags);
         const flipKey = agoraFlipKey(x, z);
         agoraSeen.add(flipKey);
@@ -1663,10 +1732,6 @@ export function createHealthBars(engine, scene, opts = {}) {
         const unlockT = rite === AGORA_RITE_UNLOCK ? agoraUnlockTimings() : null;
         const unlockElapsed = unlockT ? chipNow - rec.riteT0 : -1;
         const lockView = agoraLockCompleteFlags(flags);
-        const dashState = unlockT
-          ? (unlockElapsed < unlockT.melt0 ? lockView : agoraTugRestFlags(flags))
-          : flags;
-        const fromRight = agoraFromRight(dashState);
         const gy = groundYAt?.(x, z) ?? y - 12;
         for (let i = 0; i < AGORA_CHIP_COUNT; i++) {
           const spr = slot.dots[i];
@@ -1695,12 +1760,12 @@ export function createHealthBars(engine, scene, opts = {}) {
             const bit = 1 << i;
             if (beat.kind === 'melt' && !(rec.unlockMelt & bit)) {
               rec.unlockMelt |= bit;
-              emitAgoraFlipFx(AGORA_FX_INK, emitFx, spr.position[0], spr.position[1], spr.position[2], row.dotD, gy);
+              emitAgoraFlipFx(AGORA_FX_INK, emitFx, spr.position[0], spr.position[1], spr.position[2], row.dotD, gy, null, dist, gustAxes);
             }
             if (beat.kind === 'build' && !(rec.unlockBuild & bit)) {
               rec.unlockBuild |= bit;
               rec.unlockWind = rec.unlockWind || pickAgoraWind();
-              emitAgoraFlipFx(AGORA_FX_DANDELION, emitFx, spr.position[0], spr.position[1], spr.position[2], row.dotD, gy, rec.unlockWind);
+              emitAgoraFlipFx(AGORA_FX_DANDELION, emitFx, spr.position[0], spr.position[1], spr.position[2], row.dotD, gy, rec.unlockWind, dist, gustAxes);
             }
             continue;
           }
@@ -1722,6 +1787,9 @@ export function createHealthBars(engine, scene, opts = {}) {
               spr.position[2],
               row.dotD,
               gy,
+              null,
+              dist,
+              gustAxes,
             );
           }
         }
@@ -1731,7 +1799,7 @@ export function createHealthBars(engine, scene, opts = {}) {
           for (let i = 0; i < AGORA_CHIP_COUNT; i++) {
             const spr = slot.dots[i];
             if (!spr.handle) continue;
-            emitAgoraDandelion(emitFx, spr.position[0], spr.position[1], spr.position[2], row.dotD, wind);
+            emitAgoraDandelion(emitFx, spr.position[0], spr.position[1], spr.position[2], row.dotD, wind, dist, gustAxes);
           }
         } else if (
           !unlockT
@@ -1752,43 +1820,13 @@ export function createHealthBars(engine, scene, opts = {}) {
               spr.position[2],
               row.dotD,
               gy,
-              pickAgoraWind(),
+              null,
+              dist,
+              gustAxes,
             );
           }
         }
-        for (let i = 0; i < AGORA_DASH_COUNT; i++) {
-          placeAlong(
-            slot.dots[AGORA_CHIP_COUNT + i],
-            row.dashAlong[i],
-            row.dashW,
-            row.dashH,
-            trackRgb,
-            AGORA_DASH_TRACK_ALPHA,
-            FRAME_RECT,
-            0,
-          );
-          const fill = agoraDashFill(i, dashState);
-          const fillSpr = slot.dots[AGORA_CHIP_COUNT + AGORA_DASH_COUNT + i];
-          if (fill <= 0) {
-            hideSprite(fillSpr);
-            continue;
-          }
-          const fillRgb = agoraDashFillRgb(dashState, trackRgb);
-          const fillW = row.dashW * fill;
-          placeAlong(
-            fillSpr,
-            agoraDashFillAlong(row.dashAlong[i], row.dashW, fill, fromRight),
-            fillW,
-            row.dashH,
-            fillRgb,
-            CHIP_TEAM_FILL_ALPHA,
-            FRAME_RECT,
-            0,
-          );
-        }
-        for (let i = AGORA_CHIP_COUNT + AGORA_DASH_COUNT * 2; i < CHIP_COUNT_MAX; i++) {
-          hideSprite(slot.dots[i]);
-        }
+        for (let i = AGORA_CHIP_COUNT; i < CHIP_COUNT_MAX; i++) hideSprite(slot.dots[i]);
       } else {
         for (let i = 0; i < count; i++) {
           const spr = slot.dots[i];

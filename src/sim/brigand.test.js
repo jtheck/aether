@@ -2,13 +2,15 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fx from './fixed.js';
 import { applyCommands, CMD } from './commands.js';
+import { applyCasts } from './abilities.js';
+import { addResource, getResource } from './resources.js';
 import { createField } from './field.js';
 import { step } from './step.js';
 import { UNIT, getUnitDef, isVillagerLine } from './unitTypes.js';
 import { unitPopCost } from './pop.js';
 import { createWorld, spawn, ORDER } from './world.js';
 import { applyGather } from './gather.js';
-import { becomeBrigand, revertBrigand } from './brigand.js';
+import { becomeBrigand, revertBrigand, BRIGAND_IDLE_REVERT_TICKS, brigandIdleSystem } from './brigand.js';
 import { growTreeAt } from './trees.js';
 import { worldToTile } from './field.js';
 import { createBuilding, snapBuildingWorld } from './buildings.js';
@@ -20,12 +22,12 @@ function openField() {
 }
 
 describe('villager brigand form', () => {
-  it('is a villager-line civilian', () => {
+  it('brigand is military pop; villager line is gather-only', () => {
     assert.equal(UNIT.BRIGAND, 13);
     assert.equal(getUnitDef(UNIT.BRIGAND).name, 'Brigand');
-    assert.equal(getUnitDef(UNIT.BRIGAND).category, 'civilian');
+    assert.equal(getUnitDef(UNIT.BRIGAND).category, 'military');
     assert.ok(isVillagerLine(UNIT.VILLAGER));
-    assert.ok(isVillagerLine(UNIT.BRIGAND));
+    assert.ok(!isVillagerLine(UNIT.BRIGAND));
     assert.ok(!isVillagerLine(UNIT.WARRIOR));
     assert.equal(unitPopCost(UNIT.BRIGAND), 1);
   });
@@ -127,6 +129,77 @@ describe('villager brigand form', () => {
     revertBrigand(w, vill);
     assert.equal(w.type[vill], UNIT.VILLAGER);
     assert.equal(w.hp[vill], getUnitDef(UNIT.VILLAGER).hp);
+  });
+
+  it('ability cast spends 20 food and 10 wood once per villager', () => {
+    const w = createWorld(52);
+    const field = openField();
+    const vill = spawn(w, { x: 0, y: 0, type: UNIT.VILLAGER, owner: 0 });
+    addResource(w, 0, 'food', 100);
+    addResource(w, 0, 'wood', 100);
+    applyCasts(w, field, [vill], null, fx.fromInt(20), 0);
+    assert.equal(getResource(w, 0, 'food'), 80);
+    assert.equal(getResource(w, 0, 'wood'), 90);
+    applyCasts(w, field, [vill], null, fx.fromInt(24), 0);
+    assert.equal(getResource(w, 0, 'food'), 80, 'already brigand — no second spend');
+    assert.equal(getResource(w, 0, 'wood'), 90);
+  });
+
+  it('ability cast flips a villager and stop puts the basket back', () => {
+    const w = createWorld(49);
+    const field = openField();
+    const vill = spawn(w, { x: 0, y: 0, type: UNIT.VILLAGER, owner: 0 });
+    addResource(w, 0, 'food', 100);
+    addResource(w, 0, 'wood', 100);
+    applyCasts(w, field, [vill], null, fx.fromInt(20), 0);
+    assert.equal(w.type[vill], UNIT.BRIGAND);
+    assert.equal(w.order[vill], ORDER.ATTACK_MOVE);
+    applyCommands(w, field, [{ type: CMD.STOP, entities: [vill] }]);
+    assert.equal(w.type[vill], UNIT.VILLAGER);
+  });
+
+  it('idle brigands revert after the timeout', () => {
+    const w = createWorld(48);
+    const field = openField();
+    const vill = spawn(w, { x: 0, y: 0, type: UNIT.VILLAGER, owner: 0 });
+    becomeBrigand(w, vill);
+    w.brigandIdle[vill] = BRIGAND_IDLE_REVERT_TICKS - 1;
+    brigandIdleSystem(w);
+    assert.equal(w.type[vill], UNIT.VILLAGER);
+  });
+
+  it('does not time out while attack-moving', () => {
+    const w = createWorld(51);
+    const vill = spawn(w, { x: 0, y: 0, type: UNIT.BRIGAND, owner: 0 });
+    w.order[vill] = ORDER.ATTACK_MOVE;
+    w.hasTarget[vill] = 1;
+    w.brigandIdle[vill] = BRIGAND_IDLE_REVERT_TICKS - 1;
+    brigandIdleSystem(w);
+    assert.equal(w.type[vill], UNIT.BRIGAND);
+    assert.equal(w.brigandIdle[vill], 0);
+  });
+
+  it('pauses idle timeout while melee engagement is active', () => {
+    const w = createWorld(53);
+    const vill = spawn(w, { x: 0, y: 0, type: UNIT.BRIGAND, owner: 0 });
+    const foe = spawn(w, { x: fx.fromFloat(2), y: 0, type: UNIT.WARRIOR, owner: 1 });
+    w.order[vill] = ORDER.IDLE;
+    w.engagementTarget[vill] = foe;
+    w.brigandIdle[vill] = BRIGAND_IDLE_REVERT_TICKS - 1;
+    brigandIdleSystem(w);
+    assert.equal(w.type[vill], UNIT.BRIGAND);
+    assert.equal(w.brigandIdle[vill], 0);
+  });
+
+  it('keeps the torch while ORDER.ATTACK still has a target', () => {
+    const w = createWorld(50);
+    const field = openField();
+    const vill = spawn(w, { x: 0, y: 0, type: UNIT.VILLAGER, owner: 0 });
+    const foe = spawn(w, { x: fx.fromInt(8), y: 0, type: UNIT.WARRIOR, owner: 1 });
+    applyCommands(w, field, [{ type: CMD.ATTACK, entities: [vill], target: foe }]);
+    w.brigandIdle[vill] = BRIGAND_IDLE_REVERT_TICKS - 1;
+    brigandIdleSystem(w);
+    assert.equal(w.type[vill], UNIT.BRIGAND);
   });
 
   it('leaves soldiers alone', () => {

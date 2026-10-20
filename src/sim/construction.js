@@ -18,6 +18,7 @@ import { revertBrigand } from './brigand.js';
 import { isCarried } from './transport.js';
 import { getBuildingFootprint, applyStructureOccupancyAt } from './buildings.js';
 import { createAgora } from './agora.js';
+import { DROP_OFF_TYPES } from './gather.js';
 
 /** Most workers that can claim a single site. */
 export const MAX_BUILDERS = 2;
@@ -62,7 +63,7 @@ function buildReachSq(b) {
 }
 
 function canBuild(type) {
-  return type === UNIT.VILLAGER || type === UNIT.BRIGAND || type === UNIT.ENGINEER;
+  return type === UNIT.VILLAGER || type === UNIT.ENGINEER;
 }
 
 function buildHalvesFor(type) {
@@ -204,6 +205,9 @@ export function constructionSystem(w, field) {
         w.agoras.push(createAgora(b.owner, fx.toFloat(b.x), fx.toFloat(b.z)));
         b.hp = 0;
       }
+      if (DROP_OFF_TYPES.has(b.type)) {
+        b.gatherRallyAt = w.tick | 0;
+      }
       w.buildingsDirty = 1;
     } else if (
       constructionVisualStage(prevProg, time) !==
@@ -213,6 +217,20 @@ export function constructionSystem(w, field) {
       w.buildingsDirty = 1;
     }
   }
+}
+
+/**
+ * Lower is taken first. Idle, then wood/rock gatherers and repairing
+ * engineers. A farmer is last, and only when the site has nobody else —
+ * filling a second slot must not empty a farm.
+ */
+function candidateRank(w, field, i) {
+  if (w.order[i] === ORDER.IDLE) return 0;
+  if (w.type[i] === UNIT.VILLAGER && w.order[i] === ORDER.GATHER) {
+    const tile = w.gatherTile?.[i] | 0;
+    if (tile >= 0 && field?.foodNode?.[tile]) return 2;
+  }
+  return 1;
 }
 
 /** Rank key for a build candidate: idle beats gathering, then nearest, then id. */
@@ -228,8 +246,9 @@ function candidateEligible(w, i, owner) {
 
 /**
  * Recruit up to MAX_BUILDERS villagers/engineers per unfinished site. Nearest
- * first, idle preferred; will pull gatherers or repairing engineers when no idle
- * hands are free. Runs on a fixed cadence.
+ * first, idle preferred; will pull wood/rock gatherers or repairing engineers
+ * when no idle hand is free. A farmer is pulled only when the site would
+ * otherwise get nobody. Runs on a fixed cadence.
  * @param {object} w
  * @param {object} field
  */
@@ -248,22 +267,25 @@ export function constructionAssignSystem(w, field) {
     }
 
     for (let slot = builders; slot < MAX_BUILDERS; slot++) {
-      // Pick the best remaining candidate (idle over gatherer, then nearest).
+      // Idle, then other workers, nearest within a rank. Farmers only if the
+      // site still has nobody — a second slot must not strip the farm.
       let best = -1;
-      let bestIdle = 2;
+      let bestRank = 3;
       let bestD = 0x7fffffffffff;
       for (let i = 0; i < w.count; i++) {
         if (!candidateEligible(w, i, owner)) continue;
-        const idle = w.order[i] === ORDER.IDLE ? 0 : 1;
+        const rank = candidateRank(w, field, i);
+        if (rank >= 2 && builders > 0) continue;
         const d = fx.dist2(w.px[i], w.py[i], b.x, b.z);
-        if (idle < bestIdle || (idle === bestIdle && d < bestD)) {
-          bestIdle = idle;
+        if (rank < bestRank || (rank === bestRank && d < bestD)) {
+          bestRank = rank;
           bestD = d;
           best = i;
         }
       }
       if (best < 0) break; // no free hands anywhere
       beginBuild(w, best, bi);
+      builders++;
     }
   }
 }

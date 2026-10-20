@@ -39,7 +39,7 @@ import {
   tileCenterWorld,
 } from './tableShape.js';
 import { encodeGarden, decodeCelestial, decodeGarden, encodeRle, fieldFromGarden, applyGardenPlacements } from './garden.js';
-import { clearAllScenery, populateScenery } from './scenery.js';
+import { clearAllScenery, paintSceneryBrush, populateScenery, rockYield, SCENERY } from './scenery.js';
 import { buildTesterGarden, TESTER_STARTING_RESOURCES } from './testerGarden.js';
 import {
   buildStressGarden,
@@ -495,6 +495,25 @@ describe('garden codec', () => {
     assert.equal(again.sceneryAuthored, true);
     assert.equal([...again.sceneryType].some((v) => v !== 0), false);
     assert.equal(decodeGarden(encodeGarden(again)).authoredScenery, true);
+  });
+
+  it('saves a stacked rock and leaves a single rock uncompressed', () => {
+    const field = buildField(7, { width: 32, height: 32 });
+    applyTableSilhouette(field, {
+      cellSize: 16,
+      cellMask: createFullCellMask(32, 32, 16),
+      cellRadius: createFullCellRadius(32, 32, 16, 0),
+    });
+    field.terrainTypes.fill(TERRAIN.GRASS);
+    field.pass.fill(1);
+    assert.ok(paintSceneryBrush(field, 8, 8, SCENERY.ROCK_PLAIN, 0, { tight: true }).length > 0);
+    const alone = encodeGarden(field);
+    assert.equal(alone.rk, undefined);
+    field.rockStock[8 * 32 + 8] = rockYield(SCENERY.ROCK_PLAIN) * 2;
+    const json = encodeGarden(field);
+    assert.ok(json.rk);
+    const again = fieldFromGarden(json);
+    assert.equal(again.rockStock[8 * 32 + 8], rockYield(SCENERY.ROCK_PLAIN) * 2);
   });
 
   it('roundtrips the forge light rig', () => {

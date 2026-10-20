@@ -10,6 +10,8 @@ import {
   replayConfigFromLive,
   replayEndTick,
   replayFileName,
+  replayNameSlug,
+  replayOpponentName,
   replayModeSlug,
   saveReplayToDisk,
   REPLAY_KIND,
@@ -156,6 +158,23 @@ describe('replay size copy', () => {
       replayFileName({ config: { mode: 'onevsone' } }, new Date('2026-09-08T12:00:00Z')),
       'aether-onevsone-2026-09-08.gecho',
     );
+  });
+
+  it('puts the opponent in the filename and drops unsafe characters', () => {
+    const day = new Date('2026-10-16T12:00:00Z');
+    assert.equal(
+      replayFileName({ config: { mode: 'onevsone' }, opponent: 'Nexus' }, day),
+      'aether-onevsone-Nexus-2026-10-16.gecho',
+    );
+    const messy = `Nexus/..:${'x'.repeat(80)}`;
+    const slug = replayNameSlug(messy);
+    assert.equal(slug.includes('/'), false);
+    assert.ok(new TextEncoder().encode(slug).length <= 48);
+    const named = replayFileName({ config: { mode: 'onevsone' }, opponent: messy }, day);
+    assert.ok(named.startsWith('aether-onevsone-'));
+    assert.ok(named.endsWith('-2026-10-16.gecho'));
+    assert.ok(new TextEncoder().encode(named).length < 200);
+    assert.equal(replayOpponentName({ 0: 'Void-Caller', 1: 'Nexus' }, 0), 'Nexus');
   });
 });
 

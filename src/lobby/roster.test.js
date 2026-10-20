@@ -9,6 +9,20 @@ describe('lobby roster', () => {
     assert.deepEqual(seats.map((s) => s.team), [0, 0, 1, 1]);
   });
 
+  it('claims a ranked teams seat and refuses one that is taken', () => {
+    const seats = createRoster('teams');
+    const host = claimSeat(seats, { userId: 'h', name: 'H', ready: true }, 2);
+    assert.equal(host.ok, true);
+    assert.equal(host.index, 2);
+    assert.equal(host.seats[0].kind, 'empty');
+    assert.equal(host.seats[2].team, 1);
+    const taken = claimSeat(host.seats, { userId: 'x', name: 'X' }, 2);
+    assert.equal(taken.ok, false);
+    const ally = claimSeat(host.seats, { userId: 'a', name: 'A' }, 3);
+    assert.equal(ally.index, 3);
+    assert.equal(ally.seats[3].team, 1);
+  });
+
   it('fills the first empty seat', () => {
     let seats = createRoster('onevsone');
     const a = claimSeat(seats, { userId: 'u1', name: 'A', ready: true });
@@ -37,14 +51,18 @@ describe('lobby roster', () => {
     assert.deepEqual(next.seats[0].skins, { 4: 'first_responder' });
   });
 
-  it('gates start on min humans and ready', () => {
+  it('gates start on min humans, both teams, and ready', () => {
     let seats = createRoster('teams');
     seats = claimSeat(seats, { userId: 'host', name: 'H', ready: true }).seats;
     assert.equal(canStart('teams', seats), false);
     assert.equal(startBlockReason('teams', seats), 'Need 2 players');
-    seats = claimSeat(seats, { userId: 'p2', name: 'P' }).seats;
-    assert.equal(startBlockReason('teams', seats), 'Waiting for ready');
-    seats = setSeatReady(seats, 'p2', true);
+    seats = claimSeat(seats, { userId: 'p2', name: 'P', ready: true }).seats;
+    assert.equal(canStart('teams', seats), false);
+    assert.equal(startBlockReason('teams', seats), 'Need both teams');
+    const moved = moveRosterPerson(seats, [], 'p2', 1, { hostId: 'host', teams: true });
+    assert.equal(moved.ok, true);
+    assert.equal(startBlockReason('teams', moved.seats), 'Waiting for ready');
+    seats = setSeatReady(moved.seats, 'p2', true);
     assert.equal(canStart('teams', seats), true);
     assert.equal(startBlockReason('teams', seats), '');
   });

@@ -33,8 +33,15 @@ const PERIOD = {
 /** @type {Uint8Array} */
 let spiritMark = new Uint8Array(0);
 
+/** Spells that spend the mana bank — not villager upgrades. */
+export function isManaAbility(abilityId) {
+  if (!abilityId) return false;
+  return abilityId !== 'villager_brigand';
+}
+
 export function isManaCaster(typeId) {
-  return !!getUnitDef(typeId).primaryAbility;
+  const id = getUnitDef(typeId).primaryAbility;
+  return isManaAbility(id);
 }
 
 export function manaPeriodForType(typeId) {

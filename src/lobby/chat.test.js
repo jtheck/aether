@@ -26,6 +26,8 @@ describe('chat helpers', () => {
     assert.equal(msg.name, 'Alice');
     assert.equal(msg.color, '#f00');
     assert.equal(msg.text, 'hi');
+    assert.equal(msg.watching, false);
+    assert.equal(makeChatMessage({ from: 'u1', text: 'hi', watching: true }).watching, true);
     assert.ok(msg.id && typeof msg.ts === 'number');
     assert.ok(isChatMessage(msg));
     assert.equal(makeChatMessage({ from: 'u1', text: '   ' }), null);
@@ -43,6 +45,9 @@ describe('chat helpers', () => {
     assert.equal(list.length, 3);
     assert.deepEqual(list.map((m) => m.id), ['b', 'c', 'd']);
     assert.equal(list[0].name, 'Player');
+    assert.equal(list[0].watching, false);
+    log.add({ type: 'chat', id: 'e', text: 'eye', ts: 6, watching: true });
+    assert.equal(log.list().at(-1).watching, true);
     // Evicted id can be re-added (seen set stays bounded).
     assert.equal(log.add({ type: 'chat', id: 'a', text: 'again', ts: 5 }), true);
   });
@@ -51,8 +56,9 @@ describe('chat helpers', () => {
     const inner = makeChatMessage({ from: 'u', name: 'Ada', text: 'yo' });
     assert.equal(unwrapChatMessage(chatSpeakPayload(inner)), inner);
     assert.equal(unwrapChatMessage({ type: 'chat', content: JSON.stringify(inner) }).id, inner.id);
-    const stripped = unwrapChatMessage({ type: 'chat', from: 'u', text: 'yo', ts: 9 });
+    const stripped = unwrapChatMessage({ type: 'chat', from: 'u', text: 'yo', ts: 9, watching: true });
     assert.equal(stripped.text, 'yo');
+    assert.equal(stripped.watching, true);
     assert.ok(stripped.id);
     const log = createChatLog();
     assert.equal(ingestChat(log, chatSpeakPayload(inner)), true);

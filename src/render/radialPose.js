@@ -210,12 +210,43 @@ export function radialIconBounds(meshes) {
       if (mesh.boundMax[a] > max[a]) max[a] = mesh.boundMax[a];
     }
   }
-  if (!Number.isFinite(min[0])) return { cx: 0, cy: 0, cz: 0 };
+  if (!Number.isFinite(min[0])) return { cx: 0, cy: 0, cz: 0, hx: 0, hy: 0, hz: 0 };
   return {
     cx: (min[0] + max[0]) * 0.5,
     cy: min[1],
     cz: (min[2] + max[2]) * 0.5,
+    hx: (max[0] - min[0]) * 0.5,
+    hy: max[1] - min[1],
+    hz: (max[2] - min[2]) * 0.5,
   };
+}
+
+/**
+ * How far the posed icon reaches along a world direction, measured from the
+ * foot anchor (cx, cy, cz). Used to keep overlays in front of a depth-writing icon.
+ * Basis columns are the icon's right, up, and forward.
+ * @param {{ hx?: number, hy?: number, hz?: number }} bounds
+ */
+/**
+ * Uniform scale so a mesh AABB fits in `targetExtent`. Never grows past
+ * `fallback` — unit-tuned menus stay put; tall buildings shrink to the pad.
+ * @param {{ hx?: number, hy?: number, hz?: number } | null | undefined} bounds
+ */
+export function radialIconFitScale(bounds, targetExtent, fallback = 1) {
+  const span = Math.max((bounds?.hx ?? 0) * 2, bounds?.hy ?? 0, (bounds?.hz ?? 0) * 2);
+  if (!(span > 1e-6) || !(targetExtent > 0)) return fallback;
+  return Math.min(fallback, targetExtent / span);
+}
+
+export function radialIconFrontReach(bounds, scale, nx, ny, nz, rx, ry, rz, ux, uy, uz, fx, fy, fz) {
+  const mx = nx * rx + ny * ry + nz * rz;
+  const my = nx * ux + ny * uy + nz * uz;
+  const mz = nx * fx + ny * fy + nz * fz;
+  const hx = bounds?.hx ?? 0;
+  const hy = bounds?.hy ?? 0;
+  const hz = bounds?.hz ?? 0;
+  const along = Math.abs(mx) * hx + Math.max(0, my) * hy + Math.abs(mz) * hz;
+  return scale * along;
 }
 
 /**

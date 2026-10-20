@@ -12,8 +12,12 @@ import {
   ownerSkinsFromSeats,
   packsOwnedFromSteamDlc,
   queryDlcPacks,
+  allDlcMeshUrls,
+  allDlcVatDefs,
+  resolveBuildingModelUrl,
   resolveUnitModelUrl,
   resolveVatDef,
+  selectedBuildingSkins,
   selectedSkins,
   skinChoicesForUnit,
   skinMenuModel,
@@ -48,6 +52,31 @@ describe('dlcCatalog', () => {
     assert.equal(resolveUnitModelUrl(UNIT.PRIEST, null), UNIT_MODEL_URLS[UNIT.PRIEST]);
     assert.equal(resolveUnitModelUrl(UNIT.WARRIOR, DLC_FIRST_RESPONDER), UNIT_MODEL_URLS[UNIT.WARRIOR]);
     assert.equal(resolveVatDef(UNIT.VILLAGER, DLC_FIRST_RESPONDER)?.url, '/assets/models/villager.glb');
+    assert.equal(
+      resolveVatDef(UNIT.CHAMPION, DLC_FIRST_RESPONDER)?.url,
+      '/assets/models/dlc/first_responder/champion-DLC1.glb',
+    );
+    assert.equal(resolveVatDef(UNIT.CHAMPION, DLC_FIRST_RESPONDER)?.attackClip, 'Attack_Swing');
+    assert.equal(resolveVatDef(UNIT.CHAMPION, null)?.url, '/assets/models/champion.glb');
+    assert.equal(
+      allDlcVatDefs().some((def) => def.url.endsWith('/champion-DLC1.glb') && def.idleClip === 'Idle'),
+      true,
+    );
+    assert.equal(allDlcMeshUrls().some((url) => url.includes('champion')), false);
+  });
+
+  it('resolves the First Responder church skin', () => {
+    assert.equal(
+      resolveBuildingModelUrl('church', DLC_FIRST_RESPONDER),
+      '/assets/models/dlc/first_responder/church-DLC1.glb',
+    );
+    assert.equal(
+      resolveBuildingModelUrl('church', null),
+      '/assets/models/church.glb',
+    );
+    assert.deepEqual(selectedBuildingSkins([DLC_FIRST_RESPONDER], {}), {
+      church: DLC_FIRST_RESPONDER,
+    });
   });
 
   it('maps lobby seats and KOTH roster onto per-unit skins', () => {
@@ -55,7 +84,7 @@ describe('dlcCatalog', () => {
       { kind: 'human', index: 0, dlc: [DLC_FIRST_RESPONDER] },
       { kind: 'human', index: 1, dlc: [] },
       { kind: 'empty', index: 2 },
-    ]), { 0: { [UNIT.PRIEST]: DLC_FIRST_RESPONDER } });
+    ]), { 0: { [UNIT.PRIEST]: DLC_FIRST_RESPONDER, [UNIT.CHAMPION]: DLC_FIRST_RESPONDER } });
     assert.deepEqual(ownerSkinsFromSeats([
       { kind: 'human', index: 0, skins: { [UNIT.PRIEST]: DLC_FIRST_RESPONDER } },
     ]), { 0: { [UNIT.PRIEST]: DLC_FIRST_RESPONDER } });
@@ -71,30 +100,43 @@ describe('dlcCatalog', () => {
   it('lets a saved Default beat the auto-owned pack, and lists several choices', () => {
     assert.deepEqual(selectedSkins([DLC_FIRST_RESPONDER], {}), {
       [UNIT.PRIEST]: DLC_FIRST_RESPONDER,
+      [UNIT.CHAMPION]: DLC_FIRST_RESPONDER,
     });
-    assert.deepEqual(selectedSkins([DLC_FIRST_RESPONDER], { [UNIT.PRIEST]: DEFAULT_SKIN_ID }), {});
+    assert.deepEqual(selectedSkins([DLC_FIRST_RESPONDER], { [UNIT.PRIEST]: DEFAULT_SKIN_ID }), {
+      [UNIT.CHAMPION]: DLC_FIRST_RESPONDER,
+    });
     const choices = skinChoicesForUnit(UNIT.PRIEST, [DLC_FIRST_RESPONDER]);
     assert.equal(choices[0].id, DEFAULT_SKIN_ID);
     assert.equal(choices.length, 2);
     assert.equal(choices[1].id, DLC_FIRST_RESPONDER);
   });
 
-  it('lists priest for players who do not own the pack, with a Steam purchase link', () => {
+  it('lists priest looks for players who do not own the pack, with that choice disabled', () => {
     const locked = skinMenuModel([]);
-    assert.equal(locked.length, 1);
+    assert.equal(locked.length, 3);
     assert.equal(locked[0].kind, 'unit');
     assert.equal(locked[0].label, 'Priest');
+    const lockedChamp = locked.find((row) => row.id === UNIT.CHAMPION);
+    assert.equal(lockedChamp.kind, 'unit');
+    assert.equal(lockedChamp.label, 'Champion');
+    assert.equal(lockedChamp.unlocked, false);
+    assert.equal(lockedChamp.value, DEFAULT_SKIN_ID);
+    assert.equal(lockedChamp.choices[1].id, DLC_FIRST_RESPONDER);
+    assert.equal(lockedChamp.choices[1].enabled, false);
     assert.equal(locked[0].unlocked, false);
-    assert.equal(locked[0].choices, null);
-    assert.equal(locked[0].offers[0].id, DLC_FIRST_RESPONDER);
-    assert.equal(locked[0].offers[0].storeUrl, 'https://store.steampowered.com/app/5217980/');
+    assert.equal(locked[0].value, DEFAULT_SKIN_ID);
+    assert.equal(locked[0].choices.length, 2);
+    assert.equal(locked[0].choices[1].id, DLC_FIRST_RESPONDER);
+    assert.equal(locked[0].choices[1].enabled, false);
 
     const owned = skinMenuModel([DLC_FIRST_RESPONDER], {});
     assert.equal(owned[0].unlocked, true);
     assert.equal(owned[0].value, DLC_FIRST_RESPONDER);
-    assert.equal(owned[0].choices.length, 2);
+    assert.equal(owned[0].choices[1].enabled, true);
+    assert.equal(owned.find((row) => row.id === UNIT.CHAMPION).value, DLC_FIRST_RESPONDER);
 
     const off = skinMenuModel([DLC_FIRST_RESPONDER], { [UNIT.PRIEST]: DEFAULT_SKIN_ID });
     assert.equal(off[0].value, DEFAULT_SKIN_ID);
+    assert.equal(off.find((row) => row.id === UNIT.CHAMPION).value, DLC_FIRST_RESPONDER);
   });
 });

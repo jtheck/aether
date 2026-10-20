@@ -22,7 +22,7 @@ import { UNIT } from './unitTypes.js';
 import { revertBrigand } from './brigand.js';
 import { SCENERY, rockFootprintRadiusForStock, rockResourceKind, damageRock } from './scenery.js';
 import { isHostile } from './teams.js';
-import { buildingIsFinished } from './buildings.js';
+import { BUILDING_FOOTPRINTS, buildingIsFinished } from './buildings.js';
 
 const WOOD_CODE = RESOURCE_INDEX.wood + 1;
 const FOOD_CODE = RESOURCE_INDEX.food + 1;
@@ -98,8 +98,19 @@ export const GATHER_ACT = {
 
 /** Ticks between harvest bites. */
 export const GATHER_INTERVAL = 15;
-/** Wood removed per bite. */
+/** Wood removed per bite. Food bites use the same size. */
 export const GATHER_BITE = 2;
+/**
+ * Ticks from one farmer bite to the next. The cooldown is set, then counted
+ * down through zero, so the gap is one tick longer than GATHER_INTERVAL.
+ */
+const FARM_BITE_PERIOD = GATHER_INTERVAL + 1;
+/**
+ * Finished farm with no farmer: 10% of one farmer, paid as 1 food.
+ * One farmer is GATHER_BITE per FARM_BITE_PERIOD ticks, so this is that
+ * period times 10 divided by the bite.
+ */
+export const FARM_PASSIVE_INTERVAL = (FARM_BITE_PERIOD * 10) / GATHER_BITE;
 /** Load a villager hauls before returning to a drop-off. */
 export const GATHER_CARRY_CAP = 10;
 
@@ -133,10 +144,10 @@ const DEPOSIT_TYPES = new Set(['camp', 'mine']);
 // that circle (see workRadiusRingWorld) so nodes just past the rim still work.
 /** Uniform extra gather reach on every resource drop-off (half a tile). */
 export const WORK_RADIUS_PAD_F = TILE_SIZE_F * 0.5;
-/** Base gather reach of a camp/mine in world units (7 tiles + pad). */
-export const CAMP_WORK_RADIUS_F = 28 + WORK_RADIUS_PAD_F;
+/** Base gather reach of a camp/mine in world units (8 tiles + pad). */
+export const CAMP_WORK_RADIUS_F = 8 * TILE_SIZE_F + WORK_RADIUS_PAD_F;
 /** Farm plots only recruit from the 3×3 and a tile of grass around it. */
-export const FARM_WORK_RADIUS_F = 16 + WORK_RADIUS_PAD_F;
+export const FARM_WORK_RADIUS_F = 5 * TILE_SIZE_F + WORK_RADIUS_PAD_F;
 /** Advertised HUD ring sits this far inside the live gather circle. */
 export const WORK_RADIUS_RING_INSET_F = 1.6;
 /** Attached silo satellite circle is one tile tighter than the source. */
@@ -149,10 +160,10 @@ export const ENGINEER_ASSIST_RANGE_F = 28;
 export const ENGINEER_BONUS_CAP = 3;
 /** Keep the last stacked bonus after engineers walk off (~6s at 20 Hz). */
 export const ENGINEER_BONUS_LINGER_TICKS = 120;
-/** Crew-size radius: every 4 villagers on a camp/mine add this much reach. */
+/** Crew-size radius: every 4 villagers standing in the circle add this much reach. */
 export const CREW_RADIUS_TIER = 4;
 export const CREW_RADIUS_BONUS_F = 8;
-/** Cap stacked crew-radius tiers (4 workers → +8, 8 workers → +16). */
+/** Cap stacked crew-radius tiers (4 villagers → +8, 8 villagers → +16). */
 export const CREW_RADIUS_TIER_CAP = 2;
 /** Max villagers a single camp/mine will pull to work. */
 export const CAMP_MAX_WORKERS = 8;
@@ -166,8 +177,9 @@ export function maxWorkersFor(type) {
 
 // --- Defensive farming --------------------------------------------------------
 // A villager that reaches a node via attack-move gathers "defensively": it swings
-// at any hostile that wanders into arm's reach, then goes back to work. Kept short
-// so villagers never chase — they only defend the plot they're standing on.
+// while a hostile stays inside the short ring around the plot, then goes back to
+// work. Leaving that ring drops the fight, so a villager never follows anyone off
+// the node.
 /** How close a hostile must be for a defensive gatherer to retaliate (world units). */
 const DEFEND_RANGE = fx.fromFloat(11);
 const DEFEND_RANGE_SQ = fx.mul(DEFEND_RANGE, DEFEND_RANGE);
@@ -200,6 +212,7 @@ export function beginGather(w, field, i, tile, defensive = 0) {
     if (!already && countFarmCrewOnTile(w, tile) >= FARM_MAX_WORKERS) return false;
   }
   if (w.rallyHopCount) w.rallyHopCount[i] = 0;
+  if (w.manualHold) w.manualHold[i] = 0;
   w.order[i] = ORDER.GATHER;
   w.gatherTile[i] = tile | 0;
   w.targetEntity[i] = -1;
@@ -220,6 +233,120 @@ export function applyGather(w, field, ids, tile, defensive = 0) {
   for (let k = 0; k < ids.length; k++) {
     revertBrigand(w, ids[k]);
     beginGather(w, field, ids[k], tile, defensive);
+  }
+}
+
+/** Auto-assign passes a parked villager must stand idle before camps may recruit it. */
+export const MANUAL_HOLD_PASSES = 5;
+/** gatherTile sentinel: haul to tx/ty (a clicked agora / camp / mine) and then stand. */
+const DEPOSIT_TILE = -2;
+
+/**
+ * A move, attack, or stop drops the harvest job. The villager keeps any load
+ * already in hand, and won't be recruited or sent hauling until it has stood
+ * idle for MANUAL_HOLD_PASSES auto-assign passes after the order finishes.
+ */
+export function releaseGatherOrder(w, i) {
+  if (w.gatherTile) w.gatherTile[i] = -1;
+  if (w.gatherCd) w.gatherCd[i] = 0;
+  if (w.gatherDefensive) w.gatherDefensive[i] = 0;
+  if (w.manualHold) w.manualHold[i] = MANUAL_HOLD_PASSES;
+}
+
+/**
+ * Walk a carried load to a specific drop-off and bank it. The villager stands
+ * there afterward instead of resuming the node they were pulled off.
+ * @param {object} w
+ * @param {number} i
+ * @param {number} x fixed-point drop-off center
+ * @param {number} y fixed-point drop-off center
+ */
+export function beginDeposit(w, i, x, y) {
+  if (!w.alive[i] || w.type[i] !== UNIT.VILLAGER) return false;
+  if ((w.carriedAmt[i] | 0) <= 0) return false;
+  if (w.rallyHopCount) w.rallyHopCount[i] = 0;
+  if (w.manualHold) w.manualHold[i] = 0;
+  w.order[i] = ORDER.GATHER;
+  w.gatherTile[i] = DEPOSIT_TILE;
+  w.tx[i] = x;
+  w.ty[i] = y;
+  w.targetEntity[i] = -1;
+  if (w.targetBuilding) w.targetBuilding[i] = -1;
+  w.transportTarget[i] = -1;
+  w.hasTarget[i] = 0;
+  w.gatherCd[i] = 0;
+  if (w.gatherDefensive) w.gatherDefensive[i] = 0;
+  if (w.gatherAct) w.gatherAct[i] = GATHER_ACT.HAUL;
+  clearEngagement(w, i);
+  clearPath(w, i);
+  return true;
+}
+
+function footprintReach(fp) {
+  const hx = fx.fromFloat(fp.w * TILE_SIZE_F * 0.5 + TILE_SIZE_F);
+  const hz = fx.fromFloat(fp.h * TILE_SIZE_F * 0.5 + TILE_SIZE_F);
+  return { hx, hz };
+}
+
+function pointOnFootprint(cx, cz, fp, x, y) {
+  const { hx, hz } = footprintReach(fp);
+  const dx = x - cx;
+  const dz = y - cz;
+  return (dx < 0 ? -dx : dx) <= hx && (dz < 0 ? -dz : dz) <= hz;
+}
+
+/**
+ * Friendly agora / camp / mine / attached silo whose footprint covers this
+ * click, or null. The center is where a carried load gets handed in.
+ * @returns {{ x: number, y: number } | null}
+ */
+export function depositDropOffAt(w, owner, x, y) {
+  let bestX = 0;
+  let bestY = 0;
+  let bestD = 0x7fffffffffff;
+  let found = false;
+  const take = (cx, cz, fp) => {
+    if (!pointOnFootprint(cx, cz, fp, x, y)) return;
+    const d = fx.dist2(x, y, cx, cz);
+    if (d < bestD) {
+      bestD = d;
+      bestX = cx;
+      bestY = cz;
+      found = true;
+    }
+  };
+  const agoras = w.agoras;
+  if (agoras) {
+    const fp = BUILDING_FOOTPRINTS.agora;
+    for (let a = 0; a < agoras.length; a++) {
+      const ag = agoras[a];
+      if ((ag.owner | 0) !== (owner | 0)) continue;
+      if (ag.hp != null && (ag.hp | 0) <= 0) continue;
+      take(ag.x, ag.z, fp);
+    }
+  }
+  const buildings = w.buildings;
+  if (buildings) {
+    for (let b = 0; b < buildings.length; b++) {
+      const bd = buildings[b];
+      if ((bd.owner | 0) !== (owner | 0)) continue;
+      if (!buildingIsFinished(bd)) continue;
+      if (bd.hp != null && (bd.hp | 0) <= 0) continue;
+      if (DEPOSIT_TYPES.has(bd.type)) take(bd.x, bd.z, BUILDING_FOOTPRINTS[bd.type]);
+      else if (bd.type === 'silo' && siloIsAttached(buildings, bd, 'fixed')) {
+        take(bd.x, bd.z, BUILDING_FOOTPRINTS.silo);
+      }
+    }
+  }
+  return found ? { x: bestX, y: bestY } : null;
+}
+
+/** Idle parked villagers count down their hold, one pass per auto-assign tick. */
+function tickManualHolds(w) {
+  const hold = w.manualHold;
+  if (!hold) return;
+  for (let i = 0; i < w.count; i++) {
+    if (hold[i] && w.alive[i] && w.order[i] === ORDER.IDLE) hold[i]--;
   }
 }
 
@@ -399,8 +526,41 @@ export function nearestDropOff(w, owner, px, py) {
  * @param {object} w
  * @param {object} field
  */
+/** True when this owner already has a villager tasked to the farm's food tile. */
+function farmHasWorker(w, owner, tile) {
+  if (tile < 0 || !w.gatherTile) return false;
+  for (let i = 0; i < w.count; i++) {
+    if (!w.alive[i] || w.owner[i] !== owner || w.type[i] !== UNIT.VILLAGER) continue;
+    if (w.order[i] !== ORDER.GATHER) continue;
+    if ((w.gatherTile[i] | 0) === tile) return true;
+  }
+  return false;
+}
+
+/**
+ * Unstaffed finished farms trickle food. A farmer on the plot replaces this
+ * with the full bite in workFarm, so the two do not stack.
+ */
+function tickFarmPassive(w, field) {
+  const buildings = w.buildings;
+  if (!buildings?.length) return;
+  const interval = FARM_PASSIVE_INTERVAL | 0;
+  if (interval <= 0) return;
+  const tick = w.tick | 0;
+  for (let bi = 0; bi < buildings.length; bi++) {
+    const b = buildings[bi];
+    if (b.type !== 'farm' || !buildingIsFinished(b)) continue;
+    if (b.hp != null && (b.hp | 0) <= 0) continue;
+    if ((tick + bi) % interval !== 0) continue;
+    const tile = buildingCenterTile(field, b);
+    if (farmHasWorker(w, b.owner, tile)) continue;
+    addGatherIncome(w, b.owner | 0, 'food', 1);
+  }
+}
+
 export function gatherSystem(w, field) {
   if (!field) return;
+  tickFarmPassive(w, field);
   const width = field.width | 0;
   for (let i = 0; i < w.count; i++) {
     if (!w.alive[i]) {
@@ -424,14 +584,18 @@ export function gatherSystem(w, field) {
       continue;
     }
 
-    // Return-and-deposit when full, or when the node is spent.
-    if (carrying >= GATHER_CARRY_CAP || nodeStock <= 0) {
+    // Return-and-deposit when full, when the node is spent, or when the
+    // player clicked a drop-off (gatherTile DEPOSIT_TILE, aim stored in tx/ty).
+    const targeted = (tile | 0) === DEPOSIT_TILE;
+    if (targeted || carrying >= GATHER_CARRY_CAP || nodeStock <= 0) {
       if (carrying <= 0) {
         endGather(w, i);
         continue;
       }
       setGatherAct(w, i, GATHER_ACT.HAUL);
-      const drop = nearestDropOff(w, w.owner[i], w.px[i], w.py[i]);
+      const drop = targeted
+        ? { x: w.tx[i], y: w.ty[i] }
+        : nearestDropOff(w, w.owner[i], w.px[i], w.py[i]);
       if (!drop) {
         // Nowhere to deposit — idle holding the load until re-tasked.
         w.order[i] = ORDER.IDLE;
@@ -450,7 +614,11 @@ export function gatherSystem(w, field) {
         w.vx[i] = 0;
         w.vy[i] = 0;
         clearPath(w, i);
-        if (nodeStock <= 0) endGather(w, i);
+        if (nodeStock <= 0 || targeted) {
+          endGather(w, i);
+          // A clicked drop-off is a place to stand, not a new gather job.
+          if (targeted && w.manualHold) w.manualHold[i] = MANUAL_HOLD_PASSES;
+        }
         continue;
       }
       const snapped = snapToPassable(field, drop.x, drop.y);
@@ -533,19 +701,76 @@ function isNearestSameType(w, b, px, py) {
   return true;
 }
 
-function isNearestSameTypeWorld(buildings, b, x, z) {
-  if (!buildings?.length) return true;
-  const bestD = (x - b.x) * (x - b.x) + (z - b.z) * (z - b.z);
-  for (let i = 0; i < buildings.length; i++) {
-    const o = buildings[i];
-    if (o === b) continue;
-    if (!dropOffFinished(o)) continue;
-    if (o.owner !== b.owner || o.type !== b.type) continue;
-    const dx = x - o.x;
-    const dz = z - o.z;
-    if (dx * dx + dz * dz < bestD) return false;
+function baseWorkRadiusFx(w, b) {
+  const live = nearbyEngineerCount(w, b);
+  const linger = lingeringEngineerBonus(w, b);
+  const eng = live > linger ? live : linger;
+  const base = b.type === 'farm' ? FARM_WORK_RADIUS : CAMP_WORK_RADIUS;
+  return base + eng * ENGINEER_RADIUS_BONUS;
+}
+
+function baseWorkRadiusWorld(w, b) {
+  const live = nearbyEngineerCountWorld(w, b);
+  const linger = lingeringEngineerBonus(w, b);
+  const eng = live > linger ? live : linger;
+  const base = b.type === 'farm' ? FARM_WORK_RADIUS_F : CAMP_WORK_RADIUS_F;
+  return base + eng * ENGINEER_RADIUS_BONUS_F;
+}
+
+function inDropOffReachWorld(buildings, b, x, z, radius) {
+  const dx = x - b.x;
+  const dz = z - b.z;
+  if (dx * dx + dz * dz <= radius * radius) return true;
+  const silos = silosAttachedTo(buildings, b, 'world');
+  if (!silos.length) return false;
+  const siloR = siloWorkRadiusWorld(radius);
+  const siloR2 = siloR * siloR;
+  for (let i = 0; i < silos.length; i++) {
+    const sx = x - silos[i].x;
+    const sz = z - silos[i].z;
+    if (sx * sx + sz * sz <= siloR2) return true;
   }
-  return true;
+  return false;
+}
+
+/** Owned villagers standing in this drop-off's circle (or an attached silo copy). */
+function countVillagersInReach(w, b, radius) {
+  const buildings = w.buildings;
+  let n = 0;
+  for (let i = 0; i < w.count; i++) {
+    if (!w.alive[i] || w.owner[i] !== b.owner || w.type[i] !== UNIT.VILLAGER) continue;
+    if (inDropOffReach(buildings, b, w.px[i], w.py[i], radius)) n++;
+  }
+  return n;
+}
+
+function countVillagersInReachWorld(w, b, buildings, radius) {
+  const list = buildings ?? w.buildings;
+  let n = 0;
+  for (let i = 0; i < w.count; i++) {
+    if (!w.alive[i] || w.owner[i] !== b.owner || w.type[i] !== UNIT.VILLAGER) continue;
+    const x = fx.toFloat(w.px[i]);
+    const z = fx.toFloat(w.py[i]);
+    if (inDropOffReachWorld(list, b, x, z, radius)) n++;
+  }
+  return n;
+}
+
+/**
+ * Crew tiers from villagers inside the circle. Starts at the base reach so a
+ * crowd standing outside cannot inflate it, then rechecks the widened circle
+ * so a staffed camp can count villagers in the bonus band.
+ */
+function crewTiersForReach(countInside, baseReach, bonus) {
+  let reach = baseReach;
+  let tiers = 0;
+  for (let step = 0; step <= CREW_RADIUS_TIER_CAP; step++) {
+    const next = crewRadiusTiers(countInside(reach));
+    if (next <= tiers) break;
+    tiers = next;
+    reach = baseReach + tiers * bonus;
+  }
+  return tiers;
 }
 
 /**
@@ -566,20 +791,6 @@ function countAssignedCrew(w, field, b) {
       if (nodeClass(nodeAt(field, w.gatherTile[i])) !== wantClass) continue;
     }
     if (!isNearestSameType(w, b, w.px[i], w.py[i])) continue;
-    n++;
-  }
-  return n;
-}
-
-function countAssignedCrewWorld(w, b, buildings) {
-  const wantClass = dropOffNodeClass(b.type);
-  if (wantClass < 0) return 0;
-  const list = buildings ?? w.buildings;
-  let n = 0;
-  for (let i = 0; i < w.count; i++) {
-    if (!w.alive[i] || w.owner[i] !== b.owner || w.type[i] !== UNIT.VILLAGER) continue;
-    if (w.order[i] !== ORDER.GATHER) continue;
-    if (!isNearestSameTypeWorld(list, b, fx.toFloat(w.px[i]), fx.toFloat(w.py[i]))) continue;
     n++;
   }
   return n;
@@ -639,17 +850,19 @@ export function refreshEngineerAssists(w) {
 
 /**
  * Effective work radius of a drop-off — farm plots stay tight; camps/mines add
- * engineer assist plus a crew-size bonus (4 / 8 workers). HUD draws a slightly
- * smaller ring via workRadiusRingWorld.
+ * engineer assist plus a crew-size bonus (4 / 8 villagers standing in the circle).
+ * HUD draws a slightly smaller ring via workRadiusRingWorld.
  * @returns {number} fixed-point radius
  */
 export function campWorkRadius(w, b, field) {
-  const live = nearbyEngineerCount(w, b);
-  const linger = lingeringEngineerBonus(w, b);
-  const eng = live > linger ? live : linger;
-  const base = b.type === 'farm' ? FARM_WORK_RADIUS : CAMP_WORK_RADIUS;
-  const crew = b.type === 'farm' ? 0 : crewRadiusTiers(countAssignedCrew(w, field, b));
-  return base + eng * ENGINEER_RADIUS_BONUS + crew * CREW_RADIUS_BONUS;
+  const reach = baseWorkRadiusFx(w, b);
+  if (b.type === 'farm') return reach;
+  const tiers = crewTiersForReach(
+    (radius) => countVillagersInReach(w, b, radius),
+    reach,
+    CREW_RADIUS_BONUS,
+  );
+  return reach + tiers * CREW_RADIUS_BONUS;
 }
 
 /**
@@ -658,14 +871,17 @@ export function campWorkRadius(w, b, field) {
  * @param {object} w
  * @param {{ x: number, z: number, owner: number, type?: string, engBonus?: number, engBonusUntil?: number }} b
  * @param {object[] | null} [buildings] serialized building list (HUD has no w.buildings)
+ * @param {object | null} [field] live field, so the ring counts the same nodes as the sim
  */
-export function campWorkRadiusWorld(w, b, buildings) {
-  const live = nearbyEngineerCountWorld(w, b);
-  const linger = lingeringEngineerBonus(w, b);
-  const eng = live > linger ? live : linger;
-  const base = b.type === 'farm' ? FARM_WORK_RADIUS_F : CAMP_WORK_RADIUS_F;
-  const crew = b.type === 'farm' ? 0 : crewRadiusTiers(countAssignedCrewWorld(w, b, buildings));
-  return base + eng * ENGINEER_RADIUS_BONUS_F + crew * CREW_RADIUS_BONUS_F;
+export function campWorkRadiusWorld(w, b, buildings, field) {
+  const reach = baseWorkRadiusWorld(w, b);
+  if (b.type === 'farm') return reach;
+  const tiers = crewTiersForReach(
+    (radius) => countVillagersInReachWorld(w, b, buildings, radius),
+    reach,
+    CREW_RADIUS_BONUS_F,
+  );
+  return reach + tiers * CREW_RADIUS_BONUS_F;
 }
 
 /** Satellite gather reach for an attached silo (world units). */
@@ -775,6 +991,7 @@ function nearestNodeForDropOff(field, buildings, b, radius, fromX, fromY, wantCl
 function sendIdleCarriersHome(w, field) {
   for (let i = 0; i < w.count; i++) {
     if (!w.alive[i] || w.type[i] !== UNIT.VILLAGER) continue;
+    if (w.manualHold?.[i]) continue;
     if (w.order[i] !== ORDER.IDLE) continue;
     if ((w.carriedAmt[i] | 0) <= 0) continue;
     if (!nearestDropOff(w, w.owner[i], w.px[i], w.py[i])) continue;
@@ -784,19 +1001,202 @@ function sendIdleCarriersHome(w, field) {
 }
 
 /**
- * Camps/mines pull nearby idle villagers to harvest nodes in reach. Runs on a
- * fixed cadence; only recruits IDLE villagers so player/manual orders are safe.
- * Idle carriers are sent home first (including to an agora-only base).
+ * True when a villager stands inside a finished camp / mine / farm work circle
+ * (including attached silo satellites) and can be recruited by campAutoAssignSystem.
+ */
+/** True when (px, py) is inside one drop-off's gather circle (incl. silo ring). */
+export function withinDropOffWorkReach(w, field, b, px, py) {
+  if (!buildingIsFinished(b)) return false;
+  if (!DROP_OFF_TYPES.has(b.type)) return false;
+  if (dropOffNodeClass(b.type) < 0) return false;
+  const buildings = w.buildings;
+  if (!buildings) return false;
+  const radius = campWorkRadius(w, b, field);
+  return inDropOffReach(buildings, b, px, py, radius);
+}
+
+/**
+ * True when a finished camp / mine / farm still has crew room and a matching
+ * node inside its work circle — i.e. campAutoAssignSystem would recruit for it.
+ */
+export function dropOffCanRecruit(w, field, b) {
+  if (!dropOffHasNodes(w, field, b)) return false;
+  return countAssignedCrew(w, field, b) < maxWorkersFor(b.type);
+}
+
+/** Matching node inside the drop-off's circle nearest (fromX, fromY), or -1 — ignores the crew cap. */
+export function dropOffNodeNear(w, field, b, fromX, fromY) {
+  if (!field || !buildingIsFinished(b)) return -1;
+  if (b.hp != null && (b.hp | 0) <= 0) return -1;
+  const wantClass = dropOffNodeClass(b.type);
+  if (wantClass < 0 || wantClass === NODE_FOOD) return -1;
+  const radius = campWorkRadius(w, b, field);
+  return nearestNodeForDropOff(field, w.buildings, b, radius, fromX, fromY, wantClass);
+}
+
+/** Crew slots a recruiting camp / mine / farm still has open (0 when it can't recruit). */
+export function dropOffCrewRoom(w, field, b) {
+  if (!dropOffHasNodes(w, field, b)) return 0;
+  const room = maxWorkersFor(b.type) - countAssignedCrew(w, field, b);
+  return room > 0 ? room : 0;
+}
+
+/** True when a finished camp / mine / farm still has a matching node in reach. */
+export function dropOffHasNodes(w, field, b) {
+  if (!field || !buildingIsFinished(b)) return false;
+  if (b.hp != null && (b.hp | 0) <= 0) return false;
+  if (!DROP_OFF_TYPES.has(b.type)) return false;
+  const wantClass = dropOffNodeClass(b.type);
+  if (wantClass < 0) return false;
+  const radius = campWorkRadius(w, b, field);
+  return nearestNodeForDropOff(field, w.buildings, b, radius, b.x, b.z, wantClass) >= 0;
+}
+
+/** True when (px, py) is inside the reach of a drop-off that would recruit. */
+export function villagerWithinAutoAssignReach(w, field, owner, px, py) {
+  const buildings = w.buildings;
+  if (!buildings?.length) return false;
+  for (let bIdx = 0; bIdx < buildings.length; bIdx++) {
+    const b = buildings[bIdx];
+    if ((b.owner | 0) !== (owner | 0)) continue;
+    if (!dropOffCanRecruit(w, field, b)) continue;
+    const radius = campWorkRadius(w, b, field);
+    if (inDropOffReach(buildings, b, px, py, radius)) return true;
+  }
+  return false;
+}
+
+/** True when this finished farm still has its one farmer slot open. */
+function farmStillWantsWorker(w, field, b) {
+  if (b.type !== 'farm' || b.built === 0) return false;
+  if (b.hp != null && (b.hp | 0) <= 0) return false;
+  const tile = buildingCenterTile(field, b);
+  if (tile < 0 || !field.foodNode?.[tile]) return false;
+  return countAssignedCrew(w, field, b) < FARM_MAX_WORKERS;
+}
+
+/**
+ * Idle villager standing where a camp or mine with crew room would recruit.
+ * Farms claim these before that camp or mine does.
+ */
+function idleInsideOpenCampOrMine(w, field, owner, px, py) {
+  const buildings = w.buildings;
+  if (!buildings) return false;
+  for (let bIdx = 0; bIdx < buildings.length; bIdx++) {
+    const b = buildings[bIdx];
+    if ((b.owner | 0) !== (owner | 0)) continue;
+    if (b.type !== 'camp' && b.type !== 'mine') continue;
+    if (!dropOffCanRecruit(w, field, b)) continue;
+    const radius = campWorkRadius(w, b, field);
+    if (inDropOffReach(buildings, b, px, py, radius)) return true;
+  }
+  return false;
+}
+
+/**
+ * Wood / rock gatherer whose node sits in an owned camp or mine circle.
+ * Hand-gathering outside those circles is left alone.
+ */
+function gatheringForCampOrMine(w, field, i) {
+  if (w.order[i] !== ORDER.GATHER) return false;
+  const tile = w.gatherTile[i] | 0;
+  if (tile < 0 || field.foodNode?.[tile]) return false;
+  const width = field.width | 0;
+  const px = tileCenterX(tile % width);
+  const py = tileCenterY((tile / width) | 0);
+  const owner = w.owner[i] | 0;
+  const buildings = w.buildings;
+  if (!buildings) return false;
+  for (let b = 0; b < buildings.length; b++) {
+    const bd = buildings[b];
+    if ((bd.owner | 0) !== owner) continue;
+    if (bd.type !== 'camp' && bd.type !== 'mine') continue;
+    if (withinDropOffWorkReach(w, field, bd, px, py)) return true;
+  }
+  return false;
+}
+
+/**
+ * Someone an open farm may take: an idle villager in its own circle or in a
+ * camp/mine that still has room, or a camp/mine crew member. Parked orders
+ * (manualHold) and idle villagers still carrying a load are left alone.
+ */
+function farmClaimCandidate(w, field, b, i) {
+  if (!w.alive[i] || w.owner[i] !== b.owner || w.type[i] !== UNIT.VILLAGER) return false;
+  if (w.manualHold?.[i]) return false;
+  if (w.order[i] === ORDER.IDLE) {
+    if ((w.carriedAmt[i] | 0) > 0) return false;
+    const radius = campWorkRadius(w, b, field);
+    if (inDropOffReach(w.buildings, b, w.px[i], w.py[i], radius)) return true;
+    return idleInsideOpenCampOrMine(w, field, b.owner, w.px[i], w.py[i]);
+  }
+  return gatheringForCampOrMine(w, field, i);
+}
+
+/**
+ * Fill open farms before camps and mines. Each pass gives the closest open
+ * farm its closest claimable villager, one farmer per plot.
+ */
+function staffFarms(w, field) {
+  const buildings = w.buildings;
+  if (!buildings?.length) return;
+  for (let guard = buildings.length; guard > 0; guard--) {
+    let bestB = -1;
+    let bestI = -1;
+    let bestD = 0;
+    for (let bIdx = 0; bIdx < buildings.length; bIdx++) {
+      const b = buildings[bIdx];
+      if (!farmStillWantsWorker(w, field, b)) continue;
+      for (let i = 0; i < w.count; i++) {
+        if (!farmClaimCandidate(w, field, b, i)) continue;
+        const d = fx.dist2(w.px[i], w.py[i], b.x, b.z);
+        if (
+          bestI < 0 ||
+          d < bestD ||
+          (d === bestD && (bIdx < bestB || (bIdx === bestB && i < bestI)))
+        ) {
+          bestD = d;
+          bestB = bIdx;
+          bestI = i;
+        }
+      }
+    }
+    if (bestI < 0) return;
+    const b = buildings[bestB];
+    const tile = buildingCenterTile(field, b);
+    // A mid-haul wood/rock load is banked so the switch does not mix it into food.
+    const amt = w.carriedAmt[bestI] | 0;
+    if (amt > 0) {
+      const kind = RESOURCE_KINDS[(w.carriedKind[bestI] | 0) - 1];
+      if (kind) addGatherIncome(w, w.owner[bestI], kind, amt, true);
+      w.carriedAmt[bestI] = 0;
+      w.carriedKind[bestI] = 0;
+    }
+    if (!beginGather(w, field, bestI, tile)) return;
+  }
+}
+
+/**
+ * Farms staff first (their circle, plus anyone a camp or mine would take).
+ * Camps and mines then pull nearby idle villagers onto nodes in reach. Runs
+ * on a fixed cadence. A villager still under a player order is skipped, and
+ * so is one a move / attack / stop parked (manualHold) until it has idled out
+ * the hold — arriving at a click must not walk them straight back onto the
+ * node. Idle carriers are sent home first (including to an agora-only base),
+ * unless that same park is holding them.
  * @param {object} w
  * @param {object} field
  */
 export function campAutoAssignSystem(w, field) {
   if (!field) return;
   if (w.tick % AUTO_ASSIGN_INTERVAL !== 0) return;
+  tickManualHolds(w);
   sendIdleCarriersHome(w, field);
   if (!w.buildings?.length) return;
+  staffFarms(w, field);
   for (let bIdx = 0; bIdx < w.buildings.length; bIdx++) {
     const b = w.buildings[bIdx];
+    if (b.type === 'farm') continue; // staffFarms owns farms
     if (b.built === 0) continue; // a site can't recruit gatherers yet
     if (b.hp != null && (b.hp | 0) <= 0) continue;
     if (!DROP_OFF_TYPES.has(b.type)) continue;
@@ -813,6 +1213,7 @@ export function campAutoAssignSystem(w, field) {
 
     for (let i = 0; i < w.count && workers < cap; i++) {
       if (!w.alive[i] || w.owner[i] !== owner || w.type[i] !== UNIT.VILLAGER) continue;
+      if (w.manualHold?.[i]) continue;
       if (w.order[i] !== ORDER.IDLE) continue;
       if ((w.carriedAmt[i] | 0) > 0) continue; // sendIdleCarriersHome owns these
       if (!inDropOffReach(w.buildings, b, w.px[i], w.py[i], radius)) continue;
@@ -915,7 +1316,19 @@ export function gatherDefenseSystem(w, field) {
         w.gatherDefensive[i] = 0;
         w.gatherTile[i] = -1;
       }
+    } else if (order === ORDER.ATTACK) {
+      // Hostile left the plot ring — drop the swing and resume the node now,
+      // before combat keeps pathing after them.
+      const foe = w.targetEntity[i];
+      if (foe < 0 || !w.alive[foe] || (w.carriedBy?.[foe] >= 0)) continue;
+      const tile = w.gatherTile[i] | 0;
+      if (!nodeAt(field, tile)) continue;
+      const width = field.width | 0;
+      const cx = tileCenterX(tile % width);
+      const cy = tileCenterY((tile / width) | 0);
+      if (fx.dist2(cx, cy, w.px[foe], w.py[foe]) > DEFEND_RANGE_SQ) {
+        beginGather(w, field, i, tile, 1);
+      }
     }
-    // ORDER.ATTACK: leave the swing to combat; it flips back to IDLE when done.
   }
 }

@@ -20,6 +20,8 @@ export const UNIT = {
   APC: 12,
   /** Villager combat form — pointed CMD.ATTACK only. */
   BRIGAND: 13,
+  /** Warrior who has wounded five enemies that then fell. */
+  CHAMPION: 14,
 };
 
 export const ATTACK_DELIVERY = {
@@ -47,7 +49,7 @@ export const UNIT_DEFS = [
     projectileType: -1,
     minRange: 0,
     preferredRange: fx.fromFloat(2),
-    primaryAbility: null,
+    primaryAbility: 'villager_brigand',
   },
   {
     id: UNIT.WARRIOR,
@@ -334,7 +336,7 @@ export const UNIT_DEFS = [
   {
     id: UNIT.BRIGAND,
     name: 'Brigand',
-    category: 'civilian',
+    category: 'military',
     hp: 65,
     speed: fx.fromFloat(2.6),
     size: 5.0,
@@ -344,13 +346,36 @@ export const UNIT_DEFS = [
     attackDamage: 6,
     attackRange: fx.fromFloat(2.5),
     attackCooldown: 30,
-    aggroRange: fx.fromFloat(0),
+    /** ~6 tiles — skirmish radius (v1 brigand). */
+    aggroRange: fx.fromFloat(24),
     attackDelivery: ATTACK_DELIVERY.MELEE,
     projectileType: -1,
     minRange: 0,
     preferredRange: fx.fromFloat(2.5),
     primaryAbility: null,
-    idleHunt: false,
+  },
+  {
+    id: UNIT.CHAMPION,
+    name: 'Champion',
+    category: 'military',
+    hp: 180,
+    speed: fx.fromFloat(2.5),
+    size: 7.5,
+    steer: 0.30,
+    accel: 0.55,
+    decel: 0.85,
+    pickRadius: 1.8,
+    pickHeight: 1.1,
+    color: [0.92, 0.72, 0.28],
+    attackDamage: 15,
+    attackRange: fx.fromFloat(2.0),
+    attackCooldown: 24,
+    aggroRange: fx.fromFloat(55),
+    attackDelivery: ATTACK_DELIVERY.MELEE,
+    projectileType: -1,
+    minRange: 0,
+    preferredRange: fx.fromFloat(2.0),
+    primaryAbility: null,
   },
 ];
 
@@ -368,6 +393,7 @@ export function getUnitDef(typeId) {
  */
 export const UNIT_COST = Object.freeze({
   [UNIT.VILLAGER]: { food: 15 },
+  [UNIT.BRIGAND]: { food: 20, wood: 10 },
   [UNIT.WARRIOR]: { food: 25, wood: 15 },
   [UNIT.ARCHER]: { food: 20, wood: 25 },
   [UNIT.WARLOCK]: { food: 35, wood: 30 },
@@ -444,10 +470,9 @@ export function isMilitary(typeId) {
   return getUnitDef(typeId).category === 'military';
 }
 
-/** Villager or its pointed-attack form. */
+/** Villager only — brigands are temporary military, not gather/work line. */
 export function isVillagerLine(typeId) {
-  const t = typeId | 0;
-  return t === UNIT.VILLAGER || t === UNIT.BRIGAND;
+  return (typeId | 0) === UNIT.VILLAGER;
 }
 
 export function isTransport(typeId) {

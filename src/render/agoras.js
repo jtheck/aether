@@ -20,6 +20,15 @@ import { isTeamColorMaterial, prepareTeamColorMaterial, sceneTeamRgb } from './t
 import { forEachRallyDash } from './rallyDash.js';
 import { MODEL_BASE_SCALE } from './modelScale.js';
 import { nearestMeshInstanceHit, pickPartsFromMeshes } from './meshPick.js';
+import {
+  FLAG_DIST_REF,
+  agoraFxSizeMul,
+  flagScaleForDist,
+  flagScaleMul,
+  stampAgoraFx,
+} from './flagScale.js';
+
+export { flagScaleForDist };
 
 const AGORA_MODEL_URL = '/assets/models/agora.glb';
 const FLAG_MODEL_URL = '/assets/models/flag.glb';
@@ -40,16 +49,6 @@ export const AGORA_FLAG_SLAM_HEIGHT = 16.5;
 export const AGORA_FLAG_SLAM_TOTAL_MS = AGORA_FLAG_SLAM_DROP_MS + AGORA_FLAG_SLAM_SETTLE_MS;
 export const AGORA_FLAG_SLAM_RING = 20;
 
-/** Ownership, rally, and ghost flags scale from eye distance to that flag. */
-const FLAG_BASE_SCALE = 2.15;
-const FLAG_DIST_REF = 110;
-const FLAG_SCALE_MIN = 1.35;
-const FLAG_SCALE_MAX = 3.4;
-/**
- * 1 would hold screen size (scale ∝ distance) and reads as a zoom pop.
- * Sublinear keeps far banners readable without racing the caps.
- */
-const FLAG_SCALE_EXP = 0.7;
 /** Dashed rally stroke (world units). */
 const RALLY_DASH = 1.55;
 const RALLY_GAP = 1.05;
@@ -278,25 +277,27 @@ export function stepAgoraFlagAct(act, a = {}, nowMs = 0) {
 }
 
 /** Cloth scraps ride the same breeze as the departing banner. */
-export function emitAgoraFlagDisintegrate(emit, x, y, z, rgb, scale = 2.2, wind) {
+export function emitAgoraFlagDisintegrate(emit, x, y, z, rgb, scale = 2.2, wind, dist = 0) {
   if (!emit) return 0;
   const wdir = wind ?? pickAgoraWind();
   const cloth = [rgb?.[0] ?? 1, rgb?.[1] ?? 1, rgb?.[2] ?? 1, 0.96];
   const pole = [0.16, 0.14, 0.12, 0.95];
   const n = 16;
   const s = Math.max(0.8, scale);
+  const bannerMul = flagScaleMul(dist);
+  const grow = agoraFxSizeMul(dist);
   for (let i = 0; i < n; i++) {
     const banner = i % 3 !== 0;
     const along = 0.62 + (i % 5) * 0.1;
     const flutter = 0.45;
-    emit({
+    emit(stampAgoraFx({
       blend: 'alpha',
       hard: true,
       fadeOut: true,
       position: [
-        x + (Math.random() - 0.5) * 0.55,
-        y + 2.1 + (i % 5) * 0.55,
-        z + (Math.random() - 0.5) * 0.55,
+        x + (Math.random() - 0.5) * 0.55 * bannerMul,
+        y + (2.1 + (i % 5) * 0.55) * bannerMul,
+        z + (Math.random() - 0.5) * 0.55 * bannerMul,
       ],
       velocity: [
         wdir.x * along + (Math.random() - 0.5) * flutter,
@@ -314,24 +315,30 @@ export function emitAgoraFlagDisintegrate(emit, x, y, z, rgb, scale = 2.2, wind)
       endSize: 0.06,
       drag: 0.14 + Math.random() * 0.1,
       spin: (Math.random() - 0.5) * 10,
-    });
+    }, grow, grow));
   }
   return n;
 }
 
 /** Dust and grit when the new banner pounds the deck. */
 /** Flat dust ring shoved out along the deck — not a fountain. */
-export function emitAgoraFlagSlam(emit, _emitBurst, x, y, z) {
+export function emitAgoraFlagSlam(emit, _emitBurst, x, y, z, dist = 0) {
   if (!emit) return 0;
+  const grow = agoraFxSizeMul(dist);
+  const bannerMul = flagScaleMul(dist);
   let n = 0;
   for (let i = 0; i < AGORA_FLAG_SLAM_RING; i++) {
     const ang = (i / AGORA_FLAG_SLAM_RING) * Math.PI * 2;
     const speed = 9.2 + (i % 4) * 1.1;
-    emit({
+    emit(stampAgoraFx({
       sprite: 'puff',
       blend: 'alpha',
       fadeOut: true,
-      position: [x + Math.cos(ang) * 0.55, y + 0.1, z + Math.sin(ang) * 0.55],
+      position: [
+        x + Math.cos(ang) * 0.55 * bannerMul,
+        y + 0.1,
+        z + Math.sin(ang) * 0.55 * bannerMul,
+      ],
       velocity: [Math.cos(ang) * speed, 0.22, Math.sin(ang) * speed],
       gravity: [0, -1.2, 0],
       color: [0.64, 0.56, 0.44, 0.7],
@@ -341,15 +348,19 @@ export function emitAgoraFlagSlam(emit, _emitBurst, x, y, z) {
       peakSize: 2.15,
       endSize: 2.7,
       drag: 1.85,
-    });
+    }, grow, grow));
     n += 1;
   }
   for (let i = 0; i < 10; i++) {
     const ang = (i / 10) * Math.PI * 2 + 0.18;
-    emit({
+    emit(stampAgoraFx({
       blend: 'alpha',
       fadeOut: true,
-      position: [x + Math.cos(ang) * 0.28, y + 0.06, z + Math.sin(ang) * 0.28],
+      position: [
+        x + Math.cos(ang) * 0.28 * bannerMul,
+        y + 0.06,
+        z + Math.sin(ang) * 0.28 * bannerMul,
+      ],
       velocity: [Math.cos(ang) * 7.4, 0.12, Math.sin(ang) * 7.4],
       gravity: [0, -2.4, 0],
       color: [0.48, 0.4, 0.32, 0.48],
@@ -357,7 +368,7 @@ export function emitAgoraFlagSlam(emit, _emitBurst, x, y, z) {
       startSize: 0.65,
       endSize: 1.35,
       drag: 2.1,
-    });
+    }, grow, grow));
     n += 1;
   }
   return n;
@@ -389,16 +400,6 @@ function writeTint(colors, slot, rgb, alpha = 1) {
 
 function writeOwnerColor(colors, slot, owner, alpha = 1) {
   writeTint(colors, slot, ownerTint(owner), alpha);
-}
-
-/** Reference distance stays on FLAG_BASE_SCALE; closer and farther ease off the linear ramp. */
-export function flagScaleForDist(dist) {
-  const t = Math.max(0, dist) / FLAG_DIST_REF;
-  const ratio = t > 0 ? t ** FLAG_SCALE_EXP : 0;
-  const scale = FLAG_BASE_SCALE * ratio;
-  if (scale < FLAG_SCALE_MIN) return FLAG_SCALE_MIN;
-  if (scale > FLAG_SCALE_MAX) return FLAG_SCALE_MAX;
-  return scale;
 }
 
 function cameraEye(camera) {
@@ -960,8 +961,9 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
     }
   }
 
-  function syncFlagActs() {
+  function syncFlagActs(camera) {
     const now = typeof performance !== 'undefined' ? performance.now() : 0;
+    const eye = camera ? cameraEye(camera) : null;
     let dirty = false;
     const seen = new Set();
     for (let i = 0; i < agoraCache.length; i++) {
@@ -975,14 +977,17 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
       }
       if (next.fx === 'disintegrate') {
         const gy = groundYAt(a.x, a.z);
-        emitAgoraFlagDisintegrate(emitFx, a.x, gy, a.z, ownerTint(next.owner), 2.2, next.wind);
+        const dist = eye ? Math.hypot(eye.x - a.x, eye.y - gy, eye.z - a.z) : 0;
+        emitAgoraFlagDisintegrate(emitFx, a.x, gy, a.z, ownerTint(next.owner), 2.2, next.wind, dist);
         dirty = true;
       }
       if (next.mode === AGORA_FLAG_SLAM && !next.impact) {
         const pose = agoraFlagSlamPose((now - next.t0) / AGORA_FLAG_SLAM_TOTAL_MS);
         if (pose.hit) {
           next.impact = true;
-          emitAgoraFlagSlam(emitFx, emitBurstFx, a.x, groundYAt(a.x, a.z), a.z);
+          const gy = groundYAt(a.x, a.z);
+          const dist = eye ? Math.hypot(eye.x - a.x, eye.y - gy, eye.z - a.z) : 0;
+          emitAgoraFlagSlam(emitFx, emitBurstFx, a.x, gy, a.z, dist);
           dirty = true;
         }
       }
@@ -1006,7 +1011,7 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
 
   function update(camera) {
     updateClickPings();
-    const flagDirty = syncFlagActs();
+    const flagDirty = syncFlagActs(camera);
     const showLines = rallyCache.length > 0 || rallyGhost;
     if (!agoraCache.length && !showLines) return;
     if (showLines) {

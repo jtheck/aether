@@ -38,6 +38,7 @@ import { isHostile } from '../../sim/teams.js';
 import { canRideTransport, passengerCount, assignNearestRidersToTransport, listPassengers, transportCapacityOf } from '../../sim/transport.js';
 import { playVillagerMove } from '../audio.js';
 import { TILE_SIZE_F } from '../../sim/field.js';
+import { siloIsAttached } from '../../sim/storage.js';
 import { SCENERY, rockFootprintRadiusForStock } from '../../sim/scenery.js';
 import { USE_GPU_PICK } from '../../render/pickMode.js';
 import {
@@ -151,6 +152,7 @@ export function createGameInput(opts) {
     getBuildings,
     getDoors,
     onBuildingSelected,
+    onFollowSelection,
     getPlacingType,
     setPlacingType,
     getOwnerBank,
@@ -899,6 +901,33 @@ export function createGameInput(opts) {
   }
 
   /**
+   * Where an order points. Screen aims (mouse, touch, pad leash) read the
+   * camera when asked; a headset aim is a fixed world ray.
+   * @typedef {{ ray: () => object | null, ground: () => { x: number, y: number, z: number } | null, unit: () => number | Promise<number> }} OrderAim
+   */
+
+  /** @returns {OrderAim} */
+  function clientAim(clientX, clientY) {
+    return {
+      ray: () => renderer.clientPickingRay?.(clientX, clientY) ?? null,
+      ground: () => renderer.screenToGround?.(clientX, clientY) ?? null,
+      unit: () => pickUnitAt(clientX, clientY),
+    };
+  }
+
+  /** @returns {OrderAim} */
+  function rayAim(ray) {
+    return {
+      ray: () => ray,
+      ground: () => renderer.rayToGround?.(ray) ?? null,
+      unit: () => {
+        const hits = pickUnitsAtRay(ray);
+        return hits.length > 0 ? hits[0] : -1;
+      },
+    };
+  }
+
+  /**
    * GPU mesh pick → visible agora / placeable under the cursor, or null.
    * Kept for USE_GPU_PICK — not the live path.
    */
@@ -1224,6 +1253,23 @@ export function createGameInput(opts) {
    * Orderable selection (alive, not carried). O(sel), not O(world).
    * @param {Set<number>} [includeCarried] — unload handoff: keep these riders
    */
+  function sameFollowUnits(ids) {
+    if (ids.length !== selCount) return false;
+    for (let k = 0; k < ids.length; k++) {
+      if (selIds[k] !== ids[k]) return false;
+    }
+    return true;
+  }
+
+  function sameFollowBuildings(list) {
+    if (list.length !== selectedBuildings.length) return false;
+    for (let i = 0; i < list.length; i++) {
+      const have = selectedBuildings[i];
+      if (have.kind !== list[i].kind || (have.index | 0) !== list[i].index) return false;
+    }
+    return true;
+  }
+
   function selectedIds(includeCarried) {
     compactSelection();
     const world = getWorld();
@@ -1655,21 +1701,20 @@ export function createGameInput(opts) {
   }
 
   /**
-   * @param {number} clientX
-   * @param {number} clientY
+   * @param {OrderAim} aim
    * @param {number} cmdType
    * @param {number} [preHit] entity id from an earlier pick this click, or -1
    * @param {number} [epoch] worldClickEpoch snapshot — drop if superseded
    * @param {{ kind: 'agora' | 'building', index: number } | null} [preBld]
    */
-  async function orderAt(clientX, clientY, cmdType, preHit, epoch, preBld) {
+  async function orderAt(aim, cmdType, preHit, epoch, preBld) {
     if (!canIssueOrders() || isPlacing()) return;
     let ids = selectedIds();
     if (ids.length === 0) return;
     if (epoch !== undefined && !clickCurrent(epoch)) return;
 
     const world = getWorld();
-    const hit = preHit !== undefined ? preHit : await pickUnitAt(clientX, clientY);
+    const hit = preHit !== undefined ? preHit : await aim.unit();
     if (epoch !== undefined && !clickCurrent(epoch)) return;
 
     // Force-move (CMD.MOVE) ignores enemies under the cursor; attack-move still hard-attacks.
@@ -1804,16 +1849,27 @@ export function createGameInput(opts) {
     // order onto them (caller should have re-selected instead).
     if (hit >= 0 && world.owner[hit] === localPlayerId) return;
 
+    // A click on our own drop-off walks there. Carriers hand the load in.
+    const dropPt = friendlyDepositCenter(preBld);
+    if (dropPt && (cmdType === CMD.MOVE || cmdType === CMD.ATTACK_MOVE)) {
+      if (epoch !== undefined && !clickCurrent(epoch)) return;
+      onOrder?.(dropPt.x, dropPt.z, renderer.groundYAt?.(dropPt.x, dropPt.z) ?? 0, cmdType);
+      const { tx, ty } = moveDestinations(moveIds, dropPt.x, dropPt.z);
+      enqueueCommand({ type: cmdType, entities: moveIds, tx, ty });
+      playVillagerMove();
+      return;
+    }
+
     // Attack-move onto a tree / rock: villagers gather (same volume pick as RMB).
     // Soldiers never mine — leftover army still gets the ground order.
     if (cmdType === CMD.ATTACK_MOVE) {
-      const node = resolveGatherClick(clientX, clientY);
+      const node = resolveGatherAim(aim);
       // Left-click starts the job immediately. An attack-move onto the pad
       // never "arrives" when the tile is blocked, so they walk up and idle.
       if (node && issueGatherAtNode(moveIds, node, cmdType, epoch, true)) return;
     }
 
-    const g = renderer.screenToGround(clientX, clientY);
+    const g = aim.ground();
     if (!g) return;
     if (epoch !== undefined && !clickCurrent(epoch)) return;
     onOrder?.(g.x, g.z, g.y, cmdType);
@@ -1839,10 +1895,19 @@ export function createGameInput(opts) {
 
   /** Tap+hold — unload loaded transports, else cast primary ability. */
   function castAbilityAt(clientX, clientY) {
+    castAbilityWith(clientAim(clientX, clientY));
+  }
+
+  function castAbilityAtRay(ray) {
+    if (ray) castAbilityWith(rayAim(ray));
+  }
+
+  /** @param {OrderAim} aim */
+  function castAbilityWith(aim) {
     if (!canIssueOrders() || isPlacing()) return;
     const ids = selectedIds();
     if (ids.length === 0) return;
-    const g = renderer.screenToGround(clientX, clientY);
+    const g = aim.ground();
     if (!g) return;
 
     const world = getWorld();
@@ -2098,7 +2163,7 @@ export function createGameInput(opts) {
       if (canEmbark && canIssueOrders()) {
         lastTap = null;
         if (!clickCurrent(epoch)) return;
-        await orderAt(e.clientX, e.clientY, CMD.ATTACK_MOVE, hit, epoch);
+        await orderAt(clientAim(e.clientX, e.clientY), CMD.ATTACK_MOVE, hit, epoch);
       } else {
         const typeId = world.type[hit];
         const selectAll =
@@ -2155,7 +2220,7 @@ export function createGameInput(opts) {
     if (bld?.kind === 'door') {
       if (hasOrderableSelection() && canIssueOrders() && !click.selectOnly) {
         if (!clickCurrent(epoch)) return;
-        await orderAt(e.clientX, e.clientY, CMD.ATTACK_MOVE, -1, epoch, bld);
+        await orderAt(clientAim(e.clientX, e.clientY), CMD.ATTACK_MOVE, -1, epoch, bld);
         if (!clickCurrent(epoch)) return;
         lastTap = { t: tapAt, x: e.clientX, y: e.clientY, kind: 'enemy' };
       }
@@ -2221,7 +2286,7 @@ export function createGameInput(opts) {
         (hit >= 0 && world.owner[hit] !== localPlayerId) || hostileBld
           ? 'enemy'
           : 'ground';
-      await orderAt(e.clientX, e.clientY, CMD.ATTACK_MOVE, hit, epoch, bld);
+      await orderAt(clientAim(e.clientX, e.clientY), CMD.ATTACK_MOVE, hit, epoch, bld);
       if (!clickCurrent(epoch)) return;
       lastTap = { t: tapAt, x: e.clientX, y: e.clientY, kind: orderKind };
       return;
@@ -2293,7 +2358,7 @@ export function createGameInput(opts) {
         if (isPlacingRally?.()) {
           if (radialKind === 'pick') {
             lastTap = null;
-            if (canIssueOrders()) onRadialPick?.(picked);
+            onRadialPick?.(picked);
             radialHandled = true;
           } else if (radialKind === 'hub' || radialKind === 'chrome') {
             lastTap = null;
@@ -2330,7 +2395,7 @@ export function createGameInput(opts) {
           });
           lastTap = null;
           if (release === 'pick') {
-            if (canIssueOrders()) onRadialPick?.(picked);
+            onRadialPick?.(picked);
           } else if (release === 'exit') {
             cancelPlacement();
           } else if (release === 'confirm') {
@@ -2363,7 +2428,7 @@ export function createGameInput(opts) {
           });
           if (kind === 'pick') {
             lastTap = null;
-            if (canIssueOrders()) onRadialPick?.(picked);
+            onRadialPick?.(picked);
             radialHandled = true;
           } else if (kind === 'hub') {
             // Empty hole sits on the selected building — re-select / select-all.
@@ -2408,10 +2473,23 @@ export function createGameInput(opts) {
    * does not re-select friendlies (that's LMB).
    */
   function attackMoveAt(clientX, clientY) {
+    return attackMoveWith(clientAim(clientX, clientY), USE_GPU_PICK ? { clientX, clientY } : null);
+  }
+
+  /** Headset trigger A-move along a world ray. */
+  function attackMoveAtRay(ray) {
+    return ray ? attackMoveWith(rayAim(ray), null) : false;
+  }
+
+  /**
+   * @param {OrderAim} aim
+   * @param {{ clientX: number, clientY: number } | null} gpu screen point for the GPU pick path
+   */
+  function attackMoveWith(aim, gpu) {
     if (!canIssueOrders() || isPlacing()) return false;
     if (hasRallySelection()) {
       lastTap = null;
-      const g = renderer.screenToGround?.(clientX, clientY);
+      const g = aim.ground();
       if (!g) return false;
       return rallyOrderAt(g.x, g.z, CMD.ATTACK_MOVE);
     }
@@ -2421,18 +2499,18 @@ export function createGameInput(opts) {
     void (async () => {
       let hit = -1;
       let bld = null;
-      if (USE_GPU_PICK) {
-        hit = await pickUnitAt(clientX, clientY);
+      if (gpu) {
+        hit = await pickUnitAt(gpu.clientX, gpu.clientY);
         if (!clickCurrent(epoch)) return;
-        bld = await pickBuildingAt(clientX, clientY);
+        bld = await pickBuildingAt(gpu.clientX, gpu.clientY);
       } else {
-        const ray = renderer.clientPickingRay?.(clientX, clientY) ?? null;
+        const ray = aim.ray();
         const hits = pickUnitsAtRay(ray);
         hit = hits.length > 0 ? hits[0] : -1;
         bld = pickBuildingAtRay(ray);
       }
       if (!clickCurrent(epoch)) return;
-      await orderAt(clientX, clientY, CMD.ATTACK_MOVE, hit, epoch, bld);
+      await orderAt(aim, CMD.ATTACK_MOVE, hit, epoch, bld);
     })();
     return true;
   }
@@ -2535,26 +2613,74 @@ export function createGameInput(opts) {
    * No unit pick; ignores enemies. Camera latches pan + click on the same travel.
    */
   function forceMoveAt(clientX, clientY) {
+    return forceMoveWith(clientAim(clientX, clientY));
+  }
+
+  /** Headset trigger force-move along a world ray. */
+  function forceMoveAtRay(ray) {
+    return ray ? forceMoveWith(rayAim(ray)) : false;
+  }
+
+  /** @param {OrderAim} aim */
+  function forceMoveWith(aim) {
     if (!canIssueOrders() || isPlacing()) return false;
     if (hasRallySelection()) {
       lastTap = null;
-      const g = renderer.screenToGround?.(clientX, clientY);
+      const g = aim.ground();
       if (!g) return false;
       return rallyOrderAt(g.x, g.z, CMD.MOVE);
     }
     if (!hasOrderableSelection()) return false;
     lastTap = null;
-    const ray = renderer.clientPickingRay?.(clientX, clientY) ?? null;
-    const doorHit = pickBuildingAtRay(ray);
-    if (doorHit?.kind === 'door') {
+    const structHit = pickBuildingAtRay(aim.ray());
+    if (structHit?.kind === 'door') {
       const epoch = ++worldClickEpoch;
-      void orderAt(clientX, clientY, CMD.ATTACK_MOVE, -1, epoch, doorHit);
+      void orderAt(aim, CMD.ATTACK_MOVE, -1, epoch, structHit);
       return true;
     }
-    if (tryGatherAt(clientX, clientY)) return true;
+    // Agora / camp / mine: aim at the building itself so a carried load is handed in.
+    const dropPt = friendlyDepositCenter(structHit);
+    if (dropPt) {
+      const epoch = ++worldClickEpoch;
+      void orderAt(aimAtPoint(aim, dropPt.x, dropPt.z), CMD.MOVE, -1, epoch);
+      return true;
+    }
+    if (tryGatherAim(aim)) return true;
     const epoch = ++worldClickEpoch;
-    void orderAt(clientX, clientY, CMD.MOVE, -1, epoch);
+    void orderAt(aim, CMD.MOVE, -1, epoch);
     return true;
+  }
+
+  /**
+   * Own finished agora, camp, mine, or attached silo under the cursor.
+   * Coordinates are world floats (the client building snapshot).
+   * @returns {{ x: number, z: number } | null}
+   */
+  function friendlyDepositCenter(hit) {
+    if (!hit || hit.kind === 'door') return null;
+    if (hit.kind === 'agora') {
+      const a = getAgoras?.()?.[hit.index];
+      if (!a || (a.owner | 0) !== (localPlayerId | 0)) return null;
+      return { x: a.x, z: a.z };
+    }
+    if (hit.kind !== 'building') return null;
+    const buildings = getBuildings?.() ?? [];
+    const b = buildings[hit.index];
+    if (!b || (b.owner | 0) !== (localPlayerId | 0) || !isBuildingAlive(b)) return null;
+    if (b.built != null && (b.built | 0) === 0) return null;
+    if (b.type !== 'camp' && b.type !== 'mine' && b.type !== 'silo') return null;
+    if (b.type === 'silo' && !siloIsAttached(buildings, b, 'world')) return null;
+    return { x: b.x, z: b.z };
+  }
+
+  /** @param {OrderAim} aim @param {number} x @param {number} z @returns {OrderAim} */
+  function aimAtPoint(aim, x, z) {
+    const y = renderer.groundYAt?.(x, z) ?? aim.ground()?.y ?? 0;
+    return {
+      ray: () => aim.ray(),
+      ground: () => ({ x, y, z }),
+      unit: () => aim.unit(),
+    };
   }
 
   function gatherNodeFromTile(field, tile, heightAt) {
@@ -2592,11 +2718,11 @@ export function createGameInput(opts) {
    * the barn mesh. A click that reaches the ground first is not a gather.
    * @returns {{ tile: number, x: number, z: number, y: number } | null}
    */
-  function resolveGatherClick(clientX, clientY) {
+  function resolveGatherAim(aim) {
     const field = getField?.();
     if (!field?.treeStock) return null;
-    const ray = renderer.clientPickingRay?.(clientX, clientY);
-    const g = renderer.screenToGround?.(clientX, clientY);
+    const ray = aim.ray();
+    const g = aim.ground();
     const half = field.worldHalfF ?? (field.width * TILE_SIZE_F) / 2;
     const heightAt = (x, z) => renderer.groundYAt?.(x, z) ?? 0;
     const groundT = ray && g ? rayTToPoint(ray, g.x, g.y, g.z) : null;
@@ -2626,8 +2752,8 @@ export function createGameInput(opts) {
    * RMB on a tree / rock: villagers gather; everyone else still force-moves.
    * Returns true when any command was issued (skips the terrain force-move).
    */
-  function tryGatherAt(clientX, clientY) {
-    const node = resolveGatherClick(clientX, clientY);
+  function tryGatherAim(aim) {
+    const node = resolveGatherAim(aim);
     if (!node) return false;
     return issueGatherAtNode(selectedIds(), node, CMD.MOVE);
   }
@@ -2752,7 +2878,15 @@ export function createGameInput(opts) {
    */
   function previewPlacementAt(clientX, clientY) {
     if (!canUseInput() || !isPlacing()) return false;
-    const g = renderer.screenToGround?.(clientX, clientY);
+    return previewPlacementOn(renderer.screenToGround?.(clientX, clientY));
+  }
+
+  function previewPlacementAtRay(ray) {
+    if (!canUseInput() || !isPlacing() || !ray) return false;
+    return previewPlacementOn(renderer.rayToGround?.(ray));
+  }
+
+  function previewPlacementOn(g) {
     if (!g) return false;
     if (isPlacingRally?.()) {
       onRallyMove?.(g.x, g.z);
@@ -2791,11 +2925,33 @@ export function createGameInput(opts) {
   }
 
   /**
+   * Headset grip held while placing: the beam yaws the sitting ghost. A beam
+   * still on the ghost has no direction yet, so it holds the current yaw.
+   */
+  function rotatePlacementAtRay(ray) {
+    if (!canUseInput() || !isPlacing() || isPlacingRally?.() || !ray) return false;
+    if (!placeAnchor) return previewPlacementAtRay(ray);
+    const g = renderer.rayToGround?.(ray);
+    if (!g) return false;
+    if (Math.hypot(g.x - placeAnchor.x, g.z - placeAnchor.z) < TILE_SIZE_F) return true;
+    placeRotating = true;
+    return yawGhostToward(g);
+  }
+
+  /**
    * Gamepad A / LT / RT — stamp at the aim (or last preview).
    */
   function confirmPlacementAt(clientX, clientY) {
     if (!canIssueOrders() || !isPlacing()) return false;
-    const g = renderer.screenToGround?.(clientX, clientY);
+    return confirmPlacementOn(renderer.screenToGround?.(clientX, clientY));
+  }
+
+  function confirmPlacementAtRay(ray) {
+    if (!canIssueOrders() || !isPlacing()) return false;
+    return confirmPlacementOn(ray ? renderer.rayToGround?.(ray) : null);
+  }
+
+  function confirmPlacementOn(g) {
     if (isPlacingRally?.()) {
       if (!g) return false;
       onRallyConfirm?.(g.x, g.z);
@@ -2897,6 +3053,9 @@ export function createGameInput(opts) {
     cancelSelectDrag,
     groundLoopSelect,
     selectAtRay,
+    attackMoveAtRay,
+    forceMoveAtRay,
+    castAbilityAtRay,
     castAbilityAt,
     cancelDrag,
     clearSelection,
@@ -2905,6 +3064,10 @@ export function createGameInput(opts) {
     previewPlacementAt,
     rotatePlacementAt,
     confirmPlacementAt,
+    previewPlacementAtRay,
+    rotatePlacementAtRay,
+    confirmPlacementAtRay,
+    getPlacementAnchor: () => (placeAnchor ? { x: placeAnchor.x, z: placeAnchor.z } : null),
     nudgePlacementYaw,
     dismissMenus,
     backOutBuildUi,
@@ -2921,6 +3084,49 @@ export function createGameInput(opts) {
     setSelectedBuffer(buf) {
       selectedBuf = buf;
       rebuildDenseFromBuf();
+    },
+    getFollowSelection() {
+      const world = getWorld();
+      const units = [];
+      for (let k = 0; k < selCount && units.length < 48; k++) {
+        const i = selIds[k];
+        if (i < 0 || !world.alive[i]) continue;
+        units.push(i);
+      }
+      return {
+        units,
+        buildings: selectedBuildings.map((b) => ({ kind: b.kind, index: b.index | 0 })),
+      };
+    },
+    applyFollowSelection(unitIds, buildings) {
+      const world = getWorld();
+      const n = world?.count | 0;
+      const units = [];
+      if (unitIds) {
+        const cap = Math.min(unitIds.length, 48);
+        for (let k = 0; k < cap; k++) {
+          const i = unitIds[k] | 0;
+          if (i < 0 || i >= n || !world.alive[i]) continue;
+          units.push(i);
+        }
+      }
+      const list = [];
+      if (buildings) {
+        for (let i = 0; i < buildings.length && list.length < 12; i++) {
+          const b = buildings[i];
+          if (!b || (b.kind !== 'building' && b.kind !== 'agora')) continue;
+          const index = b.index | 0;
+          if (index < 0) continue;
+          list.push({ kind: b.kind, index });
+        }
+      }
+      if (sameFollowUnits(units) && sameFollowBuildings(list)) return;
+      clearUnitSelectionBits();
+      for (let k = 0; k < units.length; k++) selectEntity(units[k], false);
+      selectedBuilding = list[0] ?? null;
+      selectedBuildings = list;
+      onFollowSelection?.(list);
+      onSelectionChanged?.();
     },
     setInputEnabled(enabled) {
       inputEnabled = Boolean(enabled);

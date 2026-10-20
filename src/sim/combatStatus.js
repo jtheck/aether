@@ -17,10 +17,23 @@ export const SHADOW_DOT_DURATION = 10;
 export const SHADOW_DOT_PERIOD = 5;
 export const SHADOW_DOT_DAMAGE = 2;
 
-/** ~2s frost slow. */
-export const FROST_DURATION = 40;
+/** ~4s frost slow. */
+export const FROST_DURATION = 80;
 /** Movement scale while frosted (stacks with terrain / distract). */
-export const FROST_MOVE_MUL = fx.fromFloat(0.5);
+export const FROST_MOVE_MUL = fx.fromFloat(0.28);
+/**
+ * Attack cooldown advances on this many ticks out of {@link FROST_ATTACK_WINDOW}.
+ * 7/25 = 0.28, the same rate as {@link FROST_MOVE_MUL}.
+ */
+export const FROST_ATTACK_WINDOW = 25;
+export const FROST_ATTACK_STEPS = 7;
+
+/** Frosted units recover attack cooldown on 7 of every 25 ticks. */
+export function frostAttackAdvances(tick, index, frostLeft) {
+  if (!(frostLeft > 0)) return true;
+  const phase = (((tick | 0) + (index | 0)) % FROST_ATTACK_WINDOW + FROST_ATTACK_WINDOW) % FROST_ATTACK_WINDOW;
+  return phase < FROST_ATTACK_STEPS;
+}
 
 /** Short locust AA distract (~1s). */
 export const LOCUST_DISTRACT_TICKS = 20;

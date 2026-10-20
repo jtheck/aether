@@ -63,6 +63,70 @@ export function xrEye() {
 }
 
 /**
+ * Symmetric projection that maps canvas NDC onto the headset frustum.
+ * Vertical fov matches the wider eye. Aspect is the horizontal/vertical
+ * tangent, so the left and right edges of the canvas land on the eye edges.
+ * Screen HUD placed through this stays in view as the head moves.
+ * @param {{ h: number, v: number }} [frustum]
+ */
+export function xrHudProjection(frustum = reach) {
+  const v = frustum?.v > 1e-4 ? frustum.v : 1;
+  const h = frustum?.h > 1e-4 ? frustum.h : 1;
+  return { fov: 2 * Math.atan(v), aspect: h / v };
+}
+
+/**
+ * Control-group pads land at most this far off the view axis (tangent).
+ * atan(0.78) is about 38 degrees — in from the visor rim.
+ */
+export const XR_HUD_EDGE_TAN = 0.78;
+
+/**
+ * The other screen chrome (selection, resources, clock, spectator sheet)
+ * sits a little closer than the control pads. atan(0.66) is about 33 degrees.
+ */
+export const XR_HUD_CHROME_TAN = 0.66;
+
+/**
+ * How far to pull a screen panel toward the center so its edge stays inside
+ * `edge`. 1 when the eye is already that narrow. World-pinned marks keep the
+ * full eye projection; only layout points use this scale.
+ * @param {{ h: number, v: number }} [eyes]
+ * @param {number} [edge]
+ */
+export function xrHudEdgeScale(eyes = reach, edge = XR_HUD_EDGE_TAN) {
+  const h = eyes?.h > 1e-4 ? eyes.h : 1;
+  const v = eyes?.v > 1e-4 ? eyes.v : 1;
+  const limit = edge > 1e-4 ? edge : XR_HUD_EDGE_TAN;
+  const s = Math.min(limit / h, limit / v);
+  if (!(s > 0)) return 1;
+  return s < 1 ? s : 1;
+}
+
+/** Inset for everything except the control-group pads. */
+export function xrHudChromeScale(eyes = reach) {
+  return xrHudEdgeScale(eyes, XR_HUD_CHROME_TAN);
+}
+
+/**
+ * Layout point pulled toward the canvas center. Scale 1 is identity.
+ * @param {number} x
+ * @param {number} y
+ * @param {number} width
+ * @param {number} height
+ * @param {number} [scale]
+ */
+export function xrHudLayoutPoint(x, y, width, height, scale = 1) {
+  const w = width > 0 ? width : 1;
+  const h = height > 0 ? height : 1;
+  const s = scale > 0 ? scale : 1;
+  return {
+    x: w * 0.5 + (x - w * 0.5) * s,
+    y: h * 0.5 + (y - h * 0.5) * s,
+  };
+}
+
+/**
  * Union of the eye frustums as half-angle tangents. WebXR projections are
  * GL style, so an edge at NDC ±1 sits at tangent (P[8] ± 1) / P[0].
  */

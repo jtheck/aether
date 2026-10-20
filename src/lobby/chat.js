@@ -21,9 +21,9 @@ export function sanitizeChatText(text) {
 /**
  * Build a self-describing chat message (name/color travel with it so spectators
  * and late joiners can render without a roster lookup). Returns null if empty.
- * @param {{ from?: string | null, name?: string, color?: string, text: string }} opts
+ * @param {{ from?: string | null, name?: string, color?: string, text: string, watching?: boolean }} opts
  */
-export function makeChatMessage({ from, name, color, text }) {
+export function makeChatMessage({ from, name, color, text, watching = false }) {
   const clean = sanitizeChatText(text);
   if (!clean) return null;
   const ts = Date.now();
@@ -33,6 +33,7 @@ export function makeChatMessage({ from, name, color, text }) {
     name: String(name ?? '').trim().slice(0, CHAT_NAME_MAX_LEN),
     color: typeof color === 'string' ? color : '',
     text: clean,
+    watching: Boolean(watching),
     ts,
     id: `${from ?? '?'}:${ts}:${Math.random().toString(36).slice(2, 6)}`,
   };
@@ -78,6 +79,7 @@ export function unwrapChatMessage(raw) {
       from: raw.from ?? null,
       name: raw.name,
       color: raw.color,
+      watching: raw.watching === true,
       text,
       ts: raw.ts,
       id: raw.id || `${raw.from ?? '?'}:${Number(raw.ts) || 0}:${text}`,
@@ -112,6 +114,7 @@ export function createChatLog(limit = CHAT_LOG_LIMIT) {
         from: raw.from ?? null,
         name: String(raw.name ?? '').trim().slice(0, CHAT_NAME_MAX_LEN) || 'Player',
         color: typeof raw.color === 'string' ? raw.color : '',
+        watching: raw.watching === true,
         text: sanitizeChatText(raw.text),
         ts: Number(raw.ts) || Date.now(),
       };

@@ -54,8 +54,6 @@ import { mountHelpRoster } from './helpRoster.js';
  * @param {() => unknown} [opts.onOpenReplay]
  * @param {(hex: string) => unknown} [opts.onPlayerColorChange]
  * @param {() => unknown} [opts.onUnitSkinsChange]
- * @param {() => boolean} [opts.getHudLocked]
- * @param {(on: boolean) => unknown} [opts.setHudLocked]
  * @param {boolean} [opts.xrSupported]
  * @param {() => unknown} [opts.onToggleXr]
  */
@@ -67,8 +65,6 @@ export function setupMenu({
   onOpenReplay,
   onPlayerColorChange,
   onUnitSkinsChange,
-  getHudLocked,
-  setHudLocked,
   xrSupported = false,
   onToggleXr,
 }) {
@@ -96,7 +92,6 @@ export function setupMenu({
   const nameInput = /** @type {HTMLInputElement} */ (drawer.querySelector('#name_input'));
   const aaEnabled = /** @type {HTMLInputElement | null} */ (drawer.querySelector('#aa_enabled'));
   const aaNote = /** @type {HTMLElement | null} */ (drawer.querySelector('#aa_note'));
-  const hideHudBtn = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#hide_hud_b'));
   const skinsBtn = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#skins_b'));
   const colorPicker = /** @type {HTMLSelectElement} */ (drawer.querySelector('#color_picker'));
   colorPicker.replaceChildren(
@@ -140,15 +135,23 @@ export function setupMenu({
 
   function paintProfile() {
     profile.textContent = getPlayerName();
-    profile.style.color = getPlayerColor();
+    profile.style.setProperty('--player', getPlayerColor());
   }
+
+  const SHADOW_NOTES = [
+    'Cast shadows off.',
+    'Coarser shadows, short range.',
+    'Finer shadows, mid range.',
+    'Finer shadows, long range.',
+  ];
 
   function paintShadow(mode) {
     sliderValue.textContent = SHADOW_LABELS[mode];
     const tier = shadowTier(mode);
     const needsReload = mode !== 0
       && (tier.mapSize !== bootTier.mapSize || tier.numCascades !== bootTier.numCascades);
-    note.textContent = needsReload ? 'Reload to apply this quality.' : '';
+    const detail = SHADOW_NOTES[mode] ?? '';
+    note.textContent = needsReload ? `${detail} Reload to apply.` : detail;
   }
 
   function paintFx(mode) {
@@ -213,12 +216,6 @@ export function setupMenu({
     paintAa(setAaEnabled(aaEnabled.checked));
   });
 
-  hideHudBtn?.addEventListener('click', () => {
-    const next = !getHudLocked?.();
-    setHudLocked?.(next);
-    if (next) setOpen(false);
-  });
-
   soloBtn.addEventListener('click', async () => {
     if (!onStartSoloAi || soloBtn.disabled) return;
     soloBtn.disabled = true;
@@ -266,7 +263,7 @@ export function setupMenu({
   // Camera/hotkeys listen on window. Stop keydown so typing a name does not
   // pan or trip B/G/H. Leave keyup alone so a held pan key still releases.
   const keyStop = [
-    nameInput, colorPicker, aaEnabled, hideHudBtn, skinsBtn, slider, fxSlider, volumeSlider, soloBtn, openReplayBtn, testerBtn, stressBtn,
+    nameInput, colorPicker, aaEnabled, skinsBtn, slider, fxSlider, volumeSlider, soloBtn, openReplayBtn, testerBtn, stressBtn,
     menuKothStart, menuKothClaim, menuKothLeave,
     menuMatchReady, menuMatchStart, menuMatchLeave,
     ...lobbyDrawerToggles,
@@ -311,6 +308,7 @@ export function setupMenu({
   const skinsPop = /** @type {HTMLElement | null} */ (document.getElementById('skins_pop'));
   const skinsClose = /** @type {HTMLButtonElement | null} */ (document.getElementById('skins_close'));
   const skinsList = /** @type {HTMLElement | null} */ (document.getElementById('skins_list'));
+  const skinsStoreNote = /** @type {HTMLElement | null} */ (document.getElementById('skins_store_note'));
 
   function paintSkins() {
     if (!skinsList) return;
@@ -325,63 +323,44 @@ export function setupMenu({
       empty.textContent = 'No alternate looks yet.';
       frag.appendChild(empty);
     }
+    let locked = false;
     for (const item of items) {
-      const block = document.createElement('div');
-      block.className = 'skin-item';
-      if (item.unlocked && item.choices) {
-        const selectId = `skin_${item.kind}_${item.id}`;
-        const row = document.createElement('div');
-        row.className = 'skin-row';
-        const label = document.createElement('label');
-        label.htmlFor = selectId;
-        label.textContent = item.label;
-        const select = document.createElement('select');
-        select.id = selectId;
-        for (const choice of item.choices) {
-          const opt = document.createElement('option');
-          opt.value = choice.id;
-          opt.textContent = choice.label;
-          select.appendChild(opt);
-        }
-        select.value = item.value;
-        select.addEventListener('change', () => {
-          if (item.kind === 'building') setBuildingSkin(String(item.id), select.value);
-          else setUnitSkin(Number(item.id), select.value);
-          onUnitSkinsChange?.();
-        });
-        select.addEventListener('keydown', (e) => {
-          if (e.key === 'Escape') return;
-          e.stopPropagation();
-        });
-        row.append(label, select);
-        block.appendChild(row);
-      } else {
-        const name = document.createElement('div');
-        name.className = 'skin-name';
-        name.textContent = item.label;
-        block.appendChild(name);
-        for (const offer of item.offers) {
-          const row = document.createElement('div');
-          row.className = 'skin-row';
-          const pack = document.createElement('span');
-          pack.textContent = offer.name;
-          const buy = document.createElement('a');
-          buy.className = 'btn';
-          buy.href = offer.storeUrl;
-          buy.target = '_blank';
-          buy.rel = 'noreferrer';
-          buy.textContent = 'Purchase on Steam';
-          row.append(pack, buy);
-          block.appendChild(row);
-        }
-        const note = document.createElement('p');
-        note.className = 'note';
-        note.textContent = 'Purchase on Steam to use this look.';
-        block.appendChild(note);
+      if (!item.unlocked) locked = true;
+      const selectId = `skin_${item.kind}_${item.id}`;
+      const row = document.createElement('div');
+      row.className = 'skin-row';
+      const label = document.createElement('label');
+      label.htmlFor = selectId;
+      label.textContent = item.label;
+      const select = document.createElement('select');
+      select.id = selectId;
+      for (const choice of item.choices) {
+        const opt = document.createElement('option');
+        opt.value = choice.id;
+        opt.textContent = choice.label;
+        opt.disabled = !choice.enabled;
+        select.appendChild(opt);
       }
-      frag.appendChild(block);
+      select.value = item.value;
+      select.addEventListener('change', () => {
+        const choice = item.choices.find((row) => row.id === select.value);
+        if (!choice?.enabled) {
+          select.value = item.value;
+          return;
+        }
+        if (item.kind === 'building') setBuildingSkin(String(item.id), select.value);
+        else setUnitSkin(Number(item.id), select.value);
+        onUnitSkinsChange?.();
+      });
+      select.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') return;
+        e.stopPropagation();
+      });
+      row.append(label, select);
+      frag.appendChild(row);
     }
     skinsList.replaceChildren(frag);
+    if (skinsStoreNote) skinsStoreNote.hidden = !locked;
   }
 
   function hidePop(pop, btn) {

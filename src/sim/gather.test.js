@@ -12,7 +12,9 @@ import { overflowCredit, ownerResourceCap } from './storage.js';
 import {
   GATHER_ACT,
   GATHER_CARRY_CAP,
+  FARM_PASSIVE_INTERVAL,
   campWorkRadius,
+  campWorkRadiusWorld,
   nearestDropOff,
   refreshEngineerAssists,
   CAMP_WORK_RADIUS_F,
@@ -194,7 +196,7 @@ function engineerExtendsCampRadius() {
   field.pass.fill(1);
   const w = createWorld(25);
   // Villager sits just outside the base camp reach — inside with an engineer.
-  const vill = spawn(w, { x: fx.fromFloat(34), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  const vill = spawn(w, { x: fx.fromFloat(38), y: 0, type: UNIT.VILLAGER, owner: 0 });
   plantTreeAt(field, 32, 0, 30);
   w.buildings = [{ owner: 0, type: 'camp', x: 0, z: 0 }];
 
@@ -468,6 +470,102 @@ function farmCapsAtOneWorker() {
   assert.equal(working, 1, 'a farm keeps a single farmer');
 }
 
+function farmClaimsSharedIdleBeforeCamp() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(61);
+  const farmX = fx.fromFloat(12);
+  const farmTile = worldToTile(0) * field.width + worldToTile(farmX);
+  field.foodNode[farmTile] = 1;
+  plantTreeAt(field, fx.fromFloat(4), 0, 80);
+  // Camp is first in the list and covers the villager. The farm is closer.
+  w.buildings = [
+    { owner: 0, type: 'camp', x: 0, z: 0, built: 1 },
+    { owner: 0, type: 'farm', x: farmX, z: 0, built: 1 },
+  ];
+  const vill = spawn(w, { x: fx.fromFloat(8), y: 0, type: UNIT.VILLAGER, owner: 0 });
+
+  for (let t = 0; t < 40; t++) step(w, field, []);
+
+  assert.equal(w.order[vill], ORDER.GATHER, 'shared idle villager is put to work');
+  assert.equal(w.gatherTile[vill], farmTile, 'farm claims them before the camp');
+}
+
+function farmPullsCampCrewOutsideItsCircle() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(62);
+  const farmX = fx.fromFloat(48);
+  const farmTile = worldToTile(0) * field.width + worldToTile(farmX);
+  field.foodNode[farmTile] = 1;
+  const tree = plantTreeAt(field, fx.fromFloat(4), 0, 80);
+  w.buildings = [
+    { owner: 0, type: 'camp', x: 0, z: 0, built: 1 },
+    { owner: 0, type: 'farm', x: farmX, z: 0, built: 1 },
+  ];
+  const vill = spawn(w, { x: fx.fromFloat(4), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  // Skip the auto-assign cadence so the gather order lands before the farm pulls.
+  w.tick = 1;
+  step(w, field, [{ type: CMD.GATHER, entities: [vill], tile: tree }]);
+  assert.equal(w.gatherTile[vill], tree, 'starts on the camp tree');
+
+  for (let t = 0; t < 40; t++) step(w, field, []);
+
+  assert.equal(w.gatherTile[vill], farmTile, 'open farm pulls camp crew even from outside its circle');
+}
+
+function farmLeavesHandGathererOutsideCamp() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(63);
+  const farmX = fx.fromFloat(48);
+  const farmTile = worldToTile(0) * field.width + worldToTile(farmX);
+  field.foodNode[farmTile] = 1;
+  const tree = plantTreeAt(field, fx.fromFloat(4), 0, 80);
+  w.buildings = [{ owner: 0, type: 'farm', x: farmX, z: 0, built: 1 }];
+  const vill = spawn(w, { x: fx.fromFloat(4), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  step(w, field, [{ type: CMD.GATHER, entities: [vill], tile: tree }]);
+
+  for (let t = 0; t < 40; t++) step(w, field, []);
+
+  assert.equal(w.gatherTile[vill], tree, 'a chopper outside every camp stays on the tree');
+}
+
+function emptyFarmPaysATenth() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(64);
+  w.buildings = [{ owner: 0, type: 'farm', x: 0, z: 0, built: 1, hp: 10 }];
+  const interval = FARM_PASSIVE_INTERVAL | 0;
+
+  for (let t = 0; t < interval; t++) step(w, field, []);
+  assert.equal(getResource(w, 0, 'food'), 1, 'an empty farm banks one food per trickle');
+  for (let t = 0; t < interval; t++) step(w, field, []);
+  assert.equal(getResource(w, 0, 'food'), 2, 'the trickle repeats');
+
+  w.buildings[0].built = 0;
+  w.tick = 0;
+  step(w, field, []);
+  assert.equal(getResource(w, 0, 'food'), 2, 'a site does not trickle');
+
+  w.buildings[0].built = 1;
+  w.buildings[0].hp = 0;
+  w.tick = 0;
+  step(w, field, []);
+  assert.equal(getResource(w, 0, 'food'), 2, 'a wrecked farm does not trickle');
+
+  w.buildings[0].hp = 10;
+  const farmTile = worldToTile(0) * field.width + worldToTile(0);
+  field.foodNode[farmTile] = 1;
+  const vill = spawn(w, { x: 0, y: 0, type: UNIT.VILLAGER, owner: 0 });
+  w.order[vill] = ORDER.GATHER;
+  w.gatherTile[vill] = farmTile;
+  w.gatherCd[vill] = 0;
+  w.tick = 0;
+  step(w, field, []);
+  assert.equal(getResource(w, 0, 'food'), 2 + 2, 'a farmer banks a full bite and the trickle stays off');
+}
+
 function farmManualGatherHonorsCap() {
   const field = createField(1);
   field.pass.fill(1);
@@ -510,6 +608,59 @@ function campCrewExtendsRadius() {
 
   for (let t = 0; t < 220; t++) step(w, field, []);
   assert.equal(w.order[far], ORDER.GATHER, 'staffed camp recruits past the base ring');
+}
+
+function crewOutsideTheRingDoesNotExtendIt() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(45);
+  const farX = CAMP_WORK_RADIUS_F + 12;
+  const farTree = plantTreeAt(field, fx.fromFloat(farX), 0, 80);
+  w.buildings = [{ owner: 0, type: 'camp', x: 0, z: 0, built: 1 }];
+  const crew = [];
+  for (let i = 0; i < 4; i++) {
+    crew.push(spawn(w, { x: fx.fromFloat(farX), y: 0, type: UNIT.VILLAGER, owner: 0 }));
+  }
+
+  step(w, field, [{ type: CMD.GATHER, entities: crew, tile: farTree }]);
+  assert.equal(
+    fx.toFloat(campWorkRadius(w, w.buildings[0], field)),
+    CAMP_WORK_RADIUS_F,
+    'gatherers walked out past the ring do not grow it',
+  );
+  assert.equal(
+    campWorkRadiusWorld(w, { owner: 0, type: 'camp', x: 0, z: 0, built: 1 }, w.buildings, field),
+    CAMP_WORK_RADIUS_F,
+    'the ring uses the same node check',
+  );
+}
+
+function villagersStandingInsideExtendRadius() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(46);
+  w.buildings = [{ owner: 0, type: 'camp', x: 0, z: 0, built: 1 }];
+  for (let i = 0; i < 4; i++) {
+    spawn(w, { x: fx.fromFloat(6 + i), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  }
+  const camp = w.buildings[0];
+  assert.equal(
+    fx.toFloat(campWorkRadius(w, camp, field)),
+    CAMP_WORK_RADIUS_F + CREW_RADIUS_BONUS_F,
+    'four villagers standing in the circle extend it',
+  );
+  assert.equal(
+    campWorkRadiusWorld(w, { owner: 0, type: 'camp', x: 0, z: 0, built: 1 }, [camp], field),
+    CAMP_WORK_RADIUS_F + CREW_RADIUS_BONUS_F,
+    'the drawn ring sees the same villagers',
+  );
+
+  for (let i = 0; i < w.count; i++) w.px[i] = fx.fromFloat(CAMP_WORK_RADIUS_F + 12);
+  assert.equal(
+    fx.toFloat(campWorkRadius(w, camp, field)),
+    CAMP_WORK_RADIUS_F,
+    'walking that crew out of the circle drops the bonus',
+  );
 }
 
 function attackMoveStartsDefensiveGather() {
@@ -556,6 +707,157 @@ function defensiveFarmerRetaliatesThenResumes() {
   assert.equal(w.gatherDefensive[vill], 1, 'still flagged defensive after the fight');
 }
 
+function stepUntilIdleNear(w, field, i, x, limit) {
+  const dest = fx.fromFloat(x);
+  const near = fx.mul(fx.fromFloat(3), fx.fromFloat(3));
+  for (let t = 0; t < limit; t++) {
+    step(w, field, []);
+    if (w.order[i] === ORDER.IDLE && fx.dist2(w.px[i], w.py[i], dest, 0) <= near) return true;
+  }
+  return false;
+}
+
+function moveOrderLeavesTheResource() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(70);
+  const tile = plantTreeAt(field, 0, 0, 80);
+  // Camp and agora used to haul a parked villager home, then put them back on the tree.
+  w.buildings = [{ owner: 0, type: 'camp', x: 0, z: 0, built: 1 }];
+  w.agoras = [{ owner: 0, x: 0, z: 0 }];
+  const vill = spawn(w, { x: 0, y: 0, type: UNIT.VILLAGER, owner: 0 });
+
+  step(w, field, [{ type: CMD.GATHER, entities: [vill], tile, defensive: 1 }]);
+  for (let t = 0; t < 40; t++) step(w, field, []);
+  assert.equal(w.order[vill], ORDER.GATHER, 'villager is on the tree');
+  assert.equal(w.gatherDefensive[vill], 1, 'left-click gather is defensive');
+  assert.ok((w.carriedAmt[vill] | 0) > 0, 'already holding wood');
+
+  step(w, field, [
+    { type: CMD.ATTACK_MOVE, entities: [vill], tx: [fx.fromFloat(48)], ty: [0] },
+  ]);
+  assert.equal(w.gatherTile[vill], -1, 'the new click drops the node');
+  assert.equal(w.gatherDefensive[vill], 0, 'defensive resume is cleared');
+  assert.ok(w.manualHold[vill] > 0, 'the click parks them');
+
+  assert.equal(stepUntilIdleNear(w, field, vill, 48, 200), true, 'they reach the click');
+  const stock = field.treeStock[tile];
+  for (let t = 0; t < 45; t++) step(w, field, []);
+  assert.equal(w.order[vill], ORDER.IDLE, 'they stay idle after arriving');
+  assert.equal(w.gatherTile[vill], -1, 'they do not retake the tree');
+  assert.ok(fx.toFloat(w.px[vill]) > 40, 'they do not walk back to the resource');
+  assert.equal(field.treeStock[tile], stock, 'the tree is no longer being chopped');
+}
+
+function clickOnCampBanksTheLoad() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(72);
+  plantTreeAt(field, fx.fromFloat(-24), 0, 80);
+  const campX = fx.fromFloat(20);
+  w.buildings = [{ owner: 0, type: 'camp', x: campX, z: 0, built: 1 }];
+  const vill = spawn(w, { x: 0, y: 0, type: UNIT.VILLAGER, owner: 0 });
+  w.carriedAmt[vill] = 4;
+  w.carriedKind[vill] = 1;
+
+  step(w, field, [{ type: CMD.MOVE, entities: [vill], tx: [campX], ty: [0] }]);
+  assert.equal(w.order[vill], ORDER.GATHER, 'clicking the camp starts a drop-off');
+  for (let t = 0; t < 200 && (w.carriedAmt[vill] | 0) > 0; t++) step(w, field, []);
+  assert.equal(w.carriedAmt[vill], 0, 'a partial load is handed in');
+  assert.equal(getResource(w, 0, 'wood'), 4, 'the camp banks the wood');
+  assert.equal(w.order[vill], ORDER.IDLE, 'they stand at the camp afterward');
+  for (let t = 0; t < 30; t++) step(w, field, []);
+  assert.equal(w.order[vill], ORDER.IDLE, 'they are not sent back to the tree');
+}
+
+function clickOnAgoraBanksTheLoad() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(73);
+  const agoraX = fx.fromFloat(18);
+  w.agoras = [{ owner: 0, x: agoraX, z: 0 }];
+  const vill = spawn(w, { x: 0, y: 0, type: UNIT.VILLAGER, owner: 0 });
+  w.carriedAmt[vill] = 3;
+  w.carriedKind[vill] = 1;
+
+  step(w, field, [{ type: CMD.ATTACK_MOVE, entities: [vill], tx: [agoraX], ty: [0] }]);
+  assert.equal(w.order[vill], ORDER.GATHER, 'clicking the agora starts a drop-off');
+  for (let t = 0; t < 200 && (w.carriedAmt[vill] | 0) > 0; t++) step(w, field, []);
+  assert.equal(w.carriedAmt[vill], 0, 'the load is handed in');
+  assert.equal(getResource(w, 0, 'wood'), 3, 'the agora banks the wood');
+  assert.equal(w.order[vill], ORDER.IDLE, 'they stand at the agora afterward');
+}
+
+function clickBesideCampKeepsTheLoad() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(74);
+  w.buildings = [{ owner: 0, type: 'camp', x: 0, z: 0, built: 1 }];
+  const vill = spawn(w, { x: fx.fromFloat(30), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  w.carriedAmt[vill] = 4;
+  w.carriedKind[vill] = 1;
+
+  step(w, field, [{ type: CMD.MOVE, entities: [vill], tx: [fx.fromFloat(16)], ty: [0] }]);
+  assert.equal(w.order[vill], ORDER.MOVE, 'a click off the camp is still a move');
+  for (let t = 0; t < 40; t++) step(w, field, []);
+  assert.equal(w.carriedAmt[vill], 4, 'standing nearby does not bank the load');
+}
+
+function moveInsideTheCampRingStaysPut() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(71);
+  const tile = plantTreeAt(field, fx.fromFloat(4), 0, 80);
+  w.buildings = [{ owner: 0, type: 'camp', x: 0, z: 0, built: 1 }];
+  const vill = spawn(w, { x: fx.fromFloat(4), y: 0, type: UNIT.VILLAGER, owner: 0 });
+
+  step(w, field, [{ type: CMD.GATHER, entities: [vill], tile }]);
+  assert.equal(w.gatherDefensive[vill], 0, 'right-click gather is not defensive');
+
+  step(w, field, [
+    { type: CMD.MOVE, entities: [vill], tx: [fx.fromFloat(16)], ty: [0] },
+  ]);
+  assert.equal(stepUntilIdleNear(w, field, vill, 16, 120), true, 'they reach the spot inside the ring');
+  for (let t = 0; t < 45; t++) step(w, field, []);
+  assert.equal(w.order[vill], ORDER.IDLE, 'the camp does not pull them back onto the tree');
+  assert.notEqual(w.gatherTile[vill], tile);
+
+  // Left standing idle in the ring, the camp puts them back to work.
+  for (let t = 0; t < 20 * 12; t++) step(w, field, []);
+  assert.equal(w.order[vill], ORDER.GATHER, 'an idle park in the ring wears off');
+  assert.equal(w.manualHold[vill], 0);
+}
+
+function defensiveFarmerDropsAFoeWhoLeavesThePlot() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(35);
+  plantTreeAt(field, 0, 0, 80);
+  w.agoras = [{ owner: 0, x: fx.fromFloat(8), z: 0 }];
+  const vill = spawn(w, { x: fx.fromFloat(-3), y: 0, type: UNIT.VILLAGER, owner: 0 });
+
+  step(w, field, [
+    { type: CMD.ATTACK_MOVE, entities: [vill], tx: [fx.fromFloat(0)], ty: [fx.fromFloat(0)] },
+  ]);
+  for (let t = 0; t < 40; t++) step(w, field, []);
+  assert.equal(w.gatherDefensive[vill], 1, 'villager is farming defensively');
+
+  const foe = spawn(w, { x: fx.fromFloat(1), y: 0, type: UNIT.VILLAGER, owner: 1, hp: 500 });
+  let swinging = false;
+  for (let t = 0; t < 80 && !swinging; t++) {
+    step(w, field, []);
+    swinging = w.order[vill] === ORDER.ATTACK;
+  }
+  assert.equal(swinging, true, 'farmer swings at a foe on the plot');
+
+  w.px[foe] = fx.fromFloat(40);
+  w.py[foe] = 0;
+  step(w, field, []);
+  assert.equal(w.order[vill], ORDER.GATHER, 'foe outside the plot ring ends the chase');
+  assert.equal(w.targetEntity[vill], -1);
+  assert.equal(w.gatherDefensive[vill], 1);
+}
+
 gathersAndDeposits();
 returnsAllTheWayToTheDropOff();
 chopsAtTheNodeThenHauls();
@@ -570,9 +872,21 @@ mineRecruitsRockNotWood();
 campRecruitsWoodNotRock();
 farmCapsAtOneWorker();
 farmManualGatherHonorsCap();
+farmClaimsSharedIdleBeforeCamp();
+farmPullsCampCrewOutsideItsCircle();
+farmLeavesHandGathererOutsideCamp();
+emptyFarmPaysATenth();
 campCrewExtendsRadius();
+crewOutsideTheRingDoesNotExtendIt();
+villagersStandingInsideExtendRadius();
 attackMoveStartsDefensiveGather();
 defensiveFarmerRetaliatesThenResumes();
+moveOrderLeavesTheResource();
+clickOnCampBanksTheLoad();
+clickOnAgoraBanksTheLoad();
+clickBesideCampKeepsTheLoad();
+moveInsideTheCampRingStaysPut();
+defensiveFarmerDropsAFoeWhoLeavesThePlot();
 onlyVillagersGather();
 depletesThenIdles();
 needsADropOff();

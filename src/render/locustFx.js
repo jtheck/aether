@@ -2,6 +2,8 @@
 // peel forward onto new chew sites. Matches sim hop (new circles, old fade)
 // instead of cloning a full pack on every victim.
 
+import { PARTICLE_CULL_MAX_RANGE, particleEyeDistSq } from './particleSystem.js';
+
 const INSECTS = 8;
 /** Incoming swarm keeps flying for this long after the shot dies. */
 const HANDOFF_SEC = 0.55;
@@ -20,8 +22,9 @@ const REMNANT = 2;
 const LANDING_SITES = 3;
 /** Hard cap across shots + chew sites so a saturated blob cannot fill the particle pool. */
 const MAX_INSECTS = 200;
+
 /** Match PARTICLE_CULL_MAX_RANGE — far swarms stay in sync, they just do not emit. */
-const CULL_RANGE = 200;
+const CULL_RANGE = PARTICLE_CULL_MAX_RANGE;
 
 const BODY = [
   [0.46, 0.5, 0.14, 0.92],
@@ -126,10 +129,7 @@ export function createLocustFx(emit, opts = {}) {
     const eye = getEye();
     if (!eye) return false;
     const range = CULL_RANGE * cullRangeScale;
-    const dx = x - eye.x;
-    const dy = y - eye.y;
-    const dz = z - eye.z;
-    return dx * dx + dy * dy + dz * dz > range * range;
+    return particleEyeDistSq(eye, x, y, z) > range * range;
   }
 
   function emitInsect(swarm, insect, fade) {

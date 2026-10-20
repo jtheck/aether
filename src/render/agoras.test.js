@@ -135,6 +135,7 @@ describe('agora ownership flags', () => {
     const n = emitAgoraFlagDisintegrate((p) => {
       vys.push(p.velocity[1]);
       vxs.push(p.velocity[0]);
+      assert.equal(p.cull, false);
       assert.ok(p.position[1] > 2);
     }, 0, 1, 0, [0.2, 0.4, 0.9], 2.2, wind);
     assert.equal(n, 16);
@@ -145,6 +146,19 @@ describe('agora ownership flags', () => {
     emitAgoraFlagSlam((p) => ring.push(p), null, 0, 0, 0);
     assert.ok(ring.length >= AGORA_FLAG_SLAM_RING);
     assert.ok(ring.some((p) => p.sprite === 'puff'));
+    assert.ok(ring.every((p) => p.cull === false));
     assert.ok(ring.every((p) => Math.hypot(p.velocity[0], p.velocity[2]) > p.velocity[1] * 6));
+  });
+
+  it('enlarges departing cloth with the flag when the eye is far', () => {
+    const wind = { x: 6, y: 2, z: 1 };
+    const near = [];
+    const far = [];
+    emitAgoraFlagDisintegrate((p) => near.push(p), 0, 1, 0, [1, 1, 1], 2.2, wind);
+    emitAgoraFlagDisintegrate((p) => far.push(p), 0, 1, 0, [1, 1, 1], 2.2, wind, 400);
+    const width = (p) => (Array.isArray(p.startSize) ? p.startSize[0] : p.startSize);
+    assert.ok(width(far[0]) > width(near[0]) * 4);
+    assert.ok(far[0].velocity[0] > near[0].velocity[0] * 4);
+    assert.equal(far[0].cull, false);
   });
 });

@@ -25,6 +25,7 @@ import { unitPopCost } from './pop.js';
 import { ORDER } from './world.js';
 import { MAX_WAYPOINTS, PATH_STYLE, queuePath } from './path.js';
 import { spendResources, addResource, canAffordBank } from './resources.js';
+import { addGatherIncome } from './storage.js';
 import {
   agoraFoundCost,
   canAffordAgoraFound,
@@ -42,9 +43,9 @@ import { ownerHasTech, TECH, TECH_BY_ID, getTechCost } from './tech.js';
 import { GENERATED_BUILDING_SPAWN_LOCAL } from './buildingSpawnLocal.generated.js';
 
 /** @typedef {'basic' | 'advanced' | 'elemental'} BuildingCategoryId */
-/** @typedef {'camp' | 'village' | 'silo' | 'farm' | 'mine' | 'tower' | 'tavern' | 'lab' | 'barracks' | 'workshop' | 'factory' | 'church' | 'moonwell' | 'perch' | 'grove'} BuildingTypeId */
+/** @typedef {'camp' | 'village' | 'silo' | 'farm' | 'mine' | 'derrick' | 'well' | 'tower' | 'tavern' | 'lab' | 'barracks' | 'workshop' | 'factory' | 'church' | 'moonwell' | 'perch' | 'grove'} BuildingTypeId */
 /** @typedef {'block' | 'slow'} BuildingOccupancyMode */
-/** @typedef {'unit' | 'upgrade'} BuildingMenuItemKind */
+/** @typedef {'unit' | 'upgrade' | 'building'} BuildingMenuItemKind */
 
 /** Placement / ghost yaw snaps (radians). Visual only — footprints stay axis-aligned. */
 export const BUILDING_YAW_SNAP = Math.PI / 12;
@@ -69,8 +70,14 @@ export const BUILDING_SPAWN_LOCAL = Object.freeze({
 export const TRAIN_TICKS = 50;
 /** Research time per upgrade (~same as one unit; shares multi-track slowdown). */
 export const RESEARCH_TICKS = 50;
+/** A finished derrick stands this long, then collapses into a well site (55s at 20 Hz). */
+export const DERRICK_LIFE_TICKS = 1100;
+/** A well pays 1 mineral this often (5s at 20 Hz). Slow next to a crewed mine. */
+export const WELL_MINERAL_INTERVAL = 100;
 /** Villager from a completed village (~24s at 20 Hz). Charges UNIT_COST. */
 export const VILLAGE_VILLAGER_TICKS = 480;
+/** A new village's first villager starts this far into that interval (30%). */
+export const VILLAGE_FIRST_VILLAGER_ACC = (VILLAGE_VILLAGER_TICKS * 3) / 10;
 
 /**
  * Rotate a model-local XZ offset into world XZ (Y-up yaw, matches render writeMatrix).
@@ -111,6 +118,8 @@ export const BUILDING_FOOTPRINTS = {
   silo: { w: 2, h: 2, mode: 'slow' },
   farm: { w: 3, h: 3, mode: 'slow' },
   mine: { w: 2, h: 2, mode: 'slow' },
+  derrick: { w: 2, h: 2, mode: 'slow' },
+  well: { w: 2, h: 2, mode: 'slow' },
   // Advanced
   tower: { w: 2, h: 2, mode: 'block' },
   tavern: { w: 3, h: 3, mode: 'block' },
@@ -132,6 +141,8 @@ export const BUILDING_MODEL_URLS = /** @type {const} */ ({
   silo: '/assets/models/silo.glb',
   farm: '/assets/models/farm.glb',
   mine: '/assets/models/mine.glb',
+  derrick: '/assets/models/derrick.glb',
+  well: '/assets/models/well.glb',
   tower: '/assets/models/tower.glb',
   tavern: '/assets/models/tavern.glb',
   lab: '/assets/models/lab.glb',
@@ -168,6 +179,8 @@ const PLACEABLE_IDS = new Set(PLACEABLE_BUILDINGS.map((b) => b.id));
 
 const BUILDING_DISPLAY_NAMES = Object.freeze({
   agora: 'Agora',
+  derrick: 'Derrick',
+  well: 'Well',
   ...Object.fromEntries(PLACEABLE_BUILDINGS.map((b) => [b.id, b.name])),
 });
 
@@ -287,6 +300,8 @@ export const BUILD_TIME = Object.freeze({
   farm: 60,
   silo: 60,
   mine: 100,
+  derrick: 160,
+  well: 80,
   // advanced
   tower: 120,
   tavern: 140,
@@ -311,6 +326,8 @@ export const BUILDING_HP = Object.freeze({
   farm: 220,
   silo: 200,
   mine: 300,
+  derrick: 320,
+  well: 240,
   tower: 380,
   tavern: 320,
   barracks: 480,
@@ -385,12 +402,35 @@ export const UPGRADE_DEFS = /** @type {const} */ ({
 });
 
 /**
+ * Per-building structure replacements. Not owner-wide tech: the click collapses
+ * this building into a construction site of `into`. Icon is that building's GLB.
+ * `from` is the only type that may start it.
+ * @type {Readonly<Record<string, { id: string, name: string, from: string, into: string, cost: Record<string, number> }>>}
+ */
+export const BUILDING_UPGRADE_DEFS = Object.freeze({
+  derrick: Object.freeze({
+    id: 'derrick',
+    name: 'Well',
+    from: 'mine',
+    into: 'derrick',
+    cost: Object.freeze({ wood: 30, stone: 40 }),
+  }),
+});
+
+/** Resource cost of a building upgrade ({} when unknown). */
+export function getBuildingUpgradeCost(id) {
+  return BUILDING_UPGRADE_DEFS[id]?.cost ?? {};
+}
+
+/**
  * Per-building action radial. Omit / empty arrays = no menu for that side.
- * @type {Readonly<Record<string, { units?: readonly string[], upgrades?: readonly string[] }>>}
+ * `buildings` is the structure-upgrade arc (mine → derrick), beside units and tech.
+ * @type {Readonly<Record<string, { units?: readonly string[], upgrades?: readonly string[], buildings?: readonly string[] }>>}
  */
 export const BUILDING_MENUS = {
   camp: { units: ['myco'] },
   village: { units: ['engineer', 'monk'] },
+  mine: { buildings: ['derrick'] },
   tower: { units: ['wizard'] },
   tavern: { units: ['warlock'], upgrades: ['patronage'] },
   lab: { upgrades: ['artillery'] },
@@ -406,7 +446,7 @@ export const BUILDING_MENUS = {
 /**
  * Resolved menu items for a building type (icons + labels for the action radial).
  * @param {string} typeId
- * @returns {{ units: { id: string, name: string, unitType: number, cost: Record<string, number> }[], upgrades: { id: string, name: string, cost: Record<string, number> }[] } | null}
+ * @returns {{ units: { id: string, name: string, unitType: number, cost: Record<string, number> }[], upgrades: { id: string, name: string, cost: Record<string, number> }[], buildings: { id: string, name: string, cost: Record<string, number> }[] } | null}
  */
 export function getBuildingMenu(typeId) {
   const raw = BUILDING_MENUS[typeId];
@@ -436,21 +476,31 @@ export function getBuildingMenu(typeId) {
     upgrades.push({ id: key, name: def?.name ?? key, cost: getTechCost(key) });
   }
 
-  if (!units.length && !upgrades.length) return null;
-  return { units, upgrades };
+  /** @type {{ id: string, name: string, cost: Record<string, number> }[]} */
+  const buildings = [];
+  for (const key of raw.buildings ?? []) {
+    const def = BUILDING_UPGRADE_DEFS[key];
+    if (!def || !(def.into in BUILDING_MODEL_URLS)) continue;
+    buildings.push({ id: key, name: def.name, cost: def.cost });
+  }
+
+  if (!units.length && !upgrades.length && !buildings.length) return null;
+  return { units, upgrades, buildings };
 }
 
 /**
- * One action menu for several placeable types. Units share one list, upgrades
- * the other; first-seen order wins when two buildings offer the same id.
+ * One action menu for several placeable types. Units, tech upgrades, and
+ * building upgrades each keep their own list; first-seen order wins on id clash.
  * @param {Iterable<string> | null | undefined} typeIds
- * @returns {{ units: { id: string, name: string, unitType: number, cost: Record<string, number> }[], upgrades: { id: string, name: string, cost: Record<string, number> }[] } | null}
+ * @returns {{ units: { id: string, name: string, unitType: number, cost: Record<string, number> }[], upgrades: { id: string, name: string, cost: Record<string, number> }[], buildings: { id: string, name: string, cost: Record<string, number> }[] } | null}
  */
 export function mergeBuildingMenus(typeIds) {
   /** @type {Map<string, { id: string, name: string, unitType: number, cost: Record<string, number> }>} */
   const unitsById = new Map();
   /** @type {Map<string, { id: string, name: string, cost: Record<string, number> }>} */
   const upgradesById = new Map();
+  /** @type {Map<string, { id: string, name: string, cost: Record<string, number> }>} */
+  const buildingsById = new Map();
   for (const typeId of typeIds ?? []) {
     const menu = getBuildingMenu(typeId);
     if (!menu) continue;
@@ -460,43 +510,81 @@ export function mergeBuildingMenus(typeIds) {
     for (const item of menu.upgrades) {
       if (!upgradesById.has(item.id)) upgradesById.set(item.id, item);
     }
+    for (const item of menu.buildings) {
+      if (!buildingsById.has(item.id)) buildingsById.set(item.id, item);
+    }
   }
-  if (!unitsById.size && !upgradesById.size) return null;
-  return { units: [...unitsById.values()], upgrades: [...upgradesById.values()] };
+  if (!unitsById.size && !upgradesById.size && !buildingsById.size) return null;
+  return {
+    units: [...unitsById.values()],
+    upgrades: [...upgradesById.values()],
+    buildings: [...buildingsById.values()],
+  };
 }
 
-/** Whether that placeable type can queue this unit key or upgrade id. */
+/** Whether that placeable type can queue this unit, tech, or building upgrade. */
 export function buildingOffersMenuItem(typeId, kind, itemId) {
   const raw = BUILDING_MENUS[typeId];
   if (!raw || !itemId) return false;
   if (kind === 'unit') return (raw.units ?? []).includes(itemId);
   if (kind === 'upgrade') return (raw.upgrades ?? []).includes(itemId);
+  if (kind === 'building') return (raw.buildings ?? []).includes(itemId);
   return false;
 }
 
 /**
- * Fit units + upgrades into a pad budget, keeping both sides when possible.
+ * Fit units, tech upgrades, and building upgrades into a pad budget.
+ * Every non-empty side keeps at least one pad when the cap allows.
  * @template {{ id?: string }} T
- * @param {{ units?: T[], upgrades?: T[] } | null | undefined} menu
+ * @param {{ units?: T[], upgrades?: T[], buildings?: T[] } | null | undefined} menu
  * @param {number} maxOptions
  */
 export function capActionMenu(menu, maxOptions) {
   const units = menu?.units ?? [];
   const upgrades = menu?.upgrades ?? [];
+  const buildings = menu?.buildings ?? [];
   const cap = maxOptions | 0;
-  if (cap <= 0) return { units: [], upgrades: [] };
-  const total = units.length + upgrades.length;
-  if (total <= cap) return { units, upgrades };
-  if (!units.length) return { units, upgrades: upgrades.slice(0, cap) };
-  if (!upgrades.length) return { units: units.slice(0, cap), upgrades };
-  let uN = Math.max(1, Math.round(cap * (units.length / total)));
-  uN = Math.min(units.length, uN);
-  let gN = Math.min(upgrades.length, cap - uN);
-  if (gN < 1) {
-    gN = 1;
-    uN = Math.min(units.length, cap - 1);
+  /** @type {{ units: T[], upgrades: T[], buildings: T[] }} */
+  const empty = { units: [], upgrades: [], buildings: [] };
+  if (cap <= 0) return empty;
+  const groups = [
+    ['units', units],
+    ['upgrades', upgrades],
+    ['buildings', buildings],
+  ].filter((entry) => entry[1].length > 0);
+  const total = groups.reduce((n, entry) => n + entry[1].length, 0);
+  if (total <= cap) return { units, upgrades, buildings };
+  if (!groups.length) return empty;
+  const chosen = groups.slice(0, Math.min(groups.length, cap));
+  const floors = chosen.map((entry) => {
+    const n = Math.max(1, Math.round(cap * (entry[1].length / total)));
+    return Math.min(entry[1].length, n);
+  });
+  let sum = floors.reduce((a, b) => a + b, 0);
+  while (sum > cap) {
+    let bi = 0;
+    for (let i = 1; i < floors.length; i++) if (floors[i] > floors[bi]) bi = i;
+    if (floors[bi] <= 1) break;
+    floors[bi]--;
+    sum--;
   }
-  return { units: units.slice(0, uN), upgrades: upgrades.slice(0, gN) };
+  while (sum < cap) {
+    let bi = -1;
+    let room = 0;
+    for (let i = 0; i < floors.length; i++) {
+      const spare = chosen[i][1].length - floors[i];
+      if (spare > room) {
+        room = spare;
+        bi = i;
+      }
+    }
+    if (bi < 0 || room <= 0) break;
+    floors[bi]++;
+    sum++;
+  }
+  const out = { units: [], upgrades: [], buildings: [] };
+  for (let i = 0; i < chosen.length; i++) out[chosen[i][0]] = chosen[i][1].slice(0, floors[i]);
+  return out;
 }
 
 /** @param {string} typeId */
@@ -697,6 +785,31 @@ export function snapBuildingWorld(typeId, xFixed, zFixed) {
   return {
     x: snapWorldAxis(xFixed, fp.w, 'x'),
     z: snapWorldAxis(zFixed, fp.h, 'z'),
+  };
+}
+
+/**
+ * Ground AABB center in model space (XZ). Used with {@link buildingMeshOrigin}.
+ * @param {{ minX: number, maxX: number, minZ: number, maxZ: number } | null | undefined} bounds
+ */
+export function buildingMeshGroundCenter(bounds) {
+  if (!bounds) return { cx: 0, cz: 0 };
+  return {
+    cx: (bounds.minX + bounds.maxX) * 0.5,
+    cz: (bounds.minZ + bounds.maxZ) * 0.5,
+  };
+}
+
+/**
+ * Instance origin that puts the mesh bounds center on the placement point.
+ * Matches the building matrix: XZ yaw, uniform scale.
+ */
+export function buildingMeshOrigin(x, z, yaw, scale, cx, cz) {
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  return {
+    x: x - scale * (c * cx + s * cz),
+    z: z - scale * (-s * cx + c * cz),
   };
 }
 
@@ -1066,8 +1179,12 @@ export function createBuilding(opts) {
     buildTime,
     /** @type {{ kind: 'unit' | 'upgrade', id: string, unitType?: number, count: number, progress: number }[]} */
     tracks: [],
-    /** Ticks accrued toward the next village villager (0 while a site). */
-    villageSpawnAcc: 0,
+    /** Ticks accrued toward the next village villager. New villages start the first one partway done. */
+    villageSpawnAcc: type === 'village' ? VILLAGE_FIRST_VILLAGER_ACC : 0,
+    /** Sim tick when a camp/mine/farm finished — AI open-rally once (0 = done). */
+    gatherRallyAt: 0,
+    /** Ticks a finished derrick has left before it collapses into a well. */
+    morphTicks: type === 'derrick' && built ? DERRICK_LIFE_TICKS : 0,
     /** Last engineer stack on this drop-off, held until engBonusUntil. */
     engBonus: 0,
     engBonusUntil: 0,
@@ -1078,6 +1195,8 @@ export function createBuilding(opts) {
     hp: opts.hp != null ? opts.hp | 0 : (built ? getBuildingHp(type) : 1),
     locustTicks: 0,
     locustStacks: 0,
+    /** Ticks left on a lightning burn. 0 = not on fire. */
+    fireTicks: 0,
     locustAcc: 0,
     locustHops: 0,
     locustSource: -1,
@@ -1401,10 +1520,11 @@ export function applyPlaceBuilding(w, field, cmd) {
     buildIdleAcc: 0,
     buildTime: getBuildTime(type),
     tracks: [],
-    villageSpawnAcc: 0,
+    villageSpawnAcc: type === 'village' ? VILLAGE_FIRST_VILLAGER_ACC : 0,
     engBonus: 0,
     engBonusUntil: 0,
     attackCd: 0,
+    morphTicks: 0,
     maxHp: getBuildingHp(type),
     hp: 1,
     refundCost,
@@ -1578,6 +1698,96 @@ export function applyQueueResearch(w, cmd) {
 }
 
 /**
+ * Collapse this building into a construction site of another type.
+ * Same footprint, so occupancy stays. Workers raise the site as usual.
+ * @param {object} b
+ * @param {string} type
+ * @param {Record<string, number>} cost refunded if the site is cancelled
+ */
+function beginStructureSite(b, type, cost) {
+  b.type = type;
+  b.built = 0;
+  b.buildProgress = 0;
+  b.buildHalfAcc = 0;
+  b.buildIdleAcc = 0;
+  b.buildTime = getBuildTime(type);
+  b.tracks = [];
+  b.prodPaused = 0;
+  b.morphTicks = 0;
+  b.gatherRallyAt = 0;
+  b.villageSpawnAcc = 0;
+  b.maxHp = getBuildingHp(type);
+  b.hp = 1;
+  b.refundCost = cloneRefundCost(cost);
+  b.hasRally = 0;
+  clearBuildingRallyHops(b);
+}
+
+/**
+ * Pay for a building upgrade and collapse that building into the new site.
+ * @param {object} w
+ * @param {{ playerId?: number, buildingIndex: number, upgradeId: string }} cmd
+ */
+export function applyUpgradeBuilding(w, cmd) {
+  const buildings = w.buildings;
+  if (!buildings?.length) return;
+  const bi = cmd.buildingIndex | 0;
+  if (bi < 0 || bi >= buildings.length) return;
+  const b = buildings[bi];
+  const playerId = (cmd.playerId ?? -1) | 0;
+  if ((b.owner | 0) !== playerId) return;
+  if (!buildingIsFinished(b) || !isBuildingAlive(b)) return;
+  const upgradeId = String(cmd.upgradeId ?? '');
+  const def = BUILDING_UPGRADE_DEFS[upgradeId];
+  if (!def || b.type !== def.from) return;
+  const menu = BUILDING_MENUS[b.type];
+  if (!menu?.buildings?.includes(upgradeId)) return;
+  if (!spendResources(w, playerId, def.cost)) return;
+  if (b.tracks?.length) refundTracks(w, b);
+  beginStructureSite(b, def.into, def.cost);
+  w.buildingsDirty = 1;
+}
+
+/**
+ * Replace a spent derrick with a well site on the same pad. Villagers raise it.
+ * No refund — the derrick already spent the mine upgrade.
+ * @param {object} w
+ * @param {object} b
+ */
+function becomeWell(w, b) {
+  beginStructureSite(b, 'well', null);
+  w.buildingsDirty = 1;
+}
+
+/**
+ * Count down a finished derrick, collapse it into a well site, and trickle
+ * minerals from every living well. Runs after construction so a derrick
+ * that just finished starts its life the same tick.
+ * @param {object} w
+ */
+export function tickBuildingMorphs(w) {
+  const buildings = w.buildings;
+  if (!buildings?.length) return;
+  const tick = w.tick | 0;
+  for (let bi = 0; bi < buildings.length; bi++) {
+    const b = buildings[bi];
+    if (!isBuildingAlive(b) || !buildingIsFinished(b)) continue;
+    if (b.type === 'derrick') {
+      let left = b.morphTicks | 0;
+      if (left <= 0) left = DERRICK_LIFE_TICKS;
+      left -= 1;
+      b.morphTicks = left;
+      if (left <= 0) becomeWell(w, b);
+      continue;
+    }
+    if (b.type !== 'well') continue;
+    if (WELL_MINERAL_INTERVAL <= 0) continue;
+    if ((tick + bi) % WELL_MINERAL_INTERVAL !== 0) continue;
+    addGatherIncome(w, b.owner | 0, 'mineral', 1);
+  }
+}
+
+/**
  * Tear down an unfinished construction site and refund its placement cost.
  * Finished buildings are unchanged (use combat / CANCEL_TRAIN for those).
  * @param {object} w
@@ -1711,6 +1921,8 @@ export function serializeBuildings(buildings) {
     maxHp: b.maxHp != null ? b.maxHp | 0 : getBuildingHp(b.type),
     hp: b.hp != null ? b.hp | 0 : getBuildingHp(b.type),
     locustStacks: b.locustStacks | 0,
+    fireTicks: b.fireTicks | 0,
+    morphTicks: b.morphTicks | 0,
     refundCost: cloneRefundCost(b.refundCost),
   }));
 }
@@ -1755,9 +1967,11 @@ export function mixBuildingChecksum(h, mix, buildings) {
     mix(b.hp != null ? b.hp | 0 : getBuildingHp(b.type));
     mix(b.locustTicks | 0);
     mix(b.locustStacks | 0);
+    mix(b.fireTicks | 0);
     mix(b.locustAcc | 0);
     mix(b.locustHops | 0);
     mix(b.locustSource | 0);
+    mix(b.morphTicks | 0);
     const refund = b.refundCost;
     mix(refund ? 1 : 0);
     if (refund) {

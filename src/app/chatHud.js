@@ -67,12 +67,14 @@ export function storyLineRecords(lines, seqStart = 0, now = Date.now()) {
 
 const STYLE_ID = 'chat-hud-style';
 const CSS = `
-#chat-hud { position: fixed; left: 12px; bottom: 40px; z-index: 10001;
-  width: min(320px, 70vw); display: flex; flex-direction: column;
-  align-items: flex-start; gap: 4px; font-size: 13px; pointer-events: none;
+#chat-hud { position: fixed; left: var(--corner-left, 12px); bottom: var(--corner-bottom, 40px);
+  z-index: 10001; width: var(--corner-width, min(320px, 70vw));
+  display: flex; flex-direction: column;
+  align-items: flex-start; font-size: 13px; pointer-events: none;
   user-select: none; -webkit-user-select: none; }
 #chat-hud[hidden] { display: none; }
-#chat-hud .chat-log { position: fixed; left: min(160px, 18vw); bottom: min(240px, 28vh);
+#chat-hud .chat-log { position: fixed; left: min(160px, 18vw);
+  bottom: max(var(--chat-log-bottom, 0px), min(240px, 28vh));
   display: flex; flex-direction: column; justify-content: flex-end; gap: 2px;
   width: max-content; max-width: min(520px, 56vw); max-height: 40vh; overflow: hidden;
   padding: 0; background: none; pointer-events: none; user-select: none;
@@ -87,17 +89,25 @@ const CSS = `
 #chat-hud .chat-name { font-weight: 600; margin-right: 4px; }
 #chat-hud .chat-you .chat-name::after { content: ' (you)'; opacity: .55;
   font-weight: 400; }
+#chat-hud .chat-watch { color: rgba(220, 216, 206, 0.55);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55); font-size: 12px; }
+#chat-hud .chat-watch .chat-name { font-weight: 500; color: rgba(200, 196, 186, 0.5); }
+#chat-hud .chat-watch .chat-name::after { content: ' (watching)'; font-weight: 400; opacity: .85; }
+#chat-hud .chat-you.chat-watch .chat-name::after { content: ' (you, watching)'; }
 #chat-hud .chat-btn { pointer-events: auto; box-sizing: border-box;
   padding: 6px 12px; border-radius: 6px; color: #fff; cursor: pointer;
   background: rgba(12, 15, 20, 0.7); border: 1px solid #2a3140;
   font-size: 13px; line-height: 1; }
 #chat-hud .chat-btn:hover { border-color: aqua; color: aqua; }
-#chat-hud .chat-composer { display: flex; align-self: stretch; gap: 6px;
-  max-height: 0; opacity: 0; overflow: hidden; pointer-events: none; }
-#chat-hud.is-open .chat-composer { max-height: 48px; opacity: 1; pointer-events: auto;
-  transition: max-height 0.18s ease, opacity 0.18s ease; }
-#chat-hud.is-open .chat-toggle { display: none; }
+#chat-hud .chat-slot { position: relative; align-self: stretch; height: 32px; flex: none; }
+#chat-hud .chat-composer { position: absolute; inset: 0; display: flex; gap: 6px;
+  opacity: 0; overflow: hidden; visibility: hidden; pointer-events: none; }
+#chat-hud.is-open .chat-composer { opacity: 1; visibility: visible; pointer-events: auto;
+  transition: opacity 0.18s ease; }
+#chat-hud .chat-toggle { position: relative; z-index: 1; height: 100%; }
+#chat-hud.is-open .chat-toggle { visibility: hidden; pointer-events: none; }
 #chat-hud.chat-local .chat-composer { display: none; }
+#chat-hud .chat-input, #chat-hud .chat-send { height: 100%; }
 #chat-hud .chat-narration { font-style: italic; color: #f3ead2; }
 #chat-hud .chat-input { pointer-events: auto; box-sizing: border-box; flex: 1;
   min-width: 0; padding: 6px 8px; border-radius: 6px; color: #fff;
@@ -163,7 +173,10 @@ export function setupChatHud({ resolveChat, getUserId } = {}) {
   sendBtn.setAttribute('aria-label', 'Send chat message');
   composer.append(input, sendBtn);
 
-  root.append(logEl, composer, toggle);
+  const slot = document.createElement('div');
+  slot.className = 'chat-slot';
+  slot.append(composer, toggle);
+  root.append(logEl, slot);
   document.body.append(root);
 
   const rendered = new Set();
@@ -287,14 +300,17 @@ export function setupChatHud({ resolveChat, getUserId } = {}) {
       });
       settleRow(row);
       if (msg.narration) row.classList.add('chat-narration');
-      else if (localId && msg.from && String(msg.from) === String(localId)) {
-        row.classList.add('chat-you');
+      else {
+        if (msg.watching) row.classList.add('chat-watch');
+        if (localId && msg.from && String(msg.from) === String(localId)) {
+          row.classList.add('chat-you');
+        }
       }
       if (!msg.narration) {
         const name = document.createElement('span');
         name.className = 'chat-name';
         name.textContent = `${msg.name || 'Player'}:`;
-        if (msg.color) name.style.color = msg.color;
+        if (msg.color && !msg.watching) name.style.color = msg.color;
         row.append(name);
       }
       const text = document.createElement('span');

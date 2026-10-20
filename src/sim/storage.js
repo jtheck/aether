@@ -387,6 +387,20 @@ export function overflowHintLabel(unlocked) {
 }
 
 /**
+ * Icon to flash when the bank is short (e.g. village trickle can't pay food).
+ * Targets the stack being filled — not the next silo-locked slot.
+ * @param {number} amount
+ * @param {number} unlocked
+ * @param {string} kind
+ */
+export function bankShortfallHintLabel(amount, unlocked, kind) {
+  const filled = filledSlotCount(amount, unlocked, kind);
+  if (filled <= 0) return RESOURCE_SLOT_LABELS[0] ?? null;
+  const idx = Math.min(filled - 1, (unlocked | 0) - 1, MAX_RESOURCE_SLOTS - 1);
+  return idx >= 0 ? RESOURCE_SLOT_LABELS[idx] ?? null : null;
+}
+
+/**
  * @param {number} slotIndex 0..11
  * @param {number} filled
  * @param {number} [_unlocked]
@@ -402,10 +416,13 @@ export function slotVisual(slotIndex, filled, _unlocked, _atCap) {
  * @param {number} owner
  * @param {string} kind
  * @param {string | null} hint
+ * @param {'short' | undefined} [tone] `short` = red afford hint; default = silo overflow (yellow)
  */
-export function noteStorageOverflow(w, owner, kind, hint) {
+export function noteStorageOverflow(w, owner, kind, hint, tone) {
   if (!w.storageOverflow) w.storageOverflow = [];
-  w.storageOverflow.push({ owner: owner | 0, kind, hint: hint || null });
+  const ev = { owner: owner | 0, kind, hint: hint || null };
+  if (tone === 'short') ev.tone = 'short';
+  w.storageOverflow.push(ev);
 }
 
 /**

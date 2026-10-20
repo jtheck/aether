@@ -174,8 +174,12 @@ export function selectionGroupsFromUnits(ids, world, nameOf) {
   return named.concat(typeOrder);
 }
 
-/** Overlay icon: skip depth so terrain / units / buildings cannot cover the strip. */
-function makeIconMaterial(source, cullBack = true) {
+/**
+ * Overlay icon. Baked meshes are clockwise on the outside and double-sided
+ * in the world; culling the back face shows the hollow inside (wheat behind
+ * the farm ground). Draw both sides and let the depth write keep the near one.
+ */
+function makeIconMaterial(source) {
   const src =
     source?.baseColorFactor ?? source?._baseColorFactor ?? source?.diffuseColor;
   const base =
@@ -199,28 +203,33 @@ function makeIconMaterial(source, cullBack = true) {
       'viewProjection',
       { name: 'iconColor', type: 'vec3<f32>', defaultValue: color },
     ],
-    backFaceCulling: cullBack,
-    // Write depth so a quiver or sword behind the body stays behind it.
+    backFaceCulling: false,
+    // Write depth so a quiver, sword, or wheat stalk stays in front of what it covers.
     // The chip still sits nearer than the world, so the ground does not cover it.
     depthWrite: true,
     depthCompare: 'greater-equal',
     vertexSource: `struct VertexOutput {
   @builtin(position) position: vec4<f32>,
   @location(0) worldN: vec3<f32>,
+  @location(1) worldPos: vec3<f32>,
 };
 @vertex fn mainVertex(input: VertexInput) -> VertexOutput {
   var out: VertexOutput;
   let wp = shaderSystem.world * vec4<f32>(input.position, 1.0);
   out.position = shaderSystem.viewProjection * wp;
-  out.worldN = normalize((shaderSystem.world * vec4<f32>(input.normal, 0.0)).xyz);
+  out.worldPos = wp.xyz;
+  out.worldN = (shaderSystem.world * vec4<f32>(input.normal, 0.0)).xyz;
   return out;
 }`,
     fragmentSource: `struct VertexOutput {
   @builtin(position) position: vec4<f32>,
   @location(0) worldN: vec3<f32>,
+  @location(1) worldPos: vec3<f32>,
 };
 @fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
-  let n = normalize(input.worldN);
+  var n = normalize(input.worldN);
+  let toEye = scene.vEyePosition.xyz - input.worldPos;
+  if (dot(n, toEye) < 0.0) { n = -n; }
   let lit = 0.42 + 0.58 * max(dot(n, vec3<f32>(0.35, 0.82, 0.42)), 0.0);
   return vec4<f32>(shaderUniforms.iconColor * lit, 1.0);
 }`,
@@ -593,6 +602,7 @@ export async function createSelectionHud(engine, scene, screen = {}) {
 
     // Compress the row (and icons) when many types are selected so nothing
     // spills past the viewport edges.
+    const toHud = screen.chromePoint || screen.hudPoint || ((x, y) => ({ x, y }));
     const usable = Math.max(1, vw - EDGE_MARGIN * 2);
     const pitch = n > 1 ? Math.min(SLOT_PX, usable / (n - 1)) : SLOT_PX;
     const compress = Math.min(1, pitch / SLOT_PX);
@@ -610,11 +620,12 @@ export async function createSelectionHud(engine, scene, screen = {}) {
       const slot = selectionHudSlot(g);
       if (slot) {
         const hitW = Math.min(HIT_W_PX, pitch * 0.7);
+        const base = toHud(px, iconPy);
         hitRects.push({
           slot,
           groupIndex: i,
-          x: px - hitW * 0.5,
-          y: iconPy - HIT_UP_PX,
+          x: base.x - hitW * 0.5,
+          y: base.y - HIT_UP_PX,
           w: hitW,
           h: HIT_UP_PX + HIT_DOWN_PX,
         });
@@ -649,9 +660,10 @@ export async function createSelectionHud(engine, scene, screen = {}) {
       const hoverT = batch
         ? (batch.hoverT += (target - batch.hoverT) * Math.min(1, dt * HOVER_LERP))
         : 0;
-      const py = iconPy - hoverT * HOVER_LIFT_PX;
+      const base = toHud(px, iconPy);
+      const hy = base.y - hoverT * HOVER_LIFT_PX;
 
-      const ray = screen.rayFromCanvas(px, py);
+      const ray = screen.rayFromCanvas(base.x, hy);
       if (ray && iconKey) {
         const wx = ray.ox + ray.dx * ICON_DEPTH;
         const wy = ray.oy + ray.dy * ICON_DEPTH;
@@ -671,8 +683,8 @@ export async function createSelectionHud(engine, scene, screen = {}) {
       if (label) {
         const scale = LABEL_SCREEN_SCALE * pixelRatio * compress * (1 + hoverT * 0.06);
         const opacity = LABEL_OPACITY + hoverT * 0.12;
-        placeCaption(label.name, g.name, px, py + NAME_DY, scale, opacity, sx, sy);
-        placeCaption(label.count, formatGameNumber(g.count | 0), px, py + COUNT_DY, scale, opacity, sx, sy);
+        placeCaption(label.name, g.name, base.x, hy + NAME_DY, scale, opacity, sx, sy);
+        placeCaption(label.count, formatGameNumber(g.count | 0), base.x, hy + COUNT_DY, scale, opacity, sx, sy);
       }
     }
 

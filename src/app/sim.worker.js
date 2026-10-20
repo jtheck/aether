@@ -1,13 +1,26 @@
 // Web Worker — deterministic sim authority (one commitTick = one lockstep step).
 
-import { buildField, fieldSnapshot, mapSizeForConfig, STRESS_CAMERA_HALF_F, TILE_SIZE_F, worldHalfZFFromField } from '../sim/field.js';
+import {
+  buildField,
+  fieldSnapshot,
+  mapSizeForConfig,
+  STRESS_CAMERA_HALF_F,
+  STRESS_SPAWN_CLEAR_TILES,
+  TILE_SIZE_F,
+  worldHalfZFFromField,
+} from '../sim/field.js';
 import { applyTableSilhouette } from '../sim/tableShape.js';
 import { populateScenery } from '../sim/scenery.js';
 import { applyGardenPlacements, decodeGarden, fieldFromGarden } from '../sim/garden.js';
 import { setupWaveSpawners } from '../sim/waveSpawner.js';
 import { setTeamAssignments, setTeamNeutralPairs } from '../sim/teams.js';
 import { armStoryProtectFromGarden } from '../sim/storyProtect.js';
-import { buildWorldFromConfig, spawnBases, stressReservedPoints } from '../sim/worldSetup.js';
+import {
+  buildWorldFromConfig,
+  spawnBases,
+  stressReservedPoints,
+  stressSpawnDryPads,
+} from '../sim/worldSetup.js';
 import { step } from '../sim/step.js';
 import { excludeHumanAiPlayers, generateAiCommands } from '../sim/ai.js';
 import { generateEconomyCommands } from '../sim/aiEconomy.js';
@@ -56,7 +69,6 @@ let world;
 let field;
 let views;
 let aiPlayers = [];
-let publishedTypeCount = 0;
 
 function commandsForTick(frames) {
   let cmds = mergeFrames(frames);
@@ -101,7 +113,16 @@ self.onmessage = (e) => {
         : mapSizeForConfig(msg.config);
       field = garden
         ? fieldFromGarden(msg.config.garden)
-        : buildField(msg.config.seed, { width: size.mapW, height: size.mapH });
+        : buildField(msg.config.seed, {
+          width: size.mapW,
+          height: size.mapH,
+          ...((msg.config.stressPerSide | 0) > 0
+            ? {
+              spawnPads: stressSpawnDryPads((size.mapW * TILE_SIZE_F) / 2),
+              spawnPadClearTiles: STRESS_SPAWN_CLEAR_TILES,
+            }
+            : {}),
+        });
       if (!garden && (msg.config.stressPerSide | 0) > 0) {
         field.cameraHalfF = STRESS_CAMERA_HALF_F;
       }
@@ -161,7 +182,6 @@ self.onmessage = (e) => {
       bindDoors(world, field);
       beginSharedPublish(views);
       publishType(world, views);
-      publishedTypeCount = world.count;
       publishWorld(world, views);
       publishProjectiles(world, views);
       endSharedPublish(views);
@@ -202,10 +222,9 @@ self.onmessage = (e) => {
       const tPub0 = performance.now();
       beginSharedPublish(views);
       publishWorld(world, views);
-      if (world.count > publishedTypeCount) {
-        publishType(world, views, publishedTypeCount);
-        publishedTypeCount = world.count;
-      }
+      // Type changes in place (villager → brigand, warrior → champion). New
+      // spawns are not the only time the renderer needs a fresh type.
+      publishType(world, views);
       publishProjectiles(world, views);
       endSharedPublish(views);
       const publishMs = performance.now() - tPub0;
@@ -279,7 +298,6 @@ self.onmessage = (e) => {
       const tick = importWorldCheckpoint(world, field, msg.checkpoint);
       beginSharedPublish(views);
       publishType(world, views);
-      publishedTypeCount = world.count;
       publishWorld(world, views);
       publishProjectiles(world, views);
       endSharedPublish(views);

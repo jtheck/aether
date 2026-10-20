@@ -89,6 +89,13 @@
     #resource-bank .resource-icon.is-flash circle {
       stroke: #ec3 !important;
     }
+    #resource-bank .resource-icon.is-flash-short {
+      animation: resource-overflow-flash 0.4s ease-out 1;
+    }
+    #resource-bank .resource-icon.is-flash-short path,
+    #resource-bank .resource-icon.is-flash-short circle {
+      stroke: #e44 !important;
+    }
     @keyframes resource-overflow-flash {
       0%, 35% { opacity: 0.6; }
       100% { opacity: 0; }
@@ -127,6 +134,7 @@
     #radial-prices .radial-price svg * { stroke: currentColor !important; fill: none !important; }
     #radial-prices .radial-price[hidden] { display: none; }
     #koth-controls {
+      user-select: none;
       position: fixed; left: 12px; top: 150px; z-index: 10001;
       display: flex; flex-direction: column; gap: 6px;
       width: min(236px, calc(100vw - 24px));
@@ -258,7 +266,19 @@
     #side_menu .page { display: none; flex: 1; overflow-y: auto; overflow-x: hidden; padding: 5px;}
     #side_menu .page.is-active { display: block; }
     #side_menu .row { margin-bottom: 14px; }
-    #side_menu [data-profile] { text-align: center; }
+    #side_menu [data-profile] {
+      margin: 2px 0 18px;
+      padding: 6px 8px 8px;
+      text-align: center;
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      line-height: 1.15;
+      color: var(--player, #c8cbd0);
+      text-shadow: 0px 0px 21px #fff;
+      border-bottom: 2px solid var(--player, #c8cbd0);
+    }
+    #side_menu .settings-split { border: 0; border-top: 1px solid #2a3140; margin: 2px 0 16px; }
     #side_menu label { display: block; margin-bottom: 4px; opacity: .8; }
     #side_menu input, #side_menu select { margin: 0; }
     #side_menu input[type="text"], #side_menu select { width: 100%; box-sizing: border-box; padding: 4px 6px; background: #161b24; color: inherit; border: 1px solid #2a3140; border-radius: 3px; font: inherit; }
@@ -286,11 +306,12 @@
     #side_menu .page::-webkit-scrollbar-corner,
     #side_menu #privacy_poli::-webkit-scrollbar-corner { background: transparent; }
     #side_menu .value { float: right; opacity: .7; }
-    #side_menu .note { min-height: 15px; font-size: 11px; color: #e0b050; }
+    #side_menu .note { min-height: 15px; font-size: 11px; color: #e0b050; user-select: none; -webkit-user-select: none; }
     #side_menu .btn {
       display: block; width: 100%; box-sizing: border-box; margin: 0 0 8px; padding: 8px 10px;
       background: #161b24; color: inherit; border: 1px solid #2a3140; border-radius: 3px;
       font: inherit; text-align: left; cursor: pointer;
+      user-select: none; -webkit-user-select: none;
     }
     #os_kbd { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 10010; width: min(640px, 96vw); padding: 10px; background: #0c0f14; border: 1px solid #2a3140; border-radius: 6px; }
     #os_kbd[hidden] { display: none; }
@@ -315,13 +336,68 @@
     #side_menu #menu-koth-status,
     #side_menu #menu-match-status { font-weight: 600; margin-bottom: 4px; }
     #side_menu #menu-lobbies.is-dimmed { opacity: .4; pointer-events: none; }
-    #side_menu .lobby-drawer { margin-bottom: 8px; }
-    #side_menu .lobby-drawer-body { margin: 6px 0 0 4px; }
+    #side_menu .menu-mode {
+      margin: 0 0 12px;
+      padding: 8px 8px 2px 10px;
+      border: 1px solid #2a3140;
+      border-left-width: 3px;
+      border-radius: 3px;
+    }
+    #side_menu .menu-mode[data-mode="koth"] { border-left-color: aqua; }
+    #side_menu .menu-mode[data-mode="onevsone"] { border-left-color: #e24b4b; }
+    #side_menu .menu-mode[data-mode="teams"] { border-left-color: #5b8cff; }
+    #side_menu .menu-mode[data-mode="adventure"] { border-left-color: #e0b050; }
+    #side_menu .menu-mode-title {
+      margin: 0 0 2px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    #side_menu #menu-koth-browse > .note { margin: 0 0 8px; }
+    #side_menu .lobby-drawer.menu-mode { margin-bottom: 12px; }
+    #side_menu .menu-mode .lobby-drawer-toggle {
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      margin: 0 0 2px;
+      padding: 2px 0 4px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-size: 12px;
+    }
+    #side_menu .menu-mode .lobby-drawer-toggle::after {
+      content: "▸";
+      float: right;
+      letter-spacing: 0;
+      opacity: .55;
+    }
+    #side_menu .menu-mode .lobby-drawer-toggle[aria-expanded="true"]::after { content: "▾"; }
+    #side_menu .menu-mode .lobby-drawer-toggle:hover,
+    #side_menu .menu-mode .lobby-drawer-toggle:focus-visible { border-color: transparent; }
+    #side_menu .lobby-drawer-body {
+      margin: 4px 0 6px;
+      padding-left: 8px;
+      border-left: 1px solid #2a3140;
+    }
+    #side_menu .menu-solo {
+      margin-top: 4px;
+      padding-top: 10px;
+      border-top: 1px solid #2a3140;
+    }
+    #side_menu .menu-solo h4 {
+      margin: 0 0 10px;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      opacity: .75;
+    }
     #side_menu .lobby-seat-group { margin-bottom: 8px; }
     #side_menu .lobby-seat-group-title { opacity: .7; margin-bottom: 4px; }
     #side_menu .lobby-seat { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
     #side_menu .lobby-seat-name { flex: 1; min-width: 0; }
-    #side_menu .lobby-seat-status { opacity: .7; font-size: 12px; width: 5.8em; text-align: right; }
+    #side_menu .lobby-seat-status { opacity: .7; font-size: 12px; flex: none; white-space: nowrap; text-align: right; }
     .lobby-seat-moves { display: flex; gap: 2px; width: 2.6em; flex: none; }
     .lobby-seat-move {
       padding: 0 4px; background: transparent; color: inherit;
@@ -333,13 +409,31 @@
       gap: 14px;
       pointer-events: none;
     }
-    #match-lobby-overlay.is-lag,
-    #match-lobby-overlay.is-parked {
+    #match-lobby-overlay.is-lag {
       align-items: flex-start;
       justify-content: flex-start;
       padding: 12px;
     }
+    #match-lobby-overlay.is-parked {
+      top: auto;
+      right: auto;
+      left: var(--corner-left, 12px);
+      bottom: var(--lobby-bottom, var(--corner-bottom, 40px));
+      width: var(--corner-width, min(320px, calc(100vw - 24px)));
+      height: auto;
+      align-items: stretch;
+      justify-content: flex-start;
+      padding: 0;
+      gap: 0;
+    }
     #match-lobby-overlay[hidden] { display: none; }
+    #match-lobby-overlay.is-ranked-result .match-lobby-setting,
+    #match-lobby-overlay.is-ranked-result #match-lobby-seats,
+    #match-lobby-overlay.is-ranked-result #match-lobby-title,
+    #match-lobby-overlay.is-ranked-result #match-lobby-note,
+    #match-lobby-overlay.is-ranked-result #match-lobby-ready,
+    #match-lobby-overlay.is-ranked-result #match-lobby-start,
+    #match-lobby-overlay.is-ranked-result .match-lobby-min { display: none; }
     #match-lobby-overlay .match-lobby-panel {
       pointer-events: auto;
       position: relative;
@@ -350,10 +444,28 @@
       color: #fff;
       font: 13px/1.35 system-ui, sans-serif;
     }
+    #match-lobby-overlay.is-parked .match-lobby-panel {
+      width: 100%;
+      padding: 8px 10px;
+      font-size: 12px;
+    }
+    #match-lobby-overlay.is-parked h3 { margin: 0 28px 4px 0; font-size: 13px; }
+    #match-lobby-overlay.is-parked .lobby-seat-group { margin-bottom: 4px; }
+    #match-lobby-overlay.is-parked .lobby-seat { gap: 6px; margin-bottom: 2px; }
+    #match-lobby-overlay.is-parked #match-over { margin: 0 28px 4px 0; font-size: 13px; }
+    #match-lobby-overlay.is-parked .match-replay-row { margin-top: 6px; }
+    #match-lobby-overlay.is-parked .match-lobby-panel > .btn:not(.match-lobby-min) {
+      display: inline-block;
+      width: auto;
+      margin: 6px 6px 0 0;
+      padding: 4px 8px;
+    }
+    #match-lobby-overlay.is-parked .note { margin-top: 4px; }
     #match-lobby-overlay.is-parked .match-lobby-setting { display: none; }
     #match-lobby-overlay .btn.match-lobby-min {
       position: absolute; top: 6px; right: 8px;
-      width: auto; margin: 0; padding: 2px 8px;
+      width: auto; min-width: 22px; margin: 0; padding: 2px 0;
+      text-align: center; line-height: 1;
     }
     #match-lobby-overlay .match-replay-row {
       display: flex; gap: 8px; margin: 8px 0 0;
@@ -361,18 +473,17 @@
     #match-lobby-overlay .match-replay-row .btn {
       flex: 1; width: auto; margin: 0; text-align: center;
     }
-    #match-lobby-overlay.is-parked .match-replay-row,
     #match-lobby-overlay .match-replay-row:not(:has(button:not([hidden]))) { display: none; }
     #replay-watch {
       position: fixed;
-      left: 12px;
-      bottom: 12px;
+      left: var(--corner-left, 12px);
+      bottom: var(--replay-bottom, var(--corner-bottom, 40px));
       z-index: 10002;
       display: flex;
       flex-direction: column;
       align-items: stretch;
       gap: 6px;
-      width: min(340px, calc(100vw - 24px));
+      width: var(--corner-width, min(320px, calc(100vw - 24px)));
       box-sizing: border-box;
       padding: 8px 10px;
       background: #0c0f14;
@@ -382,10 +493,10 @@
       user-select: none;
     }
     #replay-watch[hidden] { display: none; }
-    body:has(#replay-watch:not([hidden])) #version { visibility: hidden; }
     #replay-watch .replay-transport {
       display: flex;
       align-items: center;
+      justify-content: space-between;
       gap: 6px;
     }
     #replay-watch button {
@@ -398,19 +509,56 @@
       cursor: pointer;
     }
     #replay-watch button:disabled { opacity: .45; cursor: default; }
-    #replay-watch .replay-speed { position: relative; }
-    #replay-speed-pop {
-      position: absolute;
-      right: 0;
-      bottom: calc(100% + 6px);
-      width: 148px;
-      box-sizing: border-box;
-      padding: 8px;
-      background: #0c0f14;
-      border: 1px solid #2a3140;
+    #replay-watch .replay-transport button {
+      flex: 0 0 auto;
+      min-width: 1.8em;
+      padding: 4px 6px;
+      text-align: center;
     }
-    #replay-speed-pop[hidden] { display: none; }
-    #replay-watch .replay-scrub { position: relative; }
+    #replay-watch .replay-speed {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: end;
+      min-width: 0;
+    }
+    #replay-watch .replay-speed-slider {
+      position: relative;
+      grid-column: 2;
+      width: 148px;
+      padding-top: 12px;
+    }
+    #replay-watch #replay-speed-slider { height: 12px; margin: 0; }
+    #replay-watch .replay-speed-stop {
+      position: absolute;
+      top: 0;
+      transform: translateX(-50%);
+      font-size: 11px;
+      line-height: 1;
+      color: #8b97a8;
+      white-space: nowrap;
+      pointer-events: none;
+      left: calc(8px + (100% - 16px) * var(--replay-speed-at, 0.5));
+    }
+    #replay-watch .replay-speed-stop.is-active { color: #fff; }
+    #replay-watch .replay-speed-stop[hidden] { display: none; }
+    #replay-watch #replay-speed {
+      grid-column: 3;
+      justify-self: end;
+      min-width: 3.4em;
+      font-size: 12px;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+      color: #fff;
+      white-space: nowrap;
+    }
+    #replay-watch .replay-scrub {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 2px;
+    }
+    #replay-watch .replay-scrub-track { position: relative; width: 100%; }
     #replay-watch input[type=range] { width: 100%; min-width: 0; margin: 0; }
     #replay-ghost {
       position: absolute;
@@ -428,7 +576,7 @@
     #replay-watch #replay-clock {
       font-variant-numeric: tabular-nums;
       opacity: .85;
-      margin-left: auto;
+      white-space: nowrap;
     }
     #match-lobby-overlay h3 { margin: 0 28px 10px 0; font-size: 15px; }
     #match-over {
@@ -437,8 +585,7 @@
       font: 600 16px/1.25 system-ui, sans-serif;
       color: #f2fbff;
     }
-    #match-over[hidden],
-    #match-lobby-overlay.is-parked #match-over { display: none; }
+    #match-over[hidden] { display: none; }
     #match-over-sub {
       margin-top: 2px;
       font: 500 12px/1.3 system-ui, sans-serif;
@@ -448,10 +595,26 @@
     #match-lobby-overlay .lobby-seat-group-title { opacity: .7; margin-bottom: 4px; }
     #match-lobby-overlay .lobby-seat { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
     #match-lobby-overlay .lobby-seat-name { flex: 1; min-width: 0; }
-    #match-lobby-overlay .lobby-seat-status { width: 5.8em; text-align: right; }
+    #match-lobby-overlay .lobby-seat-status { flex: none; white-space: nowrap; text-align: right; }
     #match-lobby-overlay .match-lobby-setting { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
     #match-lobby-overlay .match-lobby-setting[hidden] { display: none; }
     #match-lobby-overlay .match-lobby-setting label { min-width: 72px; opacity: .8; }
+    #match-lobby-overlay #match-lobby-chapter,
+    #match-lobby-overlay #match-lobby-map { min-width: 0; }
+    #match-lobby-overlay #match-lobby-chapter-row,
+    #match-lobby-overlay #match-lobby-map-row { flex-wrap: wrap; }
+    #match-lobby-overlay .match-lobby-load {
+      flex: 1 0 100%; width: auto; margin: 1px auto 0 0; padding: 0; align-self: flex-start;
+      background: none; border: 0; color: #8b93a0;
+      font-size: 11px; line-height: 1.3; font-family: inherit; font-weight: 400;
+      text-align: left; cursor: pointer;
+    }
+    #match-lobby-overlay .match-lobby-load:hover,
+    #match-lobby-overlay .match-lobby-load:focus-visible { color: aqua; outline: none; }
+    #match-lobby-overlay .match-lobby-load:disabled { opacity: .45; cursor: default; }
+    #match-lobby-overlay .match-lobby-setting input[type="checkbox"] {
+      flex: 0 0 auto; width: auto; margin: 0; padding: 0; background: none; border: 0;
+    }
     #match-lobby-overlay input, #match-lobby-overlay select {
       flex: 1; padding: 4px 6px; background: #161b24; color: inherit;
       border: 1px solid #2a3140; border-radius: 3px; font: inherit;
@@ -477,19 +640,51 @@
     #help_b:hover, #help_b:focus-visible,
     #help_b.is-on { stroke: aqua; opacity: 1; outline: none; }
     #settings_b:active, #help_b:active { stroke: darkmagenta; }
-    #help_pop, #skins_pop {
+    #ladder_pop, #ladder_go, #help_pop, #skins_pop {
       position: fixed; inset: 0; z-index: 10008;
       display: grid; place-items: center;
       background: rgba(12, 15, 20, .72);
     }
-    #help_pop[hidden], #skins_pop[hidden] { display: none; }
+    #ladder_pop[hidden], #ladder_go[hidden], #help_pop[hidden], #skins_pop[hidden] { display: none; }
     #help_pop .help-card, #skins_pop .help-card {
       position: relative; width: min(420px, 92vw); max-height: min(78vh, 560px);
       overflow: auto; box-sizing: border-box; margin: 0; padding: 16px 18px 18px;
       background: #0c0f14; border: 1px solid #2a3140; color: #fff;
       font: 13px/1.45 system-ui, sans-serif;
     }
-    #help_pop h3, #skins_pop h3 { margin: 0 28px 10px 0; font-size: 15px; font-weight: 600; }
+    #ladder_go h3, #help_pop h3, #skins_pop h3 { margin: 0 28px 10px 0; font-size: 15px; font-weight: 600; }
+    #ladder_pop .ladder-card, #ladder_go .ladder-card {
+      display: flex; flex-direction: column; overflow: hidden;
+      width: min(420px, 92vw); max-height: min(78vh, 560px);
+      box-sizing: border-box; margin: 0;
+      background: #0c0f14; border: 1px solid #2a3140; color: #fff;
+      font: 13px/1.45 system-ui, sans-serif;
+    }
+    #ladder_pop .ladder-bar {
+      display: flex; align-items: center; gap: 10px; flex: 0 0 auto;
+      padding: 8px 8px 8px 16px;
+    }
+    #ladder_pop .ladder-bar h3 { margin: 0; font-size: 15px; font-weight: 600; }
+    #ladder_status { margin: 0; font-size: 11px; color: #e0b050; white-space: nowrap; }
+    #ladder_close {
+      position: static; margin-left: auto; width: 28px; height: 28px; padding: 0;
+      background: transparent; color: inherit; border: 0; font: 18px/1 system-ui, sans-serif;
+      cursor: pointer; opacity: .7;
+    }
+    #ladder_pop .ladder-body { overflow: auto; padding: 0 16px 14px; }
+    #ladder_go .ladder-card { padding: 16px 18px; }
+    #ladder_pop h4 { margin: 12px 0 4px; font-size: 12px; font-weight: 600; }
+    #ladder_pop table { width: 100%; border-collapse: collapse; margin: 0 0 8px; }
+    #ladder_pop th, #ladder_pop td { text-align: left; padding: 3px 6px; border-bottom: 1px solid #2a3140; font-weight: 400; }
+    #ladder_pop tr.is-you { color: aqua; }
+    #ladder_pop p { margin: 2px 0; }
+    #ladder_pop .btn, #ladder_go .btn {
+      display: inline-block; width: auto; margin: 8px 8px 0 0; padding: 8px 10px;
+      background: #161b24; color: inherit; border: 1px solid #2a3140; border-radius: 3px;
+      font: inherit; cursor: pointer;
+    }
+    #ladder_pop .btn:hover, #ladder_pop .btn:focus-visible,
+    #ladder_go .btn:hover, #ladder_go .btn:focus-visible { border-color: aqua; color: aqua; outline: none; }
     #help_pop details { margin: 0 0 8px; }
     #help_pop summary {
       display: block; padding: 8px 10px; background: #161b24; color: inherit;
@@ -527,23 +722,18 @@
       background: transparent; color: inherit; border: 0; font: 18px/1 system-ui, sans-serif;
       cursor: pointer; opacity: .7;
     }
+    #ladder_close:hover, #ladder_close:focus-visible,
     #help_close:hover, #help_close:focus-visible,
     #skins_close:hover, #skins_close:focus-visible { color: aqua; opacity: 1; outline: none; }
-    #skins_pop .skin-item { margin: 0 0 14px; }
-    #skins_pop .skin-name { margin: 0 0 6px; font-weight: 600; }
     #skins_pop .skin-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 8px; }
     #skins_pop .skin-row label, #skins_pop .skin-row span { margin: 0; }
     #skins_pop select {
       margin: 0; padding: 4px 6px; background: #161b24; color: inherit;
       border: 1px solid #2a3140; border-radius: 3px; font: inherit;
     }
-    #skins_pop a.btn {
-      display: inline-block; margin: 0; padding: 6px 8px; background: #161b24; color: inherit;
-      border: 1px solid #2a3140; border-radius: 3px; font: inherit; text-decoration: none; white-space: nowrap;
-    }
-    #skins_pop a.btn:hover, #skins_pop a.btn:focus-visible { border-color: aqua; color: aqua; outline: none; }
-    #skins_pop a.btn:active { border-color: darkmagenta; color: darkmagenta; }
-    #skins_pop .note { margin: 0; font-size: 11px; color: #e0b050; }
+    #skins_pop .note { margin: 8px 0 0; font-size: 11px; color: #e0b050; }
+    #skins_pop .note a { color: inherit; }
+    #skins_pop .note[hidden] { display: none; }
     #side_menu .about { margin-top: 8px; line-height: 1.45; }
     #side_menu .about h4 { margin: 10px 0 8px; font-size: 13px; font-weight: 600; }
     #side_menu .about hr { width: 60%; border: 0; border-top: 1px solid #2a3140; margin: 14px 0; }
@@ -577,7 +767,7 @@
 </head>
 <body>
   <div id="seo"><h1>Aether Garden</h1></div>
-  <div id="version" style="position:absolute;bottom: 9px;left: 9px;color: #9999;z-index: 9;font-size: 9px;user-select: none;font-family: georgia;">v 0.4</div>
+  <div id="version" style="position:absolute;bottom: 9px;left: 9px;color: #9999;z-index: 9;font-size: 9px;user-select: none;font-family: georgia;">v 0.5</div>
   <div id="boot-splash" aria-hidden="true">
     <img src="/assets/images/skinnyheader.png" alt="Æther.Garden" width="506" height="56" decoding="sync" fetchpriority="high" />
   </div>
@@ -596,7 +786,7 @@
   </div>
   <div id="match-lobby-overlay" hidden>
     <div class="match-lobby-panel">
-      <button type="button" class="btn match-lobby-min" id="match-lobby-min" aria-label="Minimize lobby">×</button>
+      <button type="button" class="btn match-lobby-min" id="match-lobby-min" aria-label="Minimize lobby">−</button>
       <div id="match-over" hidden>
         <div id="match-over-title"></div>
         <div id="match-over-sub"></div>
@@ -615,12 +805,23 @@
         <label for="match-lobby-seed">Seed</label>
         <input id="match-lobby-seed" type="text" inputmode="numeric">
       </div>
+      <div id="match-lobby-map-row" class="match-lobby-setting" hidden>
+        <label for="match-lobby-map">Map</label>
+        <select id="match-lobby-map"></select>
+      </div>
+      <div id="match-lobby-load-row" class="match-lobby-setting" hidden>
+        <button type="button" class="match-lobby-load" id="match-lobby-load-garden" title="A .garden or .campaign you made">Load your own map</button>
+      </div>
       <div id="match-lobby-chapter-row" class="match-lobby-setting" hidden>
         <label for="match-lobby-chapter">Chapter</label>
         <select id="match-lobby-chapter"></select>
-        <button type="button" class="btn" id="match-lobby-load-map">Load</button>
-        <input id="match-lobby-map-file" type="file" accept=".garden,.campaign,.json" hidden>
+        <button type="button" class="match-lobby-load" id="match-lobby-load-map" title="A .campaign or .garden you made, not the official adventure">Load your own campaign</button>
       </div>
+      <div id="match-lobby-spectators-row" class="match-lobby-setting" hidden>
+        <label for="match-lobby-spectators">Allow spectators</label>
+        <input id="match-lobby-spectators" type="checkbox">
+      </div>
+      <input id="match-lobby-map-file" type="file" accept=".garden,.campaign,.json" hidden>
       <button type="button" class="btn" id="match-lobby-ready">Ready</button>
       <button type="button" class="btn" id="match-lobby-start" hidden>Start</button>
       <button type="button" class="btn" id="match-lobby-leave">Leave</button>
@@ -663,11 +864,12 @@
     <div class="page is-active" data-page="main">
       <img class="skinny-header" src="/assets/images/skinnyheader.png" alt="Æther.Garden" width="506" height="56">
       <div class="row" data-profile></div>
-      <div class="row" id="menu-koth" hidden>
+      <div class="row menu-mode" id="menu-koth" data-mode="koth" hidden>
+        <h4 class="menu-mode-title">King of the Hill</h4>
         <div id="menu-koth-browse">
           <div id="menu-koth-list" role="list"></div>
-          <div id="menu-koth-empty" class="note">Listening for lobbies…</div>
-          <button type="button" class="btn" id="menu-koth-start">Start a lobby</button>
+          <div id="menu-koth-empty" class="note">Listening for King of the Hill…</div>
+          <button type="button" class="btn" id="menu-koth-start">Start King of the Hill</button>
         </div>
         <div id="menu-koth-live" hidden>
           <div id="menu-koth-status"></div>
@@ -680,15 +882,16 @@
 
 
       <div class="row" id="menu-lobbies" hidden>
-        <div class="lobby-drawer" data-mode="onevsone">
+        <div class="lobby-drawer menu-mode" data-mode="onevsone">
           <button type="button" class="btn lobby-drawer-toggle" aria-expanded="false">1 vs 1</button>
           <div class="lobby-drawer-body" hidden>
             <div class="lobby-type-list" role="list"></div>
             <div class="lobby-type-empty note">Listening for lobbies…</div>
             <button type="button" class="btn lobby-create">Create 1 vs 1 lobby</button>
+            <button type="button" class="btn" id="ladder-open" aria-controls="ladder_pop" aria-expanded="false">Ladder</button>
           </div>
         </div>
-        <div class="lobby-drawer" data-mode="teams">
+        <div class="lobby-drawer menu-mode" data-mode="teams">
           <button type="button" class="btn lobby-drawer-toggle" aria-expanded="false">Teams</button>
           <div class="lobby-drawer-body" hidden>
             <div class="lobby-type-list" role="list"></div>
@@ -696,7 +899,7 @@
             <button type="button" class="btn lobby-create">Create Teams lobby</button>
           </div>
         </div>
-        <div class="lobby-drawer" data-mode="adventure">
+        <div class="lobby-drawer menu-mode" data-mode="adventure">
           <button type="button" class="btn lobby-drawer-toggle" aria-expanded="false">Adventure</button>
           <div class="lobby-drawer-body" hidden>
             <div class="lobby-type-list" role="list"></div>
@@ -715,10 +918,8 @@
       </div>
 
 
-      <div class="row">
-        <br><br>
-      </div>
-
+      <div class="menu-solo">
+        <h4>Offline</h4>
       <div class="row">
         <button type="button" class="btn" id="solo_ai_b">1v1 vs AI</button>
         <div class="note">Offline match — same armies as a live game.</div>
@@ -735,9 +936,27 @@
         <button type="button" class="btn" id="open_replay_b">Open replay</button>
         <div class="note">Watch a saved .gecho — a garden echo of a match.</div>
       </div>
+      </div>
     </div>
     <div class="page" data-page="settings">
       <h4 style="text-align: center; letter-spacing: 11px;">SETTINGS</h4>
+      <div class="row">
+        <label for="name_input">Player name</label>
+        <input type="text" id="name_input" maxlength="24" spellcheck="false" autocomplete="off" inputmode="text" enterkeyhint="done">
+      </div>
+      <div class="row">
+        <label for="color_picker">Colour</label>
+        <select id="color_picker"></select>
+      </div>
+      <div class="row">
+        <button type="button" class="btn" id="skins_b" aria-controls="skins_pop" aria-expanded="false">Skins</button>
+        <div class="note">Alternate looks for units and buildings.</div>
+      </div>
+      <hr class="settings-split">
+      <div class="row">
+        <label for="volume_slider">Volume <span class="value" id="volume_value"></span></label>
+        <input type="range" id="volume_slider" min="0" max="100" step="1">
+      </div>
       <div class="row">
         <label for="shadow_slider">Shadows <span class="value" id="shadow_value"></span></label>
         <input type="range" id="shadow_slider" min="0" max="3" step="1">
@@ -751,26 +970,6 @@
       <div class="row">
         <label for="aa_enabled"><input type="checkbox" id="aa_enabled"> Antialiasing</label>
         <div class="note" id="aa_note"></div>
-      </div>
-      <div class="row">
-        <label for="volume_slider">Volume <span class="value" id="volume_value"></span></label>
-        <input type="range" id="volume_slider" min="0" max="100" step="1">
-      </div>
-      <div class="row">
-        <label for="name_input">Player name</label>
-        <input type="text" id="name_input" maxlength="24" spellcheck="false" autocomplete="off" inputmode="text" enterkeyhint="done">
-      </div>
-      <div class="row">
-        <label for="color_picker">Colour</label>
-        <select id="color_picker"></select>
-      </div>
-      <div class="row">
-        <button type="button" class="btn" id="skins_b" aria-controls="skins_pop" aria-expanded="false">Skins</button>
-        <div class="note">Alternate looks for units and buildings.</div>
-      </div>
-      <div class="row">
-        <button type="button" class="btn" id="hide_hud_b">Hide HUD</button>
-        <div class="note">Stays off for recording. Press O to show again.</div>
       </div>
       <div class="about">
         <br><br>
@@ -841,6 +1040,42 @@
 </svg></div>
     <div id="settings_b" title="Settings" role="button" tabindex="0">
       <svg width="100%" height="100%" viewBox="0 0 99 99"><path style="fill:none;stroke-width:5.7247;stroke-linecap:round;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1" d="M19.848 32.659c-1.806-1.905-4.302-3.979-3.715-6.864.587-2.886 3.377-4.255 5.047-6.328 2.445-2.1 4.659-5.56 7.23-6.445 2.572-.885 4.303.334 5.625 2.136 1.444 2.713 4.159.962 5.743-.022 1.584-.983.24-3.364.553-4.91.847-2.783 3.137-3.896 6.53-3.612 3.393.285 8.163-.171 12.152.131 2.662.855 3.88 3.565 3.551 6.178-.847 2.877 2.343 3.544 4.249 3.831 1.906.287 2.703-3.106 4.718-3.6 2.318-.704 4.694.416 6.074 2.332 2.76 2.844 5.757 5.526 8.373 8.47 1.432 2.208.843 5.306-1.37 6.84-2.75 1.304-.863 3.523-.202 5.424.56 1.77 3.223.504 4.69.965 2.867.574 4.58 3.565 4.027 6.362-.087 4.144.173 8.37-.129 12.463-.903 2.728-3.739 3.794-6.36 3.4-2.815-.855-3.66 2.272-3.701 4.4-.044 2.129 3.832 3.143 3.715 6.158-.116 3.015-3.148 4.714-4.856 6.902-2.183 2.054-4.186 4.389-6.481 6.268-2.39 1.178-5.253.166-6.771-1.984-1.428-2.729-3.793.123-5.917.4M19.98 80.1c-5.245 1.61-7.395.366-8.912-3.324-1.517-3.69-5.408-9.343-.99-11.256 4.418-1.913 1.252-5.106-2.313-5.849-3.565-.743-1.383-5.87-.649-8.652.595-3.907 3.17-8.828 7.766-7.428 4.596 1.401 2.93-3.363 1.658-6.44-1.272-3.076 3.584-4.967 6.12-6.444 2.633-1.203 6.81-5.717 8.635-2.048 1.825 3.669 6.523 4.471 7.034.12.512-4.351 5.305-2.722 7.898-1.583 2.61.841 5.56 1.053 7.88 2.547 2.932 2.642-.63 8.371 3.075 8.724 3.705.354 5.675-3.05 7.805-.139 1.775 3.475 4.201 6.704 5.57 10.36.73 4.216-6.377 5.791-3.895 8.755 2.481 2.963 6.003 1.783 5.552 5.261-1.079 3.69-1.956 7.472-3.179 11.132-2.418 3.981-8.885-.369-9.17 3.624-.287 3.992 3.078 6.539-.7 8.185-3.041 1.654-6.004 3.484-9.102 5.008-4.584 1.5-6.762-6.63-9.566-3.565-2.803 3.065-1.815 5.694-4.947 5.31-3.62-.996-7.274-1.972-11.295-3.579-4.021-1.606.97-10.329-4.275-8.72zm30.24-22.711c.178 1.042.34 2.142.14 3.18-.377 1.97-.998 3.998-2.263 5.56-.794.98-1.716 1.896-2.78 2.576-2.67 1.707-6.104 2.281-9.212 1.467h0c-1.337-.451-2.836-.829-3.865-1.813-1.038-.991-2.251-1.885-2.992-3.108-1.627-2.687-2.132-6.068-1.269-9.143 1.01-3.593 3.887-6.46 7.381-7.759 1.176-.437 2.344-.556 3.568-.529 1.275.03 2.572.092 3.785.513"/></svg>
+    </div>
+  </div>
+  <div id="ladder_pop" hidden>
+    <div class="ladder-card" role="dialog" aria-modal="true" aria-labelledby="ladder_title">
+      <div class="ladder-bar">
+        <h3 id="ladder_title">1v1 ladder</h3>
+        <span id="ladder_status"></span>
+        <button type="button" id="ladder_close" aria-label="Close ladder">×</button>
+      </div>
+      <div class="ladder-body">
+      <p>
+        <button type="button" class="btn" id="ladder_board_1v1" aria-pressed="true">1v1</button>
+        <button type="button" class="btn" id="ladder_board_teams" aria-pressed="false">Teams</button>
+      </p>
+      <button type="button" class="btn" id="ladder_find">Find match</button>
+      <h4>Top 10</h4>
+      <div id="ladder_top"></div>
+      <div id="ladder_around_wrap">
+        <h4>Around you</h4>
+        <div id="ladder_around"></div>
+      </div>
+      <h4>All ranks</h4>
+      <div id="ladder_page"></div>
+      <p>
+        <button type="button" class="btn" id="ladder_prev">Previous</button>
+        <button type="button" class="btn" id="ladder_next">Next</button>
+        <span id="ladder_page_label" class="note">1 / 1</span>
+      </p>
+      </div>
+    </div>
+  </div>
+  <div id="ladder_go" hidden>
+    <div class="ladder-card" role="dialog" aria-modal="true" aria-labelledby="ladder_go_names">
+      <h3 id="ladder_go_names">Match</h3>
+      <p id="ladder_go_count">Connecting</p>
+      <button type="button" class="btn" id="ladder_go_cancel">Cancel</button>
     </div>
   </div>
   <div id="help_pop" hidden>
@@ -965,25 +1200,32 @@
       <h3 id="skins_title">Skins</h3>
       <p>Alternate looks for units and buildings.</p>
       <div id="skins_list"></div>
+      <p id="skins_store_note" class="note" hidden>Purchase on <a href="https://store.steampowered.com/app/5043860/" target="_blank" rel="noreferrer">Steam</a> to use these looks.</p>
     </div>
   </div>
   <div id="replay-watch" hidden>
     <div class="replay-transport">
-      <button type="button" id="replay-rew" title="Back 10 seconds" aria-label="Back 10 seconds">−10s</button>
-      <button type="button" id="replay-play">Play</button>
-      <button type="button" id="replay-fwd" title="Forward 10 seconds" aria-label="Forward 10 seconds">+10s</button>
-      <span id="replay-clock">0 / 0</span>
-      <span class="replay-speed">
-        <button type="button" id="replay-speed" title="Playback speed" aria-expanded="false" aria-controls="replay-speed-pop">1×</button>
-        <div id="replay-speed-pop" hidden>
-          <input type="range" id="replay-speed-slider" min="0" max="8" step="1" value="3" aria-label="Playback speed">
-        </div>
-      </span>
-      <button type="button" id="replay-close" aria-label="Hide replay controls">×</button>
+      <button type="button" id="replay-start" title="Jump to start" aria-label="Jump to start">|&lt;</button>
+      <button type="button" id="replay-rew" title="Back 10 seconds" aria-label="Back 10 seconds">&lt;</button>
+      <button type="button" id="replay-play" title="Play" aria-label="Play">&#9654;</button>
+      <button type="button" id="replay-fwd" title="Forward 10 seconds" aria-label="Forward 10 seconds">&gt;</button>
+      <button type="button" id="replay-end" title="Jump to end" aria-label="Jump to end">&gt;|</button>
+      <button type="button" id="replay-close" title="Back to result" aria-label="Back to result">×</button>
+    </div>
+    <div class="replay-speed">
+      <div class="replay-speed-slider">
+        <span id="replay-speed-zero" class="replay-speed-stop is-active" style="--replay-speed-at: 0.5" title="Pause">0×</span>
+        <span id="replay-speed-one" class="replay-speed-stop" style="--replay-speed-at: 0.7222" title="Play">1×</span>
+        <input type="range" id="replay-speed-slider" min="0" max="18" step="1" value="9" aria-label="Playback speed">
+      </div>
+      <span id="replay-speed">0×</span>
     </div>
     <div class="replay-scrub">
-      <div id="replay-ghost" hidden title="Catch-up position"></div>
-      <input type="range" id="replay-scrub" min="0" max="0" value="0" step="1" aria-label="Replay position">
+      <span id="replay-clock">0:00 / 0:00</span>
+      <div class="replay-scrub-track">
+        <div id="replay-ghost" hidden title="Catch-up position"></div>
+        <input type="range" id="replay-scrub" min="0" max="0" value="0" step="1" aria-label="Replay position">
+      </div>
     </div>
   </div>
   <input type="file" id="replay-file" accept=".gecho,.json,application/json" hidden>

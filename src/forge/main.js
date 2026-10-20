@@ -82,7 +82,7 @@ import {
   workshopPageUrl,
 } from '../app/workshop.js';
 import { RESOURCE_KINDS, STARTING_RESOURCES } from '../sim/resources.js';
-import { applyAuthoredScenery, clearAllScenery, clearOffTableScenery, populateScenery, paintSceneryBrush, SCENERY } from '../sim/scenery.js';
+import { applyAuthoredScenery, clearAllScenery, clearOffTableScenery, clearSceneryOnWater, populateScenery, paintSceneryBrush, SCENERY } from '../sim/scenery.js';
 import { DOODAD, paintDoodadBrush } from '../sim/doodads.js';
 import { UNIT_DEFS } from '../sim/unitTypes.js';
 import { BUILDING_FOOTPRINTS, BUILDING_YAW_SNAP, PLACEABLE_BUILDINGS, snapBuildingWorld, snapBuildingYaw } from '../sim/buildings.js';
@@ -97,7 +97,6 @@ import {
   removeWallSection,
   sameWallCorner,
   snapWallCorner,
-  wallKindOf,
 } from '../sim/walls.js';
 import { DEFAULT_MAP_TYPE, MAP_TYPES, normalizeMapType } from '../sim/mapType.js';
 import { agorasForMapType, spawnPadsForMapType } from '../sim/worldSetup.js';
@@ -119,6 +118,7 @@ import { createStorySpeech, narratorLines } from '../story/speech.js';
 import { findNamedUnit, mergeStoryParty, namedUnits, normalizeSpeaker, storyPartyPlacements } from '../story/cast.js';
 import { OBJ_KINDS, TERMINAL_KINDS, isTerminalObjective, normalizeObjectives } from '../story/objectives.js';
 import { createStorySheet } from './storySheet.js';
+import { createHistory } from './history.js';
 import {
   WAVE_ERAS,
   WAVE_ROUTE_MAX,
@@ -204,6 +204,8 @@ const state = {
   brush: 1,
   /** 1–10. 10 matches the old full raise/lower step. */
   liftStrength: 6,
+  /** 1–10. 10 stamps every tile in the scenery brush. */
+  sceneryDensity: 10,
   showGrid: false,
   showScenery: true,
   showChunks: true,
@@ -306,6 +308,10 @@ let storySheet = null;
 let placeDrag = null;
 /** Drag on empty ground. Becomes a select box once the pointer travels. */
 let placeBox = null;
+/** New value each scenery stroke, so another pass can hit different tiles. */
+let scenerySalt = 1;
+const hist = createHistory();
+let commitTimer = 0;
 
 function matVecUnproject(inv, ndcX, ndcY, depth) {
   const x = inv[0] * ndcX + inv[4] * ndcY + inv[8] * depth + inv[12];
@@ -954,7 +960,7 @@ function applyWaveHop(tx, tz) {
   renderWaveEditor();
 }
 
-function undoWaveHop() {
+function removeLastWaveHop() {
   const target = waveTargetObjective(state.objectives);
   if (target && popWaveHop(target)) {
     renderWaveEditor();
@@ -1248,8 +1254,9 @@ function applyGroupDelta(origins, dx, dz) {
       item.z = fx.toFloat(snapped.z);
       changed = true;
     } else if (o.kind === 'agora') {
-      item.x = next[i].x;
-      item.z = next[i].z;
+      const snapped = snapBuildingWorld('agora', fx.fromFloat(next[i].x), fx.fromFloat(next[i].z));
+      item.x = fx.toFloat(snapped.x);
+      item.z = fx.toFloat(snapped.z);
       changed = true;
     }
   }
@@ -1257,21 +1264,21 @@ function applyGroupDelta(origins, dx, dz) {
   return changed;
 }
 
-function beginGroupDrag(pos) {
-  placeDrag = { x: pos.x, z: pos.z, origins: groupOrigins() };
+function beginGroupDrag(pos, pointer) {
+  placeDrag = {
+    x: pos.x,
+    z: pos.z,
+    origins: groupOrigins(),
+    cx: pointer?.clientX ?? 0,
+    cy: pointer?.clientY ?? 0,
+    // A click selects. Movement starts only after the pointer actually travels.
+    armed: !pointer,
+  };
 }
 
 function moveGroupDrag(pos) {
   if (!placeDrag?.origins || !pos) return;
   applyGroupDelta(placeDrag.origins, pos.x - placeDrag.x, pos.z - placeDrag.z);
-}
-
-function moveGroupTo(pos) {
-  const primary = livePicks()[0];
-  const item = primary && placeList(primary.kind)?.[primary.index];
-  if (!item || !pos) return;
-  const here = placementWorld(primary.kind, item);
-  applyGroupDelta(groupOrigins(), pos.x - here.x, pos.z - here.z);
 }
 
 function turnYaw(item, step, snap) {
@@ -1328,8 +1335,9 @@ function rotatePlacePick(dir) {
       item.z = fx.toFloat(snapped.z);
       turnYaw(item, step, true);
     } else if (picks[i].kind === 'agora') {
-      item.x = next[i].x;
-      item.z = next[i].z;
+      const snapped = snapBuildingWorld('agora', fx.fromFloat(next[i].x), fx.fromFloat(next[i].z));
+      item.x = fx.toFloat(snapped.x);
+      item.z = fx.toFloat(snapped.z);
     }
   }
   updatePlaceMarkers();
@@ -1406,8 +1414,10 @@ function finishPlaceBox() {
     updatePlaceMarkers();
     return;
   }
-  if (state.placePicks.length) moveGroupTo({ x: box.x0, z: box.z0 });
-  else applyPlace({ x: box.x0, z: box.z0 });
+  // A click on empty ground places. It does not relocate the current selection.
+  // Dragging the selection is what moves it. Relocating on click made the first
+  // overlap (a grab) stick, so every later click destroyed the previous spot.
+  applyPlace({ x: box.x0, z: box.z0 });
 }
 
 function hitZone(pos) {
@@ -1447,7 +1457,7 @@ function selectZoneAt(index, pos, e) {
   const obj = state.objectives[index];
   state.waveEdit = obj ? { id: obj.id } : null;
   state.placePicks = [{ kind: 'objective', index }];
-  beginGroupDrag(pos);
+  beginGroupDrag(pos, e);
   renderWaveEditor();
   syncPlacePickUi();
   updatePlaceMarkers();
@@ -1491,7 +1501,7 @@ function handlePlacePointerDown(pos, e) {
   if (hit) {
     const already = state.placePicks.some((p) => p.kind === hit.kind && p.index === hit.index);
     if (!already) state.placePicks = [{ kind: hit.kind, index: hit.index }];
-    beginGroupDrag(pos);
+    beginGroupDrag(pos, e);
     try { canvas.setPointerCapture(e.pointerId); } catch { /* already gone */ }
     syncPlacePickUi();
     updatePlaceMarkers();
@@ -1555,7 +1565,8 @@ function applyPlace(pos, { remove = false } = {}) {
     state.waveEdit = { id };
     renderWaveEditor();
   } else if (state.placeKind === 'agora') {
-    state.agoras.push({ owner: state.owner, x: pos.x, z: pos.z });
+    const snapped = snapBuildingWorld('agora', fx.fromFloat(pos.x), fx.fromFloat(pos.z));
+    state.agoras.push({ owner: state.owner, x: fx.toFloat(snapped.x), z: fx.toFloat(snapped.z) });
   } else {
     const snapped = snapBuildingWorld(String(state.placeType), fx.fromFloat(pos.x), fx.fromFloat(pos.z));
     state.buildings.push({
@@ -1588,7 +1599,7 @@ function removeNearestPlacement(pos) {
   if (state.placeKind === 'unit' || state.placeKind === 'party') {
     pickNear(state.units, (u) => unitWorldXZ(u));
   } else if (state.placeKind === 'wavehop') {
-    undoWaveHop();
+    removeLastWaveHop();
   } else if (state.placeKind === 'objective') {
     pickNear(state.objectives, (o) => ({
       x: (o.tx + 0.5) * TILE_SIZE_F - half,
@@ -2223,15 +2234,9 @@ function finishWallRun() {
   updateWallMeshes();
 }
 
-function undoWallPoint() {
-  if (state.wallDraft.length) state.wallDraft.pop();
-  else if (state.walls.runs.length) {
-    const run = state.walls.runs.pop();
-    state.wallDraft = run.points.map((p) => ({ x: p.x, z: p.z }));
-    state.wallKind = wallKindOf(run);
-    state.wallDraftOpenings = (run.openings || []).map((o) => ({ ...o }));
-    syncWallTools();
-  } else return;
+function popWallDraftPoint() {
+  if (!state.wallDraft.length) return;
+  state.wallDraft.pop();
   updateWallMeshes();
 }
 
@@ -2290,7 +2295,7 @@ function clearSectionMarker() {
 }
 
 function layAimText() {
-  return 'Wall: click corners. Right-click finishes the run. Erase takes out one section.';
+  return 'Wall: click corners. Right-click finishes the run. Backspace drops the last corner. Erase takes out one section.';
 }
 
 function updateSectionMarker(pos) {
@@ -2679,6 +2684,13 @@ function applyAt(pos, { add = false } = {}) {
           state.brush,
         )
         : paintTerrainBrush(field, tx, tz, state.terrain, state.brush);
+    if (!leveling && !state.lift && state.terrain === TERRAIN.WATER) {
+      const cleared = clearSceneryOnWater(field, tx, tz, state.brush);
+      if (cleared.length) {
+        field.sceneryAuthored = true;
+        queueSceneryPaint(cleared);
+      }
+    }
     if (dirty.length) {
       queueTerrainPaint(dirty);
       if (state.lift) refreshBrushCursor();
@@ -2691,12 +2703,20 @@ function applyAt(pos, { add = false } = {}) {
     const tx = Math.floor((pos.x + half) / TILE_SIZE_F);
     const tz = Math.floor((pos.z + halfZ) / TILE_SIZE_F);
     const stamp = state.stamp === 'doodad' ? state.doodad : state.scenery;
-    const key = `scenery:${tx}:${tz}:${state.brush}:${state.stamp}:${stamp}`;
+    const key = `scenery:${tx}:${tz}:${state.brush}:${state.stamp}:${stamp}:${state.sceneryDensity}`;
     if (key === lastPaintKey) return;
     lastPaintKey = key;
     const dirty = state.stamp === 'doodad'
-      ? paintDoodadBrush(field, tx, tz, state.doodad, state.brush)
-      : paintSceneryBrush(field, tx, tz, state.scenery, state.brush, { refresh: false });
+      ? paintDoodadBrush(field, tx, tz, state.doodad, state.brush, {
+        density: state.sceneryDensity / 10,
+        salt: scenerySalt,
+      })
+      : paintSceneryBrush(field, tx, tz, state.scenery, state.brush, {
+        refresh: false,
+        tight: true,
+        density: state.sceneryDensity / 10,
+        salt: scenerySalt,
+      });
     if (state.stamp !== 'doodad' && dirty.length) field.sceneryAuthored = true;
     if (dirty.length) {
       if (terrain?.applyAuthoredSceneryTiles) {
@@ -2827,7 +2847,19 @@ function wallsForGarden() {
   return { style: state.walls.style, runs };
 }
 
-function gardenExtras() {
+function committedWallsSnapshot() {
+  return {
+    style: { ...state.walls.style },
+    runs: state.walls.runs.map((run) => ({
+      closed: !!run.closed,
+      kind: run.kind,
+      points: run.points.map((p) => ({ x: p.x, z: p.z })),
+      openings: (run.openings || []).map((o) => ({ ...o })),
+    })),
+  };
+}
+
+function gardenExtras({ committedWalls = false } = {}) {
   return {
     name: state.mapName,
     units: state.units,
@@ -2837,7 +2869,7 @@ function gardenExtras() {
     startingResources: state.startingResources,
     story: state.story,
     cameraHalfF: state.cameraHalfF,
-    walls: wallsForGarden(),
+    walls: committedWalls ? committedWallsSnapshot() : wallsForGarden(),
     celestial: celestial?.getState?.() ?? null,
     mapType: state.mapType,
     teamByOwner: state.teamByOwner,
@@ -3378,7 +3410,12 @@ function renderCampaignDraft() {
     name.maxLength = 80;
     name.value = episode.name;
     name.title = 'Episode heading — focus to make new chapters land here';
-    name.addEventListener('focus', () => { setCurrentEpisode(campaignDraft, epIdx); head.classList.add('current'); });
+    name.addEventListener('focus', () => {
+      armHistory();
+      setCurrentEpisode(campaignDraft, epIdx);
+      head.classList.add('current');
+      scheduleCommit(0);
+    });
     name.addEventListener('input', () => renameEpisode(campaignDraft, epIdx, name.value));
     name.addEventListener('change', () => renderCampaignDraft());
     head.append(name);
@@ -3471,6 +3508,7 @@ function addCurrentChapter() {
 
 /** Import a .campaign (loads it as the whole list) or a .garden (adds it as a new chapter). */
 function importCampaignFile(file) {
+  const release = holdHistory();
   flushActiveChapter();
   file.text().then((text) => {
     const data = JSON.parse(text);
@@ -3494,7 +3532,7 @@ function importCampaignFile(file) {
   }).catch((err) => {
     console.error(err);
     alert('Could not import that file.');
-  });
+  }).finally(release);
 }
 
 async function exportCampaign() {
@@ -3605,6 +3643,7 @@ function applyGardenJson(json) {
 }
 
 function importFile(file) {
+  const release = holdHistory();
   file.text().then((text) => {
     const data = JSON.parse(text);
     if (isCampaignBundle(data)) {
@@ -3615,7 +3654,7 @@ function importFile(file) {
   }).catch((err) => {
     console.error(err);
     alert('Could not import that map.');
-  });
+  }).finally(release);
 }
 
 async function loadGardenFromSearch() {
@@ -3625,6 +3664,7 @@ async function loadGardenFromSearch() {
     applyGardenJson(await loadGardenRef(raw, {
       loadWorkshopGarden: (id, file) => aetherSteam.loadWorkshopGarden(id, file),
     }));
+    forgetHistory();
   } catch (err) {
     console.error(err);
     alert('Could not load that garden URL.');
@@ -3890,24 +3930,27 @@ function syncWorkshopChrome() {
 }
 
 async function loadWorkshopSelection() {
+  const release = holdHistory();
   const select = document.getElementById('workshop-maps');
   const raw = select?.value;
-  if (!raw) {
-    await refreshWorkshopMaps();
-    if (!select?.value) {
-      alert(select && select.options.length > 1
-        ? 'Pick a subscribed map first.'
-        : 'No subscribed maps yet. Browse Workshop and subscribe, then Load.');
-    }
-    return;
-  }
   try {
+    if (!raw) {
+      await refreshWorkshopMaps();
+      if (!select?.value) {
+        alert(select && select.options.length > 1
+          ? 'Pick a subscribed map first.'
+          : 'No subscribed maps yet. Browse Workshop and subscribe, then Load.');
+      }
+      return;
+    }
     applyGardenJson(await loadGardenRef(raw, {
       loadWorkshopGarden: (id, file) => aetherSteam.loadWorkshopGarden(id, file),
     }));
   } catch (err) {
     console.error(err);
     alert('Could not load that Workshop map.');
+  } finally {
+    release();
   }
 }
 
@@ -4053,6 +4096,179 @@ function setLift(dir) {
     b.classList.toggle('active', liftToken(b.dataset.lift) === dir);
   });
   refreshBrushCursor();
+}
+
+function isTextEditing(el) {
+  if (!el || el.nodeType !== 1) return false;
+  if (el.tagName === 'TEXTAREA') return true;
+  if (el.tagName !== 'INPUT') return false;
+  const type = String(el.type || 'text').toLowerCase();
+  return type === 'text' || type === 'search' || type === 'number' || type === 'password' || type === 'email' || type === 'url';
+}
+
+function historyChord(e) {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return '';
+  const key = String(e.key || '').toLowerCase();
+  if (key === 'z') return e.shiftKey ? 'redo' : 'undo';
+  if (key === 'y' && !e.shiftKey) return 'redo';
+  return '';
+}
+
+function isHistoryKey(e) {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return false;
+  if (isTextEditing(e.target)) return false;
+  return e.key === 'Delete' || e.key === 'Backspace' || e.key === 'Enter' || e.key === '[' || e.key === ']' || e.key === 'Escape';
+}
+
+function captureDocument() {
+  if (!field || !state.walls) return null;
+  return {
+    garden: encodeGarden(field, gardenExtras({ committedWalls: true })),
+    wallDraft: state.wallDraft.map((p) => ({ x: p.x, z: p.z })),
+    wallDraftOpenings: (state.wallDraftOpenings || []).map((o) => ({ ...o })),
+    wallKind: state.wallKind,
+    waveRoute: state.waveRoute.map((hop) => [Number(hop[0]), Number(hop[1])]),
+    waveDraft: { waves: state.waveDraft.waves | 0, era: state.waveDraft.era | 0 },
+    waveEdit: state.waveEdit ? { ...state.waveEdit } : null,
+    campaign: JSON.parse(JSON.stringify(campaignDraft)),
+    activeChapterFile: activeChapterFile || null,
+  };
+}
+
+function applyDocument(snap) {
+  applyGardenJson(snap.garden);
+  state.wallDraft = (snap.wallDraft || []).map((p) => ({ x: p.x, z: p.z }));
+  state.wallDraftOpenings = (snap.wallDraftOpenings || []).map((o) => ({ ...o }));
+  state.wallKind = snap.wallKind === 'dungeon' ? 'dungeon' : 'castle';
+  state.waveRoute = (snap.waveRoute || []).map((hop) => [hop[0], hop[1]]);
+  state.waveDraft = {
+    waves: snap.waveDraft?.waves | 0,
+    era: snap.waveDraft?.era | 0,
+  };
+  state.waveEdit = snap.waveEdit ? { ...snap.waveEdit } : null;
+  campaignDraft = JSON.parse(JSON.stringify(snap.campaign));
+  activeChapterFile = snap.activeChapterFile || null;
+  syncWallTools();
+  updateWallMeshes();
+  renderWaveEditor(true);
+  updatePlaceMarkers();
+  const nameEl = document.getElementById('campaign-name');
+  if (nameEl) nameEl.value = campaignDraft.name;
+  renderCampaignDraft();
+  syncStoryEditor();
+}
+
+function syncHistoryUi() {
+  const undo = document.getElementById('btn-undo');
+  const redo = document.getElementById('btn-redo');
+  if (undo) undo.disabled = !hist.canUndo && !hist.pending();
+  if (redo) redo.disabled = !hist.canRedo;
+}
+
+function scheduleCommit(delay = 0) {
+  clearTimeout(commitTimer);
+  commitTimer = setTimeout(() => {
+    commitTimer = 0;
+    if (hist.suspended()) return;
+    if (hist.busy()) {
+      scheduleCommit(40);
+      return;
+    }
+    hist.commit(captureDocument);
+    syncHistoryUi();
+  }, delay);
+}
+
+function armHistory() {
+  hist.begin(captureDocument);
+  syncHistoryUi();
+}
+
+function holdHistory() {
+  const releaseHold = hist.hold();
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    releaseHold();
+    scheduleCommit(0);
+  };
+  try {
+    armHistory();
+  } catch (err) {
+    release();
+    throw err;
+  }
+  return release;
+}
+
+function forgetHistory() {
+  clearTimeout(commitTimer);
+  commitTimer = 0;
+  hist.cancel();
+  hist.clear();
+  syncHistoryUi();
+}
+
+function runHistory(dir) {
+  const drawing = hist.pointerCount() > 0;
+  const el = document.activeElement;
+  if (isTextEditing(el)) el.blur();
+  clearTimeout(commitTimer);
+  commitTimer = 0;
+  const did = dir === 'redo'
+    ? hist.redo(captureDocument, applyDocument)
+    : hist.undo(captureDocument, applyDocument);
+  if (drawing) hist.begin(captureDocument);
+  syncHistoryUi();
+  return did;
+}
+
+function bindHistory() {
+  window.addEventListener('pointerdown', (e) => {
+    if (e.button > 2) return;
+    hist.notePointer(true);
+    armHistory();
+  }, true);
+  const endPointer = (e) => {
+    if (e.button > 2) return;
+    hist.notePointer(false);
+    scheduleCommit(0);
+  };
+  window.addEventListener('pointerup', endPointer, true);
+  window.addEventListener('pointercancel', endPointer, true);
+  window.addEventListener('blur', () => {
+    hist.releasePointers();
+    scheduleCommit(0);
+  });
+  window.addEventListener('input', (e) => {
+    if (e.target?.id === 'workshop-publish-name' || e.target?.id === 'workshop-publish-desc') return;
+    armHistory();
+    if (!hist.busy()) scheduleCommit(isTextEditing(e.target) ? 400 : 0);
+  }, true);
+  window.addEventListener('change', (e) => {
+    armHistory();
+    if (!hist.busy()) scheduleCommit(0);
+  }, true);
+  window.addEventListener('focusout', (e) => {
+    if (!isTextEditing(e.target) || hist.busy()) return;
+    scheduleCommit(0);
+  }, true);
+  window.addEventListener('keydown', (e) => {
+    const chord = historyChord(e);
+    if (chord) {
+      e.preventDefault();
+      e.stopPropagation();
+      runHistory(chord);
+      return;
+    }
+    if (!isHistoryKey(e)) return;
+    armHistory();
+    scheduleCommit(0);
+  }, true);
+  document.getElementById('btn-undo')?.addEventListener('click', () => runHistory('undo'));
+  document.getElementById('btn-redo')?.addEventListener('click', () => runHistory('redo'));
+  syncHistoryUi();
 }
 
 function mountUi() {
@@ -4212,6 +4428,8 @@ function mountUi() {
       </div>
       <label>Brush <span id="scenery-brush-label">1</span></label>
       <input id="scenery-brush-size" type="range" min="0" max="6" value="1">
+      <label>Density <span id="scenery-density-label">100%</span></label>
+      <input id="scenery-density" type="range" min="1" max="10" value="10">
       <div class="row">
         <button id="btn-gen-scenery">Generate trees / rocks</button>
         <button id="btn-clear-scenery">Clear scenery</button>
@@ -4220,7 +4438,7 @@ function mountUi() {
       <p class="hint">Trees and rocks gather / block. Doodads are paint-only — they do not path or harvest. Grove mushrooms still sprout on their own when a stand matures. A new map already includes them. Generate fills around what you painted. Clear removes trees and rocks from the map. The Scenery checkbox only hides them.</p>
     </div>
     <div id="panel-walls" class="panel" style="display:none">
-      <p class="hint" id="wall-aim">Wall: click corners. Right-click finishes the run. Erase takes out one section.</p>
+      <p class="hint" id="wall-aim">Wall: click corners. Right-click finishes the run. Backspace drops the last corner. Erase takes out one section.</p>
       <div class="row">
         <button data-wall-kind="castle" class="active" type="button">Castle</button>
         <button data-wall-kind="dungeon" type="button">Dungeon</button>
@@ -4239,7 +4457,6 @@ function mountUi() {
       `).join('')}
       <div class="row">
         <button id="wall-finish" type="button">Finish run</button>
-        <button id="wall-undo" type="button">Undo</button>
         <button id="wall-clear" type="button">Clear</button>
       </div>
       <p class="hint" id="wall-status">0 runs</p>
@@ -4459,6 +4676,8 @@ function mountUi() {
   const view = document.createElement('div');
   view.id = 'forge-view';
   view.innerHTML = `
+    <button id="btn-undo" type="button" title="Ctrl+Z" disabled>Undo</button>
+    <button id="btn-redo" type="button" title="Ctrl+Y" disabled>Redo</button>
     <label title="Red is blocked, yellow is slow"><input id="show-grid" type="checkbox"> Collision</label>
     <label title="Chunk outlines"><input id="show-chunks" type="checkbox" checked> Chunk borders</label>
     <label title="Tile corners, plus the slope diagonal"><input id="show-tiles" type="checkbox"> Tile wireframe</label>
@@ -4703,6 +4922,12 @@ function mountUi() {
   document.getElementById('scenery-brush-size').addEventListener('input', (e) => {
     setBrush(Number(e.target.value) || 0);
   });
+  document.getElementById('scenery-density').addEventListener('input', (e) => {
+    const n = Math.max(1, Math.min(10, Number(e.target.value) || 1));
+    state.sceneryDensity = n;
+    const label = document.getElementById('scenery-density-label');
+    if (label) label.textContent = `${n * 10}%`;
+  });
   for (const spec of WALL_FIELDS) {
     const el = document.getElementById(spec.id);
     el.addEventListener('input', () => {
@@ -4713,7 +4938,6 @@ function mountUi() {
     });
   }
   document.getElementById('wall-finish').addEventListener('click', finishWallRun);
-  document.getElementById('wall-undo').addEventListener('click', undoWallPoint);
   document.getElementById('wall-clear').addEventListener('click', () => {
     state.walls.runs = [];
     state.wallDraft = [];
@@ -4892,6 +5116,7 @@ function mountUi() {
     workshopDescEdited = true;
   });
   syncWorkshopChrome();
+  bindHistory();
 }
 
 function loadForgeCelestial() {
@@ -5053,6 +5278,7 @@ async function main() {
     if (!storyDriving()) cam.handlePointerDown(e);
     if (e.button === 0 && !cam.isRmbPanning()) {
       state.painting = true;
+      if (state.layer === 'scenery') scenerySalt = (Math.random() * 0x100000000) >>> 0;
       const mode = wallOpeningMode();
       const erase = state.layer === 'walls' && (state.wallTool === 'erase' || (!mode && e.shiftKey));
       const pos = (state.layer === 'walls' && (mode || erase))
@@ -5115,7 +5341,15 @@ async function main() {
         updatePlaceMarkers();
       }
     } else if (placeDrag && (state.layer === 'place' || state.layer === 'zones') && (e.buttons & 1)) {
-      moveGroupDrag(pos);
+      if (!placeDrag.armed) {
+        const travel = Math.hypot(e.clientX - placeDrag.cx, e.clientY - placeDrag.cy);
+        if (travel > 6 && pos) {
+          placeDrag.armed = true;
+          placeDrag.x = pos.x;
+          placeDrag.z = pos.z;
+        }
+      }
+      if (placeDrag.armed) moveGroupDrag(pos);
     }
     const aiming = state.layer === 'walls' && (wallOpeningMode() || state.wallTool === 'erase' || e.shiftKey);
     const wallPos = aiming ? pickWallAim(e.clientX, e.clientY) : pos;
@@ -5185,7 +5419,7 @@ async function main() {
       }
       if (e.key === 'Backspace') {
         e.preventDefault();
-        undoWallPoint();
+        popWallDraftPoint();
         return;
       }
     }

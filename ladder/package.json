@@ -1,0 +1,8 @@
+{
+  "name": "aether-ladder",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test handler.test.js"
+  }
+}

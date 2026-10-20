@@ -33,9 +33,18 @@ import {
   setPbrUnlit,
 } from '../vendor/lite/liteVendor.js';
 import { USE_GPU_PICK } from './pickMode.js';
-import { xrEye, xrFitFov, xrShadowCover } from './xrEye.js';
+import {
+  xrEye,
+  xrEyeVersion,
+  xrFitFov,
+  xrHudChromeScale,
+  xrHudEdgeScale,
+  xrHudLayoutPoint,
+  xrHudProjection,
+  xrShadowCover,
+} from './xrEye.js';
 import { projectWorldToCanvas } from './screenProject.js';
-import { getUnitDef } from '../sim/unitTypes.js';
+import { getUnitDef, UNIT } from '../sim/unitTypes.js';
 import { GATHER_ACT } from '../sim/gather.js';
 import { MAX_PROJECTILES, PROJECTILE_DESPAWN } from '../sim/projectiles.js';
 import { PROJECTILE, PROJECTILE_MESH } from '../sim/projectileTypes.js';
@@ -52,7 +61,9 @@ import {
 } from './unitModels.js';
 import {
   allDlcMeshUrls,
+  packForBuilding,
   packForUnit,
+  resolveBuildingModelUrl,
   resolveUnitModelUrl,
   resolveVatDef,
   sanitizeSkins,
@@ -83,8 +94,14 @@ import { createWorkRadiusRings } from './workRadiusRings.js';
 import { createXrLassoOverlay } from './xrLasso.js';
 import { createFrogRenderer } from './frogs.js';
 import { createArrowTrails } from './arrowTrails.js';
+import { emitFallingFrost } from './frostFx.js';
+import { createPriestFx } from './priestFx.js';
 import { createLightningBolts } from './lightningBolts.js';
-import { createParticleSystem } from './particleSystem.js';
+import {
+  createParticleSystem,
+  particleEyeDistSq,
+  SOCKET_FX_CULL_MIN,
+} from './particleSystem.js';
 import { createUnitAuras, AURA } from './unitAuras.js';
 import { createMonkLobFx } from './monkLobFx.js';
 import { createSporeBloomFx } from './sporeBloomFx.js';
@@ -103,6 +120,8 @@ import { createBuildingActionRadial } from './buildingActionRadial.js';
 import { createSelectionHud } from './selectionHud.js';
 import { nextSelectionRingDrawCount } from './selectionRingDraw.js';
 import { createControlGroupHud } from './controlGroupHud.js';
+import { createResourcePileHud } from './resourcePileHud.js';
+import { createScreenDomHud } from './screenDomHud.js';
 import { createSceneConfirm } from './sceneConfirm.js';
 import { createGamepadCursor } from './gamepadCursor.js';
 import { createSelectionBoxOverlay } from './selectionBox.js';
@@ -806,10 +825,24 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   const preallocKoth = gpuCapacity > capacity;
   /** @type {Record<number | string, Record<number, string>>} */
   let ownerSkins = normalizeOwnerSkins(opts.ownerSkins ?? opts.ownerPacks);
+  let localPlayerId = opts.localPlayerId ?? -1;
+  /** @type {Record<string, string>} */
+  let localBuildingSkins = opts.buildingSkins ?? {};
+  /** @type {{ type: string, x: number, z: number, yaw?: number, owner?: number, built?: number }[]} */
+  let lastBuildingList = [];
 
   function packForOwnerType(owner, typeId) {
     const skins = ownerSkins[owner] ?? ownerSkins[String(owner)];
     return packForUnit(skins, typeId);
+  }
+
+  function packForOwnerBuilding(owner, buildingId) {
+    if ((owner | 0) !== (localPlayerId | 0)) return null;
+    return packForBuilding(localBuildingSkins, buildingId);
+  }
+
+  function resolveBuildingUrl(typeId, owner) {
+    return resolveBuildingModelUrl(typeId, packForOwnerBuilding(owner, typeId));
   }
   // Lite only honors 1 (off) vs 4 (4× MSAA); sample count is fixed on the
   // swapchain at construction — the settings toggle persists and reloads.
@@ -853,6 +886,31 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
     get worldMatrixVersion() {
       return xrShadowVer;
+    },
+    _viewCache: new Float32Array(16),
+    _projCache: new Float32Array(16),
+    _vpCache: new Float32Array(16),
+    _viewVer: -1,
+    _projVer: -1,
+    _vpVer: -1,
+    _projAspect: -1,
+  };
+  // Screen HUD is placed by unprojecting canvas pixels. In the headset that
+  // projection has to be the head, or the panels stay where the desktop
+  // camera was. Control pads use hudPoint. The other chrome uses chromePoint,
+  // a little closer to center.
+  const xrHudWorld = new Float32Array(16);
+  let xrHudVer = 1;
+  let xrHudEyeVer = -1;
+  const xrHudCam = {
+    fov: camera.fov,
+    nearPlane: camera.nearPlane,
+    farPlane: camera.farPlane,
+    get worldMatrix() {
+      return xrHudWorld;
+    },
+    get worldMatrixVersion() {
+      return xrHudVer;
     },
     _viewCache: new Float32Array(16),
     _projCache: new Float32Array(16),
@@ -943,7 +1001,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     groundFireIntervalMs: 55,
     sparkleIntervalMs: 70,
     emitChance: 1,
-    distance: 200,
+    distance: 360,
     cullRangeScale: 1,
     socketFire: true,
   };
@@ -1482,6 +1540,25 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       }
       list.push(i);
     }
+    // Brigand reuses villager VAT but needs its own batch for torch sockets.
+    for (const key of [...groups.keys()]) {
+      const colon = key.lastIndexOf(':');
+      const typeId = Number(key.slice(0, colon));
+      if (typeId !== UNIT.VILLAGER) continue;
+      const owner = Number(key.slice(colon + 1));
+      const brigKey = batchKey(UNIT.BRIGAND, owner);
+      if (!groups.has(brigKey)) groups.set(brigKey, []);
+    }
+    // Champion is a separate mesh. Warm it with the warrior so the fifth kill
+    // can swap batches without waiting on a GLB load.
+    for (const key of [...groups.keys()]) {
+      const colon = key.lastIndexOf(':');
+      const typeId = Number(key.slice(0, colon));
+      if (typeId !== UNIT.WARRIOR) continue;
+      const owner = Number(key.slice(colon + 1));
+      const champKey = batchKey(UNIT.CHAMPION, owner);
+      if (!groups.has(champKey)) groups.set(champKey, []);
+    }
     // Start ensures only after scenery — building the job list must not call
     // ensureTypeOwnerBatch early (that raced past the gate).
     return sceneryModelsReady.then(async () => {
@@ -1699,6 +1776,19 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const ok = mushrooms.spawnCluster(x, z, growAt);
       return ok !== false;
     },
+    spawnAttackLine(fromX, fromZ, toX, toZ) {
+      if (!mushrooms?.spawnAttackLine) return null;
+      return mushrooms.spawnAttackLine(fromX, fromZ, toX, toZ, currentUnitZoomScale());
+    },
+    beginSporePaths() {
+      mushrooms?.beginSporePaths?.();
+    },
+    noteSporePath(slot, generation, x, z) {
+      mushrooms?.noteSporePath?.(slot, generation, x, z, currentUnitZoomScale());
+    },
+    endSporePaths() {
+      mushrooms?.endSporePaths?.();
+    },
     spawnHead(entity, x, z, killed) {
       const typeId = lastMapTypes?.[entity];
       const def = getUnitDef(Number.isFinite(typeId) ? typeId : 0);
@@ -1854,34 +1944,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
   }
 
-  /** Soft gold rise on a priest heal. Not a smite slash. */
+  /** Holy column on the ally. The mesh is the infusion; motes are only sparks. */
   function emitPriestHeal(x, z) {
-    const ground = groundYAt(x, z);
-    const y = ground + 4.2;
-    particles.emit({
-      position: [x, y, z],
-      velocity: [0, 5.5, 0],
-      gravity: [0, 2.4, 0],
-      color: [1, 0.97, 0.78, 0.8],
-      lifetime: 0.5,
-      startSize: [1.7, 9],
-      endSize: [0.45, 2.4],
-      drag: 0.65,
-    });
-    for (let s = 0; s < 8; s++) {
-      const ang = (s / 8) * Math.PI * 2;
-      const along = (s / 7) * 6;
-      particles.emit({
-        position: [x + Math.cos(ang) * 0.35, ground + 1.1 + along, z + Math.sin(ang) * 0.35],
-        velocity: [Math.cos(ang) * 0.7, 6 + (s % 3) * 0.9, Math.sin(ang) * 0.7],
-        gravity: [0, 1.2, 0],
-        color: [1, 0.94, 0.7, 0.75],
-        lifetime: 0.55,
-        startSize: [0.35, 0.9],
-        endSize: [0.05, 0.15],
-        drag: 0.4,
-      });
-    }
+    priestFx.heal(x, groundYAt(x, z), z, currentUnitZoomScale());
   }
 
   /** Bright Smite-style slash across the foe on holy-slash hit. */
@@ -1902,59 +1967,15 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       holySlashSeen[i] = gen;
       const x = cur.x[i];
       const z = cur.z[i];
-      const y = groundYAt(x, z) + 2.2;
-      const vx = cur.vx?.[i] ?? 0;
-      const vz = cur.vz?.[i] ?? 1;
-      const len = Math.hypot(vx, vz) || 1;
-      const fx = vx / len;
-      const fz = vz / len;
-      const rx = -fz;
-      const rz = fx;
-      // Core slash beam.
-      for (let s = 0; s < 14; s++) {
-        const t = (s / 13) * 2 - 1;
-        particles.emit({
-          position: [
-            x + rx * t * 4.5,
-            y + (Math.random() - 0.5) * 0.6,
-            z + rz * t * 4.5,
-          ],
-          velocity: [fx * 2, 1.5 + Math.random(), fz * 2],
-          gravity: [0, 0.5, 0],
-          color: [1, 0.98, 0.85, 0.95],
-          lifetime: 0.18 + Math.random() * 0.12,
-          startSize: [2.8, 0.55],
-          endSize: [0.2, 0.05],
-          drag: 0.4,
-        });
-      }
-      particles.emit({
-        position: [x, y, z],
-        velocity: [0, 6, 0],
-        gravity: [0, -2, 0],
-        color: [1, 1, 0.92, 0.85],
-        lifetime: 0.22,
-        startSize: 8,
-        endSize: 1.2,
-        drag: 0.3,
-      });
-      for (let s = 0; s < 10; s++) {
-        const t = (Math.random() * 2 - 1);
-        particles.emit({
-          position: [x + rx * t * 3.2, y + Math.random() * 1.2, z + rz * t * 3.2],
-          velocity: [
-            (Math.random() - 0.5) * 3,
-            4 + Math.random() * 5,
-            (Math.random() - 0.5) * 3,
-          ],
-          gravity: [0, -8, 0],
-          color: [1, 0.95, 0.7, 0.7],
-          lifetime: 0.35 + Math.random() * 0.25,
-          startSize: 0.45,
-          endSize: 0.05,
-          drag: 0.6,
-        });
-      }
+      const zoom = currentUnitZoomScale();
+      priestFx.slash(
+        x,
+        groundYAt(x, z) + 1.15 * zoom,
+        z,
+        cur.vx?.[i] ?? 0,
+        cur.vz?.[i] ?? 0,
+        zoom,
+      );
     }
   }
 
@@ -2064,6 +2085,25 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         drag: 0.6,
       });
     }
+    if (kind === LIGHTNING_HIT.BUILDING) {
+      for (let n = 0; n < 16; n++) {
+        const ang = Math.random() * Math.PI * 2;
+        particles.emit({
+          position: [worldX, gy + 1.4, worldZ],
+          velocity: [
+            Math.cos(ang) * (2 + Math.random() * 5),
+            4 + Math.random() * 9,
+            Math.sin(ang) * (2 + Math.random() * 5),
+          ],
+          gravity: [0, -8, 0],
+          color: [1, 0.42, 0.06, 0.85],
+          lifetime: 0.7 + Math.random() * 0.5,
+          startSize: 1.4,
+          endSize: 0.1,
+          drag: 0.75,
+        });
+      }
+    }
     if (kind === LIGHTNING_HIT.TREE) {
       for (let n = 0; n < 22; n++) {
         const ang = Math.random() * Math.PI * 2;
@@ -2145,6 +2185,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   });
 
   const arrowTrails = createArrowTrails(engine, scene);
+  const priestFx = createPriestFx(engine, scene, (init) => particles.emit(init));
 
   const frogLandBurst = (x, z) => {
     const gy = groundYAt(x, z);
@@ -2251,7 +2292,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   const radialScreen = {
     worldToScreen(x, y, z) {
       const { width, height } = canvasCoords(0, 0);
-      const c = matVec4(viewProjection(), x, y, z, 1);
+      const c = matVec4(hudViewProjection(width, height), x, y, z, 1);
       if (Math.abs(c[3]) < 1e-8) return null;
       let cx = c[0];
       let cy = c[1];
@@ -2269,7 +2310,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
     rayFromCanvas(canvasX, canvasY) {
       const { width, height } = canvasCoords(0, 0);
-      return pickingRay(canvasX, canvasY, viewProjection(), width, height);
+      return pickingRay(canvasX, canvasY, hudViewProjection(width, height), width, height);
     },
     getViewport() {
       const { width, height } = canvasCoords(0, 0);
@@ -2284,6 +2325,19 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     canvas,
     getPointerCanvas() {
       return hudPointer;
+    },
+    hudScale() {
+      return xrEye() ? xrHudEdgeScale() : 1;
+    },
+    hudPoint(x, y) {
+      const { width, height } = canvasCoords(0, 0);
+      const scale = xrEye() ? xrHudEdgeScale() : 1;
+      return xrHudLayoutPoint(x, y, width, height, scale);
+    },
+    chromePoint(x, y) {
+      const { width, height } = canvasCoords(0, 0);
+      const scale = xrEye() ? xrHudChromeScale() : 1;
+      return xrHudLayoutPoint(x, y, width, height, scale);
     },
   };
   canvas.addEventListener('pointermove', (e) => {
@@ -2306,6 +2360,22 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     controlGroupHud = createControlGroupHud(engine, scene, radialScreen);
   } catch (err) {
     console.warn('[controlGroupHud] init failed', err);
+  }
+
+  /** @type {any} Resource piles, carried with the headset. */
+  let resourcePileHud = { update() {}, clear() {} };
+  try {
+    resourcePileHud = createResourcePileHud(engine, scene, radialScreen);
+  } catch (err) {
+    console.warn('[resourcePileHud] init failed', err);
+  }
+
+  /** @type {any} Clock, pop, and spectator sheet carried with the headset. */
+  let screenDomHud = { update() {}, clear() {} };
+  try {
+    screenDomHud = createScreenDomHud(engine, scene, radialScreen);
+  } catch (err) {
+    console.warn('[screenDomHud] init failed', err);
   }
 
   try {
@@ -2469,7 +2539,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   function radialPickingRay(clientX, clientY) {
     const cc = canvasCoords(clientX, clientY);
-    return pickingRay(cc.x, cc.y, viewProjection(), cc.width, cc.height);
+    return pickingRay(
+      cc.x,
+      cc.y,
+      hudViewProjection(cc.width, cc.height),
+      cc.width,
+      cc.height,
+    );
   }
   const visionDraw = { fn: null };
   /** @type {{ attachOverlay?: Function, detachOverlay?: Function, syncOverlay?: Function } | null} */
@@ -2491,8 +2567,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         fireballFx.track(slot, generation, x, y, z, vx, vy, vz, age === 0);
         return;
       }
-      if (def.id === PROJECTILE.SPORE_STREAM) return;
-      const emitGapMs = isShadow ? 20 : isArrow ? 22 : 32;
+      if (def.id === PROJECTILE.SPORE_STREAM) {
+        mushroomBridge.noteSporePath(slot, generation, x, z);
+        return;
+      }
+      if (def.id === PROJECTILE.HOLY_SLASH) return;
+      const emitGapMs = isShadow ? 30 : isArrow ? 22 : 32;
       if (
         trailGenerations[slot] === generation &&
         particleClockMs - trailLastEmitMs[slot] < emitGapMs
@@ -2501,53 +2581,41 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       }
       trailGenerations[slot] = generation;
       trailLastEmitMs[slot] = particleClockMs;
+      if (def.id === PROJECTILE.ICE_BOLT) {
+        emitFallingFrost((init) => particles.emit(init), x, y, z, 'bolt', { vx, vz });
+        return;
+      }
       if (isArrow) {
         // World-oriented dashes (not camera billboards) so they follow travel.
         arrowTrails.emit(x, y, z, vx, vy, vz);
-        // Ice bolts also leave a soft frost wisp.
-        if (def.id === PROJECTILE.ICE_BOLT) {
-          particles.emit({
-            position: [x, y, z],
-            velocity: [-vx * 0.08, 0.4, -vz * 0.08],
-            gravity: [0, -0.2, 0],
-            color: [0.65, 0.9, 1, 0.45],
-            lifetime: 0.28,
-            startSize: 0.9,
-            endSize: 0.1,
-            drag: 1.2,
-          });
-        }
         return;
       }
-      const speed = Math.hypot(vx, vz);
-      const offset = speed > 1e-6 ? 0.55 / speed : 0;
-      const px = x - vx * offset;
-      const pz = z - vz * offset;
       if (isShadow) {
-        // Purple inky star beads trailing the round black bolt.
+        // Purple star beads hug the bolt, then drop — short trail, not a long ink wake.
         for (let n = 0; n < 2; n++) {
-          const hang = 0.12 + Math.random() * 0.18;
+          const hang = 0.07 + Math.random() * 0.09;
+          const drift = 0.42 + Math.random() * 0.22;
           particles.emit({
             blend: 'alpha',
             shape: 'star',
             fadeOut: false,
             hangTime: hang,
             position: [
-              px + (Math.random() - 0.5) * 0.5,
-              y + (Math.random() - 0.5) * 0.4,
-              pz + (Math.random() - 0.5) * 0.5,
+              x + (Math.random() - 0.5) * 0.38,
+              y + (Math.random() - 0.5) * 0.32,
+              z + (Math.random() - 0.5) * 0.38,
             ],
-            velocity: [0, -0.1 - Math.random() * 0.2, 0],
-            gravity: [0, -14 - Math.random() * 8, 0],
+            velocity: [vx * drift, -0.04 - Math.random() * 0.08, vz * drift],
+            gravity: [0, -16 - Math.random() * 6, 0],
             color:
-              Math.random() > 0.35
-                ? [0.55, 0.15, 0.85, 1]
-                : [0.12, 0.02, 0.18, 1],
-            lifetime: hang + 0.55,
-            startSize: 0.22 + Math.random() * 0.14,
-            peakSize: 0.45 + Math.random() * 0.25,
-            endSize: 0.12,
-            drag: 0.1,
+              Math.random() > 0.28
+                ? [0.78, 0.38, 1, 1]
+                : [0.42, 0.14, 0.72, 1],
+            lifetime: hang + 0.28,
+            startSize: 0.36 + Math.random() * 0.2,
+            peakSize: 0.68 + Math.random() * 0.32,
+            endSize: 0.14,
+            drag: 0.22,
           });
         }
         return;
@@ -2881,6 +2949,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     frogRenderer.advance(fxDt);
     arrowTrails.update(fxDt);
     arrowTrails.commit();
+    priestFx.update(fxDt, cameraEyePos());
+    priestFx.commit();
     lightningBolts.update(fxDt);
     lightningBolts.commit();
     if (lightningFlash > 0.001) {
@@ -2915,10 +2985,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   function nearCamera(x, y, z) {
     const eye = cameraEyePos();
     if (!eye || !(fxDistanceSq > 0)) return true;
-    const dx = eye.x - x;
-    const dy = eye.y - y;
-    const dz = eye.z - z;
-    return dx * dx + dy * dy + dz * dz <= fxDistanceSq;
+    return particleEyeDistSq(eye, x, y, z) <= fxDistanceSq;
   }
 
   /** Burning trees: a few tongues through the trunk and inner canopy. */
@@ -2934,10 +3001,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       if (!nearCamera(tree.x, cy, tree.z)) return;
       let dist = 0;
       if (eye) {
-        const dx = eye.x - tree.x;
-        const dy = eye.y - cy;
-        const dz = eye.z - tree.z;
-        dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        dist = Math.sqrt(particleEyeDistSq(eye, tree.x, cy, tree.z));
       }
       tree.dist = dist;
       visible.push(tree);
@@ -3005,10 +3069,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       if (!nearCamera(fire.x, gy, fire.z)) continue;
       let dist = 0;
       if (eye) {
-        const dx = eye.x - fire.x;
-        const dy = eye.y - gy;
-        const dz = eye.z - fire.z;
-        dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        dist = Math.sqrt(particleEyeDistSq(eye, fire.x, gy, fire.z));
       }
       visible.push({ slot, fire, gy, remain, dist });
     }
@@ -3140,10 +3201,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         const o = slot * 16;
         if (!(m[o + 15] > 0)) continue;
         if (eye && distSq > 0) {
-          const dx = eye.x - m[o + 12];
-          const dy = eye.y - m[o + 13];
-          const dz = eye.z - m[o + 14];
-          if (dx * dx + dy * dy + dz * dz > distSq) continue;
+          if (particleEyeDistSq(eye, m[o + 12], m[o + 13], m[o + 14]) > distSq) continue;
         }
         if (!allowContinuousFx()) continue;
         const instScale = instanceUniformScale(m, o);
@@ -3181,10 +3239,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       if (staggerSparkle && !socketsHaveGroup(sockets, group)) return;
       const o = slot * 16;
       if (eye && distSq > 0) {
-        const dx = eye.x - m[o + 12];
-        const dy = eye.y - m[o + 13];
-        const dz = eye.z - m[o + 14];
-        if (dx * dx + dy * dy + dz * dz > distSq) return;
+        if (particleEyeDistSq(eye, m[o + 12], m[o + 13], m[o + 14]) > distSq) return;
       }
       if (!allowContinuousFx()) return;
       const instScale = instanceUniformScale(m, o);
@@ -3218,13 +3273,14 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     const eye = cameraEyePos();
     const distSq = fxDistanceSq;
     if (eye && distSq > 0) {
-      const dx = eye.x - p.x;
-      const dy = eye.y - y;
-      const dz = eye.z - p.z;
-      if (dx * dx + dy * dy + dz * dz > distSq) return;
+      if (particleEyeDistSq(eye, p.x, y, p.z) > distSq) return;
     }
     if (!allowContinuousFx()) return;
-    // Perimeter flames are little torches, not a second camp hearth.
+    if (p.blaze) {
+      emitSocketFlame(p.x, y, p.z, p.scale, 'torch', { density: 1, wisps: 6, embers: true });
+      return;
+    }
+    // Hit sparks stay little torches, not a second camp hearth.
     emitSocketFlame(p.x, y, p.z, p.scale, 'torch', { density: 0.8, wisps: 2, embers: false });
   }
 
@@ -3303,6 +3359,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const bSize = (0.32 + Math.random() * 0.22) * s;
       particles.emit({
         ...puffSprite(0.6),
+        cullMin: SOCKET_FX_CULL_MIN,
         // Sunk by a fraction of the disc's own width, so only the top of the
         // pool shows and discs surface into the flame instead of appearing in
         // mid-air. Tied to bSize so resizing cannot bury or float the pool.
@@ -3356,6 +3413,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const size = (0.11 + Math.random() * 0.12) * s * sizeMul;
       particles.emit({
         ...puffSprite(),
+        cullMin: SOCKET_FX_CULL_MIN,
         position: [x + cs * rad, y + Math.random() * 0.06 * s, z + sn * rad],
         // Mostly tangential with a little outward drift — drag bleeds the
         // swirl off early, leaving a curved kick rather than an orbit.
@@ -3385,6 +3443,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const eAng = Math.random() * Math.PI * 2;
       const kick = (0.2 + Math.random() * 0.4) * s;
       particles.emit({
+        cullMin: SOCKET_FX_CULL_MIN,
         position: [x, y + 0.04 * s, z],
         velocity: [
           Math.cos(eAng) * kick,
@@ -3457,6 +3516,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const end = (1.0 + Math.random() * 0.8) * s;
       particles.emit({
         ...puffSprite(0.9),
+        cullMin: SOCKET_FX_CULL_MIN,
         blend: 'alpha',
         fadeOut: true,
         position: [
@@ -3483,6 +3543,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (Math.random() < 0.2 * dens) {
       particles.emit({
         ...puffSprite(0.9),
+        cullMin: SOCKET_FX_CULL_MIN,
         blend: 'alpha',
         fadeOut: true,
         position: [x, y + 0.04 * s, z],
@@ -3512,6 +3573,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const rad = Math.random() * 0.18 * s;
       const roll = Math.random();
       particles.emit({
+        cullMin: SOCKET_FX_CULL_MIN,
         blend: 'alpha',
         shape: 'star',
         fadeOut: true,
@@ -3813,6 +3875,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       if (actionRadial.isOpen()) actionRadial.hide();
       selectionHud.clear();
       controlGroupHud.clear();
+      resourcePileHud.clear?.();
+      screenDomHud.clear?.();
       sceneConfirm.clear?.();
     } else {
       if (buildingRadial.isOpen()) {
@@ -3823,6 +3887,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       }
       selectionHud.update?.(viewCamera());
       controlGroupHud.update?.(viewCamera());
+      resourcePileHud.update?.(viewCamera(), !!xrEye());
+      screenDomHud.update?.(viewCamera(), !!xrEye());
       sceneConfirm.update?.(viewCamera());
     }
     syncGamepadCursor();
@@ -3854,6 +3920,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     frogRenderer.sync();
     frogRenderer.commit();
     arrowTrails.commit();
+    priestFx.commit();
     lightningBolts.commit();
     if (shadowsEnabled) applyShadowState();
   }
@@ -4055,6 +4122,32 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
 
     return unmapped.filter((i) => entitySlot[i] < 0);
+  }
+
+  /**
+   * Desktop orbit projection, or the headset frustum once XR is presenting.
+   * Canvas pixels stay the NDC axes, so a panel laid out on the monitor
+   * sits on the same edges of the eye view and moves with the head.
+   */
+  function hudViewProjection(width, height) {
+    const w = width > 0 ? width : 1;
+    const h = height > 0 ? height : 1;
+    const xr = xrEye();
+    if (!xr) return getViewProjectionMatrix(camera, w / h);
+    const proj = xrHudProjection();
+    xrHudCam.fov = proj.fov;
+    xrHudCam.nearPlane = camera.nearPlane;
+    xrHudCam.farPlane = camera.farPlane;
+    const ver = xrEyeVersion();
+    if (ver !== xrHudEyeVer) {
+      xrHudWorld.set(xr.worldMatrix);
+      xrHudVer += 1;
+      xrHudCam._viewVer = -1;
+      xrHudCam._projVer = -1;
+      xrHudCam._vpVer = -1;
+      xrHudEyeVer = ver;
+    }
+    return getViewProjectionMatrix(xrHudCam, proj.aspect);
   }
 
   function viewProjection() {
@@ -4283,6 +4376,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         createBuildingProps(engine, scene, groundYAt, {
           emit: (init) => particles.emit(init),
           emitBurst: (init) => particles.emitBurst(init),
+          localPlayerId,
+          resolveModelUrl: resolveBuildingUrl,
         }),
         upgradeHudMeshes(),
       ]).then(async ([frogs, shrooms, agoras, buildings]) => {
@@ -4382,6 +4477,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     releaseHeadsetCamera() {
       for (const overlay of xrLassos.values()) overlay.hide();
+      resourcePileHud.clear?.();
+      screenDomHud.clear?.();
       xrFit._cover = 0;
       if (scene.camera !== camera) scene.camera = camera;
       syncShadowCoverage();
@@ -4440,7 +4537,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     /** Place constructed buildings. */
     async placeBuildings(list) {
-      await buildingProps.place?.(list ?? []);
+      lastBuildingList = list ?? [];
+      await buildingProps.place?.(lastBuildingList);
       buildingProps.forEachShadowMesh?.(noteShadowMesh);
       if (shadowsEnabled) applyShadowState();
     },
@@ -4617,11 +4715,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /**
-     * Placeable action menu (units / upgrades). Mutually exclusive with the agora build radial.
+     * Placeable action menu (units / upgrades / building upgrades). Mutually exclusive with the agora build radial.
      * @param {number} x
      * @param {number} z
      * @param {string} buildingType
-     * @param {{ units?: any[], upgrades?: any[] } | null} [menu]
+     * @param {{ units?: any[], upgrades?: any[], buildings?: any[] } | null} [menu]
      */
     showActionRadial(x, z, buildingType, menu) {
       if (screenshotHudHidden) return;
@@ -4770,6 +4868,17 @@ export async function createRenderer(canvas, capacity, opts = {}) {
      * @param {number} clientX
      * @param {number} clientY
      */
+    /**
+     * Radial option under a world ray (headset beam). Same picks as pickBuildingRadial.
+     * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null} ray
+     */
+    pickRadialAtRay(ray) {
+      if (!ray) return null;
+      if (buildingRadial.isOpen()) return buildingRadial.pickOptionAtRay?.(ray) ?? null;
+      if (actionRadial.isOpen()) return actionRadial.pickOptionAtRay?.(ray) ?? null;
+      return null;
+    },
+
     /** Stick pie layout for the open radial, or null. */
     getRadialStickTargets() {
       if (buildingRadial.isOpen()) return buildingRadial.stickTargets?.() ?? null;
@@ -5441,6 +5550,23 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       ownerSkins = normalizeOwnerSkins(next);
     },
 
+    /** Local player's per-building cosmetic picks (render-only). */
+    setBuildingSkins(next) {
+      localBuildingSkins = next ?? {};
+    },
+
+    setLocalPlayerId(id) {
+      localPlayerId = id | 0;
+    },
+
+    /** Swap building meshes after a skins-menu change. */
+    async refreshBuildingSkins() {
+      if (!buildingProps.refreshSkins) return;
+      await buildingProps.refreshSkins(lastBuildingList);
+      buildingProps.forEachShadowMesh?.(noteShadowMesh);
+      if (shadowsEnabled) applyShadowState();
+    },
+
     groundYAt(x, z) {
       return groundYAt(x, z);
     },
@@ -5567,15 +5693,20 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       if (!cur) {
         locustFx.clear();
         fireballFx.clear();
-        return projectileRenderer.sync(prev, cur, alpha);
+        mushroomBridge.beginSporePaths();
+        const cleared = projectileRenderer.sync(prev, cur, alpha);
+        mushroomBridge.endSporePaths();
+        return cleared;
       }
       locustFx.beginFrame();
       fireballFx.beginFrame();
+      mushroomBridge.beginSporePaths();
       emitFireballGroundSplashes(prev, cur);
       emitHolySlashImpacts(prev, cur);
       const result = projectileRenderer.sync(prev, cur, alpha);
       locustFx.endFrame();
       fireballFx.endFrame();
+      mushroomBridge.endSporePaths();
       return result;
     },
 
@@ -5583,6 +5714,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       projectileRenderer.clear();
       frogRenderer.clear();
       arrowTrails.clear();
+      priestFx.clear();
       lightningBolts.clear();
       particles.clear();
       unitAuras.clear();
@@ -5607,6 +5739,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       projectileRenderer.commit();
       frogRenderer.commit();
       arrowTrails.commit();
+      priestFx.commit();
       lightningBolts.commit();
     },
 

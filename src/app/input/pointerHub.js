@@ -1,7 +1,7 @@
 import { isCameraFollowTypingTarget } from './cameraFollow.js';
 
 /** Playfield chrome. Right-click pans the camera; it is not a browser menu. */
-const RMB_PASSTHROUGH_SELECTOR = '#chat-hud, #replay-watch, #story-transport, #menu_b, #graffiti_b';
+const RMB_PASSTHROUGH_SELECTOR = '#chat-hud, #replay-watch, #match-lobby-overlay, #story-transport, #menu_b, #graffiti_b';
 
 /**
  * @param {EventTarget | null | undefined} target
@@ -145,8 +145,8 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
     const { active: on, justUnlocked } = syncActive();
     // Unlock already synthesized downs from `held` (includes this pointer).
     if (!on || justUnlocked) return;
-    // Right-click on chat, replay, scene transport, and the menu button is a
-    // pan / force-move, same as the canvas under them.
+    // Right-click on the corner HUD (chat, replay, lobby) and the menu button
+    // is a pan / force-move, same as the canvas under them.
     if (!onCanvas(e) && !(e.button === 2 && isRmbPassthroughTarget(e.target))) return;
 
     if (e.pointerType === 'touch') {
@@ -232,6 +232,8 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
     if (!syncActive().active) return;
     const help = document.getElementById('help_pop');
     if (help && !help.hidden) return;
+    const ladder = document.getElementById('ladder_pop');
+    if (ladder && !ladder.hidden) return;
     const skins = document.getElementById('skins_pop');
     if (skins && !skins.hidden) return;
     camera.handleKeyDown(e);

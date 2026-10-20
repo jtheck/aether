@@ -13,6 +13,8 @@ import { ensureTreeArrays, igniteTree } from './trees.js';
 import { rngFrac, rngRange } from './rng.js';
 import { isHostile } from './teams.js';
 import { applyDamage } from './damage.js';
+import { applyDamageBuilding, buildingFootprintHalf, igniteBuilding } from './buildingCombat.js';
+import { buildingIsFinished, isBuildingAlive } from './buildings.js';
 
 /** Strike picks a random hostile inside this radius of the aim point. */
 export const LIGHTNING_STRIKE_RADIUS = fx.fromFloat(26);
@@ -30,11 +32,13 @@ export const LIGHTNING_HIT = {
   UNIT: 1,
   TREE: 2,
   GROUND: 3,
+  BUILDING: 4,
 };
 
 const CANDIDATE_CAP = 512;
 const unitCandidates = new Int32Array(CANDIDATE_CAP);
 const treeCandidates = new Int32Array(CANDIDATE_CAP);
+const buildingCandidates = new Int32Array(CANDIDATE_CAP);
 
 export function createPendingLightningStore() {
   return {
@@ -184,6 +188,26 @@ export function collectTreesInRadius(field, cx, cy, radius, out = treeCandidates
   return n;
 }
 
+/**
+ * Finished hostile buildings in radius (index order → deterministic).
+ * Reach includes the footprint so a bolt aimed at the wall still counts.
+ * @returns {number} candidate count
+ */
+export function collectHostileBuildingsInRadius(w, owner, cx, cy, radius, out = buildingCandidates) {
+  const buildings = w.buildings;
+  if (!buildings?.length) return 0;
+  let n = 0;
+  for (let bi = 0; bi < buildings.length; bi++) {
+    const b = buildings[bi];
+    if (!isBuildingAlive(b) || !buildingIsFinished(b)) continue;
+    if (!isHostile(owner, b.owner)) continue;
+    const reach = radius + buildingFootprintHalf(b.type);
+    if (fx.dist2(cx, cy, b.x, b.z) > fx.mul(reach, reach)) continue;
+    if (n < out.length) out[n++] = bi;
+  }
+  return n;
+}
+
 /** Deterministic square scatter in ±scatter around (x, y). */
 function scatterImpact(rng, x, y, scatter = LIGHTNING_IMPACT_SCATTER) {
   if (!scatter || scatter <= 0 || !rng) return { x, y };
@@ -196,8 +220,12 @@ function scatterImpact(rng, x, y, scatter = LIGHTNING_IMPACT_SCATTER) {
 }
 
 /**
- * Resolve a lightning strike at aim: random hostile, else random tree ignite,
- * else ground strike (FX only). Impact XY is intentionally scattered.
+ * Resolve a lightning strike at aim: random hostile unit, else random hostile
+ * building (damage + ignite), else random tree ignite, else ground (FX only).
+ * A hostile building inside the radius still catches fire when the bolt hits
+ * a unit. Impact XY is intentionally scattered.
+ * Rng order when a unit is hit matches the old path (pick, then scatter)
+ * before the building roll, so unit strikes stay put.
  * @returns {{ kind: number, x: number, y: number, target: number }}
  */
 export function resolveLightningStrike(w, field, owner, aimX, aimY, radius = LIGHTNING_STRIKE_RADIUS) {
@@ -205,11 +233,26 @@ export function resolveLightningStrike(w, field, owner, aimX, aimY, radius = LIG
   if (hostileN > 0) {
     const pick = unitCandidates[rngRange(w.rng, 0, hostileN)];
     const landed = scatterImpact(w.rng, w.px[pick], w.py[pick]);
+    igniteHostileBuilding(w, owner, aimX, aimY, radius);
     return {
       kind: LIGHTNING_HIT.UNIT,
       x: landed.x,
       y: landed.y,
       target: pick,
+    };
+  }
+
+  const buildingN = collectHostileBuildingsInRadius(w, owner, aimX, aimY, radius, buildingCandidates);
+  if (buildingN > 0) {
+    const bi = buildingCandidates[rngRange(w.rng, 0, buildingN)];
+    const b = w.buildings[bi];
+    igniteBuilding(w, bi);
+    const landed = scatterImpact(w.rng, b.x, b.z);
+    return {
+      kind: LIGHTNING_HIT.BUILDING,
+      x: landed.x,
+      y: landed.y,
+      target: bi,
     };
   }
 
@@ -241,6 +284,15 @@ export function resolveLightningStrike(w, field, owner, aimX, aimY, radius = LIG
   };
 }
 
+/** One random finished hostile building in radius catches fire. */
+function igniteHostileBuilding(w, owner, aimX, aimY, radius) {
+  const n = collectHostileBuildingsInRadius(w, owner, aimX, aimY, radius, buildingCandidates);
+  if (n <= 0) return -1;
+  const bi = buildingCandidates[rngRange(w.rng, 0, n)];
+  igniteBuilding(w, bi);
+  return bi;
+}
+
 export function deliverLightningStrike(
   w,
   field,
@@ -255,6 +307,8 @@ export function deliverLightningStrike(
   const hit = resolveLightningStrike(w, field, owner, aimX, aimY, radius);
   if (hit.kind === LIGHTNING_HIT.UNIT && hit.target >= 0 && damage > 0) {
     applyDamage(w, hit.target, damage, source);
+  } else if (hit.kind === LIGHTNING_HIT.BUILDING && hit.target >= 0 && damage > 0) {
+    applyDamageBuilding(w, field, hit.target, damage);
   }
   pushLightningFx(w, hit.x, hit.y, hit.kind);
   return hit;

@@ -1,7 +1,8 @@
 // Side-menu type drawers + center match room + reduced sidebar copy.
 
 import { sameUserId } from '../lobby/ids.js';
-import { FIELD_SIZES, MODE_IDS, getMode, selectableAdventureChapters } from '../lobby/modes.js';
+import { rosterStatusLabel } from './viewFollow.js';
+import { FIELD_SIZES, MODE_IDS, getMode, mapTypeFitsLobby, selectableAdventureChapters } from '../lobby/modes.js';
 import { aetherSteam } from './steam.js';
 import { stashSessionGarden, writeCampaignPack } from './gardenSession.js';
 import { formatWorkshopRef, isWorkshopRef } from './workshop.js';
@@ -14,7 +15,8 @@ import { flattenCampaignChapters, formatPackRef, isCampaignBundle, normalizeCamp
 export function formatTypeLobbyRow(lobby) {
   const title = (lobby.hostName ?? '').trim() || 'Open lobby';
   const seats = `${lobby.playerCount ?? 0}/${lobby.maxPlayers ?? 0}`;
-  const field = lobby.settings?.fieldSize;
+  const chapter = String(lobby.settings?.chapter || '');
+  const field = lobby.mode !== 'adventure' && chapter ? 'custom map' : lobby.settings?.fieldSize;
   const watching = lobby.spectatorCount
     ?? (Array.isArray(lobby.spectators) ? lobby.spectators.length : 0);
   const bits = [seats];
@@ -138,7 +140,7 @@ function paintMoves(row, userId, hostMoves) {
   }
 }
 
-function paintSeats(container, seats, { teams, localId, compact, spectators, hostMoves }) {
+function paintSeats(container, seats, { teams, localId, compact, spectators, hostMoves, followUserId }) {
   if (!container) return;
   const groups = teams
     ? [
@@ -155,6 +157,7 @@ function paintSeats(container, seats, { teams, localId, compact, spectators, hos
         userId: s.userId,
         color: s.color,
         ready: false,
+        replay: Boolean(s.replay),
         watching: true,
       })),
     });
@@ -197,12 +200,27 @@ function paintSeats(container, seats, { teams, localId, compact, spectators, hos
       if (seat.kind === 'human') {
         setText(nameEl, formatSeatName(seat, localId));
         if (nameEl) nameEl.style.color = seat.color || '';
-        setText(statusEl, seat.watching ? 'Watching' : (seat.ready ? 'Ready' : 'Not ready'));
+        setText(statusEl, rosterStatusLabel(seat));
+        const canFollow = Boolean(seat.replay) && !sameUserId(seat.userId, localId);
+        const following = canFollow && followUserId && sameUserId(seat.userId, followUserId);
+        if (canFollow) row.dataset.replayUser = seat.userId;
+        else delete row.dataset.replayUser;
+        if (statusEl) {
+          statusEl.style.cursor = canFollow ? 'pointer' : '';
+          statusEl.style.textDecoration = following ? 'underline' : '';
+          statusEl.title = canFollow ? (following ? 'Following' : 'Follow replay') : '';
+        }
         paintMoves(row, seat.userId, hostMoves);
       } else {
         setText(nameEl, 'Waiting…');
         if (nameEl) nameEl.style.color = '';
         setText(statusEl, '');
+        delete row.dataset.replayUser;
+        if (statusEl) {
+          statusEl.style.cursor = '';
+          statusEl.style.textDecoration = '';
+          statusEl.title = '';
+        }
         paintMoves(row, '', hostMoves);
       }
     });
@@ -307,6 +325,33 @@ export function chapterSelectOptions(workshopItems, current, search, hostname, l
   return official.concat(local, extra);
 }
 
+/** Workshop and loaded gardens that fit this 1v1 or teams lobby. Field and seed are the generated map. */
+export function customMapSelectOptions(workshopItems, current, localMaps, modeId) {
+  const local = (Array.isArray(localMaps) ? localMaps : [])
+    .filter((row) => row?.id)
+    .map((row) => ({ id: row.id, name: row.name || row.id, group: row.group || '' }));
+  const extra = [];
+  for (const item of workshopItems || []) {
+    if (normalizeCampaignIndex(item.campaign)) continue;
+    for (const garden of item.gardens || []) {
+      if (!mapTypeFitsLobby(garden.mapType, modeId)) continue;
+      extra.push({
+        id: formatWorkshopRef(item.id, garden.file),
+        name: workshopChapterLabel(item, garden),
+      });
+    }
+  }
+  const cur = String(current || '');
+  const known = [...local, ...extra];
+  if (cur && !known.some((row) => row.id === cur)) {
+    extra.unshift({
+      id: cur,
+      name: cur === 'session' ? 'Custom map' : isWorkshopRef(cur) ? 'Workshop map' : 'Custom map',
+    });
+  }
+  return [...local, ...extra];
+}
+
 /**
  * @param {object} opts
  * @param {object} opts.gameLobby
@@ -314,8 +359,12 @@ export function chapterSelectOptions(workshopItems, current, search, hostname, l
  * @param {() => boolean} [opts.isKothLive]
  * @param {() => string | null} [opts.getUserId]
  * @param {() => void} [opts.onCloseMenu]
+ * @param {(userId: string) => void} [opts.onFollowReplay]
+ * @param {() => string | null} [opts.getFollowUser]
  */
-export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onCloseMenu }) {
+export function setupLobbyUi({
+  gameLobby, matchLobby, isKothLive, getUserId, onCloseMenu, onFollowReplay, getFollowUser,
+}) {
   const drawersRoot = document.getElementById('menu-lobbies');
   const sidebar = document.getElementById('menu-match');
   const overlay = document.getElementById('match-lobby-overlay');
@@ -357,9 +406,13 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
   const fieldSelect = document.getElementById('match-lobby-field');
   const seedInput = document.getElementById('match-lobby-seed');
   const chapterSelect = document.getElementById('match-lobby-chapter');
+  const mapSelect = document.getElementById('match-lobby-map');
+  const spectatorInput = document.getElementById('match-lobby-spectators');
   const fieldRow = document.getElementById('match-lobby-field-row');
   const seedRow = document.getElementById('match-lobby-seed-row');
   const chapterRow = document.getElementById('match-lobby-chapter-row');
+  const mapRow = document.getElementById('match-lobby-map-row');
+  const spectatorRow = document.getElementById('match-lobby-spectators-row');
 
   function kothLive() {
     return Boolean(isKothLive?.());
@@ -369,6 +422,7 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
   let overlayParked = false;
   let workshopItems = [];
   let localChapters = [];
+  let localMaps = [];
   let lastWorkshopPull = 0;
 
   function pullWorkshopChapters() {
@@ -399,12 +453,15 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
       Boolean(matchLobby.lockstepStalled?.()),
       Math.ceil((matchLobby.countdownMs?.() ?? 0) / 200),
       state?.settings?.fieldSize, state?.settings?.seed, state?.settings?.chapter,
+      state?.settings?.allowSpectators,
       state?.loadingMap,
-      workshopItems.flatMap((item) => (item.gardens || []).map((g) => `${item.id}:${g.file}`)).join(),
+      workshopItems.flatMap((item) => (item.gardens || []).map((g) => `${item.id}:${g.file}:${g.mapType || ''}`)).join(),
       localChapters.map((row) => row.id).join(),
+      localMaps.map((row) => row.id).join(),
       JSON.stringify(state?.seats ?? []),
       JSON.stringify(state?.spectators ?? []),
       state?.watching,
+      state?.ranked,
       overlayParked, matchOverOn,
     ].join('/');
     if (sig === lastSig) return;
@@ -427,16 +484,22 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
 
     const inPlay = state?.phase === 'playing';
     const stalled = Boolean(matchLobby.lockstepStalled?.());
-    const showOverlay = (active && (!inPlay || stalled)) || matchOverOn;
+    const ranked = Boolean(state?.ranked);
+    const showOverlay = ranked
+      ? matchOverOn
+      : (active && (!inPlay || stalled)) || matchOverOn;
+    overlay?.classList.toggle('is-ranked-result', Boolean(ranked && matchOverOn));
     const overlayOpening = Boolean(overlay?.hidden && showOverlay);
     if (overlayOpening) overlayParked = false;
     overlay?.classList.toggle('is-lag', Boolean(showOverlay && inPlay && stalled));
     overlay?.classList.toggle('is-parked', Boolean(showOverlay && overlayParked && !(inPlay && stalled)));
-    setHidden(sidebar, !active);
+    setHidden(sidebar, !active || ranked);
     setHidden(overlay, !showOverlay);
     setHidden(overlayPanel, !active);
     if (overlayMin) {
-      overlayMin.setAttribute('aria-label', overlayParked ? 'Expand lobby' : 'Minimize lobby');
+      const compact = Boolean(overlay?.classList.contains('is-parked'));
+      overlayMin.textContent = compact ? '+' : '−';
+      overlayMin.setAttribute('aria-label', compact ? 'Expand lobby' : 'Minimize lobby');
     }
     if (overlayOpening) onCloseMenu?.();
     if (!active || !state) return;
@@ -457,11 +520,12 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
     setText(sideMeta, status.meta);
     setText(panelTitle, `${mode?.name ?? 'Lobby'} — ${state.hosting ? 'host' : status.title}`);
     const hostMoves = state.hosting && (state.phase === 'waiting' || state.phase === 'countdown');
+    const followUserId = getFollowUser?.() ?? null;
     paintSeats(sideSeats, state.seats, {
-      teams: Boolean(mode?.teams), localId, compact: true, spectators: state.spectators, hostMoves,
+      teams: Boolean(mode?.teams), localId, compact: true, spectators: state.spectators, hostMoves, followUserId,
     });
     paintSeats(panelSeats, state.seats, {
-      teams: Boolean(mode?.teams), localId, compact: false, spectators: state.spectators, hostMoves,
+      teams: Boolean(mode?.teams), localId, compact: false, spectators: state.spectators, hostMoves, followUserId,
     });
 
     setHidden(sideReady, state.hosting || state.watching);
@@ -495,10 +559,11 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
         : matchOverOn
           ? (state.hosting ? 'Ready up to play again.' : 'Ready up for another round.')
           : (state.hosting ? 'Ready up, then start.' : 'Waiting for host.');
-    setText(panelNote, note);
+    setText(panelNote, ranked && matchOverOn ? '' : note);
+    if (panelLeave) setText(panelLeave, ranked && matchOverOn ? 'Done' : 'Leave');
 
     const hostControls = state.hosting && state.phase === 'waiting';
-    if (mode?.hasChapter) pullWorkshopChapters();
+    if (mode?.hasChapter || mode?.customMap) pullWorkshopChapters();
     fillSelect(fieldSelect, FIELD_SIZES, state.settings.fieldSize);
     fillSelect(chapterSelect, chapterSelectOptions(
       workshopItems,
@@ -507,17 +572,39 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
       undefined,
       localChapters,
     ), state.settings.chapter);
+    const mapOptions = customMapSelectOptions(
+      workshopItems,
+      state.settings.chapter,
+      localMaps,
+      state.mode,
+    );
+    fillSelect(
+      mapSelect,
+      mapOptions.length ? [{ id: '', name: '' }, ...mapOptions] : [],
+      state.settings.chapter || '',
+    );
     if (seedInput && document.activeElement !== seedInput && String(seedInput.value) !== String(state.settings.seed)) {
       seedInput.value = String(state.settings.seed);
+    }
+    if (spectatorInput && document.activeElement !== spectatorInput) {
+      spectatorInput.checked = state.settings.allowSpectators !== false;
     }
     if (fieldSelect) fieldSelect.disabled = !hostControls;
     if (seedInput) seedInput.disabled = !hostControls;
     if (chapterSelect) chapterSelect.disabled = !hostControls;
-    const loadMap = document.getElementById('match-lobby-load-map');
-    if (loadMap) loadMap.disabled = !hostControls;
-    setHidden(fieldRow, Boolean(mode?.hasChapter));
-    setHidden(seedRow, Boolean(mode?.hasChapter));
+    if (mapSelect) mapSelect.disabled = !hostControls;
+    if (spectatorInput) spectatorInput.disabled = !hostControls;
+    for (const id of ['match-lobby-load-map', 'match-lobby-load-garden']) {
+      const loadMap = document.getElementById(id);
+      if (loadMap) loadMap.disabled = !hostControls;
+    }
+    const usingCustomMap = Boolean(mode?.customMap && state.settings.chapter);
+    setHidden(fieldRow, Boolean(mode?.hasChapter) || usingCustomMap);
+    setHidden(seedRow, Boolean(mode?.hasChapter) || usingCustomMap);
     setHidden(chapterRow, !mode?.hasChapter);
+    setHidden(mapRow, !mode?.customMap || mapOptions.length === 0);
+    setHidden(document.getElementById('match-lobby-load-row'), !mode?.customMap);
+    setHidden(spectatorRow, !mode?.spectators);
   }
 
   function setDrawerOpen(mode, open) {
@@ -556,12 +643,21 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
     refresh();
   }
 
+  function onReplayClick(e) {
+    if (!(e.target instanceof Element) || e.target.closest('[data-dir]')) return;
+    const row = e.target.closest('[data-replay-user]');
+    const id = row?.dataset.replayUser;
+    if (!id) return;
+    onFollowReplay?.(id);
+  }
   function onMoveClick(e) {
     const btn = e.target instanceof Element ? e.target.closest('[data-dir][data-user-id]') : null;
     if (!btn) return;
     matchLobby.movePerson(btn.dataset.userId, Number(btn.dataset.dir));
     refresh();
   }
+  sideSeats?.addEventListener('click', onReplayClick);
+  panelSeats?.addEventListener('click', onReplayClick);
   sideSeats?.addEventListener('click', onMoveClick);
   panelSeats?.addEventListener('click', onMoveClick);
   sideReady?.addEventListener('click', toggleReady);
@@ -577,28 +673,38 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
 
   fieldSelect?.addEventListener('change', () => matchLobby.setSetting('fieldSize', fieldSelect.value));
   chapterSelect?.addEventListener('change', () => matchLobby.setSetting('chapter', chapterSelect.value));
-  document.getElementById('match-lobby-load-map')?.addEventListener('click', () => {
-    document.getElementById('match-lobby-map-file')?.click();
+  mapSelect?.addEventListener('change', () => matchLobby.setSetting('chapter', mapSelect.value));
+  spectatorInput?.addEventListener('change', () => {
+    matchLobby.setSetting('allowSpectators', spectatorInput.checked);
   });
+  const openMapFile = () => document.getElementById('match-lobby-map-file')?.click();
+  document.getElementById('match-lobby-load-map')?.addEventListener('click', openMapFile);
+  document.getElementById('match-lobby-load-garden')?.addEventListener('click', openMapFile);
   document.getElementById('match-lobby-map-file')?.addEventListener('change', (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
     const state = matchLobby.getState();
     if (!state?.hosting) return;
+    const mode = getMode(state.mode);
     file.text().then(async (text) => {
       const data = JSON.parse(text);
+      const rowsFromCampaign = () => flattenCampaignChapters(data).map((ch) => ({
+        id: formatPackRef(ch.file),
+        name: ch.name || ch.file,
+        group: ch.episode || data.name || 'Campaign',
+      }));
       if (isCampaignBundle(data)) {
         await writeCampaignPack(text);
-        localChapters = flattenCampaignChapters(data).map((ch) => ({
-          id: formatPackRef(ch.file),
-          name: ch.name || ch.file,
-          group: ch.episode || data.name || 'Campaign',
-        }));
-        if (localChapters[0]) matchLobby.setSetting('chapter', localChapters[0].id);
+        const rows = rowsFromCampaign();
+        if (mode?.customMap) localMaps = rows;
+        else localChapters = rows;
+        if (rows[0]) matchLobby.setSetting('chapter', rows[0].id);
       } else if (data && typeof data === 'object' && (data.v | 0) >= 3 && (data.w | 0) > 0) {
         await stashSessionGarden(text);
-        localChapters = [{ id: 'session', name: String(data.n || data.name || file.name || 'Custom map') }];
+        const row = { id: 'session', name: String(data.n || data.name || file.name || 'Custom map') };
+        if (mode?.customMap) localMaps = [row];
+        else localChapters = [row];
         matchLobby.setSetting('chapter', 'session');
       } else {
         throw new Error('unrecognized map');

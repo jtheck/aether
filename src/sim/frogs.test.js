@@ -271,6 +271,112 @@ function endOfLifeHopsToNearestWater() {
   assert.equal(w.frogs.activeCount, 0, 'frog despawns after reaching water');
 }
 
+function frogsPopOffTheCaster() {
+  const w = createWorld(48);
+  spawnFrogPlague(w, {
+    owner: 0,
+    source: 0,
+    x: 0,
+    y: 0,
+    aimX: fx.fromInt(40),
+    aimY: 0,
+    damage: 5,
+    count: 8,
+  });
+  let n = 0;
+  for (let s = 0; s < w.frogs.highWater; s++) {
+    if (!w.frogs.alive[s]) continue;
+    const d = fx.len(w.frogs.originX[s], w.frogs.originY[s]);
+    assert.ok(d >= fx.fromFloat(3), 'spawn clears the shaman');
+    assert.ok(d <= fx.fromFloat(6), 'spawn stays in a small ring');
+    n++;
+  }
+  assert.equal(n, 8);
+}
+
+function farWaterJustVanishes() {
+  const field = createField(2);
+  const w = createWorld(49);
+  const tx = worldToTile(0) + 40;
+  const tz = worldToTile(0);
+  field.terrainTypes[tz * field.width + tx] = TERRAIN.WATER;
+
+  spawnFrogPlague(w, {
+    owner: 0,
+    source: 0,
+    x: 0,
+    y: 0,
+    aimX: fx.fromInt(8),
+    aimY: 0,
+    damage: 4,
+    count: 1,
+  });
+  let slot = -1;
+  for (let s = 0; s < w.frogs.highWater; s++) {
+    if (w.frogs.alive[s]) { slot = s; break; }
+  }
+  w.frogs.phase[slot] = FROG_PHASE.LINGER;
+  w.frogs.waitTicks[slot] = 1;
+  w.frogs.hopsLeft[slot] = 0;
+  w.frogs.px[slot] = 0;
+  w.frogs.py[slot] = 0;
+
+  let sawEscape = false;
+  for (let t = 0; t < 30; t++) {
+    frogSystem(w, field);
+    if (w.frogs.alive[slot] && (w.frogs.escaping[slot] || w.frogs.phase[slot] === FROG_PHASE.ESCAPE)) {
+      sawEscape = true;
+    }
+    if (!w.frogs.alive[slot]) break;
+  }
+  assert.equal(sawEscape, false, 'far water is not worth the trip');
+  assert.equal(w.frogs.activeCount, 0, 'frog vanishes when water is far');
+}
+
+function spentFrogJumpsOffNearbyEdge() {
+  const field = createField(3);
+  const w = createWorld(50);
+  const rimTx = worldToTile(fx.fromFloat(12));
+  const rimTz = worldToTile(0);
+  const offTx = rimTx + 1;
+  field.tableEdge = new Uint8Array(field.width * field.height);
+  field.tableEdge[rimTz * field.width + rimTx] = 1;
+  field.activeMask[rimTz * field.width + offTx] = 0;
+  // A lake past the seek radius must not win over the nearby rim.
+  const farTx = worldToTile(0) + 40;
+  field.terrainTypes[rimTz * field.width + farTx] = TERRAIN.WATER;
+
+  spawnFrogPlague(w, {
+    owner: 0,
+    source: 0,
+    x: 0,
+    y: 0,
+    aimX: fx.fromInt(8),
+    aimY: 0,
+    damage: 4,
+    count: 1,
+  });
+  let slot = -1;
+  for (let s = 0; s < w.frogs.highWater; s++) {
+    if (w.frogs.alive[s]) { slot = s; break; }
+  }
+  w.frogs.phase[slot] = FROG_PHASE.LINGER;
+  w.frogs.waitTicks[slot] = 1;
+  w.frogs.hopsLeft[slot] = 0;
+  w.frogs.px[slot] = 0;
+  w.frogs.py[slot] = 0;
+
+  frogSystem(w, field);
+  assert.equal(w.frogs.alive[slot], 1);
+  assert.equal(w.frogs.escaping[slot], 1);
+  assert.equal(w.frogs.phase[slot], FROG_PHASE.ESCAPE);
+  assert.equal(w.frogs.waterX[slot], tileCenterX(offTx));
+  assert.equal(w.frogs.waterY[slot], tileCenterY(rimTz));
+
+  for (let t = 0; t < 400 && w.frogs.alive[slot]; t++) frogSystem(w, field);
+  assert.equal(w.frogs.activeCount, 0, 'frog despawns after hopping off the rim');
+}
+
 function confuseCanTurnOnAlly() {
   const w = createWorld(47);
   const a = spawn(w, {
@@ -305,6 +411,9 @@ landingDistractsHostiles();
 publishOnlyOnStateChanges();
 plagueAffectsChecksum();
 endOfLifeHopsToNearestWater();
+frogsPopOffTheCaster();
+farWaterJustVanishes();
+spentFrogJumpsOffNearbyEdge();
 confuseCanTurnOnAlly();
 assert.ok(FROG_LINGER_MIN > 0);
 assert.ok(FROG_LAUNCH_STAGGER > 0);

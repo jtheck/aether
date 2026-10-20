@@ -13,6 +13,8 @@ import {
   RADIAL_ICON_RENDER_ORDER,
   radialIconBounds,
   radialIconAnchor,
+  radialIconFitScale,
+  radialIconFrontReach,
 } from './radialPose.js';
 
 function colinear(a, b, c, eps = 1e-5) {
@@ -216,6 +218,9 @@ describe('radial icon pose', () => {
     assert.equal(b.cx, 0);
     assert.equal(b.cy, -4);
     assert.equal(b.cz, 0);
+    assert.equal(b.hx, 2);
+    assert.equal(b.hy, 4);
+    assert.equal(b.hz, 1);
     const at = radialIconAnchor(10, 5, 0, 1, 0, 0, 0, 0, 1, 2, b.cx, b.cy, b.cz);
     assert.equal(at.x, 10);
     assert.equal(at.y, 13);
@@ -223,8 +228,24 @@ describe('radial icon pose', () => {
   });
 
   it('falls back to the authored origin when bounds are missing', () => {
-    assert.deepEqual(radialIconBounds([]), { cx: 0, cy: 0, cz: 0 });
+    assert.deepEqual(radialIconBounds([]), { cx: 0, cy: 0, cz: 0, hx: 0, hy: 0, hz: 0 });
     const at = radialIconAnchor(3, 4, 5, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0);
     assert.deepEqual(at, { x: 3, y: 4, z: 5 });
+  });
+
+  it('shrinks tall buildings to the pad without scaling units up', () => {
+    const derrick = { hx: 4.33, hy: 17.72, hz: 4.28 };
+    const warrior = { hx: 1.35, hy: 2.14, hz: 1.35 };
+    assert.equal(radialIconFitScale(warrior, 6.7, 1.8), 1.8);
+    assert.ok(Math.abs(radialIconFitScale(derrick, 6.7, 1.8) - 6.7 / 17.72) < 1e-6);
+    assert.equal(radialIconFitScale({ hx: 0, hy: 0, hz: 0 }, 6.7, 1.8), 1.8);
+  });
+
+  it('measures reach from the feet toward a facing normal', () => {
+    const b = { hx: 2, hy: 4, hz: 1 };
+    // Icon forward is +Z, up is +Y. A normal along +Y only sees the height.
+    assert.equal(radialIconFrontReach(b, 2, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1), 8);
+    // Toward the camera is -Z when forward is +Z, so the near face is hz.
+    assert.equal(radialIconFrontReach(b, 1, 0, 0, -1, 1, 0, 0, 0, 1, 0, 0, 0, 1), 1);
   });
 });

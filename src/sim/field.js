@@ -373,14 +373,28 @@ export function createField(seed = 0, dims = {}) {
  * `spawnPads` (world x/z) keeps those starts on grass. Omit it to dry the
  * usual 1v1 and team pads. Pass `[]` to leave every lake where the seed put it.
  * @param {number} [seed]
- * @param {{ width?: number, height?: number, spawnPads?: Array<[number, number]> }} [dims]
+ * @param {{ width?: number, height?: number, spawnPads?: Array<[number, number]>, spawnPadClearTiles?: number }} [dims]
  */
 export function buildField(seed = 0, dims = {}) {
   const field = createField(seed, dims);
   generateHeightMap(field);
-  assignTerrainByElevation(field, dims.spawnPads);
+  assignTerrainByElevation(field, dims.spawnPads, dims.spawnPadClearTiles);
   seedRegionLift(field);
   composeHeightMap(field);
+  applyTerrainTransitions(field);
+  updatePassFromWater(field);
+  return field;
+}
+
+/**
+ * Land mask and pass bits only. Same terrain as buildField — height is not
+ * an input to the water cut — so a pre-match check can skip the mesh.
+ * @param {number} [seed]
+ * @param {{ width?: number, height?: number, spawnPads?: Array<[number, number]>, spawnPadClearTiles?: number }} [dims]
+ */
+export function buildTerrainField(seed = 0, dims = {}) {
+  const field = createField(seed, dims);
+  assignTerrainByElevation(field, dims.spawnPads, dims.spawnPadClearTiles);
   applyTerrainTransitions(field);
   updatePassFromWater(field);
   return field;
@@ -1933,7 +1947,10 @@ export function applySeededHeight(field) {
   composeHeightMap(field);
 }
 
-function assignTerrainByElevation(field, spawnPads) {
+/** Extra lake clearance for the stress pie ring (larger than 1v1 pads). */
+export const STRESS_SPAWN_CLEAR_TILES = 8;
+
+function assignTerrainByElevation(field, spawnPads, spawnPadClearTiles) {
   const { width, height, terrainTypes, seed } = field;
   const n = width * height;
   const layout = mapLayout(seed, width, height);
@@ -2007,7 +2024,7 @@ function assignTerrainByElevation(field, spawnPads) {
       }
     }
   }
-  keepMatchSpawnsDry(field, spawnPads);
+  keepMatchSpawnsDry(field, spawnPads, spawnPadClearTiles);
 }
 
 /**
@@ -2051,11 +2068,11 @@ export function drySpawnPads(field, spots, radiusTiles = MATCH_SPAWN_CLEAR_TILES
   }
 }
 
-function keepMatchSpawnsDry(field, spawnPads) {
+function keepMatchSpawnsDry(field, spawnPads, clearTiles) {
   const halfX = field.width * TILE_SIZE_F * 0.5;
   const halfZ = field.height * TILE_SIZE_F * 0.5;
   const spots = spawnPads === undefined ? legacyMatchSpawnSpots(halfX, halfZ) : spawnPads;
-  drySpawnPads(field, spots);
+  drySpawnPads(field, spots, clearTiles ?? MATCH_SPAWN_CLEAR_TILES);
 }
 
 /**

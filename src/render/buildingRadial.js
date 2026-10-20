@@ -40,16 +40,21 @@ import {
   radialHudPremulRgba,
   radialIconAnchor,
   radialIconBounds,
+  radialIconFitScale,
+  radialIconFrontReach,
 } from './radialPose.js';
+import { createRadialIconMaterial, syncRadialIconShade } from './radialIconMaterial.js';
 import { formatResourceCost } from '../sim/resources.js';
 import { menuGateState } from '../sim/menuGate.js';
 import { applyGhostValidityTint } from './buildings.js';
 import {
   ensureRadialPriceHud,
+  formatRadialPriceText,
   hideRadialPrice,
   hideRadialPricesWithPrefix,
   setRadialPrice,
 } from './radialPriceHud.js';
+import { xrEye } from './xrEye.js';
 
 /** Layout at HUD scale = 1 (ring outer radius in world units). */
 const MENU_Y = 2.4;
@@ -75,7 +80,11 @@ const PAD_H = 0.22;
 const PAD_LIFT = 1.35;
 /** Extra lift of icons along the menu normal above their pad ring. */
 const ICON_LIFT = 0.85;
+/** Pad disc + lifted icon mesh — clicks aim at the art, not just the hit circle. */
+const ICON_PICK_R = 5.2;
 const OPTION_SCALE = 0.468;
+/** Units/buildings stay at OPTION_SCALE; tall meshes shrink to this box. */
+const ICON_FIT_EXTENT = PAD_OUTER * 1.4;
 /** Hub preview while ghost-placing (a bit larger than a pad icon). */
 const PLACE_ICON_SCALE = OPTION_SCALE * 1.6;
 /** Center category pie — fixed size (not tied to ring radius). */
@@ -623,37 +632,12 @@ function liftRgb(c, t) {
   ];
 }
 
-function previewColorFromMaterial(mat) {
-  const color =
-    mat?.baseColorFactor ??
-    mat?._baseColorFactor ??
-    mat?.diffuseColor;
-  if (color?.length >= 3) {
-    return [
-      Math.max(0.12, Math.min(1, color[0])),
-      Math.max(0.12, Math.min(1, color[1])),
-      Math.max(0.12, Math.min(1, color[2])),
-    ];
-  }
-  return [0.72, 0.75, 0.8];
-}
-
 /**
- * Radial icons use isolated lit StandardMaterials. A strong emissive wash keeps
- * the resting icon silhouette-like; hover lowers it to reveal normal shading.
+ * Radial icons use a depth-writing shader. A strong emissive wash keeps the
+ * resting icon silhouette-like; hover lowers it to reveal normal shading.
  */
 function makeIconPreviewMaterial(source) {
-  const color = previewColorFromMaterial(source);
-  const mat = createStandardMaterial();
-  mat.name = `${source?.name ?? 'building'}-radial`;
-  mat.diffuseColor = color;
-  mat.emissiveColor = [0.82, 0.82, 0.82];
-  mat.alpha = RADIAL_HUD_BLEND_ALPHA;
-  mat._radialBaseAlpha = 1;
-  if (mat.specularColor) mat.specularColor = [0, 0, 0];
-  disableRadialHudDepthWrite(mat);
-  markMaterialUboDirty(mat);
-  return mat;
+  return createRadialIconMaterial(source);
 }
 
 /**
@@ -671,6 +655,21 @@ function rayHitPlane(ray, px, py, pz, nx, ny, nz) {
     z: ray.oz + ray.dz * t,
     t,
   };
+}
+
+function rayHitSphereT(ray, cx, cy, cz, radius) {
+  const lx = ray.ox - cx;
+  const ly = ray.oy - cy;
+  const lz = ray.oz - cz;
+  const b = ray.dx * lx + ray.dy * ly + ray.dz * lz;
+  const c = lx * lx + ly * ly + lz * lz - radius * radius;
+  const disc = b * b - c;
+  if (disc < 0) return null;
+  const root = Math.sqrt(disc);
+  const t0 = -b - root;
+  if (t0 >= 0) return t0;
+  const t1 = -b + root;
+  return t1 >= 0 ? t1 : null;
 }
 
 /**
@@ -1043,6 +1042,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     mat._radialBaseAlpha = base;
     mat.alpha = radialHudFadeAlpha(base, edgeOpacity);
     markMaterialUboDirty(mat);
+    syncRadialIconShade(mat);
   }
 
   function refreshMatAlpha(mat) {
@@ -1050,6 +1050,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     if (mat._radialBaseAlpha == null) mat._radialBaseAlpha = mat.alpha ?? 1;
     mat.alpha = radialHudFadeAlpha(mat._radialBaseAlpha, edgeOpacity);
     markMaterialUboDirty(mat);
+    syncRadialIconShade(mat);
   }
 
   function applyEdgeFade() {
@@ -1360,7 +1361,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       if (!mat) continue;
       if (hovered) {
         if (mat.emissiveColor && layer.baseEmissive) {
-          // Remove the flat silhouette wash so scene lighting reveals normals.
+          // Drop the flat silhouette wash so the icon shading shows.
           mat.emissiveColor = [0.06, 0.075, 0.09];
         }
         if (mat.diffuseColor && layer.baseDiffuse) {
@@ -1560,10 +1561,14 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     updateBasis(camera);
   }
 
+  function iconFitScale(type, fallback = OPTION_SCALE) {
+    return radialIconFitScale(icons.get(type), ICON_FIT_EXTENT, fallback);
+  }
+
   function redrawSlot(i) {
     const s = slots[i];
     if (!s) return;
-    const iconScale = OPTION_SCALE * hudScale;
+    const iconScale = iconFitScale(s.type) * hudScale;
     const lift = ICON_LIFT * hudScale;
     poseIcon(
       s.type,
@@ -1577,7 +1582,8 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   }
 
   /**
-   * Upright icon, yawed toward camera (right-handed: X×Y=Z, −Z toward camera).
+   * Upright icon, yawed toward camera (right-handed: X×Y=Z, +Z toward camera).
+   * Baked meshes face model +Z after the node spin is baked in.
    * @param {string} type
    * @param {number} iconX
    * @param {number} iconY
@@ -1596,15 +1602,15 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
         iconY,
         iconZ,
         iconScale,
-        -bx,
+        bx,
         0,
-        -bz,
+        bz,
         0,
         1,
         0,
-        -hx,
+        hx,
         0,
-        -hz,
+        hz,
         batch.cx ?? 0,
         batch.cy ?? 0,
         batch.cz ?? 0,
@@ -1671,12 +1677,41 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     layer._version++;
   }
 
+  function showHeadsetPrice(price, text, wash, origin, viewport, opacity, scaleMul) {
+    if (
+      price.text !== text ||
+      price.wash !== wash ||
+      Math.abs((price.fadeA ?? -1) - opacity) > 0.02
+    ) {
+      updateDefaultTextData(
+        price.data,
+        text,
+        radialHudPremulRgba(wash, opacity),
+      );
+      price.text = text;
+      price.wash = wash;
+      price.fadeA = opacity;
+    }
+    const sx = (viewport.pixelWidth ?? viewport.width) / viewport.width;
+    const sy = (viewport.pixelHeight ?? viewport.height) / viewport.height;
+    const pixelRatio = (sx + sy) * 0.5;
+    const scale = PRICE_SCREEN_SCALE * pixelRatio * scaleMul;
+    const centerOffset = price.data.width * scale * 0.5;
+    const layer = price.layer;
+    layer.positionPx.x = origin.x * sx - centerOffset;
+    layer.positionPx.y = origin.y * sy;
+    layer.rotationRad = 0;
+    layer.scale = scale;
+    layer.opacity = 1;
+    layer.visible = true;
+    layer._version++;
+  }
+
   function redrawPrice(i) {
     const price = prices[i];
     const slot = slots[i];
     const worldToScreen = screen.worldToScreen;
     const getViewport = screen.getViewport;
-    hideLabel(price);
     if (!slot?.costText || !open || !worldToScreen || !getViewport) {
       hidePrice(i);
       return;
@@ -1693,6 +1728,20 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       hidePrice(i);
       return;
     }
+    if (xrEye() && price) {
+      hideRadialPrice(`build-${i}`);
+      showHeadsetPrice(
+        price,
+        formatRadialPriceText(slot.cost),
+        PRICE_WASH[slot.gate ?? 'ok'] ?? PRICE_WASH.ok,
+        origin,
+        viewport,
+        fadeAlpha(hovered ? 0.95 : 0.8),
+        hovered ? 1.05 : 1,
+      );
+      return;
+    }
+    hideLabel(price);
     setRadialPrice(`build-${i}`, {
       cost: slot.cost,
       x: origin.x,
@@ -1733,7 +1782,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       centerX + nx * lift,
       centerY + ny * lift,
       centerZ + nz * lift,
-      PLACE_ICON_SCALE * hudScale,
+      iconFitScale(placingPreviewType, PLACE_ICON_SCALE) * hudScale,
       false,
     );
     applyPlacingPreviewTint();
@@ -1892,7 +1941,21 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     const stx = -bx * ss + tx * sc;
     const sty = -by * ss + ty * sc;
     const stz = -bz * ss + tz * sc;
-    const lift = (ICON_LIFT + LOCK_SLASH_LIFT) * s;
+    const batch = icons.get(slot.type);
+    const reach = batch
+      ? radialIconFrontReach(
+        batch,
+        iconFitScale(slot.type) * s,
+        nx, ny, nz,
+        bx, 0, bz,
+        0, 1, 0,
+        hx, 0, hz,
+      )
+      : 0;
+    // The bar has to clear the icon now that icons write depth. Center stays
+    // on the pad; only the camera-facing lift moves.
+    const halfBar = LOCK_SLASH_H * 0.5 * PAD_OUTER * s;
+    const lift = ICON_LIFT * s + Math.max(LOCK_SLASH_LIFT * s, reach + halfBar + 0.05);
     const up = LOCK_SLASH_UP * s;
     placeMeshOriented(
       mesh,
@@ -2125,20 +2188,31 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     if (!slots.length) return null;
     const pp = padPlanePoint();
     const padHit = rayHitPlane(ray, pp.x, pp.y, pp.z, nx, ny, nz);
-    if (!padHit) return null;
     const padR = (PAD_OUTER + PAD_BORDER) * hudScale;
     const padR2 = padR * padR;
+    const iconR = ICON_PICK_R * hudScale;
+    const iconLift = ICON_LIFT * hudScale;
 
     let bestType = null;
     let bestT = Infinity;
 
     for (let i = 0; i < slots.length; i++) {
       const s = slots[i];
-      const dx = padHit.x - s.x;
-      const dy = padHit.y - s.y;
-      const dz = padHit.z - s.z;
-      if (dx * dx + dy * dy + dz * dz <= padR2 && padHit.t < bestT) {
-        bestT = padHit.t;
+      if (padHit) {
+        const dx = padHit.x - s.x;
+        const dy = padHit.y - s.y;
+        const dz = padHit.z - s.z;
+        if (dx * dx + dy * dy + dz * dz <= padR2 && padHit.t < bestT) {
+          bestT = padHit.t;
+          bestType = s.type;
+        }
+      }
+      const ix = s.x + nx * iconLift;
+      const iy = s.y + ny * iconLift;
+      const iz = s.z + nz * iconLift;
+      const iconT = rayHitSphereT(ray, ix, iy, iz, iconR);
+      if (iconT != null && iconT < bestT) {
+        bestT = iconT;
         bestType = s.type;
       }
     }

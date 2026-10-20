@@ -23,15 +23,27 @@ export const PARTICLE_INITIAL_CAPACITY = 8192;
 /** Absolute ceiling so a runaway emitter cannot OOM. */
 export const PARTICLE_HARD_MAX = 262144;
 /**
- * Camera-distance cull. Closest play zoom is radius 50, so the unit under the
- * crosshair is ~50 away and the near melee sits inside MAX. Past that the
- * sprites are specks — drop them instead of filling the billboard pool.
+ * Camera-distance cull on XZ (orbit eye height must not eat ground flame range).
+ * Closest play zoom is radius 50 on the pivot; full FX tier distance matches MAX.
+ * Past that the sprites are specks — drop them instead of filling the billboard pool.
  * Size still stretches tiny sparks up toward MAX; nothing outlives the cap.
  * FX tier `distance` in settings.js should stay ≤ this cap.
  */
-export const PARTICLE_CULL_MIN_RANGE = 80;
-export const PARTICLE_CULL_MAX_RANGE = 200;
+export const PARTICLE_CULL_MIN_RANGE = 100;
+export const PARTICLE_CULL_MAX_RANGE = 360;
 export const PARTICLE_CULL_SIZE_K = 660;
+/** Camp / socket wisps use this floor so embers match the flame body. */
+export const SOCKET_FX_CULL_MIN = PARTICLE_CULL_MAX_RANGE;
+
+/**
+ * XZ distance² from the camera eye — orbit pitch should not shrink ground FX range.
+ * @param {{ x: number, y: number, z: number }} eye
+ */
+export function particleEyeDistSq(eye, x, y, z) {
+  const dx = x - eye.x;
+  const dz = z - eye.z;
+  return dx * dx + dz * dz;
+}
 
 function atlasFromAlphaDisk(engine, soft) {
   const pixels = new Uint8Array(TEXTURE_SIZE * TEXTURE_SIZE * 4);
@@ -152,7 +164,33 @@ function makeParticle() {
     cullSize: 1,
     rotation: 0,
     spin: 0,
+    stream: null,
   };
+}
+
+/**
+ * Acceleration toward the line through `stream.origin` along `stream.axis`.
+ * Idle until `stream.delay`, so a bloom can open before the current catches it.
+ * @param {number[]} position
+ * @param {{ origin: number[], axis: number[], k: number, delay?: number } | null} stream
+ * @param {number} age
+ * @returns {number[] | null}
+ */
+export function streamPullAccel(position, stream, age) {
+  if (!stream || !(stream.k > 0) || age < (stream.delay || 0)) return null;
+  const ax = stream.axis[0];
+  const ay = stream.axis[1];
+  const az = stream.axis[2];
+  const dx = position[0] - stream.origin[0];
+  const dy = position[1] - stream.origin[1];
+  const dz = position[2] - stream.origin[2];
+  const along = dx * ax + dy * ay + dz * az;
+  const k = stream.k;
+  return [
+    -k * (dx - ax * along),
+    -k * (dy - ay * along),
+    -k * (dz - az * along),
+  ];
 }
 
 async function atlasFromPuffSprite(engine) {
@@ -281,10 +319,7 @@ export async function createParticleSystem(engine, scene, options = {}) {
     const eye = getEye();
     if (!eye) return false;
     const range = cullRange(size, cullRangeScale, minRange);
-    const dx = x - eye.x;
-    const dy = y - eye.y;
-    const dz = z - eye.z;
-    return dx * dx + dy * dy + dz * dz > range * range;
+    return particleEyeDistSq(eye, x, y, z) > range * range;
   }
 
   function emit(init = {}) {
@@ -350,6 +385,7 @@ export async function createParticleSystem(engine, scene, options = {}) {
     particle.cullSize = sizeHint;
     particle.rotation = init.rotation ?? 0;
     particle.spin = init.spin ?? 0;
+    particle.stream = init.stream || null;
     particle.patch.rotation = particle.rotation;
     const puff = init.sprite === 'puff';
     const system =
@@ -420,6 +456,12 @@ export async function createParticleSystem(engine, scene, options = {}) {
         particle.vx += particle.gravityX * dt;
         particle.vy += particle.gravityY * dt;
         particle.vz += particle.gravityZ * dt;
+        const pull = streamPullAccel(particle.position, particle.stream, particle.age);
+        if (pull) {
+          particle.vx += pull[0] * dt;
+          particle.vy += pull[1] * dt;
+          particle.vz += pull[2] * dt;
+        }
         const damping = Math.exp(-particle.drag * dt);
         particle.vx *= damping;
         particle.vy *= damping;
@@ -463,10 +505,7 @@ export async function createParticleSystem(engine, scene, options = {}) {
           particle.cullSize || 0,
         );
         const range = cullRange(size, cullRangeScale, particle.cullMin || 0);
-        const dx = particle.position[0] - eye.x;
-        const dy = particle.position[1] - eye.y;
-        const dz = particle.position[2] - eye.z;
-        if (dx * dx + dy * dy + dz * dz > range * range) {
+        if (particleEyeDistSq(eye, particle.position[0], particle.position[1], particle.position[2]) > range * range) {
           culled++;
           release(i);
           continue;

@@ -21,18 +21,26 @@ import {
   canPlaceBuildingAt,
   canPreviewPlaceBuilding,
   buildingFootprintBounds,
+  buildingMeshOrigin,
   snapBuildingWorld,
   BUILDING_FOOTPRINTS,
   getBuildingDisplayName,
   buildingCanRally,
   TRAIN_TICKS,
   VILLAGE_VILLAGER_TICKS,
+  VILLAGE_FIRST_VILLAGER_ACC,
   BUILDING_MENUS,
   getBuildingMenu,
   mergeBuildingMenus,
   buildingOffersMenuItem,
   capActionMenu,
   createBuilding,
+  getBuildingHp,
+  getBuildTime,
+  getBuildingUpgradeCost,
+  DERRICK_LIFE_TICKS,
+  WELL_MINERAL_INTERVAL,
+  tickBuildingMorphs,
   getBuildingRequires,
   ownerHasBuildingType,
   ownerMeetsBuildingRequires,
@@ -41,6 +49,7 @@ import {
 import { menuGateState } from './menuGate.js';
 import { POP_PER_VILLAGE } from './pop.js';
 import { buildingProductionSystem } from './buildingProduction.js';
+import { takeStorageOverflow } from './storage.js';
 import { createAgoras } from './agora.js';
 import { UNIT, getUnitCost } from './unitTypes.js';
 import { grantTech } from './tech.js';
@@ -103,6 +112,20 @@ function footprintTiles(type, xF, zF) {
 }
 
 describe('buildings place', () => {
+  it('keeps the mesh ground center on the placement point at authored scale', () => {
+    const cx = -0.265;
+    const cz = 2.235;
+    const scale = 1.25;
+    const yaw = 0.7;
+    const origin = buildingMeshOrigin(10, 20, yaw, scale, cx, cz);
+    const c = Math.cos(yaw);
+    const s = Math.sin(yaw);
+    const wx = origin.x + scale * (c * cx + s * cz);
+    const wz = origin.z + scale * (-s * cx + c * cz);
+    assert.ok(Math.abs(wx - 10) < 1e-6);
+    assert.ok(Math.abs(wz - 20) < 1e-6);
+  });
+
   it('PLACE_BUILDING snaps odd footprints to tile centers', () => {
     const w = createWorld(1);
     w.buildings = [];
@@ -911,13 +934,24 @@ describe('village and workshop menus', () => {
     const before = w.count;
     const foodBefore = getResource(w, 0, 'food');
     const cost = getUnitCost(UNIT.VILLAGER);
-    for (let i = 0; i < VILLAGE_VILLAGER_TICKS - 1; i++) buildingProductionSystem(w, field);
-    assert.equal(w.count, before, 'no villager before the interval');
+    assert.equal(
+      w.buildings[0].villageSpawnAcc,
+      VILLAGE_FIRST_VILLAGER_ACC,
+      'first villager starts 30% done',
+    );
+    const firstWait = VILLAGE_VILLAGER_TICKS - VILLAGE_FIRST_VILLAGER_ACC;
+    for (let i = 0; i < firstWait - 1; i++) buildingProductionSystem(w, field);
+    assert.equal(w.count, before, 'no villager before the remaining interval');
     buildingProductionSystem(w, field);
     assert.equal(w.count, before + 1, 'village spawns a villager');
     assert.equal(w.type[before], UNIT.VILLAGER);
     assert.equal(w.owner[before], 0);
     assert.equal(getResource(w, 0, 'food'), foodBefore - (cost.food | 0), 'trickle charges food');
+    assert.equal(w.buildings[0].villageSpawnAcc, 0, 'later villagers start from empty');
+    for (let i = 0; i < VILLAGE_VILLAGER_TICKS - 1; i++) buildingProductionSystem(w, field);
+    assert.equal(w.count, before + 1, 'the next villager takes the full interval');
+    buildingProductionSystem(w, field);
+    assert.equal(w.count, before + 2, 'the second villager arrives on time');
   });
 
   it('skips a trickle when the owner cannot afford the villager', () => {
@@ -937,10 +971,16 @@ describe('village and workshop menus', () => {
     finishAllBuildings(w);
     addResource(w, 0, 'food', -getResource(w, 0, 'food'));
     const before = w.count;
-    for (let i = 0; i < VILLAGE_VILLAGER_TICKS; i++) buildingProductionSystem(w, field);
+    const firstWait = VILLAGE_VILLAGER_TICKS - VILLAGE_FIRST_VILLAGER_ACC;
+    for (let i = 0; i < firstWait; i++) buildingProductionSystem(w, field);
     assert.equal(w.count, before, 'unaffordable trickle is skipped');
     assert.equal(getResource(w, 0, 'food'), 0, 'broke trickle spends nothing');
     assert.equal(w.buildings[0].villageSpawnAcc, 0, 'timer resets after a miss');
+    const flash = takeStorageOverflow(w);
+    assert.equal(flash?.length, 1);
+    assert.equal(flash[0].kind, 'food');
+    assert.equal(flash[0].hint, '1');
+    assert.equal(flash[0].tone, 'short');
     addResource(w, 0, 'food', getUnitCost(UNIT.VILLAGER).food | 0);
     for (let i = 0; i < VILLAGE_VILLAGER_TICKS; i++) buildingProductionSystem(w, field);
     assert.equal(w.count, before + 1, 'next interval spawns once funded');
@@ -995,10 +1035,16 @@ describe('village and workshop menus', () => {
     const menu = mergeBuildingMenus(['barracks', 'tavern']);
     assert.deepEqual(menu.units.map((u) => u.id), ['warrior', 'archer', 'warlock']);
     assert.deepEqual(menu.upgrades.map((u) => u.id), ['drayage', 'patronage']);
-    assert.equal(mergeBuildingMenus(['farm', 'mine']), null);
+    assert.deepEqual(menu.buildings, []);
+    assert.equal(mergeBuildingMenus(['farm']), null);
+    const mineMenu = mergeBuildingMenus(['mine']);
+    assert.deepEqual(mineMenu.buildings.map((b) => b.id), ['derrick']);
+    assert.equal(mineMenu.buildings[0].name, 'Well');
     assert.equal(buildingOffersMenuItem('barracks', 'unit', 'warrior'), true);
     assert.equal(buildingOffersMenuItem('barracks', 'unit', 'warlock'), false);
     assert.equal(buildingOffersMenuItem('tavern', 'upgrade', 'patronage'), true);
+    assert.equal(buildingOffersMenuItem('mine', 'building', 'derrick'), true);
+    assert.equal(buildingOffersMenuItem('barracks', 'building', 'derrick'), false);
   });
 
   it('caps a combined menu without dropping an entire side', () => {
@@ -1010,6 +1056,16 @@ describe('village and workshop menus', () => {
     assert.equal(capped.units.length + capped.upgrades.length, 8);
     assert.ok(capped.units.length >= 1);
     assert.ok(capped.upgrades.length >= 1);
+    assert.deepEqual(capped.buildings, []);
+    const three = capActionMenu({
+      units: [1, 2, 3, 4, 5].map((i) => ({ id: `u${i}` })),
+      upgrades: [1, 2, 3].map((i) => ({ id: `g${i}` })),
+      buildings: [1, 2].map((i) => ({ id: `b${i}` })),
+    }, 8);
+    assert.equal(three.units.length + three.upgrades.length + three.buildings.length, 8);
+    assert.ok(three.units.length >= 1);
+    assert.ok(three.upgrades.length >= 1);
+    assert.ok(three.buildings.length >= 1);
   });
 
   it('slows the villager trickle at the soft cap but still trains', () => {
@@ -1040,5 +1096,97 @@ describe('village and workshop menus', () => {
       { type: CMD.QUEUE_TRAIN, playerId: 0, buildingIndex: 0, unitKey: 'monk' },
     ]);
     assert.equal(w.buildings[0].tracks?.length | 0, 2, 'village still trains past the soft cap');
+  });
+
+  it('collapses a finished mine into a derrick site, then a well', () => {
+    const w = _createWorld(4);
+    grantStartingResources(w, 0, { wood: 80, stone: 80, mineral: 0, food: 0 });
+    const mine = createBuilding({ owner: 0, type: 'mine', x: 4, z: 8 });
+    const spot = { x: mine.x, z: mine.z };
+    w.buildings = [mine];
+    const cost = getBuildingUpgradeCost('derrick');
+    applyCommands(w, null, [{
+      type: CMD.UPGRADE_BUILDING,
+      playerId: 1,
+      buildingIndex: 0,
+      upgradeId: 'derrick',
+    }]);
+    assert.equal(w.buildings[0].type, 'mine', 'another owner cannot upgrade it');
+    const site = createBuilding({ owner: 0, type: 'mine', x: 4, z: 8, built: 0 });
+    w.buildings = [site];
+    applyCommands(w, null, [{
+      type: CMD.UPGRADE_BUILDING,
+      playerId: 0,
+      buildingIndex: 0,
+      upgradeId: 'derrick',
+    }]);
+    assert.equal(w.buildings[0].type, 'mine', 'an unfinished mine stays a mine');
+
+    w.buildings = [mine];
+    applyCommands(w, null, [{
+      type: CMD.UPGRADE_BUILDING,
+      playerId: 0,
+      buildingIndex: 0,
+      upgradeId: 'derrick',
+    }]);
+    const derrick = w.buildings[0];
+    assert.equal(derrick.type, 'derrick');
+    assert.equal(derrick.built, 0);
+    assert.equal(derrick.hp, 1);
+    assert.equal(derrick.x, spot.x);
+    assert.equal(derrick.z, spot.z);
+    assert.equal(derrick.morphTicks, 0);
+    assert.equal(getResource(w, 0, 'wood'), 80 - cost.wood);
+    assert.equal(getResource(w, 0, 'stone'), 80 - cost.stone);
+
+    applyCommands(w, null, [{
+      type: CMD.CANCEL_CONSTRUCTION,
+      playerId: 0,
+      buildingIndex: 0,
+    }]);
+    assert.equal(derrick.hp, 0);
+    assert.equal(getResource(w, 0, 'wood'), 80);
+    assert.equal(getResource(w, 0, 'stone'), 80);
+
+    const fresh = createBuilding({ owner: 0, type: 'derrick', x: 0, z: 0, built: 0 });
+    fresh.built = 1;
+    fresh.hp = fresh.maxHp;
+    fresh.morphTicks = 0;
+    w.buildings = [fresh];
+    tickBuildingMorphs(w);
+    assert.equal(fresh.type, 'derrick', 'finishing the site starts the derrick life');
+    assert.equal(fresh.morphTicks, DERRICK_LIFE_TICKS - 1);
+
+    const raised = createBuilding({ owner: 0, type: 'derrick', x: 4, z: 8 });
+    assert.equal(raised.morphTicks, DERRICK_LIFE_TICKS);
+    w.buildings = [raised];
+    w.tick = 0;
+    for (let i = 0; i < DERRICK_LIFE_TICKS - 1; i++) tickBuildingMorphs(w);
+    assert.equal(w.buildings[0].type, 'derrick');
+    assert.equal(w.buildings[0].morphTicks, 1);
+    tickBuildingMorphs(w);
+    const well = w.buildings[0];
+    assert.equal(well.type, 'well');
+    assert.equal(well.built, 0);
+    assert.equal(well.hp, 1);
+    assert.equal(well.buildProgress, 0);
+    assert.equal(well.buildTime, getBuildTime('well'));
+    assert.equal(well.x, spot.x);
+    assert.equal(serializeBuildings([well])[0].morphTicks, 0);
+
+    well.built = 1;
+    well.hp = getBuildingHp('well');
+    const before = getResource(w, 0, 'mineral');
+    for (let i = 0; i < WELL_MINERAL_INTERVAL; i++) {
+      tickBuildingMorphs(w);
+      w.tick++;
+    }
+    assert.equal(getResource(w, 0, 'mineral'), before + 1);
+
+    const dead = createBuilding({ owner: 0, type: 'derrick', x: 12, z: 0 });
+    dead.hp = 0;
+    w.buildings = [dead];
+    for (let i = 0; i < 3; i++) tickBuildingMorphs(w);
+    assert.equal(dead.type, 'derrick', 'a wrecked derrick does not become a well');
   });
 });

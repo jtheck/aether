@@ -7,6 +7,8 @@ import { isHostile } from './teams.js';
 import { storyProtectsOwner } from './storyProtect.js';
 import { unloadPassengers } from './transport.js';
 import { onMycoDeath } from './sporeBloom.js';
+import { armChaseLeash } from './leash.js';
+import { creditDamagedBy, noteWarriorDamage } from './champion.js';
 
 /**
  * @param {object} w
@@ -17,6 +19,7 @@ import { onMycoDeath } from './sporeBloom.js';
 export function applyDamage(w, target, amount, source = -1) {
   if (target < 0 || target >= w.count || !w.alive[target] || amount <= 0) return false;
   if (storyProtectsOwner(w, w.owner[target])) return false;
+  noteWarriorDamage(w, source, target);
   let remain = amount;
   const shield = w.shieldHp?.[target] ?? 0;
   if (shield > 0) {
@@ -50,11 +53,13 @@ function tryRetaliate(w, victim, attacker) {
   if (w.distractCd?.[victim] > 0) return;
   const order = w.order[victim];
   if (order !== w.ORDER.IDLE && order !== w.ORDER.ATTACK_MOVE) return;
+  if ((w.leashDrop?.[victim] ?? -1) === attacker) return;
   const def = getUnitDef(w.type[victim]);
   if (def.category !== 'military') return;
 
   w.targetEntity[victim] = attacker;
   w.order[victim] = w.ORDER.ATTACK;
+  armChaseLeash(w, victim);
   claimEngagement(w, victim, attacker);
   const stand = attackStandPoint(w, victim, attacker);
   queuePath(w, victim, stand.x, stand.y);
@@ -89,6 +94,9 @@ export function kill(w, i) {
   if (w.locustSource) w.locustSource[i] = -1;
   if (w.engagementTarget) w.engagementTarget[i] = -1;
   if (w.engagementSlot) w.engagementSlot[i] = -1;
+  if (w.leashActive) w.leashActive[i] = 0;
+  if (w.leashDrop) w.leashDrop[i] = -1;
   clearPath(w, i);
   if (deathType === UNIT.MYCO) onMycoDeath(w, deathX, deathY);
+  creditDamagedBy(w, i);
 }

@@ -4,6 +4,25 @@
 
 import { KOTH_APP_STATE, SHARD_PHASE } from './protocol.js';
 
+/**
+ * Ended matches can keep receiving live heartbeats from spectators that missed
+ * the host's shutdown. Refresh the tombstone for every such heartbeat so the
+ * old match cannot be re-added until every stale announcer has gone quiet.
+ */
+export function suppressEndedMatchPresence(endedMatches, data, now = Date.now()) {
+  const id = data?.matchId;
+  if (!id) return false;
+  if (!data.gone && !endedMatches.has(id)) return false;
+  endedMatches.set(id, now);
+  return true;
+}
+
+export function pruneEndedMatches(endedMatches, ttlMs, now = Date.now()) {
+  for (const [id, lastSeenAt] of endedMatches) {
+    if (now - lastSeenAt > ttlMs) endedMatches.delete(id);
+  }
+}
+
 /** Listing lobbies: in the matchmaking channel, not a live shard. */
 export function isBrowsePresence(data) {
   return data?.appState === KOTH_APP_STATE.PRIVATE_SANDBOX

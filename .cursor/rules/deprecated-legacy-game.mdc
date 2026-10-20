@@ -1,8 +1,7 @@
 ---
 description: Root index.html and game/ are deprecated; src/ is what ships via DEPLOY
-alwaysApply: true
+alwaysApply: false
 ---
-
 # Shipping stack
 
 - **Current game:** `src/` (Lite / WebGPU). Local: `src/index.html`. Ship: `npm run package` in `src/` → `DEPLOY/` (S3/CloudFront).

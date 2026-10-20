@@ -2,7 +2,12 @@ import { describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { createGameLobby } from './gameLobby.js';
 import { MODE_IDS } from '../lobby/modes.js';
-import { LOBBY_PROTOCOL_VERSION, MSG, typeChannel } from '../lobby/protocol.js';
+import {
+  ANNOUNCE_TTL_MS,
+  LOBBY_PROTOCOL_VERSION,
+  MSG,
+  typeChannel,
+} from '../lobby/protocol.js';
 
 function fakeP2p() {
   const joined = new Set();
@@ -69,5 +74,45 @@ describe('game lobby auto listen', () => {
     assert.equal(p2p.joined.has(typeChannel('onevsone')), true);
     lobby.unlisten('onevsone');
     assert.equal(p2p.joined.has(typeChannel('onevsone')), false);
+  });
+
+  it('removes a lobby when the host closes it', () => {
+    let onBroadcast = null;
+    const lobby = createGameLobby({
+      getP2p: () => fakeP2p(),
+      subscribeBroadcast: (fn) => { onBroadcast = fn; return () => {}; },
+    });
+    const row = {
+      v: LOBBY_PROTOCOL_VERSION,
+      mode: 'onevsone',
+      roomId: 'lobby-a',
+      userId: 'host',
+    };
+    onBroadcast({ ...row, type: MSG.ANNOUNCE });
+    assert.equal(lobby.listLobbies('onevsone').length, 1);
+    onBroadcast({ ...row, type: MSG.CLOSED });
+    assert.equal(lobby.listLobbies('onevsone').length, 0);
+  });
+
+  it('expires a lobby after the host heartbeat stops', () => {
+    mock.timers.enable({ apis: ['Date'] });
+    try {
+      let onBroadcast = null;
+      const lobby = createGameLobby({
+        getP2p: () => fakeP2p(),
+        subscribeBroadcast: (fn) => { onBroadcast = fn; return () => {}; },
+      });
+      onBroadcast({
+        v: LOBBY_PROTOCOL_VERSION,
+        type: MSG.ANNOUNCE,
+        mode: 'onevsone',
+        roomId: 'lobby-a',
+        userId: 'host',
+      });
+      mock.timers.tick(ANNOUNCE_TTL_MS + 1);
+      assert.equal(lobby.listLobbies('onevsone').length, 0);
+    } finally {
+      mock.timers.reset();
+    }
   });
 });

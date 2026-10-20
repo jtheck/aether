@@ -10,6 +10,7 @@ import { isHostile } from './teams.js';
 import { claimEngagement, clearEngagement } from './engagement.js';
 import { attackStandPoint, clearPath, queuePath } from './path.js';
 import { ORDER } from './world.js';
+import { armChaseLeash, clearChaseLeash } from './leash.js';
 import { rngFrac, rngRange } from './rng.js';
 import {
   TERRAIN,
@@ -67,13 +68,19 @@ const ESCAPE_HOP_DIST_MAX = fx.fromFloat(16.875);
 /** Tiny pause between escape hops (ticks). */
 const ESCAPE_PAUSE_MIN = 0;
 const ESCAPE_PAUSE_MAX = 1;
-/** Search radius in tiles (~360 world units; most of a fight zone). */
-const WATER_SEARCH_TILES = 90;
-/** Safety cap so a stranded frog can't hop forever. */
-const ESCAPE_HOPS_MAX = 48;
+/**
+ * Spent frogs only scoot to water or the table rim inside this radius
+ * (13 tiles, ~52 world units). Anything farther and they just vanish.
+ */
+const ESCAPE_SEEK_TILES = 13;
+/** Safety cap so a stranded frog can't hop forever. Covers a 13-tile seek. */
+const ESCAPE_HOPS_MAX = 12;
 const FIRST_HOP_NEAR = fx.fromFloat(6);
 const FIRST_HOP_FAR = fx.fromFloat(16);
 const CLUSTER_LATERAL = fx.fromFloat(9);
+/** Pop in a small ring around the caster instead of stacking on the shaman. */
+const SPAWN_RADIUS_MIN = fx.fromFloat(3);
+const SPAWN_RADIUS_MAX = fx.fromFloat(6);
 const WANDER_FORWARD_MIN = fx.fromFloat(3.5);
 const WANDER_FORWARD_MAX = fx.fromFloat(9);
 const WANDER_LATERAL = fx.fromFloat(6.5);
@@ -118,7 +125,7 @@ export function createFrogStore(capacity = FROG_INITIAL_CAPACITY) {
     landPulse: new Uint8Array(capacity),
     /** 1 while fleeing toward water. */
     escaping: new Uint8Array(capacity),
-    /** Locked water target for the escape chain. */
+    /** Locked escape target (nearby water, or a point just off the table). */
     waterX: new Int32Array(capacity),
     waterY: new Int32Array(capacity),
     /** Escape hops taken (cap). */
@@ -220,7 +227,7 @@ function setHop(store, slot, ox, oy, dx, dy, speed = HOP_SPEED) {
 }
 
 /** Nearest TERRAIN.WATER tile center, or null if none within range. */
-export function findNearestWater(field, wx, wy, maxTiles = WATER_SEARCH_TILES) {
+export function findNearestWater(field, wx, wy, maxTiles = ESCAPE_SEEK_TILES) {
   if (!field?.terrainTypes) return null;
   const tx0 = worldToTile(wx);
   const tz0 = worldToTileZ(wy);
@@ -246,6 +253,73 @@ export function findNearestWater(field, wx, wy, maxTiles = WATER_SEARCH_TILES) {
         const tz = tz0 + dz;
         if (!at(tx, tz)) continue;
         return { x: tileCenterX(tx), y: tileCenterY(tz) };
+      }
+    }
+  }
+  return null;
+}
+
+function isOffTable(field, tx, tz) {
+  const w = field.width;
+  const h = field.height;
+  if (tx < 0 || tz < 0 || tx >= w || tz >= h) return true;
+  const mask = field.activeMask;
+  return !!(mask && mask[tz * w + tx] === 0);
+}
+
+function isRimTile(field, tx, tz) {
+  if (isOffTable(field, tx, tz)) return false;
+  const w = field.width;
+  const h = field.height;
+  const i = tz * w + tx;
+  if (field.tableEdge) return field.tableEdge[i] === 1;
+  return tx === 0 || tz === 0 || tx === w - 1 || tz === h - 1;
+}
+
+const RIM_NEIGHBORS = [
+  [1, 0], [-1, 0], [0, 1], [0, -1],
+  [1, 1], [1, -1], [-1, 1], [-1, -1],
+];
+
+/** Point just past a rim tile, so the last hop leaves the table. */
+function exitPastRim(field, frogX, frogY, tx, tz) {
+  let bestX = tileCenterX(tx);
+  let bestY = tileCenterY(tz);
+  let bestD2 = -1;
+  for (let n = 0; n < RIM_NEIGHBORS.length; n++) {
+    const nx = tx + RIM_NEIGHBORS[n][0];
+    const nz = tz + RIM_NEIGHBORS[n][1];
+    if (!isOffTable(field, nx, nz)) continue;
+    const x = tileCenterX(nx);
+    const y = tileCenterY(nz);
+    const d2 = fx.dist2(frogX, frogY, x, y);
+    if (d2 > bestD2) {
+      bestD2 = d2;
+      bestX = x;
+      bestY = y;
+    }
+  }
+  return { x: bestX, y: bestY };
+}
+
+/**
+ * Nearest off-table hop target within range, or null.
+ * Prefers a tile just outside the rim so the frog jumps off the edge.
+ */
+function findNearestTableExit(field, wx, wy, maxTiles = ESCAPE_SEEK_TILES) {
+  if (!field?.width || !field.height) return null;
+  const tx0 = worldToTile(wx);
+  const tz0 = worldToTileZ(wy);
+  if (isRimTile(field, tx0, tz0)) return exitPastRim(field, wx, wy, tx0, tz0);
+
+  for (let r = 1; r <= maxTiles; r++) {
+    for (let dz = -r; dz <= r; dz++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (dx !== -r && dx !== r && dz !== -r && dz !== r) continue;
+        const tx = tx0 + dx;
+        const tz = tz0 + dz;
+        if (!isRimTile(field, tx, tz)) continue;
+        return exitPastRim(field, wx, wy, tx, tz);
       }
     }
   }
@@ -330,6 +404,7 @@ export function applyDistract(w, i, ticks = FROG_DISTRACT_TICKS) {
       w.vx[i] = 0;
       w.vy[i] = 0;
     }
+    clearChaseLeash(w, i);
   }
 }
 
@@ -357,6 +432,7 @@ export function maybeConfuseAlly(w, i) {
   w.targetEntity[i] = best;
   if (w.targetBuilding) w.targetBuilding[i] = -1;
   w.order[i] = ORDER.ATTACK;
+  armChaseLeash(w, i);
   claimEngagement(w, i, best);
   const stand = attackStandPoint(w, i, best);
   queuePath(w, i, stand.x, stand.y);
@@ -480,15 +556,24 @@ function planEscapeHop(w, store, slot) {
   return true;
 }
 
-/** After CC linger, start a chain of small fast hops toward water. */
+/** After CC linger, hop to nearby water or off a nearby table edge. Far exits are ignored. */
 function beginEscapeToWater(w, field, store, slot) {
-  const water = findNearestWater(field, store.px[slot], store.py[slot]);
-  if (!water) {
+  const px = store.px[slot];
+  const py = store.py[slot];
+  const water = findNearestWater(field, px, py);
+  const edge = findNearestTableExit(field, px, py);
+  let target = water || edge;
+  if (water && edge) {
+    const waterD = fx.dist2(px, py, water.x, water.y);
+    const edgeD = fx.dist2(px, py, edge.x, edge.y);
+    target = edgeD < waterD ? edge : water;
+  }
+  if (!target) {
     freeFrog(store, slot);
     return false;
   }
-  store.waterX[slot] = water.x;
-  store.waterY[slot] = water.y;
+  store.waterX[slot] = target.x;
+  store.waterY[slot] = target.y;
   store.escaping[slot] = 1;
   store.escapeHops[slot] = 0;
   if (nearWater(store, slot)) {
@@ -567,10 +652,15 @@ export function spawnFrogPlague(w, {
     const destX = clusterX[cluster] + jitterX;
     const destY = clusterY[cluster] + jitterY;
 
-    // Staggered pop out from slightly different spots around the caster.
-    const spawnJitter = fx.fromFloat(1.8);
-    const sx = x + rngSigned(rng, spawnJitter);
-    const sy = y + rngSigned(rng, spawnJitter);
+    // Same two rng draws as the old jitter, so launch stagger stays put.
+    // Radius comes from |ax| so the pop is a ring, not a pile on the shaman.
+    const ax = rngSigned(rng, fx.ONE);
+    const ay = rngSigned(rng, fx.ONE);
+    const pop = normalizeDir(ax || fx.ONE, ay);
+    const mag = ax < 0 ? -ax : ax;
+    const spread = SPAWN_RADIUS_MIN + fx.mul(SPAWN_RADIUS_MAX - SPAWN_RADIUS_MIN, mag);
+    const sx = x + fx.mul(pop.x, spread);
+    const sy = y + fx.mul(pop.y, spread);
 
     store.owner[slot] = owner & 0xff;
     store.source[slot] = source ?? -1;
@@ -631,7 +721,7 @@ export function frogSystem(w, field = null) {
       if (store.hopsLeft[slot] > 0) tryBirthChild(w, store, slot);
 
       if (store.hopsLeft[slot] <= 0) {
-        // CC sit finished — scoot into water if there's any nearby.
+        // CC sit finished — nearby water or the table edge, otherwise vanish.
         beginEscapeToWater(w, field, store, slot);
         continue;
       }

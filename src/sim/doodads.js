@@ -3,7 +3,7 @@
 // field.doodadType and round-trip in .garden (`dd`).
 
 import { TERRAIN, TILE_SIZE_F, worldHalfFFromField, worldHalfZFFromField } from './field.js';
-import { SCENERY, rockFootprintRadius, sceneryTileHash } from './scenery.js';
+import { SCENERY, rockFootprintRadius, sceneryDensityAllows, sceneryTileHash } from './scenery.js';
 import { TREE_STOCK_NATURAL_MAX, treeScaleForStage, treeStageFromStock } from './trees.js';
 
 export const DOODAD = {
@@ -229,7 +229,7 @@ function stampDoodad(field, tx, tz, kind) {
  * @param {number} [radius]
  * @returns {{ x: number, z: number }[]}
  */
-export function paintDoodadBrush(field, tx, tz, kind, radius = 0) {
+export function paintDoodadBrush(field, tx, tz, kind, radius = 0, opts = {}) {
   ensureDoodadArrays(field);
   const r = Math.max(0, radius | 0);
   const r2 = r * r;
@@ -239,6 +239,7 @@ export function paintDoodadBrush(field, tx, tz, kind, radius = 0) {
       if (dx * dx + dz * dz > r2) continue;
       const x = tx + dx;
       const z = tz + dz;
+      if (!sceneryDensityAllows(x, z, field.seed, opts.density, opts.salt)) continue;
       if (stampDoodad(field, x, z, kind)) dirty.push({ x, z });
     }
   }

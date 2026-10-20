@@ -25,6 +25,98 @@
       "normalImage": null,
       "ormImage": null,
       "emissiveImage": null
+    },
+    {
+      "name": "roof",
+      "baseColorFactor": [
+        0.030034486204385757,
+        0.014511793851852417,
+        0.004732748959213495,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "door",
+      "baseColorFactor": [
+        0.04020668566226959,
+        0.016326898708939552,
+        0.0009476213017478585,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "window",
+      "baseColorFactor": [
+        0.006374228745698929,
+        0.07198837399482727,
+        0,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "bell",
+      "baseColorFactor": [
+        0.3427060544490814,
+        0.2026328593492508,
+        0.01564027927815914,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
     }
   ],
   "images": [],
@@ -40,27 +132,167 @@
       ],
       "boundMax": [
         3.0173139572143555,
-        8.47232723236084,
-        4.655633926391602
+        8.304701805114746,
+        5.129246234893799
       ],
       "positions": {
         "offset": 0,
-        "length": 252,
+        "length": 921,
         "type": "f32"
       },
       "normals": {
-        "offset": 1008,
-        "length": 252,
+        "offset": 3684,
+        "length": 921,
         "type": "f32"
       },
       "indices": {
-        "offset": 2016,
-        "length": 132,
+        "offset": 7368,
+        "length": 651,
         "type": "u32"
       },
       "uvs": {
-        "offset": 2544,
-        "length": 168,
+        "offset": 9972,
+        "length": 614,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "roof",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "boundMin": [
+        -2.786015033721924,
+        1.9210009574890137,
+        -4.715902328491211
+      ],
+      "boundMax": [
+        3.0173139572143555,
+        8.882524490356445,
+        5.129246234893799
+      ],
+      "positions": {
+        "offset": 12428,
+        "length": 96,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 12812,
+        "length": 96,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 13196,
+        "length": 42,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 13364,
+        "length": 64,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "door",
+      "materialIndex": 2,
+      "reverseWinding": true,
+      "boundMin": [
+        -0.44053471088409424,
+        0.12132411450147629,
+        4.655633449554443
+      ],
+      "boundMax": [
+        0.6243358850479126,
+        1.923157811164856,
+        4.655633449554443
+      ],
+      "positions": {
+        "offset": 13620,
+        "length": 12,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 13668,
+        "length": 12,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 13716,
+        "length": 6,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 13740,
+        "length": 8,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "window",
+      "materialIndex": 3,
+      "reverseWinding": true,
+      "boundMin": [
+        -2.786015033721924,
+        0.9010815024375916,
+        -3.661813259124756
+      ],
+      "boundMax": [
+        3.0173137187957764,
+        5.2634148597717285,
+        4.655633449554443
+      ],
+      "positions": {
+        "offset": 13772,
+        "length": 87,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 14120,
+        "length": 87,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 14468,
+        "length": 45,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 14648,
+        "length": 58,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "bell",
+      "materialIndex": 4,
+      "reverseWinding": true,
+      "boundMin": [
+        -0.17493276298046112,
+        7.716529846191406,
+        2.852433681488037
+      ],
+      "boundMax": [
+        0.41867318749427795,
+        8.257996559143066,
+        3.4592490196228027
+      ],
+      "positions": {
+        "offset": 14880,
+        "length": 420,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 16560,
+        "length": 420,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 18240,
+        "length": 204,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 19056,
+        "length": 280,
         "type": "f32"
       }
     }

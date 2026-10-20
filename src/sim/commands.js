@@ -40,13 +40,14 @@ import {
   applyPlaceBuilding,
   applyQueueTrain,
   applyQueueResearch,
+  applyUpgradeBuilding,
   applyCancelTrain,
   applyCancelConstruction,
   applyPauseTrain,
   applySetRally,
   clearUnitRallyHops,
 } from './buildings.js';
-import { applyGather } from './gather.js';
+import { applyGather, beginDeposit, depositDropOffAt, releaseGatherOrder } from './gather.js';
 import { setStoryProtect } from './storyProtect.js';
 import { assignBuildersToSite } from './construction.js';
 
@@ -80,6 +81,8 @@ export const CMD = {
   CANCEL_CONSTRUCTION: 17,
   /** Arm / drop party invincibility for a story reel (lockstep). */
   STORY_PROTECT: 18,
+  /** Collapse a finished building into another structure's construction site. */
+  UPGRADE_BUILDING: 19,
 };
 
 /** @typedef {{ type: number, entities: number[], tx?: number[]|number, ty?: number[]|number, target?: number, abilityId?: string, transportAssignments?: { riderId: number, transportId: number }[] }} Command */
@@ -150,6 +153,9 @@ export function applyCommands(world, field, commands) {
         break;
       case CMD.RESEARCH:
         applyQueueResearch(world, cmd);
+        break;
+      case CMD.UPGRADE_BUILDING:
+        applyUpgradeBuilding(world, cmd);
         break;
       case CMD.STORY_PROTECT:
         setStoryProtect(world, cmd.on);
@@ -253,6 +259,15 @@ function applyMove(world, field, ids, tx, ty, order) {
     world.transportTarget[i] = -1;
     const clickX = tx[k];
     const clickY = ty[k];
+    // A click on an agora / camp / mine hands in a carried load, then they stand.
+    if ((world.carriedAmt[i] | 0) > 0) {
+      const drop = depositDropOffAt(world, world.owner[i], clickX, clickY);
+      if (drop && beginDeposit(world, i, drop.x, drop.y)) {
+        clearAttackFocus(world, i);
+        continue;
+      }
+    }
+    releaseGatherOrder(world, i);
     let destX = clickX;
     let destY = clickY;
     if (scatter) {
@@ -319,6 +334,7 @@ function applyAttack(world, field, ids, target, buildingIndex, doorIndex) {
       if (!world.alive[i] || isCarried(world, i)) continue;
       becomeBrigand(world, i);
       if (!unitAttacksBuildings(world.type[i])) continue;
+      releaseGatherOrder(world, i);
       world.transportTarget[i] = -1;
       clearUnitRallyHops(world, i);
       world.order[i] = ORDER.ATTACK;
@@ -343,6 +359,7 @@ function applyAttack(world, field, ids, target, buildingIndex, doorIndex) {
       if (!world.alive[i] || isCarried(world, i)) continue;
       becomeBrigand(world, i);
       if (!unitAttacksBuildings(world.type[i])) continue;
+      releaseGatherOrder(world, i);
       world.transportTarget[i] = -1;
       clearUnitRallyHops(world, i);
       world.order[i] = ORDER.ATTACK;
@@ -373,6 +390,7 @@ function applyAttack(world, field, ids, target, buildingIndex, doorIndex) {
       beginRepair(world, i, target);
       continue;
     }
+    releaseGatherOrder(world, i);
     clearUnitRallyHops(world, i);
     world.order[i] = ORDER.ATTACK;
     world.targetEntity[i] = target;
@@ -392,6 +410,7 @@ function applyStop(world, ids) {
     const i = ids[k];
     if (!world.alive[i] || isCarried(world, i)) continue;
     revertBrigand(world, i);
+    releaseGatherOrder(world, i);
     world.transportTarget[i] = -1;
     clearUnitRallyHops(world, i);
     world.order[i] = ORDER.IDLE;

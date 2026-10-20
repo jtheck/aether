@@ -224,25 +224,37 @@ function spawnFromSockets(sockets) {
   return { x: spawn.x, y: spawn.y, z: spawn.z };
 }
 
-/**
- * @returns {Promise<object>}
- */
+function onlyVatUrls() {
+  const raw = new URLSearchParams(location.search).get('vat');
+  if (!raw) return null;
+  return raw.split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+/** @returns {Promise<object>} */
 export async function runPrebake() {
+  const vatOnly = onlyVatUrls();
   setStatus('Creating WebGPU engine…');
   const canvas = document.getElementById('canvas');
   if (!canvas) throw new Error('missing #canvas');
   const engine = await createEngine(canvas, { antialias: false });
   createSceneContext(engine);
 
-  const meshUrls = allMeshBakeUrls();
+  const meshUrls = vatOnly ? [] : allMeshBakeUrls();
   const listedVat = allVatBakeDefs();
-  const vatDefs = [
-    ...listedVat,
-    ...await extraVatBakeDefs(
-      Object.values(UNIT_MODEL_URLS),
-      listedVat.map((def) => def.url),
-    ),
-  ];
+  const vatDefs = vatOnly
+    ? listedVat.filter((def) => vatOnly.includes(def.url))
+    : [
+      ...listedVat,
+      ...await extraVatBakeDefs(
+        Object.values(UNIT_MODEL_URLS),
+        listedVat.map((def) => def.url),
+      ),
+    ];
+  if (vatOnly && vatDefs.length !== vatOnly.length) {
+    const have = new Set(vatDefs.map((def) => def.url));
+    const missing = vatOnly.filter((url) => !have.has(url));
+    throw new Error(`VAT bake list missing ${missing.join(', ')}`);
+  }
   /** @type {Record<string, object>} */
   const files = {};
   /** @type {Record<string, { x: number, y: number, z: number }>} */
@@ -277,6 +289,24 @@ export async function runPrebake() {
     const pkg = await bakeVatPackage(engine, def);
     files[`vat/${pkg.stem}.json`] = JSON.stringify(pkg.json, null, 2);
     files[`vat/${pkg.stem}.bin`] = pkg.bin;
+  }
+
+  if (vatOnly) {
+    const res = await fetch('/assets/baked/manifest.json');
+    if (!res.ok) throw new Error(`manifest ${res.status}`);
+    const existing = await res.json();
+    const vat = [...(existing.vat ?? [])];
+    for (const def of vatDefs) {
+      const stem = bakedMeshStem(def.url);
+      if (!vat.includes(stem)) vat.push(stem);
+    }
+    files['manifest.json'] = JSON.stringify({
+      meshes: existing.meshes ?? [],
+      vat,
+    }, null, 2);
+    setStatus(`Done — ${Object.keys(files).length} files`);
+    window.__PREBAKE_RESULT__ = { ok: true, files, buildingSpawns };
+    return window.__PREBAKE_RESULT__;
   }
 
   files['sockets.json'] = JSON.stringify({ byUrl: allSockets, buildingSpawns }, null, 2);

@@ -24,6 +24,7 @@ import {
 } from './sporeBloom.js';
 import { createMonkKickFxStore } from './monkKick.js';
 import { MAX_RESOURCE_OWNERS, RESOURCE_COUNT } from './resources.js';
+import { clearChaseLeash } from './leash.js';
 
 // Storage headroom is intentionally above the supported 50k stress target.
 // Keep this centralized: world state and the SharedArrayBuffer derive from it.
@@ -51,11 +52,14 @@ export function clearAttackFocus(w, i) {
   if (w.targetBuilding) w.targetBuilding[i] = -1;
   if (w.targetDoor) w.targetDoor[i] = -1;
   if (w.attackFocus) w.attackFocus[i] = 0;
+  clearChaseLeash(w, i);
 }
 
 /** Mark a CMD.ATTACK so combat will not steal the clicked target. */
 export function lockAttackFocus(w, i) {
   if (w.attackFocus) w.attackFocus[i] = 1;
+  // A pointed attack is not on a rope, and it may retarget a foe we just dropped.
+  clearChaseLeash(w, i);
 }
 
 export function createWorld(seed) {
@@ -132,6 +136,12 @@ export function createWorld(seed) {
     doorsDirty: 0,
     /** 1 = CMD.ATTACK focus — acquireTargets must not rebalance off this target. */
     attackFocus: new Uint8Array(MAX_ENTITIES),
+    /** 1 = this attack is roped to leashX/leashY (self-started fights only). */
+    leashActive: new Uint8Array(MAX_ENTITIES),
+    leashX: new Int32Array(MAX_ENTITIES),
+    leashY: new Int32Array(MAX_ENTITIES),
+    /** Foe we refused to keep chasing, or -1. Skipped by acquire and retaliation. */
+    leashDrop: new Int32Array(MAX_ENTITIES).fill(-1),
     buildings: [],
     buildingsDirty: 0,
     engagementTarget,
@@ -148,6 +158,21 @@ export function createWorld(seed) {
     gatherCd: new Int16Array(MAX_ENTITIES),
     /** 1 = gather defensively (retaliate on a nearby hostile, then resume). */
     gatherDefensive: new Uint8Array(MAX_ENTITIES),
+    /** Ticks without ORDER.ATTACK on a live target (brigand idle revert). */
+    brigandIdle: new Int16Array(MAX_ENTITIES),
+    /** Enemies this unit wounded who have since fallen. A warrior promotes at CHAMPION_KILLS. */
+    kills: new Uint8Array(MAX_ENTITIES),
+    /**
+     * Warriors who have wounded this unit. Head is an index into the mark pool, or −1.
+     * The pool is not per-entity: damagedByAtk/Next grow, damagedByFree is the free list.
+     */
+    damagedByHead: new Int32Array(MAX_ENTITIES).fill(-1),
+    damagedByAtk: new Int32Array(64),
+    damagedByNext: new Int32Array(64),
+    damagedByFree: -1,
+    damagedByTop: 0,
+    /** >0 = idle auto-assign passes left on a move / attack / stop park; no auto gather or haul. */
+    manualHold: new Uint8Array(MAX_ENTITIES),
     /** 0 none / 1 chop at node / 2 haul load back (see gather.js GATHER_ACT). */
     gatherAct: new Uint8Array(MAX_ENTITIES),
     /** 1 = garden unit with a name. Bigger mesh, more hp, harder hits. */
@@ -273,6 +298,8 @@ export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed, faceX, 
   if (w.targetBuilding) w.targetBuilding[i] = -1;
   if (w.targetDoor) w.targetDoor[i] = -1;
   if (w.attackFocus) w.attackFocus[i] = 0;
+  if (w.leashActive) w.leashActive[i] = 0;
+  if (w.leashDrop) w.leashDrop[i] = -1;
   w.engagementTarget[i] = -1;
   w.engagementSlot[i] = -1;
   w.engagementMask[i] = 0;
@@ -282,6 +309,10 @@ export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed, faceX, 
   w.carriedAmt[i] = 0;
   w.gatherCd[i] = 0;
   w.gatherDefensive[i] = 0;
+  if (w.brigandIdle) w.brigandIdle[i] = 0;
+  if (w.kills) w.kills[i] = 0;
+  if (w.damagedByHead) w.damagedByHead[i] = -1;
+  if (w.manualHold) w.manualHold[i] = 0;
   if (w.gatherAct) w.gatherAct[i] = 0;
   w.buildTarget[i] = -1;
   w.navWpCount[i] = 0;

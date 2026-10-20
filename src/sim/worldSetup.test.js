@@ -1,7 +1,16 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fx from './fixed.js';
-import { TINY_MAP_W, SKIRMISH_MAP_W, worldHalfFFromMap } from './field.js';
+import {
+  TINY_MAP_W,
+  SKIRMISH_MAP_W,
+  STRESS_MAP_W,
+  TERRAIN,
+  buildField,
+  STRESS_SPAWN_CLEAR_TILES,
+  worldHalfFFromMap,
+} from './field.js';
+import { applyTableSilhouette } from './tableShape.js';
 import { UNIT } from './unitTypes.js';
 import { createAgoras } from './agora.js';
 import { getResource, STARTING_RESOURCES } from './resources.js';
@@ -29,6 +38,7 @@ import {
   spawnCameraHomeXZ,
   KOTH_SPAWN_COUNT,
   stressSliceMidAngle,
+  stressSpawnDryPads,
   usesCornerSpawnBases,
 } from './worldSetup.js';
 
@@ -364,6 +374,34 @@ describe('stress pie ring', () => {
     assert.equal(w.count, STRESS_MENU_PER_SIDE * STRESS_ARMY_COUNT);
     for (let owner = 0; owner < STRESS_ARMY_COUNT; owner++) {
       assert.equal(livingOf(w, owner).length, STRESS_MENU_PER_SIDE);
+    }
+  });
+
+  it('keeps stress armies off generated water', () => {
+    const half = (STRESS_MAP_W * 4) / 2;
+    for (const seed of [0x57e55, 0x9595c914, 0x87e3bb79]) {
+      const field = buildField(seed, {
+        width: STRESS_MAP_W,
+        height: STRESS_MAP_W,
+        spawnPads: stressSpawnDryPads(half),
+        spawnPadClearTiles: STRESS_SPAWN_CLEAR_TILES,
+      });
+      applyTableSilhouette(field);
+      const w = buildWorldFromConfig({ seed, stressPerSide: 80, mapW: STRESS_MAP_W, mapH: STRESS_MAP_W });
+      for (let owner = 0; owner < STRESS_ARMY_COUNT; owner++) {
+        for (const i of livingOf(w, owner)) {
+          const x = fx.toFloat(w.px[i]);
+          const z = fx.toFloat(w.py[i]);
+          const tx = Math.floor((x + w.worldHalfF) / 4);
+          const tz = Math.floor((z + w.worldHalfF) / 4);
+          const ti = tz * field.width + tx;
+          assert.notEqual(
+            field.terrainTypes[ti],
+            TERRAIN.WATER,
+            `seed 0x${seed.toString(16)} owner ${owner} on water`,
+          );
+        }
+      }
     }
   });
 });

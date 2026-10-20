@@ -142,6 +142,7 @@
     ],
     "/assets/models/church.glb": [],
     "/assets/models/collar.glb": [],
+    "/assets/models/derrick.glb": [],
     "/assets/models/dirigible.glb": [
       {
         "name": "spawn_anchor",
@@ -204,6 +205,7 @@
         "roll": 0.04293940563229939
       }
     ],
+    "/assets/models/dlc/first_responder/church-DLC1.glb": [],
     "/assets/models/dlc/first_responder/priest-DLC1.glb": [],
     "/assets/models/drayage.glb": [],
     "/assets/models/engineer.glb": [],
@@ -278,10 +280,10 @@
     "/assets/models/mine.glb": [
       {
         "name": "fire_anchor",
-        "x": 4.017306327819824,
-        "y": 0.7579934597015381,
-        "z": 6.835797309875488,
-        "scale": 1.490295171737671,
+        "x": 3.919978618621826,
+        "y": 0.805106520652771,
+        "z": 6.834949493408203,
+        "scale": 1,
         "yaw": 0,
         "pitch": 0,
         "roll": 0
@@ -468,6 +470,7 @@
       }
     ],
     "/assets/models/warrior.glb": [],
+    "/assets/models/well.glb": [],
     "/assets/models/wizard.glb": [
       {
         "name": "sparkle_anchor",

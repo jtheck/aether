@@ -57,7 +57,7 @@ describe('createXrSelect', () => {
       handedness,
       targetRayTracked: true,
       targetRayMatrix: rayMatrix(0, EYE_Y, 0, 0, -1, 0),
-      selecting: false,
+      squeezing: false,
       gamepad: pad,
     };
     return {
@@ -95,7 +95,7 @@ describe('createXrSelect', () => {
     const ctx = { input: { inputSources: [right.src] } };
     return {
       select, ctx, right, left, shown, calls,
-      step: () => select.step(ctx),
+      step: (opts) => select.step(ctx, opts),
       withLeft() { ctx.input.inputSources.push(left.src); },
       lastShown: (hand) => shown.filter((e) => e.hand === hand).at(-1)?.s,
     };
@@ -108,24 +108,27 @@ describe('createXrSelect', () => {
     }
   }
 
-  it('hides the beam until the trigger is pressed', () => {
+  it('hides the beam until the grip is pressed; the trigger does not select', () => {
     const h = harness();
-    h.step();
-    assert.equal(h.shown.length, 0);
     h.right.trigger(true);
     h.step();
+    assert.equal(h.shown.length, 0);
+    h.right.grip(true);
+    h.step();
     assert.ok(h.lastShown('right')?.ray);
+    assert.equal(h.select.isActive('right'), true);
+    assert.equal(h.select.isActive('left'), false);
   });
 
   it('a tap selects with the press aim, even if the release flicks', () => {
     const h = harness();
     h.right.aim(10, 0);
-    h.right.trigger(true);
+    h.right.grip(true);
     h.step();
     // About 1.7° of wobble: a far-off ground point moves, but this is still a tap.
     h.right.aim(13, 0);
     h.step();
-    h.right.trigger(false);
+    h.right.grip(false);
     h.step();
     assert.equal(h.calls.length, 1);
     assert.equal(h.calls[0].kind, 'ray');
@@ -134,26 +137,43 @@ describe('createXrSelect', () => {
     assert.equal(h.lastShown('right'), null);
   });
 
-  it('a sweep lassoes, and grip makes it additive', () => {
+  it('a sweep lassoes and replaces the selection', () => {
     const h = harness();
-    h.right.trigger(true);
     h.right.grip(true);
     sweepSquare(h, h.right);
     assert.ok(h.lastShown('right')?.loop?.length >= 3);
     assert.equal(h.calls.length, 0);
-    h.right.trigger(false);
+    h.right.grip(false);
     h.step();
     assert.equal(h.calls.length, 1);
     assert.equal(h.calls[0].kind, 'loop');
-    assert.equal(h.calls[0].add, true);
+    assert.equal(h.calls[0].add, false);
     assert.equal(h.calls[0].loop.length, 4);
+  });
+
+  it('holding the other grip still is shift, and that grip selects nothing', () => {
+    const h = harness();
+    h.withLeft();
+    h.left.grip(true);
+    h.step();
+    h.right.grip(true);
+    sweepSquare(h, h.right);
+    h.right.grip(false);
+    h.step();
+    h.right.grip(true);
+    h.step();
+    h.right.grip(false);
+    h.step();
+    h.left.grip(false);
+    h.step();
+    assert.deepEqual(h.calls.map((c) => [c.kind, c.add]), [['loop', true], ['ray', true]]);
   });
 
   it('both hands lasso at once; the later release adds to the earlier', () => {
     const h = harness();
     h.withLeft();
-    h.right.trigger(true);
-    h.left.trigger(true);
+    h.right.grip(true);
+    h.left.grip(true);
     h.step();
     sweepSquare(h, h.right);
     for (const [x, z] of [[-30, 0], [-50, 0], [-50, -20], [-30, -20]]) {
@@ -162,9 +182,9 @@ describe('createXrSelect', () => {
     }
     assert.ok(h.lastShown('right')?.loop);
     assert.ok(h.lastShown('left')?.loop);
-    h.right.trigger(false);
+    h.right.grip(false);
     h.step();
-    h.left.trigger(false);
+    h.left.grip(false);
     h.step();
     assert.deepEqual(h.calls.map((c) => [c.kind, c.add]), [['loop', false], ['loop', true]]);
   });
@@ -172,13 +192,13 @@ describe('createXrSelect', () => {
   it('separate taps one after another each replace the selection', () => {
     const h = harness();
     h.withLeft();
-    h.right.trigger(true);
+    h.right.grip(true);
     h.step();
-    h.right.trigger(false);
+    h.right.grip(false);
     h.step();
-    h.left.trigger(true);
+    h.left.grip(true);
     h.step();
-    h.left.trigger(false);
+    h.left.grip(false);
     h.step();
     assert.deepEqual(h.calls.map((c) => c.add), [false, false]);
   });
@@ -186,11 +206,32 @@ describe('createXrSelect', () => {
   it('a lost controller drops its gesture without selecting', () => {
     const h = harness();
     h.withLeft();
-    h.left.trigger(true);
+    h.left.grip(true);
     h.step();
     h.ctx.input.inputSources.pop();
     h.step();
     assert.equal(h.calls.length, 0);
     assert.equal(h.lastShown('left'), null);
+  });
+
+  it('blocked drops a live gesture, and a grip held through it never fires', () => {
+    const h = harness();
+    h.right.grip(true);
+    h.step();
+    h.step({ blocked: true });
+    assert.equal(h.select.isActive('right'), false);
+    h.step();
+    h.right.grip(false);
+    h.step();
+    assert.equal(h.calls.length, 0);
+  });
+
+  it('canBegin vetoes a press', () => {
+    const h = harness();
+    h.right.grip(true);
+    h.step({ canBegin: () => false });
+    h.right.grip(false);
+    h.step();
+    assert.equal(h.calls.length, 0);
   });
 });

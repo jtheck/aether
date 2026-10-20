@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { priceOverlayPos } from './radialPriceHud.js';
+import { formatRadialPriceText, priceOverlayPos } from './radialPriceHud.js';
 
 describe('radial price overlay', () => {
   it('keeps canvas CSS px when the canvas sits at the viewport origin', () => {
@@ -19,5 +19,11 @@ describe('radial price overlay', () => {
       },
     };
     assert.deepEqual(priceOverlayPos(100, 200, canvas), { x: 112, y: 240 });
+  });
+
+  it('names each kind for the headset, and skips pop', () => {
+    assert.equal(formatRadialPriceText({ wood: 25, food: 10, pop: 1 }), '19 Wood · a Food');
+    assert.equal(formatRadialPriceText({ pop: 1 }), '');
+    assert.equal(formatRadialPriceText(null), '');
   });
 });

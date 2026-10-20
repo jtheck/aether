@@ -99,7 +99,9 @@ import {
   isLiveMatchMember,
   isMatchLeavePresence,
   isSpectatorMember,
+  pruneEndedMatches,
   relinquishesActiveSeat,
+  suppressEndedMatchPresence,
 } from '../koth/presence.js';
 import {
   canSkipCatchupRequest,
@@ -307,6 +309,9 @@ export function createKothShard(options = {}) {
   // Host and spectators all announce the same matchId with different active
   // counts, so we keep the MAX active count (the host's view) per match.
   const liveMatches = new Map();
+  // A host can end a match while spectators still emit LIVE heartbeats. Keep
+  // that match hidden until all stale announcers have been quiet for one TTL.
+  const endedMatches = new Map();
   /** userId -> display name from presence. */
   const peerNames = new Map();
   // Set when the player picks a listed lobby or starts their own. Stops
@@ -1087,6 +1092,7 @@ export function createKothShard(options = {}) {
       name: getPlayerName(),
       color: getPlayerColor(),
       text,
+      watching: role === 'spectator',
     });
     if (!msg) return false;
     lastChatSendAt = now;
@@ -1098,6 +1104,21 @@ export function createKothShard(options = {}) {
     p2p?.broadcast?.({ ...msg, matchId }, BROADCAST);
     p2p?.sendData?.(msg);
     return true;
+  }
+
+  /** Live-match camera/selection. Peers on the mesh, plus the shard room. */
+  function sendView(body) {
+    if (!body || phase !== SHARD_PHASE.LIVE) return;
+    const msg = {
+      ...body,
+      type: 'view',
+      v: KOTH_PROTOCOL_VERSION,
+      matchId,
+      from: body.from || localUserId,
+    };
+    p2p?.sendData?.(msg);
+    const room = shardLobbyName(matchId);
+    if (room) p2p?.sendLobbyMessage?.(room, { type: 'view', content: msg });
   }
 
   function announcerCount(id) {
@@ -1410,7 +1431,7 @@ export function createKothShard(options = {}) {
 
   function recordLiveMatch(data) {
     if (!data?.matchId) return;
-    if (data.gone) {
+    if (suppressEndedMatchPresence(endedMatches, data)) {
       liveMatches.delete(data.matchId);
       matchAnnouncers.delete(data.matchId);
       return;
@@ -1476,6 +1497,7 @@ export function createKothShard(options = {}) {
   }
 
   function pruneLiveMatches(now = Date.now()) {
+    pruneEndedMatches(endedMatches, LIVE_MATCH_TTL_MS, now);
     for (const [id, m] of [...liveMatches]) {
       if (now - m.ts > LIVE_MATCH_TTL_MS) {
         liveMatches.delete(id);
@@ -5476,6 +5498,9 @@ export function createKothShard(options = {}) {
     getP2p: () => p2p,
     getUserId: () => localUserId,
     sendChat,
+    sendView,
+    inLiveMatch: () => phase === SHARD_PHASE.LIVE && role === 'player',
+    getMatchId: () => matchId,
     getChatLog: () => chatLog.list(),
     isChatActive,
     subscribeChat: (fn) => addListener(chatListeners, fn),

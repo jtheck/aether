@@ -58,7 +58,7 @@ export const BRIGAND_TORCH_SOCKET = Object.freeze({
   x: 0.5118,
   y: 1.1828,
   z: -0.0934,
-  scale: 0.18,
+  scale: 0.32,
 });
 
 const VILLAGER_VAT = {
@@ -78,6 +78,13 @@ export const VAT_UNIT_DEFS = {
   [UNIT.BRIGAND]: { ...VILLAGER_VAT, extraSockets: [BRIGAND_TORCH_SOCKET] },
   [UNIT.WARRIOR]: {
     url: '/assets/models/warrior.glb',
+    scale: 1,
+    idleClip: 'Idle',
+    walkClip: 'Run',
+    attackClip: 'Attack_Swing',
+  },
+  [UNIT.CHAMPION]: {
+    url: '/assets/models/champion.glb',
     scale: 1,
     idleClip: 'Idle',
     walkClip: 'Run',

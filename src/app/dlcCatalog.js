@@ -2,6 +2,7 @@
 // Steam App IDs unlock packs; GLBs live on the CDN like every other model.
 
 import { UNIT, UNIT_DEFS, getUnitDef } from '../sim/unitTypes.js';
+import { BUILDING_MODEL_URLS } from '../sim/buildings.js';
 import { UNIT_MODEL_URLS } from '../render/unitModels.js';
 import { VAT_UNIT_DEFS } from '../render/vatUnits.js';
 
@@ -18,6 +19,18 @@ export const DLC_PACKS = {
     name: 'First Responder',
     skins: {
       [UNIT.PRIEST]: { url: '/assets/models/dlc/first_responder/priest-DLC1.glb' },
+      [UNIT.CHAMPION]: {
+        url: '/assets/models/dlc/first_responder/champion-DLC1.glb',
+        idleClip: 'Idle',
+        walkClip: 'Run',
+        attackClip: 'Attack_Swing',
+      },
+    },
+    buildings: {
+      church: {
+        url: '/assets/models/dlc/first_responder/church-DLC1.glb',
+        label: 'Church',
+      },
     },
   },
 };
@@ -147,6 +160,44 @@ export function unitsWithUnlockedSkins(ownedPacks = []) {
  * @param {Record<number, string> | object} [saved]
  * @returns {Record<number, string>}
  */
+/** Building type ids that have at least one catalog skin entry. */
+export function buildingIdsWithSkins() {
+  /** @type {Set<string>} */
+  const ids = new Set();
+  for (const packId of DLC_PACK_ORDER) {
+    for (const buildingId of Object.keys(DLC_PACKS[packId]?.buildings ?? {})) {
+      if (DLC_PACKS[packId].buildings[buildingId]?.url) ids.add(buildingId);
+    }
+  }
+  return ids;
+}
+
+/**
+ * Per-building pack ids for the local player. Same rules as `selectedSkins`.
+ * @param {string[]} [ownedPacks]
+ * @param {Record<string, string> | object} [saved]
+ * @returns {Record<string, string>}
+ */
+export function selectedBuildingSkins(ownedPacks = [], saved = {}) {
+  const owned = (ownedPacks ?? []).filter(isDlcPackId);
+  const prefs = sanitizeBuildingSkins(saved);
+  /** @type {Record<string, string>} */
+  const out = {};
+  for (const buildingId of buildingIdsWithSkins()) {
+    if (skinChoicesForBuilding(buildingId, owned).length <= 1) continue;
+    if (Object.prototype.hasOwnProperty.call(prefs, buildingId)) {
+      const pick = prefs[buildingId];
+      if (pick && owned.includes(pick)) out[buildingId] = pick;
+      continue;
+    }
+    const first = DLC_PACK_ORDER.find(
+      (id) => owned.includes(id) && DLC_PACKS[id].buildings?.[buildingId]?.url,
+    );
+    if (first) out[buildingId] = first;
+  }
+  return out;
+}
+
 export function selectedSkins(ownedPacks = [], saved = {}) {
   const owned = (ownedPacks ?? []).filter(isDlcPackId);
   const prefs = sanitizeSkins(saved);
@@ -240,14 +291,30 @@ export function unitSkinLabel(typeId) {
   return getUnitDef(typeId)?.name ?? `Unit ${typeId}`;
 }
 
-/** @param {number | string} appId */
-export function steamStoreUrl(appId) {
-  return `https://store.steampowered.com/app/${Number(appId)}/`;
+/**
+ * Every look in the catalog. Unowned packs stay in the list with `enabled: false`.
+ * @param {'unit' | 'building'} kind
+ * @param {number | string} id
+ * @param {string[]} owned
+ */
+function menuChoices(kind, id, owned) {
+  /** @type {{ id: string, label: string, enabled: boolean }[]} */
+  const choices = [{ id: DEFAULT_SKIN_ID, label: 'Default', enabled: true }];
+  for (const packId of DLC_PACK_ORDER) {
+    const pack = DLC_PACKS[packId];
+    const skin = kind === 'unit' ? pack?.skins?.[id] : pack?.buildings?.[id];
+    if (!skin?.url) continue;
+    choices.push({
+      id: packId,
+      label: pack.name || packId,
+      enabled: owned.includes(packId),
+    });
+  }
+  return choices;
 }
 
 /**
- * Looks the skins menu can show. Locked rows stay visible so a browser
- * player can see the pack and the Steam purchase link.
+ * Looks the skins menu can show. Unowned rows stay listed and disabled.
  * @param {string[]} [ownedPacks]
  * @param {Record<number, string> | object} [savedUnits]
  * @param {Record<string, string> | object} [savedBuildings]
@@ -257,7 +324,7 @@ export function skinMenuModel(ownedPacks = [], savedUnits = {}, savedBuildings =
   const unitPrefs = sanitizeSkins(savedUnits);
   const buildingPrefs = sanitizeBuildingSkins(savedBuildings);
   const auto = selectedSkins(owned, {});
-  /** @type {{ kind: 'unit' | 'building', id: number | string, label: string, unlocked: boolean, choices: { id: string, label: string }[] | null, value: string, offers: { id: string, name: string, storeUrl: string }[] }[]} */
+  /** @type {{ kind: 'unit' | 'building', id: number | string, label: string, unlocked: boolean, choices: { id: string, label: string, enabled: boolean }[], value: string }[]} */
   const items = [];
   /** @type {Set<string>} */
   const seen = new Set();
@@ -270,20 +337,19 @@ export function skinMenuModel(ownedPacks = [], savedUnits = {}, savedBuildings =
       const dedupe = `unit:${typeId}`;
       if (seen.has(dedupe)) continue;
       seen.add(dedupe);
-      const choices = skinChoicesForUnit(typeId, owned);
-      const unlocked = choices.length > 1;
+      const choices = menuChoices('unit', typeId, owned);
+      const unlocked = choices.some((choice) => choice.id && choice.enabled);
       items.push({
         kind: 'unit',
         id: typeId,
         label: unitSkinLabel(typeId),
         unlocked,
-        choices: unlocked ? choices : null,
+        choices,
         value: unlocked
           ? (Object.prototype.hasOwnProperty.call(unitPrefs, typeId)
             ? unitPrefs[typeId]
             : (auto[typeId] ?? DEFAULT_SKIN_ID))
           : DEFAULT_SKIN_ID,
-        offers: offersFor('unit', typeId),
       });
     }
     for (const buildingId of Object.keys(pack.buildings ?? {})) {
@@ -291,40 +357,24 @@ export function skinMenuModel(ownedPacks = [], savedUnits = {}, savedBuildings =
       const dedupe = `building:${buildingId}`;
       if (seen.has(dedupe)) continue;
       seen.add(dedupe);
-      const choices = skinChoicesForBuilding(buildingId, owned);
-      const unlocked = choices.length > 1;
+      const choices = menuChoices('building', buildingId, owned);
+      const unlocked = choices.some((choice) => choice.id && choice.enabled);
+      const saved = buildingPrefs[buildingId];
       items.push({
         kind: 'building',
         id: buildingId,
         label: pack.buildings[buildingId].label || buildingId,
         unlocked,
-        choices: unlocked ? choices : null,
+        choices,
         value: unlocked
           ? (Object.prototype.hasOwnProperty.call(buildingPrefs, buildingId)
-            ? (buildingPrefs[buildingId] || DEFAULT_SKIN_ID)
-            : (choices[1]?.id ?? DEFAULT_SKIN_ID))
+            ? (saved || DEFAULT_SKIN_ID)
+            : (choices.find((choice) => choice.enabled && choice.id)?.id ?? DEFAULT_SKIN_ID))
           : DEFAULT_SKIN_ID,
-        offers: offersFor('building', buildingId),
       });
     }
   }
   return items;
-}
-
-/** @param {'unit' | 'building'} kind @param {number | string} id */
-function offersFor(kind, id) {
-  const offers = [];
-  for (const packId of DLC_PACK_ORDER) {
-    const pack = DLC_PACKS[packId];
-    const skin = kind === 'unit' ? pack?.skins?.[id] : pack?.buildings?.[id];
-    if (!skin?.url) continue;
-    offers.push({
-      id: packId,
-      name: pack.name || packId,
-      storeUrl: steamStoreUrl(pack.steamAppId),
-    });
-  }
-  return offers;
 }
 
 /**
@@ -384,6 +434,19 @@ export function packsOwnedFromSteamDlc(dlcList) {
   return out;
 }
 
+/** @param {Record<string, string> | null | undefined} skins @param {string} buildingId */
+export function packForBuilding(skins, buildingId) {
+  if (!skins) return null;
+  const pack = skins[buildingId];
+  return pack || null;
+}
+
+/** @param {string} buildingId @param {string | null | undefined} packId */
+export function resolveBuildingModelUrl(buildingId, packId) {
+  const override = packId ? DLC_PACKS[packId]?.buildings?.[buildingId]?.url : null;
+  return override ?? BUILDING_MODEL_URLS[buildingId] ?? null;
+}
+
 /** @param {number} typeId @param {string | null | undefined} packId */
 export function resolveUnitModelUrl(typeId, packId) {
   const override = packId ? DLC_PACKS[packId]?.skins?.[typeId]?.url : null;
@@ -423,7 +486,7 @@ export function allDlcMeshUrls() {
   return urls;
 }
 
-/** VAT DLC defs for prebake (none in First Responder yet). */
+/** VAT DLC skins. Clip names are required; static meshes stay in allDlcMeshUrls. */
 export function allDlcVatDefs() {
   const defs = [];
   for (const pack of Object.values(DLC_PACKS)) {

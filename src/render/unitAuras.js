@@ -1,6 +1,9 @@
 // Render-only unit aura FX: expanding cast pulses + per-unit buff sparkles.
 // Sim publishes gameplay shields / DoT / frost; this layer only paints.
 
+import { particleEyeDistSq } from './particleSystem.js';
+import { emitFallingFrost } from './frostFx.js';
+
 /** Bit flags for ongoing unit auras (extend as buffs/debuffs land). */
 export const AURA = {
   HOLY: 1 << 0,
@@ -26,8 +29,10 @@ export function createUnitAuras(emit, groundYAt, opts = {}) {
   /** @type {Float32Array | null} */
   let posZ = null;
   let sparkleAcc = 0;
+  let frostAcc = 0;
   let maxSparkleDistSq = opts.maxSparkleDistSq ?? Infinity;
   let sparkleIntervalMs = Math.max(16, opts.sparkleIntervalMs ?? 70);
+  let frostIntervalMs = Math.max(16, sparkleIntervalMs * 0.55);
   let muted = !!opts.muted;
   const getEye = opts.getEye ?? null;
 
@@ -160,17 +165,12 @@ export function createUnitAuras(emit, groundYAt, opts = {}) {
     const gate = !!eye;
     for (let i = 0; i < n; i++) {
       const mask = auraMask[i] | 0;
-      if (!mask) continue;
+      if ((mask & (AURA.HOLY | AURA.SHADOW)) === 0) continue;
       const x = posX[i];
       const y = posY[i];
       const z = posZ[i];
       if (!(y > -1e8)) continue;
-      if (gate) {
-        const dx = eye.x - x;
-        const dy = eye.y - y;
-        const dz = eye.z - z;
-        if (dx * dx + dy * dy + dz * dz > maxSparkleDistSq) continue;
-      }
+      if (gate && particleEyeDistSq(eye, x, y, z) > maxSparkleDistSq) continue;
 
       if (mask & AURA.HOLY) {
         const ang = Math.random() * Math.PI * 2;
@@ -227,31 +227,22 @@ export function createUnitAuras(emit, groundYAt, opts = {}) {
         });
       }
 
-      if (mask & AURA.FROST) {
-        const ang = Math.random() * Math.PI * 2;
-        const rad = 0.3 + Math.random() * 1.0;
-        emit({
-          position: [
-            x + Math.cos(ang) * rad,
-            y + 0.35 + Math.random() * 1.5,
-            z + Math.sin(ang) * rad,
-          ],
-          velocity: [
-            (Math.random() - 0.5) * 0.35,
-            0.35 + Math.random() * 0.9,
-            (Math.random() - 0.5) * 0.35,
-          ],
-          gravity: [0, -0.15, 0],
-          color:
-            Math.random() > 0.4
-              ? [0.7, 0.92, 1, 0.6]
-              : [0.45, 0.78, 1, 0.5],
-          lifetime: 0.65 + Math.random() * 0.45,
-          startSize: 0.18 + Math.random() * 0.22,
-          endSize: 0.04,
-          drag: 0.9,
-        });
-      }
+    }
+  }
+
+  function emitFrost() {
+    if (!auraMask || !posX || !posY || !posZ) return;
+    const n = auraCount;
+    const eye = Number.isFinite(maxSparkleDistSq) ? getEye?.() ?? null : null;
+    const gate = !!eye;
+    for (let i = 0; i < n; i++) {
+      if ((auraMask[i] & AURA.FROST) === 0) continue;
+      const x = posX[i];
+      const y = posY[i];
+      const z = posZ[i];
+      if (!(y > -1e8)) continue;
+      if (gate && particleEyeDistSq(eye, x, y, z) > maxSparkleDistSq) continue;
+      emitFallingFrost(emit, x, y, z, 'chill');
     }
   }
 
@@ -264,6 +255,11 @@ export function createUnitAuras(emit, groundYAt, opts = {}) {
       sparkleAcc = 0;
       emitSparkles();
     }
+    frostAcc += deltaMs;
+    if (frostAcc >= frostIntervalMs) {
+      frostAcc = 0;
+      emitFrost();
+    }
   }
 
   function clear() {
@@ -272,6 +268,7 @@ export function createUnitAuras(emit, groundYAt, opts = {}) {
     auraCount = 0;
     posX = posY = posZ = null;
     sparkleAcc = 0;
+    frostAcc = 0;
   }
 
   /**
@@ -281,6 +278,7 @@ export function createUnitAuras(emit, groundYAt, opts = {}) {
     if (next.maxSparkleDistSq != null) maxSparkleDistSq = next.maxSparkleDistSq;
     if (next.sparkleIntervalMs != null) {
       sparkleIntervalMs = Math.max(16, next.sparkleIntervalMs);
+      frostIntervalMs = Math.max(16, sparkleIntervalMs * 0.55);
     }
     if (next.muted != null) {
       muted = !!next.muted;

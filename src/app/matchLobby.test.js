@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createMatchLobby } from './matchLobby.js';
 import { createGameLobby } from './gameLobby.js';
 import { MSG } from '../lobby/protocol.js';
+import { ladderMatchDeal } from '../lobby/ladderMap.js';
 import { CMD } from '../sim/commands.js';
 
 function fakeP2p(userId = 'host') {
@@ -86,6 +87,7 @@ describe('match lobby', () => {
     assert.equal(room.canStart(), true);
     assert.equal(room.requestStart(), true);
     assert.equal(room.getState().phase, 'countdown');
+    assert.equal(room.getState().settings.fieldSize, 'tiny');
     room.leaveRoom();
   });
 
@@ -113,6 +115,126 @@ describe('match lobby', () => {
     assert.equal(seats[0].userId, 'host-id');
     assert.equal(seats[1].userId, 'guest-id');
     assert.equal(seats[0].name !== seats[1].name || seats[0].userId !== seats[1].userId, true);
+    hostRoom.leaveRoom();
+  });
+
+  it('starts a ranked countdown when the guest joins on the type broadcast', () => {
+    const hostP2p = fakeP2p('host-id');
+    let hostBroadcast = null;
+    const hostRoom = createMatchLobby({
+      getP2p: () => hostP2p,
+      getUserId: () => 'host-id',
+      gameLobby: createGameLobby({ getP2p: () => hostP2p }),
+      subscribeBroadcast: (fn) => { hostBroadcast = fn; return () => {}; },
+    });
+    hostRoom.createRoom('onevsone', { roomId: 'lobby-ranked', seed: 7, ranked: true });
+    hostBroadcast({
+      v: 1,
+      type: MSG.JOIN,
+      userId: 'guest-id',
+      name: 'Guest',
+      color: '#00f',
+      ready: true,
+      roomId: 'lobby-ranked',
+      mode: 'onevsone',
+    });
+    assert.equal(hostRoom.getState().phase, 'countdown');
+    assert.equal(hostRoom.getState().ranked, true);
+    const deal = ladderMatchDeal(7);
+    assert.equal(hostRoom.getState().settings.seed, deal.seed);
+    assert.equal(hostRoom.getState().settings.fieldSize, deal.fieldSize);
+    hostRoom.leaveRoom();
+  });
+
+  it('gives the guest the host seed and both seats', () => {
+    const hostP2p = fakeP2p('host-id');
+    let hostBroadcast = null;
+    const hostRoom = createMatchLobby({
+      getP2p: () => hostP2p,
+      getUserId: () => 'host-id',
+      gameLobby: createGameLobby({ getP2p: () => hostP2p }),
+      subscribeBroadcast: (fn) => { hostBroadcast = fn; return () => {}; },
+    });
+    hostRoom.createRoom('onevsone', { roomId: 'lobby-ranked', seed: 7, ranked: true });
+    const guestP2p = fakeP2p('guest-id');
+    let guestBroadcast = null;
+    const guestRoom = createMatchLobby({
+      getP2p: () => guestP2p,
+      getUserId: () => 'guest-id',
+      gameLobby: createGameLobby({ getP2p: () => guestP2p }),
+      subscribeBroadcast: (fn) => { guestBroadcast = fn; return () => {}; },
+    });
+    guestRoom.joinRoom('onevsone', 'lobby-ranked', 'host-id', { ranked: true, seed: 7 });
+    hostBroadcast({
+      v: 1,
+      type: MSG.JOIN,
+      userId: 'guest-id',
+      name: 'Guest',
+      color: '#00f',
+      ready: true,
+      roomId: 'lobby-ranked',
+      mode: 'onevsone',
+    });
+    const start = hostP2p.broadcasts.map((row) => row.data).find((data) => data.type === MSG.START);
+    const deal = ladderMatchDeal(7);
+    assert.equal(start.seed, deal.seed);
+    assert.equal(start.settings.fieldSize, deal.fieldSize);
+    assert.equal(start.seats.filter((seat) => seat.kind === 'human').length, 2);
+    guestBroadcast(start);
+    const guest = guestRoom.getState();
+    assert.equal(guest.settings.seed, deal.seed);
+    assert.equal(guest.settings.fieldSize, deal.fieldSize);
+    assert.equal(guest.playerCount, 2);
+    assert.equal(guest.phase, 'countdown');
+    hostRoom.leaveRoom();
+    guestRoom.leaveRoom();
+  });
+
+  it('seats a ranked teams match from the roster and waits for all four', () => {
+    const hostP2p = fakeP2p('host-id');
+    let hostBroadcast = null;
+    const hostRoom = createMatchLobby({
+      getP2p: () => hostP2p,
+      getUserId: () => 'host-id',
+      gameLobby: createGameLobby({ getP2p: () => hostP2p }),
+      subscribeBroadcast: (fn) => { hostBroadcast = fn; return () => {}; },
+    });
+    hostRoom.createRoom('teams', {
+      roomId: 'lobby-teams',
+      seed: 11,
+      ranked: true,
+      roster: [
+        { userId: 'host-id', seat: 2, team: 1 },
+        { userId: 'a', seat: 0, team: 0 },
+        { userId: 'b', seat: 1, team: 0 },
+        { userId: 'c', seat: 3, team: 1 },
+      ],
+    });
+    assert.equal(hostRoom.getState().seats[2].userId, 'host-id');
+    assert.equal(hostRoom.getState().seats[0].kind, 'empty');
+    const join = (userId) => hostBroadcast({
+      v: 1,
+      type: MSG.JOIN,
+      userId,
+      name: userId,
+      color: '#00f',
+      ready: true,
+      roomId: 'lobby-teams',
+      mode: 'teams',
+    });
+    join('a');
+    assert.equal(hostRoom.getState().phase, 'waiting');
+    assert.equal(hostRoom.getState().seats[0].userId, 'a');
+    join('stranger');
+    assert.equal(hostRoom.getState().seats.some((seat) => seat.userId === 'stranger'), false);
+    join('b');
+    assert.equal(hostRoom.getState().phase, 'waiting');
+    join('c');
+    assert.equal(hostRoom.getState().phase, 'countdown');
+    assert.deepEqual(hostRoom.getState().seats.map((seat) => seat.userId), ['a', 'b', 'host-id', 'c']);
+    const deal = ladderMatchDeal(11, 'teams');
+    assert.equal(hostRoom.getState().settings.seed, deal.seed);
+    assert.equal(hostRoom.getState().settings.fieldSize, deal.fieldSize);
     hostRoom.leaveRoom();
   });
 
@@ -472,6 +594,7 @@ describe('match lobby', () => {
     assert.equal(own.length, 1);
     assert.equal(own[0].text, 'hello world');
     assert.equal(own[0].from, 'host');
+    assert.equal(own[0].watching, false);
     // Self-echo of the same id must not double-paint.
     lobbyFn(outbound.payload, ch);
     assert.equal(room.getChatLog().length, 1);
@@ -618,6 +741,8 @@ describe('match lobby', () => {
     });
     assert.equal(guest.getState().watching, true);
     assert.equal(guest.getState().playerCount, 2);
+    assert.equal(guest.sendChat('from the stands'), true);
+    assert.equal(guest.getChatLog()[0].watching, true);
     onBroadcast({
       v: 1,
       type: MSG.START,
@@ -654,6 +779,108 @@ describe('match lobby', () => {
     room.leaveRoom();
   });
 
+  it('embeds a custom 1v1 map on START so guests can play', async () => {
+    const garden = { v: 4, n: 'Duel', w: 32, h: 32, mt: 'onevsone' };
+    const p2p = fakeP2p('host');
+    let dataFn = null;
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      loadGarden: async (settings) => (settings.chapter === 'workshop:10/map.garden' ? garden : null),
+    });
+    room.createRoom('onevsone');
+    room.setSetting('chapter', 'workshop:10/map.garden');
+    const { roomId, mode } = room.getState();
+    dataFn({ v: 1, type: MSG.JOIN, userId: 'guest', name: 'Guest', roomId, mode });
+    dataFn({ v: 1, type: MSG.READY, userId: 'guest', ready: true, roomId, mode });
+    assert.equal(room.requestStart(), true);
+    await new Promise((r) => setTimeout(r, 0));
+    const start = p2p.sent.find((row) => row.msg.type === MSG.START);
+    assert.deepEqual(start.msg.garden, garden);
+    assert.equal(room.getState().settings.chapter, 'workshop:10/map.garden');
+    room.leaveRoom();
+  });
+
+  it('refuses a full-lobby joiner when spectators are off', () => {
+    const p2p = fakeP2p('host');
+    let dataFn = null;
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+    });
+    room.createRoom('teams');
+    room.setSetting('allowSpectators', false);
+    const { roomId, mode } = room.getState();
+    dataFn({ v: 1, type: MSG.JOIN, userId: 'guest', name: 'Guest', roomId, mode });
+    dataFn({ v: 1, type: MSG.JOIN, userId: 'ally', name: 'Ally', roomId, mode });
+    dataFn({ v: 1, type: MSG.JOIN, userId: 'eye', name: 'Eye', roomId, mode });
+    dataFn({ v: 1, type: MSG.JOIN, userId: 'extra', name: 'Extra', roomId, mode });
+    dataFn({ v: 1, type: MSG.SPECTATE, userId: 'watch', name: 'Watch', roomId, mode });
+    const state = room.getState();
+    assert.equal(state.settings.allowSpectators, false);
+    assert.equal(state.playerCount, 4);
+    assert.equal(state.seats.some((s) => s.userId === 'extra'), false);
+    assert.equal(state.spectators.length, 0);
+    assert.equal(room.movePerson('eye', 1), false);
+    room.leaveRoom();
+  });
+
+  it('sends a watcher home when the host turns spectators off', () => {
+    let onBroadcast = null;
+    const guest = createMatchLobby({
+      getP2p: () => fakeP2p('eye'),
+      getUserId: () => 'eye',
+      gameLobby: createGameLobby({ getP2p: () => fakeP2p('eye') }),
+      subscribeBroadcast: (fn) => { onBroadcast = fn; return () => {}; },
+    });
+    assert.equal(guest.spectateRoom('onevsone', 'lobby-1', 'host-id'), true);
+    onBroadcast({
+      v: 1,
+      type: MSG.ANNOUNCE,
+      mode: 'onevsone',
+      roomId: 'lobby-1',
+      phase: 'waiting',
+      seats: [
+        { index: 0, kind: 'human', userId: 'host-id', name: 'H', ready: true, team: 0 },
+        { index: 1, kind: 'human', userId: 'guest', name: 'G', ready: true, team: 0 },
+      ],
+      spectators: [],
+      settings: { fieldSize: 'tiny', seed: 1, chapter: '', allowSpectators: false },
+    });
+    assert.equal(guest.isActive(), false);
+  });
+
+  it('keeps a watcher waiting while the host still allows spectators', () => {
+    let onBroadcast = null;
+    const guest = createMatchLobby({
+      getP2p: () => fakeP2p('eye'),
+      getUserId: () => 'eye',
+      gameLobby: createGameLobby({ getP2p: () => fakeP2p('eye') }),
+      subscribeBroadcast: (fn) => { onBroadcast = fn; return () => {}; },
+    });
+    guest.spectateRoom('onevsone', 'lobby-1', 'host-id');
+    onBroadcast({
+      v: 1,
+      type: MSG.ANNOUNCE,
+      mode: 'onevsone',
+      roomId: 'lobby-1',
+      phase: 'waiting',
+      seats: [
+        { index: 0, kind: 'human', userId: 'host-id', name: 'H', ready: true, team: 0 },
+        { index: 1, kind: 'empty', userId: null, name: '', ready: false, team: 0 },
+      ],
+      spectators: [],
+      settings: { fieldSize: 'tiny', seed: 1, allowSpectators: true },
+    });
+    assert.equal(guest.isActive(), true);
+    assert.equal(guest.getState().watching, false);
+    guest.leaveRoom();
+  });
+
   it('refuses an adventure spectator', () => {
     const guest = createMatchLobby({
       getP2p: () => fakeP2p('eye'),
@@ -680,5 +907,43 @@ describe('match lobby', () => {
     guest.setReady(true);
     assert.equal(p2p.sent.some((row) => row.msg.type === MSG.READY), false);
     guest.leaveRoom();
+  });
+
+  it('marks a seat as watching the replay and relays it', () => {
+    const p2p = fakeP2p('host');
+    let dataFn = null;
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+    });
+    room.createRoom('onevsone');
+    const { roomId, mode } = room.getState();
+    dataFn({
+      v: 1,
+      type: MSG.JOIN,
+      from: 'host',
+      userId: 'guest',
+      name: 'Guest',
+      color: '#0f0',
+      roomId,
+      mode,
+    });
+    assert.equal(room.setReplayWatch(true), true);
+    assert.equal(room.getState().seats.find((s) => s.userId === 'host').replay, true);
+    dataFn({
+      v: 1,
+      type: MSG.REPLAY,
+      from: 'guest',
+      userId: 'guest',
+      replay: true,
+      roomId,
+      mode,
+    });
+    assert.equal(room.getState().seats.find((s) => s.userId === 'guest').replay, true);
+    assert.equal(room.setReplayWatch(false), true);
+    assert.equal(room.getState().seats.find((s) => s.userId === 'host').replay, false);
+    room.leaveRoom();
   });
 });

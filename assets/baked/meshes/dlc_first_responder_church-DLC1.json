@@ -1,0 +1,184 @@
+{
+  "sourceUrl": "/assets/models/dlc/first_responder/church-DLC1.glb",
+  "version": 3,
+  "sockets": [],
+  "materials": [
+    {
+      "name": "roof.001",
+      "baseColorFactor": [
+        0.010219350457191467,
+        0.010219350457191467,
+        0.010219350457191467,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material.017",
+      "baseColorFactor": [
+        0.052150242030620575,
+        0.052150242030620575,
+        0.052150242030620575,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "wall",
+      "baseColorFactor": [
+        0.020043401047587395,
+        0.00615838635712862,
+        0.0021933747921139,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "roof.001",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "boundMin": [
+        -4.017153263092041,
+        -0.7159508466720581,
+        -6.620083332061768
+      ],
+      "boundMax": [
+        3.9840919971466064,
+        10.02322006225586,
+        6.458578109741211
+      ],
+      "positions": {
+        "offset": 0,
+        "length": 1659,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 6636,
+        "length": 1659,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 13272,
+        "length": 855,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 16692,
+        "length": 1106,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.017",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "boundMin": [
+        -4.017153263092041,
+        -0.6559271812438965,
+        -6.620083332061768
+      ],
+      "boundMax": [
+        3.9840919971466064,
+        5.655409812927246,
+        6.458578109741211
+      ],
+      "positions": {
+        "offset": 21116,
+        "length": 297,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 22304,
+        "length": 297,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 23492,
+        "length": 141,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 24056,
+        "length": 198,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "wall",
+      "materialIndex": 2,
+      "reverseWinding": true,
+      "boundMin": [
+        -4.017153263092041,
+        -0.7159508466720581,
+        -6.620083332061768
+      ],
+      "boundMax": [
+        3.9840919971466064,
+        9.798477172851562,
+        6.458578109741211
+      ],
+      "positions": {
+        "offset": 24848,
+        "length": 504,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 26864,
+        "length": 504,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 28880,
+        "length": 264,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 29936,
+        "length": 336,
+        "type": "f32"
+      }
+    }
+  ]
+}

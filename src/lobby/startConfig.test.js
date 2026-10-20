@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { installAdventureCampaign } from './adventureCampaign.js';
-import { chapterLabelFor, gardenUrlForChapter, selectableAdventureChapters } from './modes.js';
+import { chapterLabelFor, defaultSettings, gardenUrlForChapter, lobbyAllowsSpectators, mapTypeFitsLobby, selectableAdventureChapters } from './modes.js';
 import { liveConfigFromLobby, teamByOwnerForMode } from './startConfig.js';
 
 const seats = [
@@ -37,7 +37,7 @@ describe('lobby start config', () => {
     assert.deepEqual(watching.humanPlayers, [0, 1]);
     assert.equal(cfg.localSolo, false);
     assert.deepEqual(cfg.shareVisionWith, []);
-    assert.deepEqual(cfg.ownerSkins, { 0: { 4: 'first_responder' } });
+    assert.deepEqual(cfg.ownerSkins, { 0: { 4: 'first_responder', 14: 'first_responder' } });
     assert.deepEqual(cfg.ownerColors, { 0: '#FF0000', 1: '#00FF00' });
   });
 
@@ -92,6 +92,18 @@ describe('lobby start config', () => {
     assert.deepEqual(selectableAdventureChapters().map((c) => c.id), ['pack:opening.garden']);
   });
 
+  it('plays a custom map ref in 1v1', () => {
+    const cfg = liveConfigFromLobby({
+      mode: 'onevsone',
+      roomId: 'lobby-1',
+      settings: { fieldSize: 'tiny', seed: 99, chapter: 'session' },
+      seats: seats.slice(0, 2),
+    }, 'host-id');
+    assert.equal(cfg.chapter, 'session');
+    assert.equal(cfg.gardenUrl, 'session');
+    assert.equal(cfg.mapW, 80);
+  });
+
   it('passes workshop chapter refs through as gardenUrl', () => {
     const cfg = liveConfigFromLobby({
       mode: 'adventure',
@@ -101,6 +113,24 @@ describe('lobby start config', () => {
     }, 'host-id');
     assert.equal(cfg.chapter, 'workshop:99/maps/02.garden');
     assert.equal(cfg.gardenUrl, 'workshop:99/maps/02.garden');
+  });
+});
+
+describe('lobby map and spectator defaults', () => {
+  it('starts 1v1 and teams on a generated field with spectators allowed', () => {
+    const duel = defaultSettings('onevsone', 'tiny');
+    assert.equal(duel.fieldSize, 'tiny');
+    assert.equal(duel.chapter, '');
+    assert.equal(duel.allowSpectators, true);
+    assert.equal(defaultSettings('teams').allowSpectators, true);
+    assert.equal(defaultSettings('adventure').allowSpectators, false);
+    assert.equal(lobbyAllowsSpectators('onevsone', duel), true);
+    assert.equal(lobbyAllowsSpectators('onevsone', { allowSpectators: false }), false);
+    assert.equal(lobbyAllowsSpectators('adventure', { allowSpectators: true }), false);
+    assert.equal(mapTypeFitsLobby('', 'teams'), true);
+    assert.equal(mapTypeFitsLobby('1v1', 'onevsone'), true);
+    assert.equal(mapTypeFitsLobby('teams', 'onevsone'), false);
+    assert.equal(mapTypeFitsLobby('adventure', 'teams'), false);
   });
 });
 

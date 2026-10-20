@@ -6,7 +6,7 @@ import { UNIT } from '../sim/unitTypes.js';
 export const STORY_PARTY = Object.freeze([
   { name: 'Stumpey', type: UNIT.MYCO, dx: 0, dz: 1 },
   { name: 'Goblin', type: UNIT.WARLOCK, dx: -3, dz: 1 },
-  { name: 'Lady', type: UNIT.PRIEST, dx: 0, dz: -1 },
+  { name: 'Idra', type: UNIT.PRIEST, dx: 0, dz: -1 },
   { name: 'Doc', type: UNIT.SHAMAN, dx: 3, dz: -1 },
 ]);
 

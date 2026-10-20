@@ -186,6 +186,8 @@ export function createSporeBloomFxStore() {
     headX: [],
     headY: [],
     headKill: [],
+    headFromX: [],
+    headFromY: [],
     deathCount: 0,
     deathX: [],
     deathY: [],
@@ -211,13 +213,17 @@ export function pushSporeSeedFx(w, x, y, growAtTick) {
   store.seedCount++;
 }
 
-export function pushSporeHeadFx(w, entity, x, y, killed) {
+export function pushSporeHeadFx(w, entity, x, y, killed, fromX = x, fromY = y) {
   const store = w.sporeBloomFx;
   if (!store) return;
+  if (!store.headFromX) store.headFromX = [];
+  if (!store.headFromY) store.headFromY = [];
   store.headEntity.push(entity | 0);
   store.headX.push(fx.toFloat(x));
   store.headY.push(fx.toFloat(y));
   store.headKill.push(killed ? 1 : 0);
+  store.headFromX.push(fx.toFloat(fromX));
+  store.headFromY.push(fx.toFloat(fromY));
   store.headCount++;
 }
 
@@ -267,6 +273,8 @@ export function takeSporeBloomUpdates(w) {
     headX: store.headX.slice(0, hn),
     headY: store.headY.slice(0, hn),
     headKill: store.headKill.slice(0, hn),
+    headFromX: (store.headFromX || []).slice(0, hn),
+    headFromY: (store.headFromY || []).slice(0, hn),
   };
   store.dripX.length = 0;
   store.dripY.length = 0;
@@ -286,6 +294,8 @@ export function takeSporeBloomUpdates(w) {
   store.headX.length = 0;
   store.headY.length = 0;
   store.headKill.length = 0;
+  if (store.headFromX) store.headFromX.length = 0;
+  if (store.headFromY) store.headFromY.length = 0;
   store.headCount = 0;
   return patch;
 }

@@ -5,6 +5,7 @@ import * as fx from './fixed.js';
 import { TILE_SIZE_F, snapToPassable } from './field.js';
 import { getUnitDef } from './unitTypes.js';
 import {
+  buildingIsFinished,
   clearStructureOccupancyAt,
   getBuildingFootprint,
   isBuildingAlive,
@@ -73,6 +74,7 @@ export function ruinBuilding(w, field, bi) {
   const b = w.buildings?.[bi];
   if (!b) return;
   b.hp = 0;
+  b.fireTicks = 0;
   if (field) {
     clearStructureOccupancyAt(field, b.type, b.x, b.z, {
       buildings: w.buildings,
@@ -167,6 +169,46 @@ export function damageBuildingsInBloom(w, field, _owner, cx, cy, radius, amount 
 }
 
 setBloomBuildingDamage(damageBuildingsInBloom);
+
+/** Lightning burn length (~8s at 20Hz). Re-strike refreshes the timer. */
+export const LIGHTNING_BUILDING_BURN_TICKS = 160;
+/** Damage cadence while a building is on fire (~0.5s at 20Hz). */
+export const LIGHTNING_BUILDING_BURN_INTERVAL = 10;
+/** HP lost per burn pulse. Farms use FARM_FIRE_DAMAGE_MUL. */
+export const LIGHTNING_BUILDING_BURN_DAMAGE = 3;
+
+/** Light a finished building. Refreshes an existing burn. */
+export function igniteBuilding(w, bi) {
+  const b = w.buildings?.[bi];
+  if (!isBuildingAlive(b) || !buildingIsFinished(b)) return false;
+  b.fireTicks = LIGHTNING_BUILDING_BURN_TICKS;
+  w.buildingsDirty = 1;
+  return true;
+}
+
+/** Advance lightning burns and pulse fire damage. */
+export function tickBuildingFires(w, field) {
+  const buildings = w.buildings;
+  if (!buildings?.length) return;
+  for (let bi = 0; bi < buildings.length; bi++) {
+    const b = buildings[bi];
+    if ((b.fireTicks | 0) <= 0) continue;
+    if (!isBuildingAlive(b)) {
+      b.fireTicks = 0;
+      continue;
+    }
+    b.fireTicks = (b.fireTicks | 0) - 1;
+    if (b.fireTicks > 0 && b.fireTicks % LIGHTNING_BUILDING_BURN_INTERVAL === 0) {
+      applyDamageBuilding(
+        w,
+        field,
+        bi,
+        scaleFarmHazardDamage(b.type, LIGHTNING_BUILDING_BURN_DAMAGE, FARM_FIRE_DAMAGE_MUL),
+      );
+    }
+    if (!isBuildingAlive(b) || (b.fireTicks | 0) <= 0) b.fireTicks = 0;
+  }
+}
 
 /** Ground-fire pulses — farms cook faster than other buildings. */
 export function pulseFireZoneBuildings(w, field) {

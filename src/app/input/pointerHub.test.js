@@ -172,6 +172,7 @@ describe('isRmbPassthroughTarget', () => {
     assert.equal(isRmbPassthroughTarget(el('play', transport)), true);
     assert.equal(isRmbPassthroughTarget(menu), true);
     assert.equal(isRmbPassthroughTarget(graffiti), true);
+    assert.equal(isRmbPassthroughTarget(el('match-lobby-ready', el('match-lobby-overlay'))), true);
     assert.equal(isRmbPassthroughTarget(drawerBtn), false);
     assert.equal(isRmbPassthroughTarget(null), false);
   });
@@ -203,14 +204,14 @@ describe('setupPointerHub right-click chrome', () => {
       assert.equal(h.camera.ups, 1);
       assert.deepEqual(h.game.moves, []);
 
-      for (const id of ['replay-watch', 'story-transport', 'menu_b', 'graffiti_b']) {
+      for (const id of ['replay-watch', 'match-lobby-overlay', 'story-transport', 'menu_b', 'graffiti_b']) {
         const click = event('pointerdown', el(id), { button: 2, buttons: 2, pointerId: 4 });
         h.dispatch('pointerdown', click, swallow);
         const release = event('pointerup', el(id), { button: 2, buttons: 0, pointerId: 4 });
         h.dispatch('pointerup', release);
       }
-      assert.equal(h.camera.downs, 5);
-      assert.equal(h.game.moves.length, 4);
+      assert.equal(h.camera.downs, 6);
+      assert.equal(h.game.moves.length, 5);
     } finally {
       h.dispose();
     }

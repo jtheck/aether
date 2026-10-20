@@ -1,0 +1,126 @@
+{
+  "sourceUrl": "/assets/models/derrick.glb",
+  "version": 3,
+  "sockets": [],
+  "materials": [
+    {
+      "name": "Material",
+      "baseColorFactor": [
+        0.0422445572912693,
+        0.02459133416414261,
+        0.004401430021971464,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material.001",
+      "baseColorFactor": [
+        0.08164761960506439,
+        0.08164761960506439,
+        0.08164761960506439,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "Material",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "boundMin": [
+        -4.2964982986450195,
+        -1.8692083358764648,
+        -4.1705756187438965
+      ],
+      "boundMax": [
+        4.363742828369141,
+        15.852313041687012,
+        4.3809967041015625
+      ],
+      "positions": {
+        "offset": 0,
+        "length": 1794,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 7176,
+        "length": 1794,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 14352,
+        "length": 948,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 18144,
+        "length": 1196,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.001",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "boundMin": [
+        -0.23470313847064972,
+        -3.723344326019287,
+        -0.26584556698799133
+      ],
+      "boundMax": [
+        0.25386008620262146,
+        9.29279899597168,
+        0.22606568038463593
+      ],
+      "positions": {
+        "offset": 22928,
+        "length": 90,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 23288,
+        "length": 90,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 23648,
+        "length": 48,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 23840,
+        "length": 60,
+        "type": "f32"
+      }
+    }
+  ]
+}

@@ -14,7 +14,7 @@ import {
 } from '../vendor/lite/liteVendor.js';
 import { loadBakedUnitMeshParts, prefetchBakedMesh } from './unitModels.js';
 import { meshRoofY, roofChipLift, DEFAULT_BUILDING_ROOF } from './healthBars.js';
-import { BUILDING_FOOTPRINTS, BUILDING_MODEL_URLS, PLACEABLE_BUILDINGS } from '../sim/buildings.js';
+import { BUILDING_FOOTPRINTS, BUILDING_MODEL_URLS, PLACEABLE_BUILDINGS, buildingMeshGroundCenter, buildingMeshOrigin } from '../sim/buildings.js';
 import { TILE_SIZE_F } from '../sim/field.js';
 import { SCALE_RISE_MS, stageRiseScale } from './scaleBounce.js';
 import { MODEL_BASE_SCALE } from './modelScale.js';
@@ -142,6 +142,46 @@ function buildingKey(type, x, z) {
   return `${type}:${x.toFixed(2)}:${z.toFixed(2)}`;
 }
 
+/**
+ * Which meshes stay, which followed a move, and which collapse.
+ * A building still in the list is not a collapse. A same-type mesh whose
+ * old spot is empty and whose type just appeared somewhere else moved.
+ * `pending` keys are in the snapshot but the model is not loaded yet.
+ * @param {{ key: string, type: string }[]} existing
+ * @param {{ key: string, type: string }[]} incoming
+ * @param {Set<string> | null | undefined} pending
+ */
+export function planBuildingVisuals(existing, incoming, pending) {
+  const seen = new Set();
+  const keep = [];
+  const create = [];
+  for (let i = 0; i < incoming.length; i++) {
+    const b = incoming[i];
+    if (seen.has(b.key)) continue;
+    seen.add(b.key);
+    if (existing.some((e) => e.key === b.key)) keep.push(b.key);
+    else create.push(b.key);
+  }
+  const loose = [];
+  for (let i = 0; i < existing.length; i++) {
+    const e = existing[i];
+    if (seen.has(e.key) || pending?.has(e.key)) continue;
+    loose.push(e);
+  }
+  const moved = [];
+  const stillCreate = [];
+  for (let i = 0; i < create.length; i++) {
+    const key = create[i];
+    const type = incoming.find((b) => b.key === key)?.type;
+    const at = loose.findIndex((e) => e.type === type);
+    if (at >= 0) {
+      moved.push({ from: loose[at].key, to: key });
+      loose.splice(at, 1);
+    } else stillCreate.push(key);
+  }
+  return { keep, moved, fall: loose.map((e) => e.key), create: stillCreate };
+}
+
 /** Flattened collar: XZ = size, Y crushed but thicker than before. */
 function writeFlatCollar(matrices, slot, x, z, scaleXZ, groundY) {
   const o = slot * 16;
@@ -256,18 +296,18 @@ function resolveSelScale(size) {
  * @param {{ emit?: Function, emitBurst?: Function }} [opts]
  */
 export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
-  /** @type {Map<string, { parts: object[], fxSockets: { name: string, x: number, y: number, z: number }[] }>} typeId → template */
+  /** @type {Map<string, { parts: object[], fxSockets: { name: string, x: number, y: number, z: number }[], roofY: number, pickParts: object[] }>} glb url → template */
   const templates = new Map();
-  /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array, colors: Float32Array, isTeamColor: boolean }[], capacity: number, typeId: string, owners: Uint8Array, fxSockets: { name: string, x: number, y: number, z: number }[] }>} */
-  const byType = new Map();
+  /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array, colors: Float32Array, isTeamColor: boolean }[], capacity: number, typeId: string, modelUrl: string, owners: Uint8Array, fxSockets: { name: string, x: number, y: number, z: number }[] }>} model url → live batch */
+  const batches = new Map();
   /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array }[] }>} */
-  const ghostByType = new Map();
-  /** @type {Map<object, string>} mesh → typeId */
+  const ghostByUrl = new Map();
+  /** @type {Map<object, string>} mesh → model url (slotToIndex key) */
   const pickMeshes = new Map();
   /** @type {Map<string, number[]>} */
   const slotToIndex = new Map();
   /** @type {Map<string, Promise<boolean>>} */
-  const typeInflight = new Map();
+  const templateInflight = new Map();
   /** @type {Map<string, { x: number, z: number, started: number }>} */
   const harvestPings = new Map();
   /** Live + crumbling instances, keyed by type+position so place() can animate. */
@@ -313,25 +353,38 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
   let selVisible = false;
   /** @type {string | null} */
   let ghostType = null;
+  /** @type {string | null} */
+  let ghostUrl = null;
   /** @type {{ x: number, z: number, size: 's' | 'm' | 'l' }[]} */
   let selAnchors = [];
   let selCapacity = 1;
   let placeGen = 0;
   let ghostGen = 0;
 
+  /** @param {string} typeId @param {number} [owner] */
+  function modelUrlFor(typeId, owner = 0) {
+    const url = opts.resolveModelUrl?.(typeId, owner | 0);
+    return url || MODEL_URLS[typeId] || null;
+  }
+
+  /** Placement ghost uses the local player's cosmetic pick. */
+  function ghostModelUrl(typeId) {
+    const owner = opts.localPlayerId ?? 0;
+    return modelUrlFor(typeId, owner);
+  }
+
   /**
-   * Load the CPU/GPU template for one building type. Ghost clones stay off
-   * the scene until setGhost() — hidden thin-instances still tax writeBuffer.
-   * @param {string} typeId
+   * Load the CPU/GPU template for one GLB. Ghost clones stay off the scene
+   * until setGhost() — hidden thin-instances still tax writeBuffer.
+   * @param {string} url
    * @returns {Promise<boolean>}
    */
-  function ensureType(typeId) {
-    if (templates.has(typeId)) return Promise.resolve(true);
-    let pending = typeInflight.get(typeId);
+  function ensureTemplate(url) {
+    if (!url) return Promise.resolve(false);
+    if (templates.has(url)) return Promise.resolve(true);
+    let pending = templateInflight.get(url);
     if (pending) return pending;
     pending = (async () => {
-      const url = MODEL_URLS[typeId];
-      if (!url) return false;
       try {
         const parts = await loadBakedUnitMeshParts(engine, url);
         // GPU pick path kept; CPU ray-vs-sphere is live (see pickMode.js).
@@ -346,27 +399,28 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
           z: s.z,
           scale: Number.isFinite(s.scale) && s.scale > 1e-6 ? s.scale : 1,
         }));
-        templates.set(typeId, {
+        templates.set(url, {
           parts,
           fxSockets,
           roofY: meshRoofY(parts),
           pickParts: pickPartsFromMeshes(parts),
+          groundBounds: groundBoundsOf(parts),
         });
         return true;
       } catch (err) {
-        console.warn(`[buildings] ${typeId} failed`, err);
+        console.warn(`[buildings] ${url} failed`, err);
         return false;
       } finally {
-        typeInflight.delete(typeId);
+        templateInflight.delete(url);
       }
     })();
-    typeInflight.set(typeId, pending);
+    templateInflight.set(url, pending);
     return pending;
   }
 
-  function ensureGhostMeshes(typeId) {
-    if (ghostByType.has(typeId)) return true;
-    const template = templates.get(typeId);
+  function ensureGhostMeshes(url) {
+    if (ghostByUrl.has(url)) return true;
+    const template = templates.get(url);
     if (!template) return false;
     /** @type {{ mesh: object, matrices: Float32Array }[]} */
     const layers = [];
@@ -380,18 +434,19 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
       addToScene(scene, mesh);
       layers.push({ mesh, matrices });
     }
-    ghostByType.set(typeId, { layers });
+    ghostByUrl.set(url, { layers });
     return true;
   }
 
   function hideAllGhosts() {
-    for (const batch of ghostByType.values()) {
+    for (const batch of ghostByUrl.values()) {
       for (const layer of batch.layers) {
         setThinInstanceCount(layer.mesh, 0);
         flushThinInstances(layer.mesh);
       }
     }
     ghostType = null;
+    ghostUrl = null;
     ghostVisible = false;
   }
 
@@ -489,10 +544,10 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
    * (same pattern as agora flags) so two sides share the mesh + material.
    * @param {string} typeId
    */
-  function ensureBatch(typeId) {
-    let batch = byType.get(typeId);
+  function ensureBatch(typeId, modelUrl) {
+    let batch = batches.get(modelUrl);
     if (batch) return batch;
-    const template = templates.get(typeId);
+    const template = templates.get(modelUrl);
     if (!template) return null;
     const { parts, fxSockets } = template;
 
@@ -514,17 +569,18 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
       setThinInstanceCount(mesh, 0);
       addToScene(scene, mesh);
       layers.push({ mesh, matrices, colors, isTeamColor });
-      pickMeshes.set(mesh, typeId);
+      pickMeshes.set(mesh, modelUrl);
     }
     batch = {
       layers,
       capacity: INITIAL_CAPACITY,
       typeId,
+      modelUrl,
       owners: new Uint8Array(INITIAL_CAPACITY),
       fxSockets,
     };
-    byType.set(typeId, batch);
-    slotToIndex.set(typeId, []);
+    batches.set(modelUrl, batch);
+    slotToIndex.set(modelUrl, []);
     return batch;
   }
 
@@ -552,10 +608,35 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
     batch.capacity = cap;
   }
 
+  function groundBoundsOf(parts) {
+    let minX = Infinity;
+    let minZ = Infinity;
+    let maxX = -Infinity;
+    let maxZ = -Infinity;
+    for (const mesh of parts || []) {
+      const min = mesh?.boundMin;
+      const max = mesh?.boundMax;
+      if (!min || !max) continue;
+      minX = Math.min(minX, min[0]);
+      minZ = Math.min(minZ, min[2]);
+      maxX = Math.max(maxX, max[0]);
+      maxZ = Math.max(maxZ, max[2]);
+    }
+    if (!Number.isFinite(minX)) return null;
+    return { minX, minZ, maxX, maxZ };
+  }
+
+  function meshFit(_typeId, url) {
+    const bounds = url ? templates.get(url)?.groundBounds : null;
+    const { cx, cz } = buildingMeshGroundCenter(bounds);
+    return { scale: MODEL_BASE_SCALE, cx, cz };
+  }
+
   function constructScale(b) {
-    if (b.built !== 0) return MODEL_BASE_SCALE;
+    const base = meshFit(b.type, modelUrlFor(b.type, b.owner | 0)).scale;
+    if (b.built !== 0) return base;
     const stage = CONSTRUCT_STAGE_SCALE[constructionVisualStage(b.buildProgress, b.buildTime)] ?? SITE_SCALE;
-    return MODEL_BASE_SCALE * stage;
+    return base * stage;
   }
 
   function constructStage(b) {
@@ -570,6 +651,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
     return {
       key: buildingKey(b.type, b.x, b.z),
       type: b.type,
+      modelUrl: modelUrlFor(b.type, b.owner | 0),
       x: b.x,
       z: b.z,
       yaw: b.yaw ?? 0,
@@ -656,57 +738,94 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
 
   function poseVisual(s) {
     const gy = groundYAt(s.x, s.z);
+    const fit = meshFit(s.type, s.modelUrl);
+    const yaw = s.yaw || 0;
     if (!s.falling) {
-      return { x: s.x, y: gy, z: s.z, yaw: s.yaw, sx: s.visScale, sy: s.visScale, sz: s.visScale };
+      const origin = buildingMeshOrigin(s.x, s.z, yaw, s.visScale, fit.cx, fit.cz);
+      return { x: origin.x, y: gy, z: origin.z, yaw, sx: s.visScale, sy: s.visScale, sz: s.visScale };
     }
     const t = Math.min(1, s.fallT);
     const ease = t * t;
+    const sc = s.visScale * (1 + 0.55 * ease);
+    const origin = buildingMeshOrigin(s.x, s.z, yaw + 0.32 * ease, sc, fit.cx, fit.cz);
     return {
-      x: s.x,
+      x: origin.x,
       y: gy - 0.7 * ease,
-      z: s.z,
-      yaw: s.yaw + 0.32 * ease,
-      sx: s.visScale * (1 + 0.55 * ease),
+      z: origin.z,
+      yaw: yaw + 0.32 * ease,
+      sx: sc,
       sy: s.visScale * Math.max(0.04, 1 - 0.94 * ease),
-      sz: s.visScale * (1 + 0.55 * ease),
+      sz: sc,
     };
   }
 
+  function adoptVisual(s, b, index) {
+    // A mesh that already started collapsing stays collapsed forever unless
+    // this clears it. The building is in the list again, so stand it back up.
+    if (s.falling) {
+      s.falling = false;
+      s.fallT = 0;
+    }
+    s.globalIndex = index;
+    s.x = b.x;
+    s.z = b.z;
+    s.yaw = b.yaw ?? 0;
+    s.owner = b.owner | 0;
+    s.modelUrl = modelUrlFor(b.type, b.owner | 0);
+    const built = b.built === 0 ? 0 : 1;
+    const stage = constructStage(b);
+    if (s.built === 0 && built === 1) beginRise(s, constructScale(b));
+    else if (built === 0 && stage > (s.scaleStage | 0)) beginRise(s, constructScale(b));
+    s.built = built;
+    s.scaleStage = Math.max(s.scaleStage | 0, stage);
+  }
+
   /**
-   * @param {{ type: string, x: number, z: number, yaw?: number, owner?: number, built?: number }[]} list
+   * @param {{ type: string, x: number, z: number, yaw?: number, owner?: number, built?: number, simIndex?: number }[]} list
+   * @param {{ pendingKeys?: Set<string> }} [opts]
    */
-  function applyPlace(list) {
-    const seen = new Set();
+  function applyPlace(list, opts = {}) {
     const all = list ?? [];
+    const incoming = [];
     for (let gi = 0; gi < all.length; gi++) {
       const b = all[gi];
-      // Display lists drop fogged and dead buildings, so the loop index is not
-      // the sim slot. Clicks have to land on the building that was actually hit.
-      const index = Number.isInteger(b.simIndex) ? b.simIndex : gi;
-      const key = buildingKey(b.type, b.x, b.z);
-      seen.add(key);
-      let s = visuals.get(key);
-      if (!s) {
-        s = makeVisual(b, index);
-        visuals.set(key, s);
-      } else {
-        s.globalIndex = index;
-        s.x = b.x;
-        s.z = b.z;
-        s.yaw = b.yaw ?? 0;
-        s.owner = b.owner | 0;
-        const built = b.built === 0 ? 0 : 1;
-        const stage = constructStage(b);
-        if (s.built === 0 && built === 1 && !s.falling) beginRise(s, 1);
-        else if (built === 0 && stage > (s.scaleStage | 0) && !s.falling) {
-          beginRise(s, constructScale(b));
-        }
-        s.built = built;
-        s.scaleStage = Math.max(s.scaleStage | 0, stage);
-      }
+      incoming.push({
+        key: buildingKey(b.type, b.x, b.z),
+        type: b.type,
+        b,
+        // Display lists drop fogged and dead buildings, so the loop index is not
+        // the sim slot. Clicks have to land on the building that was actually hit.
+        index: Number.isInteger(b.simIndex) ? b.simIndex : gi,
+      });
     }
-    for (const [key, s] of visuals) {
-      if (!seen.has(key)) beginFall(s);
+    const existing = [];
+    for (const [key, s] of visuals) existing.push({ key, type: s.type });
+    const plan = planBuildingVisuals(existing, incoming, opts.pendingKeys);
+    const byKey = new Map();
+    for (let i = 0; i < incoming.length; i++) byKey.set(incoming[i].key, incoming[i]);
+    for (let i = 0; i < plan.keep.length; i++) {
+      const item = byKey.get(plan.keep[i]);
+      const s = item && visuals.get(item.key);
+      if (item && s) adoptVisual(s, item.b, item.index);
+    }
+    for (let i = 0; i < plan.moved.length; i++) {
+      const move = plan.moved[i];
+      const item = byKey.get(move.to);
+      const s = visuals.get(move.from);
+      if (!item || !s) continue;
+      visuals.delete(move.from);
+      s.key = move.to;
+      visuals.set(move.to, s);
+      adoptVisual(s, item.b, item.index);
+    }
+    for (let i = 0; i < plan.create.length; i++) {
+      const item = byKey.get(plan.create[i]);
+      if (!item || visuals.has(item.key)) continue;
+      visuals.set(item.key, makeVisual(item.b, item.index));
+    }
+    for (let i = 0; i < plan.fall.length; i++) {
+      const s = visuals.get(plan.fall[i]);
+      if (s) beginFall(s);
     }
     flushVisuals();
   }
@@ -714,25 +833,29 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
   function flushVisuals() {
     /** @type {Map<string, object[]>} */
     const groups = new Map();
-    for (const typeId of byType.keys()) {
-      slotToIndex.set(typeId, []);
+    for (const modelUrl of batches.keys()) {
+      slotToIndex.set(modelUrl, []);
     }
     for (const s of visuals.values()) {
       if (s.falling && s.fallT >= 1) continue;
-      let g = groups.get(s.type);
+      const url = s.modelUrl || MODEL_URLS[s.type];
+      if (!url) continue;
+      let g = groups.get(url);
       if (!g) {
         g = [];
-        groups.set(s.type, g);
+        groups.set(url, g);
       }
       g.push(s);
     }
 
     /** @type {Set<string>} */
     const used = new Set();
-    for (const [typeId, items] of groups) {
-      const batch = ensureBatch(typeId);
+    for (const [modelUrl, items] of groups) {
+      const typeId = items[0]?.type;
+      if (!typeId) continue;
+      const batch = ensureBatch(typeId, modelUrl);
       if (!batch) continue;
-      used.add(typeId);
+      used.add(modelUrl);
       const n = items.length;
       ensureCapacity(batch, n);
       const slots = [];
@@ -746,16 +869,16 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
           if (layer.isTeamColor) writeOwnerColor(layer.colors, i, s.owner);
         }
       }
-      slotToIndex.set(typeId, slots);
+      slotToIndex.set(modelUrl, slots);
       for (const layer of batch.layers) {
         setThinInstanceCount(layer.mesh, n);
         setThinInstanceColors(layer.mesh, layer.colors);
         flushThinInstances(layer.mesh);
       }
     }
-    for (const [typeId, batch] of byType) {
-      if (used.has(typeId)) continue;
-      slotToIndex.set(typeId, []);
+    for (const [modelUrl, batch] of batches) {
+      if (used.has(modelUrl)) continue;
+      slotToIndex.set(modelUrl, []);
       for (const layer of batch.layers) {
         setThinInstanceCount(layer.mesh, 0);
         flushThinInstances(layer.mesh);
@@ -792,24 +915,40 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
    * Stale generations drop if a newer place() wins.
    * @param {{ type: string, x: number, z: number, yaw?: number, owner?: number, built?: number }[]} list
    */
+  function templateReady(b) {
+    const url = modelUrlFor(b.type, b.owner | 0);
+    return url && templates.has(url);
+  }
+
+  function drawReady(snapshot) {
+    const pendingKeys = new Set();
+    const ready = [];
+    for (let i = 0; i < snapshot.length; i++) {
+      const b = snapshot[i];
+      if (templateReady(b)) ready.push(b);
+      else pendingKeys.add(buildingKey(b.type, b.x, b.z));
+    }
+    applyPlace(ready, { pendingKeys });
+  }
+
   async function place(list) {
     const snapshot = list ?? [];
     const gen = ++placeGen;
     /** @type {string[]} */
-    const types = [];
+    const urls = [];
     const seen = new Set();
     for (let i = 0; i < snapshot.length; i++) {
-      const t = snapshot[i].type;
-      if (seen.has(t)) continue;
-      seen.add(t);
-      types.push(t);
+      const url = modelUrlFor(snapshot[i].type, snapshot[i].owner | 0);
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      urls.push(url);
     }
-    applyPlace(snapshot.filter((b) => templates.has(b.type)));
-    for (const t of types) {
-      if (templates.has(t)) continue;
-      await ensureType(t);
+    drawReady(snapshot);
+    for (const url of urls) {
+      if (templates.has(url)) continue;
+      await ensureTemplate(url);
       if (gen !== placeGen) return;
-      applyPlace(snapshot.filter((b) => templates.has(b.type)));
+      drawReady(snapshot);
       await afterPaint();
     }
   }
@@ -818,18 +957,22 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
    * @param {{ type: string, x: number, z: number, yaw?: number, valid?: boolean }} pos
    */
   function applyGhost(pos) {
-    if (ghostType && ghostType !== pos.type) hideAllGhosts();
-    const batch = ghostByType.get(pos.type);
+    const url = ghostModelUrl(pos.type);
+    if (ghostUrl && ghostUrl !== url) hideAllGhosts();
+    const batch = ghostByUrl.get(url);
     if (!batch) {
       hideAllGhosts();
       return;
     }
     ghostType = pos.type;
+    ghostUrl = url;
     const y = groundYAt(pos.x, pos.z);
     const yaw = pos.yaw ?? 0;
+    const fit = meshFit(pos.type, url);
+    const origin = buildingMeshOrigin(pos.x, pos.z, yaw, fit.scale, fit.cx, fit.cz);
     const valid = pos.valid !== false;
     for (const layer of batch.layers) {
-      writeMatrix(layer.matrices, 0, pos.x, y, pos.z, yaw, MODEL_BASE_SCALE);
+      writeMatrix(layer.matrices, 0, origin.x, y, origin.z, yaw, fit.scale);
       setThinInstanceCount(layer.mesh, 1);
       flushThinInstances(layer.mesh);
       applyGhostValidityTint(layer.mesh.material, valid);
@@ -848,9 +991,10 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
     }
     const gen = ++ghostGen;
     const want = pos;
-    await ensureType(want.type);
+    const url = ghostModelUrl(want.type);
+    await ensureTemplate(url);
     if (gen !== ghostGen) return;
-    if (!ensureGhostMeshes(want.type)) return;
+    if (!ensureGhostMeshes(url)) return;
     applyGhost(want);
   }
 
@@ -869,11 +1013,11 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
     if (!ray) return null;
     let best = null;
     let limit = maxT;
-    for (const batch of byType.values()) {
-      const parts = templates.get(batch.typeId)?.pickParts;
+    for (const batch of batches.values()) {
+      const parts = templates.get(batch.modelUrl)?.pickParts;
       const layer = batch.layers[0];
       if (!parts?.length || !layer) continue;
-      const slots = slotToIndex.get(batch.typeId);
+      const slots = slotToIndex.get(batch.modelUrl);
       const count = layer.mesh?.thinInstances?.count ?? 0;
       const hit = nearestMeshInstanceHit(ray, parts, layer.matrices, count, (slot) => {
         const index = slots?.[slot];
@@ -895,9 +1039,9 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
    * @returns {boolean | null}
    */
   function ghostHitOnRay(ray, maxT = Infinity) {
-    if (!ray || !ghostVisible || !ghostType) return null;
-    const parts = templates.get(ghostType)?.pickParts;
-    const layer = ghostByType.get(ghostType)?.layers[0];
+    if (!ray || !ghostVisible || !ghostUrl) return null;
+    const parts = templates.get(ghostUrl)?.pickParts;
+    const layer = ghostByUrl.get(ghostUrl)?.layers[0];
     const count = layer?.mesh?.thinInstances?.count ?? 0;
     if (!parts?.length || !layer || count <= 0) return null;
     return nearestMeshInstanceHit(ray, parts, layer.matrices, count, undefined, maxT) != null;
@@ -933,7 +1077,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
    * ) => void} fn
    */
   function forEachFxInstance(fn) {
-    for (const batch of byType.values()) {
+    for (const batch of batches.values()) {
       const sockets = batch.fxSockets;
       if (!sockets?.length) continue;
       const layer = batch.layers[0];
@@ -952,7 +1096,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
 
   /** Live placed building meshes (not ghosts / selection). */
   function forEachShadowMesh(fn) {
-    for (const batch of byType.values()) {
+    for (const batch of batches.values()) {
       for (const layer of batch.layers) {
         const mesh = layer.mesh;
         if (!mesh) continue;
@@ -963,7 +1107,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
   }
 
   function refreshTeamColors() {
-    for (const batch of byType.values()) {
+    for (const batch of batches.values()) {
       const count = batch.layers[0]?.mesh?.thinInstances?.count ?? 0;
       for (const layer of batch.layers) {
         if (!layer.isTeamColor) continue;
@@ -974,8 +1118,9 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
   }
 
   function chipHeight(typeId) {
-    const roof = templates.get(typeId)?.roofY;
-    return roofChipLift(roof, DEFAULT_BUILDING_ROOF) * MODEL_BASE_SCALE;
+    const url = MODEL_URLS[typeId];
+    const roof = url ? templates.get(url)?.roofY : undefined;
+    return roofChipLift(roof, DEFAULT_BUILDING_ROOF) * meshFit(typeId, url).scale;
   }
 
   const HARVEST_PING_MS = 280;
@@ -1004,7 +1149,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
   function findSlotNear(x, z, typeId = null) {
     let best = null;
     let bestD = HARVEST_RANGE2;
-    for (const batch of byType.values()) {
+    for (const batch of batches.values()) {
       if (typeId && batch.typeId !== typeId) continue;
       const layer = batch.layers[0];
       if (!layer?.matrices) continue;
@@ -1057,13 +1202,26 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
    * Loading-screen roster: later place() hits the CPU cache and only clones.
    */
   async function prefetchProgressive() {
+    /** @type {Set<string>} */
+    const urls = new Set();
     for (const b of PLACEABLE_BUILDINGS) {
-      if (templates.has(b.id)) continue;
-      const url = MODEL_URLS[b.id];
-      if (!url) continue;
+      const base = MODEL_URLS[b.id];
+      if (base) urls.add(base);
+      const skin = ghostModelUrl(b.id);
+      if (skin) urls.add(skin);
+    }
+    for (const url of urls) {
+      if (templates.has(url)) continue;
       await prefetchBakedMesh(engine, url);
       await afterPaint();
     }
+  }
+
+  /** Re-place after cosmetic building skins change (local player mesh swap). */
+  async function refreshSkins(list) {
+    ghostByUrl.clear();
+    ghostUrl = null;
+    await place(list ?? []);
   }
 
   function preloadAll() {
@@ -1076,6 +1234,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
     preloadAll,
     prefetchProgressive,
     preloadProgressive: prefetchProgressive,
+    refreshSkins,
     refreshTeamColors,
     setGhost,
     setSelectionHighlight,

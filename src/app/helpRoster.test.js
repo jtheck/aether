@@ -16,15 +16,20 @@ describe('helpPips', () => {
 });
 
 describe('help roster cards', () => {
-  it('rates a warrior as the tough end and an engineer as no damage', () => {
+  it('rates a champion as the tough end and an engineer as no damage', () => {
     const cards = helpUnitCards();
     const warrior = cards.find((c) => c.name === 'Warrior');
     const engineer = cards.find((c) => c.name === 'Engineer');
     const dirigible = cards.find((c) => c.name === 'Dirigible');
-    assert.equal(warrior.stats.find((s) => s.label === 'Health').pips, HELP_PIPS);
+    const champion = cards.find((c) => c.name === 'Champion');
+    assert.equal(champion.stats.find((s) => s.label === 'Health').pips, HELP_PIPS);
+    assert.ok(warrior.stats.find((s) => s.label === 'Health').pips < HELP_PIPS);
+    assert.match(champion.note, /nearby/i);
     assert.equal(engineer.stats.find((s) => s.label === 'Damage').pips, 0);
     assert.equal(dirigible.stats.find((s) => s.label === 'Speed').pips, HELP_PIPS);
-    assert.equal(cards.some((c) => c.id === String(UNIT.BRIGAND)), false);
+    const brigand = cards.find((c) => c.id === String(UNIT.BRIGAND));
+    assert.ok(brigand);
+    assert.match(brigand.note, /Temporary/i);
   });
 
   it('rates the factory as the toughest, longest building', () => {

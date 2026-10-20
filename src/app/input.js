@@ -171,8 +171,26 @@ export function setupInput(opts) {
     cancelPlacement: () => game.cancelPlacement?.(),
     groundLoopSelect: (loop, add) => game.groundLoopSelect?.(loop, add) ?? false,
     selectAtRay: (ray, add, assist) => game.selectAtRay?.(ray, add, assist) ?? false,
+    attackMoveAtRay: (ray) => game.attackMoveAtRay?.(ray) ?? false,
+    forceMoveAtRay: (ray) => game.forceMoveAtRay?.(ray) ?? false,
+    castAbilityAtRay: (ray) => game.castAbilityAtRay?.(ray),
+    isPlacing: () => game.isPlacing?.() ?? false,
+    previewPlacementAtRay: (ray) => game.previewPlacementAtRay?.(ray) ?? false,
+    rotatePlacementAtRay: (ray) => game.rotatePlacementAtRay?.(ray) ?? false,
+    confirmPlacementAtRay: (ray) => game.confirmPlacementAtRay?.(ray) ?? false,
+    getPlacementAnchor: () => game.getPlacementAnchor?.() ?? null,
+    isRadialOpen: () => opts.isRadialOpen?.() ?? false,
+    getRadialStickTargets: () => opts.getRadialStickTargets?.() ?? null,
+    pickRadialAtRay: (ray) => renderer.pickRadialAtRay?.(ray) ?? null,
+    hoverRadialPick: (pick) => opts.onRadialStickHover?.(pick),
+    confirmRadialPick: (pick) => {
+      if (pick) opts.onRadialPick?.(pick);
+    },
+    cancelRadial: () => opts.onRadialCancel?.(),
     getSelectedBuilding: () => game.getSelectedBuilding?.(),
     setSelectedBuilding: (sel) => game.setSelectedBuilding?.(sel),
+    getFollowSelection: () => game.getFollowSelection?.() ?? { units: [], buildings: [] },
+    applyFollowSelection: (units, buildings) => game.applyFollowSelection?.(units, buildings),
     dispose: () => {
       win?.removeEventListener?.('pointermove', onPointerYield);
       win?.removeEventListener?.('pointerdown', onPointerYield);

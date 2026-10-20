@@ -17,10 +17,10 @@ describe('story cast', () => {
 
   it('lays the four heroes in a diamond and moves them instead of duplicating', () => {
     const placed = storyPartyPlacements(40, 40, 80, 80, 0);
-    assert.deepEqual(placed.map((u) => u.name), ['Stumpey', 'Goblin', 'Lady', 'Doc']);
+    assert.deepEqual(placed.map((u) => u.name), ['Stumpey', 'Goblin', 'Idra', 'Doc']);
     assert.deepEqual(placed.map((u) => [u.tx, u.tz]), [[40, 41], [37, 41], [40, 39], [43, 39]]);
     const row = storyPartyPlacements(40, 40, 80, 80, 0, 'row');
-    assert.deepEqual(row.map((u) => u.name), ['Stumpey', 'Goblin', 'Lady', 'Doc']);
+    assert.deepEqual(row.map((u) => u.name), ['Stumpey', 'Goblin', 'Idra', 'Doc']);
     assert.deepEqual(row.map((u) => u.tz), [40, 40, 40, 40]);
     assert.deepEqual(row.map((u) => u.tx), [34, 38, 42, 46]);
     const again = mergeStoryParty(

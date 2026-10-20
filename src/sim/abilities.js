@@ -24,19 +24,26 @@ import {
   SPORE_BLOOM_COOLDOWN,
   castSporeBloom,
 } from './sporeBloom.js';
-import { clearPath } from './path.js';
+import { clearPath, queuePath } from './path.js';
 import { clearEngagement } from './engagement.js';
 import { ORDER } from './world.js';
 import { isCarried } from './transport.js';
-import { canCastAbility, spendMana, CAST_GCD } from './mana.js';
+import { canCastAbility, isManaAbility, spendMana, CAST_GCD } from './mana.js';
+import { getUnitCost } from './unitTypes.js';
+import { addResource, canAfford, spendResources } from './resources.js';
+import { becomeBrigand } from './brigand.js';
 
 export const ABILITY = {
+  VILLAGER_BRIGAND: 'villager_brigand',
   WARLOCK_FIREBALL: 'warlock_fireball',
   HOLY_ARMOR: 'holy_armor',
   SPORE_BLOOM: 'spore_bloom',
   PLAGUE_OF_FROGS: 'plague_of_frogs',
   WIZARD_LIGHTNING: 'wizard_lightning',
 };
+
+const BRIGAND_UPGRADE_COST = getUnitCost(UNIT.BRIGAND);
+const BRIGAND_UPGRADE_CD = 12;
 
 export const CAST_COMPOUND_CAP = 4;
 
@@ -114,13 +121,13 @@ export function applyCasts(w, field, ids, abilityId, tx, ty) {
     const i = ids[k];
     if (i < 0 || i >= w.count || !w.alive[i]) continue;
     if (isCarried(w, i)) continue;
-    if (!canCastAbility(w, i)) continue;
-    const aimX = sharedAim ? tx : tx?.[k];
-    const aimY = sharedAim ? ty : ty?.[k];
-    if (aimX == null || aimY == null) continue;
     const def = getUnitDef(w.type[i]);
     const id = abilityId || def.primaryAbility;
     if (!id) continue;
+    if (!canIssueAbility(w, i, id)) continue;
+    const aimX = sharedAim ? tx : tx?.[k];
+    const aimY = sharedAim ? ty : ty?.[k];
+    if (aimX == null || aimY == null) continue;
     let g = groups[id];
     if (!g) {
       g = { casters: [], aimX, aimY };
@@ -168,6 +175,8 @@ function tryCastGroup(w, field, abilityId, casters, aimX, aimY) {
   if (!id) return false;
 
   switch (id) {
+    case ABILITY.VILLAGER_BRIGAND:
+      return castVillagerBrigandGroup(w, field, casters, aimX, aimY);
     case ABILITY.WARLOCK_FIREBALL:
       return castWarlockFireballGroup(w, casters, aimX, aimY);
     case ABILITY.PLAGUE_OF_FROGS:
@@ -181,6 +190,15 @@ function tryCastGroup(w, field, abilityId, casters, aimX, aimY) {
     default:
       return false;
   }
+}
+
+function canIssueAbility(w, i, abilityId) {
+  if (i < 0 || i >= w.count || !w.alive[i]) return false;
+  if (w.abilityCd[i] > 0) return false;
+  if (abilityId === ABILITY.VILLAGER_BRIGAND) {
+    return w.type[i] === UNIT.VILLAGER;
+  }
+  return canCastAbility(w, i);
 }
 
 function lockCaster(w, i, _cooldown) {
@@ -200,16 +218,49 @@ function lockGroup(w, casters, cooldown) {
   for (let k = 0; k < casters.length; k++) lockCaster(w, casters[k], cooldown);
 }
 
-function filterType(w, casters, typeId) {
+function filterType(w, casters, typeId, abilityId = null) {
   const out = [];
   for (let k = 0; k < casters.length; k++) {
     const i = casters[k];
     if (i < 0 || i >= w.count || !w.alive[i]) continue;
-    if (!canCastAbility(w, i)) continue;
+    const id = abilityId || getUnitDef(w.type[i]).primaryAbility;
+    if (!id || !canIssueAbility(w, i, id)) continue;
     if (w.type[i] !== typeId) continue;
     out.push(i);
   }
   return out;
+}
+
+function castVillagerBrigandGroup(w, field, casters, aimX, aimY) {
+  const ready = filterType(w, casters, UNIT.VILLAGER, ABILITY.VILLAGER_BRIGAND);
+  if (!ready.length) return false;
+  let upgraded = 0;
+  for (let k = 0; k < ready.length; k++) {
+    const i = ready[k];
+    const owner = w.owner[i] | 0;
+    if (!canAfford(w, owner, BRIGAND_UPGRADE_COST)) continue;
+    if (!spendResources(w, owner, BRIGAND_UPGRADE_COST)) continue;
+    if (!becomeBrigand(w, i)) {
+      addResource(w, owner, 'food', BRIGAND_UPGRADE_COST.food | 0);
+      addResource(w, owner, 'wood', BRIGAND_UPGRADE_COST.wood | 0);
+      continue;
+    }
+    w.abilityCd[i] = BRIGAND_UPGRADE_CD;
+    w.vx[i] = 0;
+    w.vy[i] = 0;
+    clearEngagement(w, i);
+    w.targetEntity[i] = -1;
+    if (w.targetBuilding) w.targetBuilding[i] = -1;
+    if (w.targetDoor) w.targetDoor[i] = -1;
+    w.order[i] = ORDER.ATTACK_MOVE;
+    w.tx[i] = aimX;
+    w.ty[i] = aimY;
+    w.hasTarget[i] = 1;
+    if (field) queuePath(w, i, aimX, aimY);
+    else clearPath(w, i);
+    upgraded++;
+  }
+  return upgraded > 0;
 }
 
 function aimDir(fromX, fromY, toX, toY) {

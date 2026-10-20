@@ -15,6 +15,7 @@ import {
   countSiloPairs,
   filledSlotCount,
   overflowCredit,
+  bankShortfallHintLabel,
   overflowHintLabel,
   ownerOverflowCap,
   ownerResourceCap,
@@ -203,6 +204,12 @@ describe('slot fill and blink', () => {
     assert.equal(overflowHintLabel(12), null);
     assert.equal(slotVisual(0, 6, 6, true), SLOT_VIS.ON);
     assert.equal(slotVisual(6, 6, 6, true), SLOT_VIS.OFF);
+  });
+
+  it('picks the stack being filled for a bank shortfall flash', () => {
+    assert.equal(bankShortfallHintLabel(0, 6, 'food'), '1');
+    assert.equal(bankShortfallHintLabel(14, 6, 'food'), '1');
+    assert.equal(bankShortfallHintLabel(21, 6, 'food'), '2');
   });
 
   it('notes a wasted haul return, not an in-place bite', () => {

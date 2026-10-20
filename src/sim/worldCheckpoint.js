@@ -20,6 +20,7 @@ import { ensureFireZoneCapacity } from './fireZones.js';
 import { capacityFor } from './capacity.js';
 import { SPORE_PENDING_INITIAL } from './sporeBloom.js';
 import { isManaCaster, MANA_MAX } from './mana.js';
+import { ensureDamageCreditPool, resetDamageCredit } from './champion.js';
 
 export const CHECKPOINT_FORMAT = 1;
 
@@ -28,20 +29,21 @@ const ENTITY_I32 = [
   'navDestX', 'navDestY', 'lastPx', 'lastPy', 'hp', 'carriedBy', 'transportTarget',
   'rallyHop1X', 'rallyHop1Y', 'rallyHop2X', 'rallyHop2Y',
   'dotSource', 'locustSource', 'lobFromX', 'lobFromY', 'lobToX', 'lobToY', 'squadId',
-  'gatherTile', 'carriedAmt',
+  'gatherTile', 'carriedAmt', 'leashX', 'leashY', 'leashDrop',
 ];
 const ENTITY_I16 = [
   'engagementSlot', 'attackCd', 'abilityCd', 'mana', 'manaAcc', 'distractCd', 'shieldHp', 'shieldTicks',
   'dotTicks', 'dotDamage', 'dotPeriod', 'dotAcc', 'locustTicks', 'locustStacks', 'locustAcc', 'locustHops',
   'frostTicks', 'lobTicks', 'lobDur', 'lobPeak',
-  'gatherCd',
+  'gatherCd', 'brigandIdle',
 ];
 const ENTITY_U16 = ['engagementMask', 'targetLoad'];
 const ENTITY_U8 = [
   'hasTarget', 'order', 'navWpCount', 'navWpIndex', 'pathRequest', 'pathSlowAware',
   'rallyHopCount', 'rallyHop1Order', 'rallyHop2Order',
   'stuckTicks', 'repathCount', 'lobTrail', 'type', 'owner', 'alive', 'carriedKind',
-  'gatherDefensive', 'gatherAct', 'attackFocus', 'named',
+  'gatherDefensive', 'gatherAct', 'manualHold', 'attackFocus', 'named', 'leashActive',
+  'kills',
 ];
 
 /**
@@ -70,6 +72,14 @@ export function exportWorldCheckpoint(w, field, checksum) {
   for (const key of ENTITY_U8) entities.arrays[key] = encodeTA(w[key], n);
   entities.arrays.navWx = encodeTA(w.navWx, n * MAX_WAYPOINTS);
   entities.arrays.navWy = encodeTA(w.navWy, n * MAX_WAYPOINTS);
+  const damageTop = w.damagedByTop | 0;
+  entities.damagedBy = w.damagedByHead ? {
+    top: damageTop,
+    free: w.damagedByFree ?? -1,
+    head: encodeTA(w.damagedByHead, n),
+    atk: encodeTA(w.damagedByAtk, damageTop),
+    next: encodeTA(w.damagedByNext, damageTop),
+  } : null;
 
   return {
     format: CHECKPOINT_FORMAT,
@@ -144,7 +154,25 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   // Older checkpoints omit pathSlowAware — clear so restore stays geometric.
   if (!ent.arrays.pathSlowAware && w.pathSlowAware) w.pathSlowAware.fill(0);
   if (!ent.arrays.attackFocus && w.attackFocus) w.attackFocus.fill(0);
+  if (!ent.arrays.leashActive && w.leashActive) w.leashActive.fill(0);
+  if (!ent.arrays.leashX && w.leashX) w.leashX.fill(0);
+  if (!ent.arrays.leashY && w.leashY) w.leashY.fill(0);
+  // 0 would ignore entity 0. A missing rope means "no one".
+  if (!ent.arrays.leashDrop && w.leashDrop) w.leashDrop.fill(-1);
   if (!ent.arrays.gatherAct && w.gatherAct) w.gatherAct.fill(0);
+  if (!ent.arrays.manualHold && w.manualHold) w.manualHold.fill(0);
+  if (!ent.arrays.brigandIdle && w.brigandIdle) w.brigandIdle.fill(0);
+  if (!ent.arrays.kills && w.kills) w.kills.fill(0);
+  resetDamageCredit(w);
+  if (ent.damagedBy && w.damagedByHead) {
+    const top = ent.damagedBy.top | 0;
+    ensureDamageCreditPool(w, top);
+    decodeTAInto(w.damagedByHead, ent.damagedBy.head);
+    decodeTAInto(w.damagedByAtk, ent.damagedBy.atk);
+    decodeTAInto(w.damagedByNext, ent.damagedBy.next);
+    w.damagedByTop = top;
+    w.damagedByFree = ent.damagedBy.free ?? -1;
+  }
   if (!ent.arrays.named && w.named) w.named.fill(0);
   if (!ent.arrays.targetBuilding && w.targetBuilding) w.targetBuilding.fill(-1);
   if (!ent.arrays.locustTicks && w.locustTicks) w.locustTicks.fill(0);
@@ -507,6 +535,7 @@ function exportBuildings(buildings) {
     buildHalfAcc: b.buildHalfAcc | 0,
     buildIdleAcc: b.buildIdleAcc | 0,
     villageSpawnAcc: b.villageSpawnAcc | 0,
+    gatherRallyAt: b.gatherRallyAt | 0,
     engBonus: b.engBonus | 0,
     engBonusUntil: b.engBonusUntil | 0,
     attackCd: b.attackCd | 0,
@@ -517,6 +546,8 @@ function exportBuildings(buildings) {
     locustAcc: b.locustAcc | 0,
     locustHops: b.locustHops | 0,
     locustSource: b.locustSource ?? -1,
+    fireTicks: b.fireTicks | 0,
+    morphTicks: b.morphTicks | 0,
     refundCost: b.refundCost
       ? {
         wood: b.refundCost.wood | 0,
@@ -570,6 +601,7 @@ function importBuildings(w, data) {
       buildTime: getBuildTime(type),
       tracks: [],
       villageSpawnAcc: b.villageSpawnAcc | 0,
+      gatherRallyAt: b.gatherRallyAt | 0,
       engBonus: b.engBonus | 0,
       engBonusUntil: b.engBonusUntil | 0,
       attackCd: b.attackCd | 0,
@@ -580,6 +612,8 @@ function importBuildings(w, data) {
       locustAcc: b.locustAcc | 0,
       locustHops: b.locustHops | 0,
       locustSource: b.locustSource != null ? b.locustSource | 0 : -1,
+      fireTicks: b.fireTicks | 0,
+      morphTicks: b.morphTicks | 0,
       refundCost: b.refundCost
         ? {
           wood: b.refundCost.wood | 0,
@@ -668,6 +702,8 @@ function clearSporeFx(store) {
   if (store.headX) store.headX.length = 0;
   if (store.headY) store.headY.length = 0;
   if (store.headKill) store.headKill.length = 0;
+  if (store.headFromX) store.headFromX.length = 0;
+  if (store.headFromY) store.headFromY.length = 0;
 }
 
 function clearMonkFx(store) {

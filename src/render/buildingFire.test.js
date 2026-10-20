@@ -6,6 +6,7 @@ import {
   BUILDING_FIRE_SPARK_CHANCE_MIN,
   createBuildingFire,
   fireWound,
+  blazeScale,
   flameScale,
   heatForWound,
   maxPatchesForType,
@@ -57,6 +58,8 @@ describe('building fire wound', () => {
     assert.equal(sparksForWound(1), 3);
     assert.ok(heatForWound(1) > heatForWound(0));
     assert.ok(flameScale(1) < 0.8, 'little fires, not socket-torch scale');
+    assert.ok(blazeScale(1) > flameScale(1) * 5, 'a lightning burn is a column, not a candle');
+    assert.ok(blazeScale(0) >= 3, 'even a fresh burn matches a camp hearth');
   });
 });
 
@@ -136,6 +139,19 @@ describe('createBuildingFire', () => {
     const after = fx.snapshot().buildings[0];
     assert.ok(after.heat >= before);
     assert.ok(after.patches >= 1);
+  });
+
+  it('stays lit from a lightning burn even above the HP gate', () => {
+    const fx = alwaysSpark();
+    const sparked = fx.sync([building({ hp: 300, fireTicks: 160 })]);
+    assert.ok(sparked.length >= 1);
+    for (let i = 0; i < 20; i++) fx.tick(0.5);
+    fx.sync([building({ hp: 300, fireTicks: 80 })]);
+    assert.ok(livePatches(fx).length >= 1);
+    assert.ok(fx.snapshot().buildings[0].heat > 0);
+    fx.sync([building({ hp: 300, fireTicks: 0 })]);
+    for (let i = 0; i < 24; i++) fx.tick(0.5);
+    assert.equal(livePatches(fx).length, 0);
   });
 
   it('dies back when it is not under attack', () => {

@@ -14,6 +14,17 @@ export function createSporeBloomFx(emit, groundYAt, mushrooms = null) {
   const drips = [];
   /** @type {Array<{ x: number, z: number, growAtTick: number, wait: number }>} */
   const pendingMushrooms = [];
+  /**
+   * Attack hits wait until the ground line reaches the target, then sprout
+   * a cluster on the victim.
+   * @type {Array<{
+   *   entity: number, x: number, z: number, fromX: number, fromZ: number,
+   *   killed: boolean, count: number, delay: number, lined: boolean,
+   * }>}
+   */
+  const pendingImpacts = [];
+  const IMPACT_HIT_COUNT = 4;
+  const IMPACT_KILL_COUNT = 6;
   /** Seed-tile wisps — delayed so ink drips lead; stop just before trees sprout. */
   /** @type {Map<string, { x: number, z: number, growAtTick: number, delay: number, acc: number }>} */
   const seeds = new Map();
@@ -327,39 +338,70 @@ export function createSporeBloomFx(emit, groundYAt, mushrooms = null) {
       }
       const hn = patch?.headCount ?? 0;
       for (let i = 0; i < hn; i++) {
-        const hx = patch.headX[i];
-        const hz = patch.headY[i];
-        const spawned = mushrooms?.spawnHead?.(patch.headEntity[i], hx, hz, !!patch.headKill[i]);
-        const gy = groundYAt(hx, hz);
-        const px = spawned?.x ?? hx;
-        const py = spawned?.y ?? gy + 1.2;
-        const pz = spawned?.z ?? hz;
-        for (let n = 0; n < 5; n++) {
-          emit({
-            blend: 'alpha',
-            fadeOut: true,
-            position: [
-              px + (Math.random() - 0.5) * 0.55,
-              py + Math.random() * 0.45,
-              pz + (Math.random() - 0.5) * 0.55,
-            ],
-            velocity: [
-              (Math.random() - 0.5) * 1.4,
-              1.1 + Math.random() * 1.6,
-              (Math.random() - 0.5) * 1.4,
-            ],
-            gravity: [0, 0.15, 0],
-            color:
-              Math.random() > 0.4
-                ? [0.65, 0.4, 0.95, 0.5]
-                : [0.4, 0.9, 0.45, 0.46],
-            lifetime: 0.45 + Math.random() * 0.35,
-            startSize: 0.28 + Math.random() * 0.22,
-            endSize: 0.05,
-            drag: 1.1,
-          });
-        }
+        const killed = !!patch.headKill[i];
+        const entity = patch.headEntity[i] | 0;
+        pendingImpacts.push({
+          entity,
+          x: patch.headX[i],
+          z: patch.headY[i],
+          fromX: patch.headFromX?.[i] ?? patch.headX[i],
+          fromZ: patch.headFromY?.[i] ?? patch.headY[i],
+          killed,
+          count: entity < 0 ? 0 : (killed ? IMPACT_KILL_COUNT : IMPACT_HIT_COUNT),
+          delay: 0,
+          lined: false,
+        });
       }
+    }
+  }
+
+  function emitImpactPuff(x, z) {
+    const gy = groundYAt(x, z);
+    for (let n = 0; n < 8; n++) {
+      emit({
+        blend: 'alpha',
+        fadeOut: true,
+        position: [
+          x + (Math.random() - 0.5) * 1.1,
+          gy + 0.6 + Math.random() * 1.2,
+          z + (Math.random() - 0.5) * 1.1,
+        ],
+        velocity: [
+          (Math.random() - 0.5) * 1.8,
+          1.4 + Math.random() * 1.8,
+          (Math.random() - 0.5) * 1.8,
+        ],
+        gravity: [0, 0.15, 0],
+        color:
+          Math.random() > 0.4
+            ? [0.65, 0.4, 0.95, 0.55]
+            : [0.4, 0.9, 0.45, 0.5],
+        lifetime: 0.5 + Math.random() * 0.35,
+        startSize: 0.42 + Math.random() * 0.28,
+        endSize: 0.06,
+        drag: 1.1,
+      });
+    }
+  }
+
+  function updatePendingImpacts(dtMs) {
+    for (let i = pendingImpacts.length - 1; i >= 0; i--) {
+      const imp = pendingImpacts[i];
+      if (!imp.lined) {
+        const delay = mushrooms?.spawnAttackLine?.(imp.fromX, imp.fromZ, imp.x, imp.z);
+        if (delay == null) continue;
+        imp.delay = delay;
+        imp.lined = true;
+      }
+      imp.delay -= dtMs;
+      if (imp.delay > 0) continue;
+      if (imp.count > 0) {
+        for (let n = 0; n < imp.count; n++) {
+          mushrooms?.spawnHead?.(imp.entity, imp.x, imp.z, imp.killed);
+        }
+        emitImpactPuff(imp.x, imp.z);
+      }
+      pendingImpacts.splice(i, 1);
     }
   }
 
@@ -373,12 +415,14 @@ export function createSporeBloomFx(emit, groundYAt, mushrooms = null) {
     updateDrips(dt);
     emitSeedWisps(dt);
     updatePendingMushrooms(dt);
+    updatePendingImpacts(Math.min(100, Math.max(0, deltaMs)));
     mushrooms?.update?.(deltaMs, simTick);
   }
 
   function clear() {
     drips.length = 0;
     pendingMushrooms.length = 0;
+    pendingImpacts.length = 0;
     seeds.clear();
     arcs.length = 0;
     mushrooms?.clear?.();

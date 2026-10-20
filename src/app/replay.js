@@ -120,6 +120,7 @@ export function buildReplayFile(session, extra = {}) {
     tick: (session?.confirmedTick | 0) || 0,
     checksum: (session?._lastChecksum ?? 0) >>> 0,
     names: extra.names && typeof extra.names === 'object' ? { ...extra.names } : {},
+    opponent: replayNameSlug(extra.opponent || ''),
     config,
     frames,
   };
@@ -156,11 +157,45 @@ export function replayModeSlug(config) {
   return mode || 'match';
 }
 
+/** UTF-8 cap so the filename stays under Linux NAME_MAX and a Windows path segment. */
+const REPLAY_NAME_BYTES = 48;
+
+/** Strip characters both filesystems reject, then keep the name short. */
+export function replayNameSlug(name) {
+  const cleaned = String(name || '')
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^[.]+|[. ]+$/g, '');
+  let out = '';
+  let bytes = 0;
+  for (const ch of cleaned) {
+    const size = new TextEncoder().encode(ch).length;
+    if (bytes + size > REPLAY_NAME_BYTES) break;
+    out += ch;
+    bytes += size;
+  }
+  return out.replace(/[. ]+$/g, '');
+}
+
+/** The other human in the tape, when the save knows who was local. */
+export function replayOpponentName(names, localId) {
+  if (!names || typeof names !== 'object') return '';
+  for (const [id, name] of Object.entries(names)) {
+    if ((Number(id) | 0) === (localId | 0)) continue;
+    const text = String(name || '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
 /** @param {object | null | undefined} file @param {Date} [now] */
 export function replayFileName(file, now = new Date()) {
   const mode = replayModeSlug(file?.config);
   const day = now.toISOString().slice(0, 10);
-  return `aether-${mode}-${day}${REPLAY_EXT}`;
+  const who = replayNameSlug(file?.opponent);
+  const base = who ? `aether-${mode}-${who}-${day}` : `aether-${mode}-${day}`;
+  return `${base}${REPLAY_EXT}`;
 }
 
 const REPLAY_ACCEPT = `${REPLAY_EXT},.json,application/json`;

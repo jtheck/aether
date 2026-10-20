@@ -103,7 +103,7 @@ function warriorHooksAuthoredClipNames() {
 }
 
 function sniffedRolesMatchAuthoredDefs() {
-  for (const def of [VAT_UNIT_DEFS[UNIT.VILLAGER], VAT_UNIT_DEFS[UNIT.WARRIOR]]) {
+  for (const def of [VAT_UNIT_DEFS[UNIT.VILLAGER], VAT_UNIT_DEFS[UNIT.WARRIOR], VAT_UNIT_DEFS[UNIT.CHAMPION]]) {
     const file = def.url.split('/').pop();
     const sniffed = vatDefFromGlbJson(def.url, glbJson(`../../assets/models/${file}`));
     assert.ok(sniffed, file);
@@ -155,6 +155,7 @@ function brigandKeepsVillagerBakeAndATorch() {
   assert.ok(BRIGAND_TORCH_SOCKET.x > 0.4);
   assert.ok(BRIGAND_TORCH_SOCKET.y > 1.1);
   assert.ok(BRIGAND_TORCH_SOCKET.y < 1.3);
+  assert.ok(BRIGAND_TORCH_SOCKET.scale >= 0.3);
 }
 
 texelWidthMatchesLitePacking();

@@ -142,6 +142,7 @@ export async function replayCatchUp(session, matchConfig, ledgerFrames, targetTi
  *   stayPaused?: boolean,
  *   shouldContinue?: () => boolean,
  *   onBatch?: (tick: number) => void | Promise<void>,
+ *   onTick?: (tick: number) => void | Promise<void>,
  * }} [options]
  */
 export async function replayCatchUpInto(session, matchConfig, ledgerFrames, targetTick, expectedChecksum, options = {}) {
@@ -168,6 +169,7 @@ export async function replayCatchUpInto(session, matchConfig, ledgerFrames, targ
       onProgress,
       options.shouldContinue,
       options.onBatch,
+      options.onTick,
     );
 
     if (!sameCatchupChecksum(session._lastChecksum, expectedChecksum)) {
@@ -185,7 +187,7 @@ export async function replayCatchUpInto(session, matchConfig, ledgerFrames, targ
   }
 }
 
-async function runReplayTicks(session, byTick, humanPlayers, fromTick, targetTick, ticksPerFrame, onProgress, shouldContinue, onBatch) {
+async function runReplayTicks(session, byTick, humanPlayers, fromTick, targetTick, ticksPerFrame, onProgress, shouldContinue, onBatch, onTick) {
   const startTick = Math.max(1, (fromTick | 0) + 1);
   if (startTick > targetTick) {
     session.catchupProgress = { tick: targetTick | 0, targetTick: targetTick | 0 };
@@ -201,6 +203,7 @@ async function runReplayTicks(session, byTick, humanPlayers, fromTick, targetTic
     if (extra?.koth) session.koth = extra.koth;
     if (extra?.kothMatchOver != null) session.kothMatchOver = extra.kothMatchOver;
     session._captureSnapshot(tick);
+    if (onTick) await onTick(tick);
   };
 
   if (ticksPerFrame <= 0) {

@@ -4,6 +4,12 @@ import { adventureChapters } from './adventureCampaign.js';
 
 export const FIELD_SIZES = ['tiny', 'small', 'medium', 'large', 'huge'];
 
+/** Ranked 1v1 rotates the default board and the next two sizes. */
+export const LADDER_FIELD_SIZES = ['tiny', 'small', 'medium'];
+
+/** Ranked teams rotates the teams default and the next two sizes. */
+export const TEAMS_LADDER_FIELD_SIZES = ['small', 'medium', 'large'];
+
 /** Live chapters from maps/adventure.campaign. Empty until that file loads. */
 export function selectableAdventureChapters() {
   return adventureChapters();
@@ -63,6 +69,7 @@ export function chapterLabelFor(ref = {}) {
  *   allowAi: boolean,
  *   minHumans: number,
  *   hasChapter: boolean,
+ *   customMap: boolean,
  *   spectators: boolean,
  * }>} */
 export const MODES = {
@@ -76,6 +83,7 @@ export const MODES = {
     allowAi: true,
     minHumans: 2,
     hasChapter: false,
+    customMap: true,
     spectators: true,
   },
   teams: {
@@ -88,6 +96,7 @@ export const MODES = {
     allowAi: true,
     minHumans: 2,
     hasChapter: false,
+    customMap: true,
     spectators: true,
   },
   adventure: {
@@ -100,6 +109,7 @@ export const MODES = {
     allowAi: false,
     minHumans: 1,
     hasChapter: true,
+    customMap: false,
     spectators: false,
   },
 };
@@ -139,13 +149,33 @@ export function isLobbyPlayMode(modeId) {
   return isLobbyMode(modeId);
 }
 
+/**
+ * A declared garden type may sit in this lobby. Blank matches either competitive mode.
+ * Adventure and King of the Hill maps stay out of 1v1 and teams.
+ * @param {unknown} mapType
+ * @param {string} modeId
+ */
+export function mapTypeFitsLobby(mapType, modeId) {
+  const raw = String(mapType || '').trim().toLowerCase();
+  if (!raw) return true;
+  const id = raw === '1v1' || raw === '1vs1' || raw === 'ffa' ? 'onevsone' : raw;
+  return id === modeId;
+}
+
+/** Mode can host watchers, and this room has the box checked. */
+export function lobbyAllowsSpectators(modeId, settings) {
+  if (!getMode(modeId)?.spectators) return false;
+  return settings?.allowSpectators !== false;
+}
+
 /** @param {string} modeId */
 export function defaultSettings(modeId, fieldSize) {
   const mode = getMode(modeId);
-  if (!mode) return { fieldSize: 'small', seed: 0, chapter: '' };
+  if (!mode) return { fieldSize: 'small', seed: 0, chapter: '', allowSpectators: false };
   return {
     fieldSize: fieldSize && FIELD_SIZES.includes(fieldSize) ? fieldSize : mode.defaultFieldSize,
     seed: (Math.random() * 0xffffffff) >>> 0,
     chapter: mode.hasChapter ? (adventureChapters()[0]?.id || '') : '',
+    allowSpectators: Boolean(mode.spectators),
   };
 }

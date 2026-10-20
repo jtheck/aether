@@ -86,14 +86,14 @@ import {
   exitXr,
   isXrSessionSupported,
 } from '../vendor/lite/liteVendor.js';
-import { createXrRig, stepXrRig } from './xrRig.js';
-import { createXrSelect } from './xrSelect.js';
+import { createXrRig, jumpXrRig, stepXrRig } from './xrRig.js';
+import { createXrControls } from './xrControls.js';
 import { clearXrEye } from '../render/xrEye.js';
 import { rimKeyForBuildingType, sharedRimKey } from '../render/workRadiusRings.js';
 import { createFogOfWar } from '../render/fogOfWar.js';
 import { shareVisionOwnersFromCfg } from '../render/visionShare.js';
 import { selectionGroupsFromBuildings, selectionGroupsFromUnits } from '../render/selectionHud.js';
-import { manaReadyCount } from '../sim/mana.js';
+import { isManaCaster, manaReadyCount } from '../sim/mana.js';
 import { createLiteExplorerToggle } from '../render/liteExplorer.js';
 import { setupMenu } from './menu.js';
 import {
@@ -102,6 +102,7 @@ import {
   ensureShadowModeDefault,
   fxTier,
   getPlayerColor,
+  getBuildingSkins,
   getUnitSkins,
   msaaSamples,
   resolveAaEnabled,
@@ -136,6 +137,7 @@ import {
   pickFirstBuiltIndex,
   pickLeastLoadedIndex,
   ownedActionBuildingGroup,
+  radialBuildingPickAction,
 } from './input/buildingSelect.js';
 import { chasePoseXZ } from './poseInterp.js';
 import { init as initAudio, playMatchStart, playThunder, thunderPlaysForStrikes } from './audio.js';
@@ -151,16 +153,22 @@ import {
 import { createGameLobby } from './gameLobby.js';
 import { createMatchLobby } from './matchLobby.js';
 import { setupChatHud } from './chatHud.js';
+import { watchCornerStack } from './cornerStack.js';
 import { setupLobbyUi } from './lobbyUi.js';
+import { setupLadderDialog } from './ladderDialog.js';
+import { noteLadderDisconnect, noteLadderResult } from './ladderSession.js';
+import { rememberLadderId } from './ladderId.js';
 import {
   buildReplayFile,
   formatReplayBytes,
   jsonByteLength,
   replayConfigFromLive,
+  replayOpponentName,
   saveReplayToDisk,
 } from './replay.js';
 import { createReplayController } from './replayWatch.js';
-import { chapterIdForGardenUrl, chapterLabelFor, gardenUrlForChapter, getMode, isLobbyPlayMode } from '../lobby/modes.js';
+import { createViewFollow, unpackBuildings } from './viewFollow.js';
+import { chapterIdForGardenUrl, chapterLabelFor, gardenUrlForChapter, getMode, isLobbyPlayMode, lobbyAllowsSpectators } from '../lobby/modes.js';
 import { liveConfigFromLobby } from '../lobby/startConfig.js';
 import { createMatchStory } from '../story/matchPlay.js';
 import { castIndexFromUnits, normalizeSpeaker } from '../story/cast.js';
@@ -184,6 +192,7 @@ import { getTeamAssignments, getTeamNeutralPairs, isAlly, normalizeTeamByOwner, 
 import { aetherSteam } from './steam.js';
 import {
   localOwnedPacks,
+  selectedBuildingSkins,
   selectedSkins,
   setLocalHudSkins,
 } from './dlcCatalog.js';
@@ -191,6 +200,8 @@ import { SCREENSHOT_HUD_CLASS, createScreenshotHud } from './screenshotHud.js';
 import { installNavGuard } from './navGuard.js';
 
 const SEED = 0x1234;
+
+let viewFollow = null;
 
 let replayCtl = {
   bind() {},
@@ -343,6 +354,15 @@ function forceRendererSync(ctx) {
 
 function localSelectedSkins() {
   return selectedSkins(localOwnedPacks(aetherSteam.ownedPacks()), getUnitSkins());
+}
+
+function localSelectedBuildingSkins() {
+  return selectedBuildingSkins(localOwnedPacks(aetherSteam.ownedPacks()), getBuildingSkins());
+}
+
+function applyBuildingSkinsToRenderer(renderer) {
+  renderer?.setBuildingSkins?.(localSelectedBuildingSkins());
+  void renderer?.refreshBuildingSkins?.();
 }
 
 function applyOwnerPacksToRenderer(renderer, cfg, localPlayerId) {
@@ -555,13 +575,14 @@ function paintXrButton(on) {
 
 /**
  * @param {object} renderer
- * @param {() => ({ groundLoopSelect?: Function, selectAtRay?: Function } | null | undefined)} getInput
+ * @param {() => object | null | undefined} getInput input api from setupInput (ray orders, radial, place)
+ * @param {{ home?: () => { x: number, z: number } | null, selection?: () => { x: number, z: number } | null }} [jumps]
  */
-async function toggleMatchXr(renderer, getInput) {
+async function toggleMatchXr(renderer, getInput, jumps) {
   if (matchXr) {
     const ctx = matchXr;
     matchXr = null;
-    ctx.xrSelect?.dispose();
+    ctx.xrControls?.dispose();
     clearXrEye();
     renderer.releaseHeadsetCamera?.();
     paintXrButton(false);
@@ -570,7 +591,12 @@ async function toggleMatchXr(renderer, getInput) {
   }
   const cam = renderer.camera.worldMatrix;
   const eye = [cam[12], cam[13], cam[14]];
-  const select = createXrSelect({ renderer, getInput });
+  const controls = createXrControls({
+    renderer,
+    getInput,
+    jumps,
+    onJump: (x, z) => jumpXrRig(rig, x, z),
+  });
   const rig = createXrRig(eye, {
     floor: (x, z) => renderer.groundHeight(x, z),
     clearance: 6,
@@ -583,17 +609,17 @@ async function toggleMatchXr(renderer, getInput) {
     depthFar: renderer.camera.farPlane || 40000,
     onFrame: (ctx, frame, time) => {
       stepXrRig(rig, ctx, frame, time);
-      select.step(ctx);
+      controls.step(ctx);
     },
     onEnd: () => {
       matchXr = null;
-      select.dispose();
+      controls.dispose();
       clearXrEye();
       renderer.releaseHeadsetCamera?.();
       paintXrButton(false);
     },
   });
-  matchXr.xrSelect = select;
+  matchXr.xrControls = controls;
   paintXrButton(true);
 }
 
@@ -603,6 +629,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   const skirmish = bootCfg.mode === 'skirmish';
   let kothLobbyUi = { refresh() {} };
   let lobbyUi = { refresh() {} };
+  let ladderUi = { refresh() {}, close() {} };
   const queuedStory = [];
   let chatHud = {
     refresh() {},
@@ -673,6 +700,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   const bootFxMode = resolveFxMode();
   const bootAaEnabled = resolveAaEnabled();
   const bootLocalSkins = localSelectedSkins();
+  const bootBuildingSkins = localSelectedBuildingSkins();
   setLocalHudSkins(bootLocalSkins);
   const xrSupported = await xrSupportPromise;
   if (xrSupported) enableXrCompatibleAdapter();
@@ -686,6 +714,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     ownerSkins: bootCfg.localPlayerId >= 0
       ? { [bootCfg.localPlayerId]: bootLocalSkins }
       : {},
+    localPlayerId: bootCfg.localPlayerId,
+    buildingSkins: bootBuildingSkins,
     gpuCapacity: useNet ? kothMaxEntities(army) : count,
     field: session.field,
     onAnimLoadProgress: animStress > 0
@@ -972,8 +1002,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   }
   /** Filled just before return so the menu callback can reach the live ctx. */
   const ctxRef = { current: null };
-  /** Filled when screenshot HUD is created — settings can lock chrome off. */
-  const screenshotHudRef = { current: null };
   const sideMenu = setupMenu({
     renderer,
     onStartSoloAi: () => startSoloAiMatch(ctxRef.current),
@@ -988,11 +1016,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     },
     onUnitSkinsChange: () => {
       applyOwnerPacksToRenderer(renderer, {}, localPlayerId);
+      applyBuildingSkinsToRenderer(renderer);
     },
-    getHudLocked: () => screenshotHudRef.current?.isLocked() ?? false,
-    setHudLocked: (on) => screenshotHudRef.current?.setLocked(on),
     xrSupported,
-    onToggleXr: () => toggleMatchXr(renderer, () => inputApi),
+    onToggleXr: () => toggleMatchXr(renderer, () => inputApi, xrJumps),
   });
   const liteExplorer = createLiteExplorerToggle({
     engine: renderer.engine,
@@ -1061,12 +1088,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     overlayBarAllow: new Uint8Array(CAP),
     fogHidden: new Uint8Array(CAP),
     drawable: new Uint8Array(CAP),
+    /** Type last assigned to a GPU batch. A promotion must remap, not just rescale. */
+    drawnType: new Uint8Array(CAP),
   };
   /** Reused holy-shield slots — one object per pool entry, not per frame. */
   const shieldSlots = Array.from({ length: OVERLAY_MAX_SHIELDS }, () => ({
     x: 0, y: 0, z: 0, r: 0,
   }));
   bufs.wasAlive.fill(1);
+  if (session.state?.type && session.count > 0) {
+    bufs.drawnType.set(session.state.type.subarray(0, session.count));
+  }
   bufs.cacheGx.fill(NaN);
   bufs.cacheGz.fill(NaN);
   bufs.cacheGy.fill(NaN);
@@ -1204,9 +1236,28 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     return drawable;
   }
 
+  function unitTypesChanged() {
+    const types = session.state?.type;
+    const n = session.count | 0;
+    if (!types) return false;
+    const drawn = bufs.drawnType;
+    for (let i = 0; i < n; i++) {
+      if (drawn[i] !== types[i]) return true;
+    }
+    return false;
+  }
+
+  function noteDrawnTypes() {
+    const types = session.state?.type;
+    const n = session.count | 0;
+    if (!types || n <= 0) return;
+    bufs.drawnType.set(types.subarray(0, n));
+  }
+
   function syncDrawnEntities() {
     const n = rebuildRendererEntities(renderer, session, hideUnitForSync, drawableEntities());
     bufs.poseValid.fill(0);
+    noteDrawnTypes();
     return n;
   }
 
@@ -1405,7 +1456,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   function paintStatusClock() {
     const timeEl = document.getElementById('status-time');
     if (!timeEl) return;
-    const clock = formatHudMatchClock(matchSecondsFromTick(session.confirmedTick));
+    const clockTick = session.replayClockTick != null ? session.replayClockTick : session.confirmedTick;
+    const clock = formatHudMatchClock(matchSecondsFromTick(clockTick));
     if (timeEl.textContent !== clock) timeEl.textContent = clock;
   }
 
@@ -1490,6 +1542,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       owners: sheetOwners,
       names: namesFromLobbySeats(observerLobby?.getState?.()?.seats),
       computers: session.aiPlayers,
+    });
+    observerData.setFollowTarget?.({
+      owner: viewFollow?.ownerTarget?.() ?? null,
+      enabled: observing && showSheet,
     });
     // Observer sheet owns other-army banks. The old bottom dump is gone
     // whenever the sheet is up (shared-vision AI / spectator).
@@ -1604,7 +1660,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     for (let i = 0; i < (buildings?.length ?? 0); i++) {
       const b = buildings[i];
       if (!b || b.built === 0 || !keys.has(`${b.owner}:${b.type}`)) continue;
-      const radius = campWorkRadiusWorld(st, b, buildings);
+      const radius = campWorkRadiusWorld(st, b, buildings, session.field);
       const rimKey = rimKeyForBuildingType(b.type);
       rings.push({ x: b.x, z: b.z, radius: workRadiusRingWorld(radius), owner: b.owner, rimKey });
       const silos = silosAttachedTo(buildings, b, 'world');
@@ -1674,6 +1730,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   function pushSelectionFollow() {
     const cam = renderer.cameraController;
+    if (viewFollow?.isFollowing?.()) {
+      cam?.stopFollow?.();
+      return;
+    }
     if (!selectionFollowArmed) {
       cam?.consumePanBrokeFollow?.();
       return;
@@ -1919,6 +1979,24 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   /** Last B / ~ tap — second press in the control-group window jumps the camera. */
   let lastAgoraHotkeyTap = null;
 
+  /** Headset stick-click jumps: where to fly, or null to stay put. */
+  const xrJumps = {
+    home() {
+      if (!bootInteractive || matchStory?.driving?.()) return null;
+      if ((session.role ?? 'player') !== 'player' || localPlayerId < 0) return null;
+      const index = pickOwnedAgoraIndex();
+      const a = session.agoras?.[index];
+      if (!a || !Number.isFinite(a.x) || !Number.isFinite(a.z)) return null;
+      if (placingType) applyPlacingType(null);
+      inputApi.setSelectedBuilding?.({ kind: 'agora', index });
+      return { x: a.x, z: a.z };
+    },
+    selection() {
+      if (matchStory?.driving?.()) return null;
+      return selectionFollowPoint();
+    },
+  };
+
   function jumpCameraToOwnedAgora(index) {
     if (matchStory?.driving?.()) return;
     const a = session.agoras?.[index];
@@ -1994,7 +2072,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         { id: 'villager', name: 'Villager', cost: {}, auto: true },
         ...(menu?.units ?? []),
       ];
-      return { units, upgrades: menu?.upgrades ?? [] };
+      return {
+        units,
+        upgrades: menu?.upgrades ?? [],
+        buildings: menu?.buildings ?? [],
+      };
     }
     return menu;
   }
@@ -2045,7 +2127,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (needReframe || nextKey !== actionMenuKey) {
       actionMenuKey = nextKey;
       const next = session.buildings?.[actionBuildingIndex];
-      if (next) renderer.showActionRadial?.(next.x, next.z, next.type, menuForActionGroup(indices));
+      const menu = menuForActionGroup(indices);
+      if (!next || (!menu && !groupHasConstructionSite(indices))) {
+        closeRadial();
+        return;
+      }
+      renderer.showActionRadial?.(next.x, next.z, next.type, menu);
     }
     const b = session.buildings?.[actionBuildingIndex];
     if (!b) {
@@ -2764,7 +2851,14 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     enqueueCommand: (cmd) => submitIssuedCommand(cmd),
     onSelectionChanged: () => {
       updateColors();
+      if (viewFollow?.isApplying?.()) return;
       engageSelectionFollow();
+    },
+    onFollowSelection: (list) => {
+      selectedBuildings = list ? list.map((b) => ({ kind: b.kind, index: b.index | 0 })) : [];
+      syncBuildingHighlight(selectedBuildings.length ? selectedBuildings : null);
+      syncRallyFlagMarkers();
+      syncWorkRadiusRing();
     },
     onControlGroupJump: () => {
       if (matchStory.driving()) return;
@@ -2797,6 +2891,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       syncBuildingHighlight(list);
       syncRallyFlagMarkers();
       syncWorkRadiusRing();
+      if (viewFollow?.isApplying?.()) return;
       engageSelectionFollow();
       if (isObservingBoard()) {
         closeRadial();
@@ -2931,7 +3026,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         inputApi.setSelectedBuilding?.({ kind: 'agora', index: lastAgoraIndex });
       }
     },
-    isRadialOpen: () => !placingType && isAnyRadialOpen(),
+    isRadialOpen: () => isAnyRadialOpen(),
     getRadialStickTargets: () => renderer.getRadialStickTargets?.() ?? null,
     onRadialStickHover: (pick) => renderer.hoverRadialPick?.(pick, !placingType),
     onRadialCancel: () => closeRadial(),
@@ -2989,6 +3084,48 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           playerId: localPlayerId,
           buildingIndex: target,
           techId,
+        });
+        return;
+      }
+      if (picked.kind === 'building') {
+        const buildingAction = radialBuildingPickAction(picked, {
+          buildRadialOpen: renderer.isBuildingRadialOpen?.() ?? false,
+        });
+        if (buildingAction === 'place') {
+          if (
+            menuGateState({
+              cost: getBuildingCost(picked.id),
+              requires: getBuildingRequires(picked.id),
+              bank: ownerResourcesFrom(session.resources, localPlayerId),
+              ownedTypes: ownedBuildingTypesFor(localPlayerId),
+            }) === 'locked'
+          ) {
+            return;
+          }
+          applyPlacingType(picked.id);
+          placingYaw = 0;
+          renderer.setBuildingGhost?.(null);
+          return;
+        }
+        if (!accept) return;
+        renderer.setActionRadialArmed?.(null);
+        if (actionBuildingIndex < 0 || localPlayerId < 0) return;
+        const upgradeId = picked.id;
+        if (!upgradeId) return;
+        const group = liveActionIndices();
+        const capable = [];
+        for (let k = 0; k < group.length; k++) {
+          const i = group[k];
+          const site = session.buildings?.[i];
+          if (site && buildingOffersMenuItem(site.type, 'building', upgradeId)) capable.push(i);
+        }
+        const target = pickFirstBuiltIndex(capable, session.buildings);
+        if (target < 0) return;
+        session.submitCommand({
+          type: CMD.UPGRADE_BUILDING,
+          playerId: localPlayerId,
+          buildingIndex: target,
+          upgradeId,
         });
         return;
       }
@@ -3072,22 +3209,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         renderer.setBuildingRadialCategory?.(picked.id, true);
         return;
       }
-      if (picked.kind === 'building') {
-        if (
-          menuGateState({
-            cost: getBuildingCost(picked.id),
-            requires: getBuildingRequires(picked.id),
-            bank: ownerResourcesFrom(session.resources, localPlayerId),
-            ownedTypes: ownedBuildingTypesFor(localPlayerId),
-          }) === 'locked'
-        ) {
-          return;
-        }
-        // Hide the agora radial while ghost-placing; hub shows this type.
-        applyPlacingType(picked.id);
-        placingYaw = 0;
-        renderer.setBuildingGhost?.(null);
-      }
     },
     onRadialHover: (cx, cy) =>
       renderer.hoverBuildingRadial?.(cx, cy, !placingType),
@@ -3111,8 +3232,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
     },
   });
-  screenshotHudRef.current = screenshotHud;
-
   window.addEventListener('keydown', (e) => {
     if ((sideMenu.isHelpOpen?.() || sideMenu.isSkinsOpen?.()) && e.code !== 'Escape') {
       const inSkinControl = sideMenu.isSkinsOpen?.()
@@ -3256,9 +3375,16 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   window.addEventListener('blur', () => {
     releaseSpaceFollow();
     screenshotHud.release();
+    renderer.cameraController?.takeUserAim?.();
+  });
+  window.addEventListener('focus', () => {
+    renderer.cameraController?.takeUserAim?.();
   });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') {
+    const hidden = document.visibilityState === 'hidden';
+    viewFollow?.setPageHidden?.(hidden);
+    renderer.cameraController?.takeUserAim?.();
+    if (hidden) {
       releaseSpaceFollow();
       screenshotHud.release();
     }
@@ -3303,7 +3429,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       onChange: () => {
         lobbyUi.refresh();
         kothLobbyUi.refresh();
+        ladderUi.refresh();
       },
+      onRankedLeave: (userId) => noteLadderDisconnect(userId, rememberLadderId()),
       onChat: () => chatHud.refresh(),
       onStartMatch: (snap) => startLobbyMatch(ctxRef.current, snap, kothShard, matchLobby, sideMenu),
       onChapter: (msg) => ctxRef.current?.onChapterVote?.(msg),
@@ -3336,6 +3464,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       isKothLive: () => kothShard.getLobbyPresence?.()?.browsing === false,
       getUserId: () => kothShard.getUserId(),
       onCloseMenu: () => sideMenu.close(),
+      onFollowReplay: (userId) => viewFollow?.toggleUser?.(userId),
+      getFollowUser: () => viewFollow?.userTarget?.() ?? null,
+    });
+    ladderUi = setupLadderDialog({
+      matchLobby,
+      getUserId: () => kothShard.getUserId(),
+      onCloseMenu: () => sideMenu.close(),
     });
   } else {
     kothLobbyUi = setupKothLobby(kothLobbyOpts);
@@ -3366,15 +3501,65 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   if (queuedStory.length) chatHud.noteStory(queuedStory.splice(0));
   kothShard?.subscribeChat(() => chatHud.refresh());
 
+  watchCornerStack();
   replayCtl = createReplayController({
     getCtx: () => ctxRef.current,
     applyLiveConfig,
     loadGarden: loadGardenJson,
     setStatus: setStatusText,
     parkLobby: () => lobbyUi.setOverlayParked?.(true),
+    unparkLobby: () => {
+      const over = document.getElementById('match-over');
+      if (over) over.hidden = false;
+      lobbyUi.setOverlayParked?.(false);
+    },
     getKothShard: () => kothShard,
+    onReplayWatch: (on) => observerLobby?.setReplayWatch?.(on),
   });
   replayCtl.bind();
+  observerData.setFollowHandler?.((owner) => viewFollow?.toggleOwner?.(owner));
+  viewFollow = createViewFollow({
+    sample: () => {
+      const head = replayCtl.getHead?.();
+      const sel = inputApi.getFollowSelection?.() ?? { units: [], buildings: [] };
+      return {
+        from: kothShard?.getUserId?.() ?? null,
+        playerId: localPlayerId,
+        pose: renderer.cameraController?.getPose?.() ?? {},
+        units: sel.units,
+        buildings: sel.buildings,
+        replay: head?.open ? { tick: head.tick, speed: head.speed } : null,
+      };
+    },
+    send: (msg) => {
+      if (observerLobby?.isActive?.()) observerLobby.sendView?.(msg);
+      else kothShard?.sendView?.(msg);
+    },
+    shouldPublish: () => {
+      const lobbyOn = Boolean(observerLobby?.isActive?.());
+      if (replayCtl.getHead?.().open && lobbyOn) return true;
+      if (session.role !== 'player') return false;
+      return lobbyOn || Boolean(kothShard?.inLiveMatch?.());
+    },
+    localUserId: () => kothShard?.getUserId?.() ?? null,
+    localOwner: () => localPlayerId,
+    lobbyActive: () => Boolean(observerLobby?.isActive?.()),
+    roomId: () => observerLobby?.getState?.()?.roomId ?? null,
+    kothMatchId: () => kothShard?.getMatchId?.() ?? null,
+    applySelection: (msg) => {
+      inputApi.applyFollowSelection?.(msg.u, unpackBuildings(msg.b));
+    },
+    applyReplay: (msg) => {
+      if (msg.rt == null) return;
+      replayCtl.followRemote?.(msg.rt, msg.rs || 0);
+    },
+    onTarget: () => {
+      lobbyUi.refresh?.();
+      paintResources();
+    },
+  });
+  kothShard?.subscribeDataMessage?.((msg) => viewFollow?.receive?.(msg));
+  kothShard?.subscribeLobbyMessage?.((msg) => viewFollow?.receive?.(msg));
 
   // Walk everyone so idle→walk skinning is under load (not just idle poses).
   if (animStress > 0) {
@@ -3404,13 +3589,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       // Fresh table only — late-join catch-up lands on a high tick.
       if ((tick | 0) <= 2) playMatchStart();
     }
-    const world = session.state;
-    const { wasAlive, deathFade } = bufs;
-    for (let i = 0; i < session.count; i++) {
-      if (wasAlive[i] && !world.alive[i]) deathFade[i] = 1;
-      wasAlive[i] = world.alive[i];
+    // Reverse playback rewinds alive flags. Arming a death fade from that
+    // would shrink units that are alive again in the pose being shown.
+    if (!session.replayPoseHold) {
+      const world = session.state;
+      const { wasAlive, deathFade } = bufs;
+      for (let i = 0; i < session.count; i++) {
+        if (wasAlive[i] && !world.alive[i]) deathFade[i] = 1;
+        wasAlive[i] = world.alive[i];
+      }
     }
-    if (session.count !== renderEntityCount) {
+    if (session.count !== renderEntityCount || unitTypesChanged()) {
       renderEntityCount = session.count;
       renderer.setCount(renderEntityCount);
       syncDrawnEntities();
@@ -3428,7 +3617,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       renderer.setFxPaused?.(true);
       inputApi?.setRole?.('spectator');
       setShareVisionWith(shareWith);
-      observerLobby?.returnToWaiting?.();
+      if (!observerLobby?.getState?.()?.ranked) observerLobby?.returnToWaiting?.();
       armReplaySave(session, namesFromLobbySeats(observerLobby?.getState?.()?.seats));
       lobbyUi.refresh();
       paintResources();
@@ -3472,6 +3661,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     matchStory.tick(deltaMs);
     exitMarks.tick();
     renderer.cameraController?.tick?.(deltaMs);
+    if (!document.hidden && renderer.cameraController?.takeUserAim?.()) viewFollow?.userSteered?.();
+    const followedPose = viewFollow?.cameraPose?.(performance.now());
+    if (followedPose) renderer.cameraController?.setPose?.(followedPose);
+    viewFollow?.publish?.(performance.now());
     session.pump(deltaMs);
     tickAdventureObjectives();
     if (pendingChapterUrl != null && !chapterHandoffPending && !matchStory.driving() && !chapterAdvanceBusy && !chapterProposeSent) {
@@ -3940,7 +4133,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         let ringKind = 'default';
         if (isTransport(world.type[i]) || def.category === 'vehicle' || def.category === 'air') {
           ringKind = 'vehicle';
-        } else if (def.primaryAbility) {
+        } else if (isManaCaster(world.type[i])) {
           ringKind = 'caster';
         }
         // After the flourish, only rewrite when the unit moved or tint changed.
@@ -3986,7 +4179,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         if (isTransport(world.type[i])) {
           manas[slot] = 0;
           seats[slot] = passengerTotalOf[i] | 0;
-        } else if (def.primaryAbility) {
+        } else if (isManaCaster(world.type[i])) {
           manas[slot] = manaReadyCount(world.mana?.[i] | 0);
           seats[slot] = 0;
         } else {
@@ -4902,6 +5095,7 @@ function showMatchOver(session) {
   const titleEl = document.getElementById('match-over-title');
   const subEl = document.getElementById('match-over-sub');
   if (!el) return;
+  noteLadderResult(session, rememberLadderId());
   const k = session.koth;
   let title = 'Match over';
   let sub = '';
@@ -4972,7 +5166,10 @@ function armReplaySave(session, names) {
     hideReplaySave();
     return;
   }
-  pendingReplayFile = buildReplayFile(session, { names });
+  pendingReplayFile = buildReplayFile(session, {
+    names,
+    opponent: replayOpponentName(names, session.localPlayerId),
+  });
   btn.hidden = false;
   btn.textContent = `Save replay · ${formatReplayBytes(jsonByteLength(pendingReplayFile))}`;
   if (btn.dataset.bound !== '1') {
@@ -5187,28 +5384,29 @@ async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
   if (!ctx?.session) return;
   const cfg = liveConfigFromLobby(snapshot, kothShard?.getUserId?.() ?? null);
   const spectating = cfg.localPlayerId < 0;
-  if (spectating && !getMode(snapshot.mode)?.spectators) {
+  if (spectating && !lobbyAllowsSpectators(snapshot.mode, snapshot.settings)) {
     setStatusText('Not seated — cannot start');
     return;
   }
   let garden = null;
-  if (snapshot.mode === 'adventure') {
-    const url = cfg.gardenUrl || gardenUrlForChapter(cfg.chapter);
-    if (!url && !snapshot.garden) {
-      setStatusText('That chapter is not ready yet');
-      throw new Error('chapter garden missing');
+  const embedded = snapshot.garden && typeof snapshot.garden === 'object' ? snapshot.garden : null;
+  const url = cfg.gardenUrl || gardenUrlForChapter(cfg.chapter);
+  if (snapshot.mode === 'adventure' || url || embedded) {
+    if (!url && !embedded) {
+      setStatusText(snapshot.mode === 'adventure' ? 'That chapter is not ready yet' : 'That map is not ready yet');
+      throw new Error('lobby garden missing');
     }
     try {
-      const rawGarden = snapshot.garden && typeof snapshot.garden === 'object'
-        ? snapshot.garden
-        : await loadGardenJson(url);
-      garden = prepareAdventureGarden(rawGarden, {
-        humanPlayers: cfg.humanPlayers,
-        seed: adventureDealSeed(cfg.seed, rawGarden.s),
-      });
+      const rawGarden = embedded || await loadGardenJson(url);
+      garden = snapshot.mode === 'adventure'
+        ? prepareAdventureGarden(rawGarden, {
+          humanPlayers: cfg.humanPlayers,
+          seed: adventureDealSeed(cfg.seed, rawGarden.s),
+        })
+        : rawGarden;
     } catch (err) {
-      console.error('[lobby] chapter garden failed', err);
-      setStatusText('Chapter map failed to load');
+      console.error('[lobby] map failed', err);
+      setStatusText(snapshot.mode === 'adventure' ? 'Chapter map failed to load' : 'Custom map failed to load');
       throw err;
     }
   }
@@ -5219,7 +5417,11 @@ async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
     await applyLiveConfig(ctx, {
       ...cfg,
       garden,
-      ...(garden ? { seed: garden.s, mapW: garden.w, mapH: garden.h } : {}),
+      ...(garden ? {
+        seed: (garden.s ?? garden.seed ?? cfg.seed) >>> 0,
+        mapW: garden.w ?? garden.width,
+        mapH: garden.h ?? garden.height,
+      } : {}),
       reset: true,
       inputEnabled: true,
       armyPerSide: 0,

@@ -10,11 +10,10 @@
 import {
   addToScene,
   createMeshFromData,
-  createStandardMaterial,
+  createShaderMaterial,
   createTexture2DFromPixels,
   getOrCreateSampler,
-  markMaterialUboDirty,
-  setStandardOpacityTexture,
+  setShaderTexture,
 } from '../vendor/lite/liteVendor.js';
 import * as fx from '../sim/fixed.js';
 import { TILE_SIZE_F, worldHalfFFromField, worldHalfZFFromField } from '../sim/field.js';
@@ -37,6 +36,36 @@ const UNSEEN_DIFFUSE = [0.01, 0.016, 0.028];
 const VISITED_MESH_ALPHA = 0.50;
 const VISITED_DIFFUSE = [0.045, 0.058, 0.072];
 const OVERLAY_LIFT = 0.18;
+/**
+ * Tie-break once both veils share a sort origin. Transparent draws go by mesh
+ * origin first; lower order draws first. Unseen under visited.
+ */
+export const FOG_UNSEEN_ORDER = 104;
+export const FOG_VISITED_ORDER = 105;
+/**
+ * Transparent meshes sort by origin, and a larger depth along the camera's Z
+ * axis draws first. The veil is authored in world space, so its origin would
+ * be the board center and one orbit side would paint it over the build menu.
+ * Park the origin this far along that axis. The vertex shader ignores the
+ * translation, so the sheet stays on the ground.
+ */
+export const FOG_SORT_PUSH = 1e6;
+
+/**
+ * @param {number} eyeX
+ * @param {number} eyeY
+ * @param {number} eyeZ
+ * @param {number} axisX camera world Z axis (the transparent-sort axis)
+ * @param {number} axisY
+ * @param {number} axisZ
+ */
+export function fogSortOrigin(eyeX, eyeY, eyeZ, axisX, axisY, axisZ) {
+  return {
+    x: eyeX + axisX * FOG_SORT_PUSH,
+    y: eyeY + axisY * FOG_SORT_PUSH,
+    z: eyeZ + axisZ * FOG_SORT_PUSH,
+  };
+}
 const TEXEL_ALIGN = 64;
 /** Soft overlay + hide skirt past the hard explored circle. */
 const EDGE_FADE_TILES = 3;
@@ -1316,13 +1345,13 @@ export function createFogOfWar() {
     dirtyN = 0;
   }
 
+  /** @type {WeakMap<object, object>} */
+  const boundOpacity = new WeakMap();
+
   function bindOneOpacity(mat, next) {
-    if (!mat || !next) return;
-    setStandardOpacityTexture(mat, next);
-    mat.opacityFromRGB = false;
-    // Blend, don't cutoff — bilinear then fades the tile stairs for free.
-    if ('alphaCutOff' in mat) mat.alphaCutOff = 0;
-    markMaterialUboDirty?.(mat);
+    if (!mat || !next || boundOpacity.get(mat) === next) return;
+    boundOpacity.set(mat, next);
+    setShaderTexture(mat, 'opacity', next);
   }
 
   function writeOpacityTexture(prev, data, rect) {
@@ -1416,7 +1445,15 @@ export function createFogOfWar() {
     for (let i = 0; i < normals.length; i += 3) normals[i + 1] = 1;
     const idx = new Uint32Array(bucket.indices);
     const uv = new Float32Array(bucket.uvs);
-    const unseen = addOverlayMesh(`${name}-unseen`, pos, normals, idx, uv, material);
+    const unseen = addOverlayMesh(
+      `${name}-unseen`,
+      pos,
+      normals,
+      idx,
+      uv,
+      material,
+      FOG_UNSEEN_ORDER,
+    );
     const visited = addOverlayMesh(
       `${name}-visited`,
       pos.slice(),
@@ -1424,8 +1461,8 @@ export function createFogOfWar() {
       idx.slice(),
       uv.slice(),
       visitedMaterial,
+      FOG_VISITED_ORDER,
     );
-    if (visited.position) visited.position.y = 0.03;
     return { unseen, visited };
   }
 
@@ -1499,7 +1536,15 @@ export function createFogOfWar() {
     const u1 = (width * FOG_TEX_SCALE) / texW;
     const v1 = (height * FOG_TEX_SCALE) / texH;
     const uvs = new Float32Array([0, 0, u1, 0, u1, v1, 0, v1]);
-    const unseen = addOverlayMesh('fog-table-unseen', positions, normals, indices, uvs, material);
+    const unseen = addOverlayMesh(
+      'fog-table-unseen',
+      positions,
+      normals,
+      indices,
+      uvs,
+      material,
+      FOG_UNSEEN_ORDER,
+    );
     const visited = addOverlayMesh(
       'fog-table-visited',
       positions.slice(),
@@ -1507,8 +1552,8 @@ export function createFogOfWar() {
       indices.slice(),
       uvs.slice(),
       visitedMaterial,
+      FOG_VISITED_ORDER,
     );
-    if (visited.position) visited.position.y = 0.03;
     const ymin = y - 1;
     const ymax = y + 1;
     unseen.boundMin = [-half, ymin, -halfZ];
@@ -1524,23 +1569,51 @@ export function createFogOfWar() {
     tableFog.visited.visible = !!show;
   }
 
-  function createOverlayMaterial(color, alpha) {
-    const mat = createStandardMaterial();
-    mat.diffuseColor = color;
-    mat.emissiveColor = [0, 0, 0];
-    mat.ambientColor = [0, 0, 0];
-    mat.specularColor = [0, 0, 0];
-    mat.disableLighting = true;
-    mat.alpha = alpha;
-    mat.backFaceCulling = true;
+  function createOverlayMaterial(_color, alpha) {
+    // Blend, don't cutoff — the mask's bilinear filter fades the tile stairs.
+    // Vertices stay in world space. Mesh translation is only the sort origin.
+    // The old unlit standard material shaded emissive × diffuse with emissive
+    // black, so the veil is black at `alpha`. Keep that darkness.
+    const mat = createShaderMaterial({
+      name: 'fog-of-war',
+      attributes: ['position', 'normal', 'uv'],
+      uniforms: ['world', 'viewProjection'],
+      samplers: ['opacity'],
+      needAlphaBlending: true,
+      blend: {
+        color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+        alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+      },
+      depthWrite: false,
+      backFaceCulling: true,
+      vertexSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+};
+@vertex fn mainVertex(input: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  out.position = shaderSystem.viewProjection * vec4<f32>(input.position, 1.0);
+  out.uv = input.uv;
+  return out;
+}`,
+      fragmentSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+};
+@fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
+  let mask = textureSample(opacity, opacitySampler, input.uv).a;
+  return vec4<f32>(vec3<f32>(0.0), mask * ${alpha});
+}`,
+    });
     return mat;
   }
 
-  function addOverlayMesh(name, pos, normals, idx, uv, mat) {
+  function addOverlayMesh(name, pos, normals, idx, uv, mat, order) {
     const next = createMeshFromData(engine, name, pos, normals, idx, uv);
     next.material = mat;
     next.pickable = false;
     next.receiveShadows = false;
+    next.renderOrder = order;
     next.visible = enabled;
     addToScene(scene, next);
     return next;
@@ -1620,8 +1693,40 @@ export function createFogOfWar() {
     uploadTexture();
   }
 
+  function placeSortOrigin(target, x, y, z) {
+    const p = target?.position;
+    if (!p) return;
+    if (p.x === x && p.y === y && p.z === z) return;
+    p.x = x;
+    p.y = y;
+    p.z = z;
+    target.markLocalDirty?.();
+  }
+
+  function forEachFogMesh(fn) {
+    if (mesh) fn(mesh);
+    if (visitedMesh) fn(visitedMesh);
+    for (let i = 0; i < fogChunks.length; i++) {
+      fn(fogChunks[i].unseen);
+      fn(fogChunks[i].visited);
+    }
+    if (tableFog) {
+      fn(tableFog.unseen);
+      fn(tableFog.visited);
+    }
+  }
+
+  /** Keep the veil's sort origin behind the build menu from every orbit side. */
+  function pinFogSortOrigin(camera) {
+    const wm = camera?.worldMatrix;
+    if (!wm || !Number.isFinite(wm[12]) || !Number.isFinite(wm[8])) return;
+    const origin = fogSortOrigin(wm[12], wm[13], wm[14], wm[8], wm[9], wm[10]);
+    forEachFogMesh((target) => placeSortOrigin(target, origin.x, origin.y, origin.z));
+  }
+
   /** Hide height fog past the terrain keep ring. The flat sheet stays on the table. */
   function updateLod(camera, deltaMs = 120) {
+    pinFogSortOrigin(camera);
     if (!fogLod || !fogChunks.length || !camera) return;
     fogLodElapsed += deltaMs;
     const look = terrainLookXZ(camera);

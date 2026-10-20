@@ -192,6 +192,37 @@ function pullsAGathererWhenNoIdle() {
   assert.equal(w.buildings[1].built, 1, 'and the site got raised');
 }
 
+function siteDoesNotStripAStaffedFarm() {
+  const field = openField(11);
+  const w = createWorld(11);
+  const farmTile = worldToTile(0) * field.width + worldToTile(0);
+  field.foodNode[farmTile] = 1;
+  const treeTile = worldToTile(fx.fromFloat(10)) * field.width + worldToTile(fx.fromFloat(10));
+  growTreeAt(field, treeTile, 200);
+  w.buildings = [
+    { owner: 0, type: 'farm', x: 0, z: 0, built: 1, buildProgress: 1, buildTime: 1, hasRally: 0, rallyX: 0, rallyZ: 0, rallyOrder: ORDER.MOVE, prodPaused: 0, tracks: [] },
+  ];
+  const farmer = spawn(w, { x: fx.fromFloat(1), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  const chopper = spawn(w, { x: fx.fromFloat(10), y: fx.fromFloat(10), type: UNIT.VILLAGER, owner: 0 });
+  step(w, field, [
+    { type: CMD.GATHER, entities: [farmer], tile: farmTile },
+    { type: CMD.GATHER, entities: [chopper], tile: treeTile },
+  ]);
+  // A camp does not trickle, so progress means a builder actually showed up.
+  w.buildings.push(siteBuilding('camp', 8, 0));
+
+  let farmerPulled = false;
+  let chopperPulled = false;
+  for (let t = 0; t < 80; t++) {
+    step(w, field, []);
+    if (w.order[farmer] === ORDER.BUILD) farmerPulled = true;
+    if (w.order[chopper] === ORDER.BUILD) chopperPulled = true;
+  }
+  assert.equal(farmerPulled, false, 'the farmer stays on the plot while someone else can build');
+  assert.equal(chopperPulled, true, 'the chopper is the one pulled onto the site');
+  assert.equal(w.gatherTile[farmer], farmTile, 'farm keeps its worker');
+}
+
 function finishingTurnsOnTheFarm() {
   const field = openField(6);
   const w = createWorld(6);
@@ -344,6 +375,7 @@ engineerBuildsAtHalfSpeed();
 villagerPlusEngineerBeatsSoloVillager();
 twoBuildersBeatOne();
 pullsAGathererWhenNoIdle();
+siteDoesNotStripAStaffedFarm();
 finishingTurnsOnTheFarm();
 deterministic();
 visualStagesAtStartAndTwoThirds();

@@ -13,6 +13,7 @@ import {
   tileCenterX,
   tileCenterY,
   buildField,
+  buildTerrainField,
   drySpawnPads,
   applySeededHeight,
   composeHeightMap,
@@ -814,6 +815,13 @@ describe('seeded terrain variety', () => {
       }
     }
     assert.ok(spread > 0.25, `water sat in the same place on every seed (${spread})`);
+  });
+
+  it('terrain mask matches the match field without building height', () => {
+    const full = buildField(45, { width: TINY_MAP_W, height: TINY_MAP_W });
+    const mask = buildTerrainField(45, { width: TINY_MAP_W, height: TINY_MAP_W });
+    assert.deepEqual(mask.terrainTypes, full.terrainTypes);
+    assert.deepEqual(mask.pass, full.pass);
   });
 
   it('keeps match spawn pads on land', () => {

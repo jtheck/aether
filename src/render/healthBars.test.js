@@ -9,6 +9,7 @@ import {
   HORIZON_FADE_START,
   LOOK_DOWN_SCALE_MIN,
   TARGET_DOT_PX,
+  TARGET_AGORA_DOT_PX,
   chipHorizonScale,
   chipLookDownScale,
   chipScreenPixels,
@@ -75,6 +76,7 @@ import {
   AGORA_FX_MIX,
   AGORA_LARGE_CHIP_COUNT,
   AGORA_TINT_NEUTRAL,
+  AGORA_NEUTRAL_RGB,
   agoraChipFilled,
   agoraChipIsSmall,
   agoraChipLeadIndex,
@@ -103,7 +105,6 @@ import {
   agoraLeadBlinkBlack,
   agoraProgressRatio,
   agoraPropTint,
-  AGORA_CAPTURER_LIFT,
   AGORA_LEAD_PULSE_MUL,
   AGORA_BLINK_PERIOD_MS,
   AGORA_CONTESTED_RGB,
@@ -134,6 +135,13 @@ import {
 } from './healthBars.js';
 import { OWNER_TINTS, ownerTint, setLocalOwnerTint } from './ownerTints.js';
 import { CAMERA_CLOSE_SPAN, cameraZoomNormalized } from './cameraController.js';
+import {
+  AGORA_CAPTURE_SCALE_MAX,
+  FLAG_DIST_REF,
+  agoraCaptureDotMul,
+  agoraFxSizeMul,
+  flagScaleMul,
+} from './flagScale.js';
 import {
   HEALTH_BAR_CAPACITY,
   OVERLAY_MAX_BARS,
@@ -290,6 +298,28 @@ describe('health chip screen-constant size', () => {
     assert.equal(snapScreenYToPixelCenter(50.9, 1), 50.5);
     assert.equal(snapScreenYToPixelCenter(50.25, 2), 50.25);
     assert.equal(snapScreenYToPixelCenter(50.4, 2), 50.25);
+  });
+
+  it('grows agora capture dots with the flag as the camera pulls back', () => {
+    const vh = 720;
+    const fov = 0.8;
+    const dotPx = (dist) => chipScreenPixels(
+      worldSizeForScreenPx(TARGET_AGORA_DOT_PX, dist, vh, fov) * agoraCaptureDotMul(dist),
+      dist,
+      vh,
+      fov,
+    );
+    const near = dotPx(70);
+    const mid = dotPx(FLAG_DIST_REF);
+    const far = dotPx(260);
+    const maxed = dotPx(900);
+    assert.ok(Math.abs(mid - TARGET_AGORA_DOT_PX) < 1e-6);
+    assert.ok(far > mid);
+    assert.ok(near < mid);
+    assert.ok(Math.abs(maxed - TARGET_AGORA_DOT_PX * AGORA_CAPTURE_SCALE_MAX) < 1e-6);
+    assert.ok(maxed < TARGET_AGORA_DOT_PX * flagScaleMul(900));
+    assert.ok(agoraFxSizeMul(FLAG_DIST_REF) === 1);
+    assert.ok(agoraFxSizeMul(260) > 1);
   });
 
   it('grows world size with distance and shrinks with viewport height', () => {
@@ -479,17 +509,17 @@ describe('health chip bars', () => {
     assert.equal(agoraFlipFxKind(contest), AGORA_FX_INK);
     const firstPip = { progress: 36, capturer: 1, owner: 0 };
     assert.equal(agoraDashFill(3, firstPip), 1);
-    assert.equal(agoraChipTintOwner(4, firstPip), 1);
+    assert.equal(agoraChipTintOwner(4, firstPip), AGORA_TINT_NEUTRAL);
     assert.equal(agoraChipLeadIndex(firstPip), 3);
     const mid = { progress: 90, capturer: 1, owner: 0 };
     assert.equal(agoraChipLeadIndex(mid), 2);
-    assert.equal(agoraChipTintOwner(4, mid), 1);
-    assert.equal(agoraChipTintOwner(3, mid), 1);
+    assert.equal(agoraChipTintOwner(4, mid), AGORA_TINT_NEUTRAL);
+    assert.equal(agoraChipTintOwner(3, mid), AGORA_TINT_NEUTRAL);
     assert.equal(agoraChipTintOwner(0, mid), 0);
     const lastPip = { progress: 150, capturer: 1, owner: 0 };
     assert.equal(agoraDashFill(0, lastPip), 1);
     assert.equal(agoraChipLeadIndex(lastPip), 0);
-    assert.equal(agoraChipTintOwner(1, lastPip), 1);
+    assert.equal(agoraChipTintOwner(1, lastPip), AGORA_TINT_NEUTRAL);
     assert.equal(agoraChipTintOwner(0, lastPip), 0);
     const gain = { phase: 1, tug: 27, capturer: 1, owner: 0, founder: 0 };
     assert.equal(agoraFromRight(gain), false);
@@ -512,6 +542,8 @@ describe('health chip bars', () => {
     const tugStart = { phase: 1, tug: 1, capturer: 1, owner: 0, founder: 0 };
     assert.equal(agoraChipLeadIndex(tugStart), 0);
     assert.ok(agoraChipPulseMul(0, tugStart, 0) > 1);
+    assert.ok(agoraChipPulseMul(0, tugStart, 0) < 1 + AGORA_LEAD_PULSE_MUL + 0.02);
+    assert.ok(AGORA_LEAD_PULSE_MUL < 0.25);
     assert.equal(agoraChipPulseMul(1, tugStart, 0), 1);
     const stalled = { progress: 0, capturer: -1, owner: 0, contested: 1 };
     assert.equal(agoraChipLeadIndex(stalled), 4);
@@ -532,34 +564,45 @@ describe('health chip bars', () => {
     assert.deepEqual(blow.rgb, AGORA_CONTESTED_RGB);
     assert.ok(blow.drop < 0);
     let dandelionN = 0;
+    let withWind = 0;
+    let against = 0;
     const wind = pickAgoraWind();
     emitAgoraDandelion((p) => {
       dandelionN += 1;
-      assert.equal(p.color[0], 1);
-      assert.ok(p.velocity[0] * wind.x > 0);
+      assert.ok(p.color[1] > 0.95);
+      assert.equal(p.cull, false);
+      assert.ok(p.gravity[0] * wind.x > 0);
+      assert.ok(p.gravity[1] > 0);
+      assert.ok(p.stream.k > 0);
+      assert.ok(p.stream.axis[0] * wind.x > 0);
+      if (p.velocity[0] * wind.x > 0) withWind += 1;
+      else against += 1;
     }, 0, 1, 0, 1, wind);
-    assert.ok(dandelionN >= 8);
+    assert.ok(dandelionN >= 16);
+    assert.ok(withWind > 0 && against > 0);
     const mixKinds = [];
-    emitAgoraFlipFx(AGORA_FX_MIX, (p) => mixKinds.push(p.color[0]), 0, 1, 0, 1, 0, wind);
+    emitAgoraFlipFx(AGORA_FX_MIX, (p) => mixKinds.push(p.color[1]), 0, 1, 0, 1, 0, wind);
     assert.ok(mixKinds.includes(0));
-    assert.ok(mixKinds.includes(1));
+    assert.ok(mixKinds.some((g) => g > 0.95));
+    const inkOnly = [];
+    emitAgoraFlipFx(AGORA_FX_INK, (p) => inkOnly.push(p.color[1]), 0, 1, 0, 1, 0);
+    assert.ok(inkOnly.length > 0);
+    assert.ok(inkOnly.every((g) => g === 0));
     assert.equal(emitAgoraFlipFx(AGORA_FX_DANDELION, null, 0, 0, 0, 1), 0);
     const claimed = agoraChipRgb(4, firstPip, AGORA_BLINK_PERIOD_MS * 0.75);
-    const base = ownerTint(1);
-    assert.ok(claimed[1] > base[1]);
+    assert.deepEqual(claimed, AGORA_NEUTRAL_RGB);
     assert.ok(agoraCaptureMix({ capturer: 1, progress: 90 }) > 0.4);
     assert.equal(agoraCaptureMix({ owner: 0, progress: 90 }), 0);
     const idle = agoraPropTint({ owner: 0 });
     const mixed = agoraPropTint({ owner: 0, capturer: 1, progress: 180 });
     assert.deepEqual(idle, ownerTint(0));
     assert.ok(Math.abs(mixed[0] - ownerTint(1)[0]) < Math.abs(idle[0] - ownerTint(1)[0]));
-    assert.ok(AGORA_CAPTURER_LIFT > 0);
     const row = agoraRowLayout(1);
     assert.equal(row.dotAlong.length, 5);
-    assert.equal(row.dashAlong.length, 4);
+    assert.equal(row.dashAlong, undefined);
     for (let i = 0; i < 4; i++) {
-      assert.ok(row.dotAlong[i] < row.dashAlong[i]);
-      assert.ok(row.dashAlong[i] < row.dotAlong[i + 1]);
+      const gap = row.dotAlong[i + 1] - row.dotAlong[i] - row.dotD;
+      assert.ok(gap > 0 && gap < row.dotD * 0.6);
     }
     assert.ok(agoraDashFillAlong(0, 2, 0.5, true) > 0);
     assert.ok(agoraDashFillAlong(0, 2, 0.5, false) < 0);

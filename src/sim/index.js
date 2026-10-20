@@ -14,6 +14,7 @@ export * from './rng.js';
 export * from './world.js';
 export * from './unitTypes.js';
 export * from './brigand.js';
+export * from './champion.js';
 export * from './step.js';
 export * from './checksum.js';
 export * from './commands.js';

@@ -9,7 +9,9 @@
     "camp",
     "church",
     "collar",
+    "derrick",
     "dirigible",
+    "dlc_first_responder_church-DLC1",
     "dlc_first_responder_priest-DLC1",
     "drayage",
     "engineer",
@@ -45,12 +47,15 @@
     "wagon",
     "warlock",
     "warrior",
+    "well",
     "wizard",
     "workshop"
   ],
   "vat": [
     "villager",
     "warrior",
+    "champion",
+    "dlc_first_responder_champion-DLC1",
     "monk",
     "engineer"
   ]

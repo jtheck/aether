@@ -32,6 +32,8 @@ import { isBuildingAlive } from './buildings.js';
 import { applyDamageDoor, attackDoorInRange, attackDoorStandPointOnField, DOOR_BASH_REACH_F, isDoorAlive, nearestShutDoor } from './doorCombat.js';
 import { lineClear } from './field.js';
 import { clearAttackFocus, lockAttackFocus } from './world.js';
+import { armChaseLeash, chaseLeashExceeded, refreshLeashDrops } from './leash.js';
+import { frostAttackAdvances } from './combatStatus.js';
 
 export const ACQUIRE_PHASES = 5;
 /** Squared-distance penalty per existing attacker — spreads fire without ignoring nearer threats. */
@@ -40,6 +42,7 @@ const LOAD_SPREAD = fx.mul(fx.fromInt(10), fx.fromInt(10));
 const REBALANCE_MARGIN = fx.mul(fx.fromInt(4), fx.fromInt(4));
 
 export function combatSystem(w, field) {
+  refreshLeashDrops(w);
   rebuildSpatialGrid(w.spatial, w);
   rebuildEngagementClaims(w);
   bashBlockingDoors(w, field);
@@ -125,6 +128,7 @@ export function acquireTargets(w, field) {
 
     const consider = (j) => {
       if (j === i || !w.alive[j] || !isHostile(w.owner[i], w.owner[j])) return;
+      if (j === (w.leashDrop?.[i] ?? -1)) return;
       if (w.carriedBy?.[j] >= 0) return;
       w.metrics.combatCandidates++;
       const d2 = fx.dist2(w.px[i], w.py[i], w.px[j], w.py[j]);
@@ -177,7 +181,9 @@ export function acquireTargets(w, field) {
       if (w.targetBuilding) w.targetBuilding[i] = -1;
       if (w.targetDoor) w.targetDoor[i] = -1;
       if (w.attackFocus) w.attackFocus[i] = 0;
+      const freshChase = !wasAttack;
       w.order[i] = w.ORDER.ATTACK;
+      if (freshChase) armChaseLeash(w, i);
       claimEngagement(w, i, best);
       const stand = attackStandPoint(w, i, best);
       queuePath(w, i, stand.x, stand.y);
@@ -224,11 +230,34 @@ export function acquireTargets(w, field) {
     w.targetBuilding[i] = bestBi;
     if (w.targetDoor) w.targetDoor[i] = -1;
     if (w.attackFocus) w.attackFocus[i] = 0;
+    const freshChase = !wasAttack;
     w.order[i] = w.ORDER.ATTACK;
+    if (freshChase) armChaseLeash(w, i);
     clearEngagement(w, i);
     const stand = attackBuildingStandPointOnField(w, field, i, buildings[bestBi]);
     queuePath(w, i, stand.x, stand.y);
   }
+}
+
+/**
+ * Past the rope and not in swing range: drop the foe and go back.
+ * Attack-move resumes its march. Idle walks back to the spot the chase began.
+ * In-range fighters keep swinging where they stand, and only leave once the
+ * foe steps out of reach — so the rope stops a chase without cancelling a hit.
+ */
+function giveUpChase(w, i) {
+  const homeX = w.leashX[i];
+  const homeY = w.leashY[i];
+  const dropped = w.targetEntity[i];
+  const marching = w.hasTarget[i];
+  endAttack(w, i);
+  if (dropped >= 0 && w.leashDrop) w.leashDrop[i] = dropped;
+  if (marching) return;
+  w.order[i] = w.ORDER.MOVE;
+  w.hasTarget[i] = 1;
+  w.tx[i] = homeX;
+  w.ty[i] = homeY;
+  queuePath(w, i, homeX, homeY);
 }
 
 /** After a fight: resume attack-move destination if one remains, else idle. */
@@ -269,6 +298,11 @@ function resolveAttacks(w, field) {
     const doorOk = isDoorAlive(door) && unitAttacksBuildings(w.type[i]);
     if (!unitOk && !buildingOk && !doorOk) {
       endAttack(w, i);
+      continue;
+    }
+
+    if (chaseLeashExceeded(w, i) && !attackInRange(w, i)) {
+      giveUpChase(w, i);
       continue;
     }
 
@@ -354,7 +388,9 @@ function resolveAttacks(w, field) {
   }
 
   for (let i = 0; i < w.count; i++) {
-    if (w.attackCd[i] > 0) w.attackCd[i]--;
+    if (w.attackCd[i] > 0 && frostAttackAdvances(w.tick, i, w.frostTicks?.[i])) {
+      w.attackCd[i]--;
+    }
     if (w.abilityCd[i] > 0) w.abilityCd[i]--;
     if (w.distractCd[i] > 0) {
       w.distractCd[i]--;

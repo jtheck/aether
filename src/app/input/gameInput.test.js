@@ -10,6 +10,7 @@ import {
   placementHoverFollowsPointer,
   placementReleaseKind,
   placementTapKind,
+  radialBuildingPickAction,
   radialClickKind,
   radialHubFramedBuilding,
   lassoPrefersLoop,
@@ -90,6 +91,14 @@ describe('building multi / box select helpers', () => {
     assert.equal(radialClickKind({ picked: false, onHub: true, onChrome: true }), 'hub');
     assert.equal(radialClickKind({ picked: false, onHub: false, onChrome: true }), 'chrome');
     assert.equal(radialClickKind({ picked: false, onHub: false, onChrome: false }), 'world');
+    assert.equal(
+      radialBuildingPickAction({ kind: 'building', id: 'camp' }, { buildRadialOpen: true }),
+      'place',
+    );
+    assert.equal(
+      radialBuildingPickAction({ kind: 'building', id: 'keep' }, { buildRadialOpen: false }),
+      'upgradeBuilding',
+    );
   });
 
   it('agora tap while placing exits; world taps leave the ghost for 1^', () => {

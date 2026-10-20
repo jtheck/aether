@@ -434,8 +434,12 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
         },
       },
     );
+  const curtainWalls = opts.skipWalls || opts.signal?.aborted
+    ? { meshes: [], dispose() {} }
+    : await createCurtainWalls(engine, scene, field, (x, z) => surfaceHeightAt(liveField, x, z));
   if (opts.signal?.aborted) {
     disposed = true;
+    curtainWalls.dispose();
     releaseAtlasSource();
     specGlint.dispose();
     specMap.dispose();
@@ -463,9 +467,6 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
   for (const mesh of scenery.meshes) {
     if (built.indexOf(mesh) < 0) built.push(mesh);
   }
-  const curtainWalls = opts.skipWalls
-    ? { meshes: [], dispose() {} }
-    : createCurtainWalls(engine, scene, field, (x, z) => surfaceHeightAt(liveField, x, z));
   for (const mesh of curtainWalls.meshes) {
     if (built.indexOf(mesh) < 0) built.push(mesh);
   }

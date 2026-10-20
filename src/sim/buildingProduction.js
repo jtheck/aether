@@ -8,7 +8,8 @@ import { queuePath } from './path.js';
 import { clearEngagement } from './engagement.js';
 import { isFlyer, UNIT, getUnitCost } from './unitTypes.js';
 import { ownerAtPopSoftCap, ownerPopCap, ownerPopUsed } from './pop.js';
-import { spendResources } from './resources.js';
+import { getResource, spendResources } from './resources.js';
+import { bankShortfallHintLabel, noteStorageOverflow, ownerSlotCount } from './storage.js';
 import {
   BUILDING_SPAWN_LOCAL,
   TRAIN_TICKS,
@@ -114,8 +115,19 @@ function tickVillageVillagers(w, field, b) {
   if (acc >= need) {
     b.villageSpawnAcc = 0;
     // Can't pay → miss this interval; the timer does not sit on ready.
-    if (spendResources(w, b.owner | 0, getUnitCost(UNIT.VILLAGER))) {
+    const owner = b.owner | 0;
+    if (spendResources(w, owner, getUnitCost(UNIT.VILLAGER))) {
       spawnTrainedUnit(w, field, b, UNIT.VILLAGER);
+    } else {
+      const food = getResource(w, owner, 'food');
+      const slots = ownerSlotCount(w.buildings, owner, 'food', 'world', w);
+      noteStorageOverflow(
+        w,
+        owner,
+        'food',
+        bankShortfallHintLabel(food, slots, 'food'),
+        'short',
+      );
     }
     return;
   }

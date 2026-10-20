@@ -1,12 +1,12 @@
-// Headset select. Trigger down shows that hand's beam; turning the controller
+// Headset select. Grip down shows that hand's beam; turning the controller
 // past a few degrees while held paints a lasso on the field, release selects
-// inside it. A trigger tap that never turned selects what the beam hit at the
-// press (aim-assisted onto a nearby unit). Grip held adds to the selection.
-// Both hands run their own gesture; when they overlap, the later release adds
-// to the earlier one so two lassos make one selection.
+// inside it. A grip tap that never turned selects what the beam hit at the
+// press (aim-assisted onto a nearby unit). Both hands run their own gesture.
+// Holding the other grip still is shift: the release adds, and the still grip
+// selects nothing when it lets go. Two lassos at once make one selection (the
+// later release adds to the earlier).
 
 import { lassoOuterLoop } from './input/gamepadLasso.js';
-import { readQuestTouch } from './xrRig.js';
 
 /** Stroke sample spacing as a fraction of head height over the field. */
 const SAMPLE_FRAC = 0.012;
@@ -34,6 +34,11 @@ export function controllerRay(m) {
   const len = Math.hypot(dx, dy, dz);
   if (!(len > 1e-8)) return null;
   return { ox: m[12], oy: m[13], oz: m[14], dx: dx / len, dy: dy / len, dz: dz / len };
+}
+
+/** Tracked target ray of an XR input source, or null. */
+export function sourceRay(src) {
+  return src?.targetRayTracked ? controllerRay(src.targetRayMatrix) : null;
 }
 
 /**
@@ -84,8 +89,31 @@ export function strokeLoop(stroke) {
   return out;
 }
 
-function triggerHeld(src) {
-  return !!(src.gamepad?.buttons?.[0]?.pressed || src.selecting);
+/** Head height over the field under the ray origin, at least 1. */
+export function rayHeadHeight(renderer, ray) {
+  const floor = renderer.groundHeight(ray.ox, ray.oz);
+  return Math.max(1, ray.oy - (Number.isFinite(floor) ? floor : 0));
+}
+
+/**
+ * Beam overlay for a ray: reaches the field hit, or a few head heights into the sky.
+ * @param {{ rayToGround: Function, groundHeight: Function }} renderer
+ * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number }} ray
+ * @param {{ x: number, y: number, z: number } | null} [hit]
+ */
+export function beamState(renderer, ray, hit = renderer.rayToGround(ray), loop = null) {
+  const head = rayHeadHeight(renderer, ray);
+  return {
+    ray,
+    length: hit ? Math.hypot(hit.x - ray.ox, hit.y - ray.oy, hit.z - ray.oz) : head * MISS_REACH,
+    loop,
+    tip: hit ? { x: hit.x, z: hit.z } : null,
+    width: Math.max(LINE_MIN, head * LINE_FRAC),
+  };
+}
+
+function gripHeld(src) {
+  return !!(src.gamepad?.buttons?.[1]?.pressed || src.squeezing);
 }
 
 /**
@@ -95,7 +123,7 @@ function triggerHeld(src) {
  * }} opts
  */
 export function createXrSelect({ renderer, getInput }) {
-  /** @type {Map<object, boolean>} trigger state last frame, per XRInputSource */
+  /** @type {Map<object, boolean>} grip state last frame, per XRInputSource */
   const wasHeld = new Map();
   /**
    * Live gestures, one per XRInputSource.
@@ -106,16 +134,12 @@ export function createXrSelect({ renderer, getInput }) {
    *   pressHead: number,
    *   minDot: number,
    *   stroke: { x: number, z: number }[],
+   *   modifier: boolean,
    * }>}
    */
   const gestures = new Map();
   /** A release that overlapped another live gesture: the next release adds. */
   let chainAdd = false;
-
-  function headHeight(ray) {
-    const floor = renderer.groundHeight(ray.ox, ray.oz);
-    return Math.max(1, ray.oy - (Number.isFinite(floor) ? floor : 0));
-  }
 
   function end(key, g) {
     gestures.delete(key);
@@ -123,12 +147,18 @@ export function createXrSelect({ renderer, getInput }) {
     if (gestures.size === 0) chainAdd = false;
   }
 
-  function finish(key, g, src) {
-    const grip = readQuestTouch(src.gamepad).grip.pressed;
-    const add = grip || chainAdd;
+  function finish(key, g) {
     const swept = g.minDot < TAP_COS;
+    let shift = false;
+    for (const [k, other] of gestures) {
+      if (k === key || other.minDot < TAP_COS) continue;
+      other.modifier = true;
+      shift = true;
+    }
+    const add = shift || chainAdd;
     const loop = swept ? strokeLoop(g.stroke) : null;
     end(key, g);
+    if (!swept && g.modifier) return;
     if (gestures.size > 0) chainAdd = true;
     const input = getInput();
     if (!input) return;
@@ -143,7 +173,7 @@ export function createXrSelect({ renderer, getInput }) {
 
   function begin(src, ray) {
     const hit = renderer.rayToGround(ray);
-    const head = headHeight(ray);
+    const head = rayHeadHeight(renderer, ray);
     const g = {
       slot: src.handedness || 'none',
       pressRay: ray,
@@ -151,6 +181,7 @@ export function createXrSelect({ renderer, getInput }) {
       pressHead: head,
       minDot: 1,
       stroke: [],
+      modifier: false,
     };
     if (hit) noteStrokePoint(g.stroke, hit.x, hit.z, head * SAMPLE_FRAC);
     gestures.set(src.source, g);
@@ -158,48 +189,55 @@ export function createXrSelect({ renderer, getInput }) {
   }
 
   function update(key, g, src) {
-    const ray = src.targetRayTracked ? controllerRay(src.targetRayMatrix) : null;
+    const ray = sourceRay(src);
     if (!ray) {
-      if (!triggerHeld(src)) end(key, g);
+      if (!gripHeld(src)) end(key, g);
       return;
     }
-    if (!triggerHeld(src)) {
-      finish(key, g, src);
+    if (!gripHeld(src)) {
+      finish(key, g);
       return;
     }
     const p = g.pressRay;
     const dot = ray.dx * p.dx + ray.dy * p.dy + ray.dz * p.dz;
     if (dot < g.minDot) g.minDot = dot;
-    const head = headHeight(ray);
     const hit = renderer.rayToGround(ray);
-    if (hit) noteStrokePoint(g.stroke, hit.x, hit.z, head * SAMPLE_FRAC);
-    const length = hit
-      ? Math.hypot(hit.x - ray.ox, hit.y - ray.oy, hit.z - ray.oz)
-      : head * MISS_REACH;
-    renderer.setXrSelect(g.slot, {
+    if (hit) noteStrokePoint(g.stroke, hit.x, hit.z, rayHeadHeight(renderer, ray) * SAMPLE_FRAC);
+    renderer.setXrSelect(g.slot, beamState(
+      renderer,
       ray,
-      length,
-      loop: g.minDot < TAP_COS ? strokeLoop(g.stroke) : null,
-      tip: hit ? { x: hit.x, z: hit.z } : null,
-      width: Math.max(LINE_MIN, head * LINE_FRAC),
-    });
+      hit,
+      g.minDot < TAP_COS ? strokeLoop(g.stroke) : null,
+    ));
   }
 
-  /** Call once per XR frame after the rig has moved the reference space. */
-  function step(ctx) {
+  function endAll() {
+    for (const [key, g] of gestures) end(key, g);
+  }
+
+  /**
+   * Call once per XR frame after the rig has moved the reference space.
+   * `blocked` drops live gestures without selecting (the grip belongs to
+   * something else, e.g. ghost-place yaw). `canBegin` vetoes one press.
+   * @param {{ input?: { inputSources?: object[] } }} ctx
+   * @param {{ blocked?: boolean, canBegin?: (src: object) => boolean }} [opts]
+   */
+  function step(ctx, opts = {}) {
     const sources = ctx.input?.inputSources ?? [];
+    if (opts.blocked && gestures.size > 0) endAll();
     for (const src of sources) {
-      const held = triggerHeld(src);
+      const held = gripHeld(src);
       const pressed = held && !wasHeld.get(src.source);
       wasHeld.set(src.source, held);
+      if (opts.blocked) continue;
       const g = gestures.get(src.source);
       if (g) {
         update(src.source, g, src);
         continue;
       }
-      if (!pressed || !src.targetRayTracked) continue;
-      const ray = controllerRay(src.targetRayMatrix);
-      if (!ray) continue;
+      if (!pressed) continue;
+      const ray = sourceRay(src);
+      if (!ray || opts.canBegin?.(src) === false) continue;
       update(src.source, begin(src, ray), src);
     }
     if (wasHeld.size > sources.length || gestures.size > 0) {
@@ -214,9 +252,14 @@ export function createXrSelect({ renderer, getInput }) {
 
   return {
     step,
+    /** True while this hand ('left' / 'right') is mid-gesture and owns its beam. */
+    isActive(hand) {
+      for (const g of gestures.values()) if (g.slot === hand) return true;
+      return false;
+    },
     dispose() {
       wasHeld.clear();
-      for (const [key, g] of gestures) end(key, g);
+      endAll();
     },
   };
 }

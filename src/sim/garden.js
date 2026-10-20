@@ -8,8 +8,8 @@
 // them while editing; a match stamps them onto the field and renders that copy.
 
 import { applyTableSilhouette, createFullCellMask, createFullCellRadius, normalizeTableShape } from './tableShape.js';
-import { applySeededHeight, buildField, composeHeightMap, computeSeedRegionLift, createField, generateHeightMap, PAINTED_LIFT_MAX, PAINTED_LIFT_MIN, refreshTerrainDerived, TILE_SIZE_F, tileCenterX, tileCenterY, worldToTile, worldToTileZ } from './field.js';
-import { applyAuthoredScenery, clearOffTableScenery, SCENERY } from './scenery.js';
+import { applySeededHeight, buildField, composeHeightMap, computeSeedRegionLift, createField, generateHeightMap, PAINTED_LIFT_MAX, PAINTED_LIFT_MIN, refreshTerrainDerived, STRESS_SPAWN_CLEAR_TILES, TILE_SIZE_F, tileCenterX, tileCenterY, worldToTile, worldToTileZ } from './field.js';
+import { applyAuthoredScenery, applySavedRockStock, clearOffTableScenery, rockYield, SCENERY } from './scenery.js';
 import { ensureDoodadArrays, hasAuthoredDoodads } from './doodads.js';
 import { cloneBackdrops, encodeBackdrops, normalizeBackdrops } from './backdrops.js';
 import { spawn } from './world.js';
@@ -64,6 +64,35 @@ export function decodeRle(str, length = 0) {
     return out;
   }
   return Uint8Array.from(arr);
+}
+
+/** Rock stock above one yield (a forge stack). Values can exceed 255. */
+function decodeRleU16(str, length) {
+  const out = new Uint16Array(Math.max(0, length | 0));
+  if (!str) return out;
+  let i = 0;
+  const runs = String(str).split(',');
+  for (let r = 0; r < runs.length && i < out.length; r++) {
+    if (!runs[r]) continue;
+    const parts = runs[r].split(':');
+    const val = Number(parts[0]);
+    const count = Number(parts[1]);
+    if (!Number.isFinite(val) || !(count > 0)) continue;
+    for (let n = 0; n < count && i < out.length; n++, i++) out[i] = val;
+  }
+  return out;
+}
+
+function rockStockNeedsSave(field) {
+  const stock = field?.rockStock;
+  const types = field?.sceneryType;
+  if (!stock || !types) return false;
+  for (let i = 0; i < types.length; i++) {
+    const kind = types[i];
+    if (kind < SCENERY.ROCK_PLAIN) continue;
+    if ((stock[i] | 0) !== rockYield(kind)) return true;
+  }
+  return false;
 }
 
 /** Cell radii are signed: -1 is a plinth. Uint8 RLE would wrap that to 255. */
@@ -418,6 +447,7 @@ export function encodeGarden(field, extras = {}) {
   if (hasAuthoredDoodads(field)) {
     out.dd = encodeRle(field.doodadType);
   }
+  if (rockStockNeedsSave(field)) out.rk = encodeRle(field.rockStock);
   const backdrops = normalizeBackdrops(
     extras.backdrops !== undefined ? extras.backdrops : field.backdrops,
   );
@@ -508,6 +538,7 @@ export function decodeGarden(data) {
     sceneryType: data.sc ? decodeRle(data.sc, n) : null,
     treeStock: data.ts ? decodeRle(data.ts, n) : null,
     doodadType: data.dd ? decodeRle(data.dd, n) : null,
+    rockStock: data.rk ? decodeRleU16(data.rk, n) : null,
     backdrops: normalizeBackdrops(data.bd),
     units: applyUnitYaws(normalizeUnits(data.u), data.uy),
     buildings: normalizeBuildings(data.b),
@@ -542,7 +573,12 @@ export function fieldFromGarden(data) {
       width: g.width,
       height: g.height,
       ...(g.mapType
-        ? { spawnPads: spawnPadsForMapType(g.mapType, half, g.width, halfZ) }
+        ? {
+          spawnPads: spawnPadsForMapType(g.mapType, half, g.width, halfZ),
+          ...(normalizeMapType(g.mapType, '') === 'stress'
+            ? { spawnPadClearTiles: STRESS_SPAWN_CLEAR_TILES }
+            : {}),
+        }
         : {}),
     });
   if (authored) {
@@ -576,6 +612,7 @@ export function fieldFromGarden(data) {
     if (g.treeStock?.length === field.treeStock.length) field.treeStock.set(g.treeStock);
     field.sceneryAuthored = true;
     applyAuthoredScenery(field);
+    if (g.rockStock) applySavedRockStock(field, g.rockStock);
   }
   if (g.doodadType?.length === field.width * field.height) {
     ensureDoodadArrays(field);

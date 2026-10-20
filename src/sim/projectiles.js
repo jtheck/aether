@@ -255,6 +255,17 @@ function hitBuilding(w, field, bi, def, amount, source = -1, owner = 0) {
   return dealt;
 }
 
+function sporeHitOrigin(w, store, slot, x, y) {
+  const src = store.source[slot];
+  if (src >= 0 && src < w.count) return { x: w.px[src], y: w.py[src] };
+  return { x, y };
+}
+
+function publishSporeHit(w, store, slot, x, y, entity, killed) {
+  const from = sporeHitOrigin(w, store, slot, x, y);
+  pushSporeHeadFx(w, entity, x, y, killed, from.x, from.y);
+}
+
 function hitEntity(w, store, slot, def, entity, field) {
   const wasAlive = !!w.alive[entity];
   applyDamage(w, entity, store.damage[slot], store.source[slot]);
@@ -270,7 +281,7 @@ function hitEntity(w, store, slot, def, entity, field) {
   }
   if (def.growsHeadMushroom) {
     const killed = wasAlive && !w.alive[entity];
-    pushSporeHeadFx(w, entity, w.px[entity], w.py[entity], killed);
+    publishSporeHit(w, store, slot, w.px[entity], w.py[entity], entity, killed);
     if (killed) queueTreeSeedAt(w, field, w.px[entity], w.py[entity]);
   }
 }
@@ -485,6 +496,7 @@ export function projectileSystem(w, field) {
         const reach = def.hitRadius + buildingFootprintHalf(b.type);
         if (fx.dist2(nextX, nextY, b.x, b.z) <= fx.mul(reach, reach)) {
           hitBuilding(w, field, bi, def, store.damage[slot], store.source[slot], store.owner[slot]);
+          if (def.growsHeadMushroom) publishSporeHit(w, store, slot, b.x, b.z, -1, false);
           store.hitCount[slot]++;
           if (store.hitCount[slot] >= def.pierce) {
             freeProjectile(w, slot, PROJECTILE_DESPAWN.HIT);
@@ -495,6 +507,7 @@ export function projectileSystem(w, field) {
         const reach = def.hitRadius + fx.fromFloat(TILE_SIZE_F);
         if (fx.dist2(nextX, nextY, door.x, door.z) <= fx.mul(reach, reach)) {
           applyDamageDoor(w, field, di, store.damage[slot]);
+          if (def.growsHeadMushroom) publishSporeHit(w, store, slot, door.x, door.z, -1, false);
           store.hitCount[slot]++;
           if (store.hitCount[slot] >= def.pierce) {
             freeProjectile(w, slot, PROJECTILE_DESPAWN.HIT);

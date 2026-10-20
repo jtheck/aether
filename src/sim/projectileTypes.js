@@ -130,10 +130,11 @@ export const PROJECTILE_DEFS = [
   {
     id: PROJECTILE.SPORE_STREAM,
     name: 'SporeStream',
-    speed: fx.fromFloat(5.4),
-    maxTicks: 36,
+    // Matches the ground mushroom wave (3.4 wu every 67ms) so the line you see is the hit.
+    speed: fx.fromFloat(2.55),
+    maxTicks: 40,
     hitRadius: fx.fromFloat(2.4),
-    homing: 1,
+    homing: 0,
     blockedByTerrain: 0,
     pierce: 1,
     splashRadius: 0,
@@ -161,6 +162,8 @@ export const PROJECTILE_DEFS = [
     color: [1, 0.96, 0.78],
     launchHeight: 3.6,
     arcHeight: 0.15,
+    /** The cut is a mesh at the target. Nothing travels. */
+    hidden: 1,
     renderCapacity: 4096,
   },
   {

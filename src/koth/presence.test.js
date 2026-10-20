@@ -6,7 +6,9 @@ import {
   isLiveMatchMember,
   isMatchLeavePresence,
   isSpectatorMember,
+  pruneEndedMatches,
   relinquishesActiveSeat,
+  suppressEndedMatchPresence,
 } from './presence.js';
 
 const matchId = 'koth-abc-12345678';
@@ -87,5 +89,29 @@ describe('koth presence membership', () => {
     assert.equal(isMatchLeavePresence(data, matchId), true);
     assert.equal(isLiveMatchMember(data, matchId), false);
     assert.equal(isSpectatorMember(data, matchId), false);
+  });
+
+  it('keeps an ended match suppressed while stale spectators still announce it', () => {
+    const ended = new Map();
+    assert.equal(suppressEndedMatchPresence(ended, { matchId, gone: true }, 100), true);
+    assert.equal(suppressEndedMatchPresence(ended, {
+      matchId,
+      phase: SHARD_PHASE.LIVE,
+      appState: KOTH_APP_STATE.SPECTATOR,
+      role: 'spectator',
+    }, 200), true);
+    assert.equal(ended.get(matchId), 200);
+    assert.equal(suppressEndedMatchPresence(ended, {
+      matchId: 'koth-other-ffffffff',
+      phase: SHARD_PHASE.LIVE,
+    }, 300), false);
+  });
+
+  it('forgets an ended match only after its stale heartbeats stop', () => {
+    const ended = new Map([[matchId, 100]]);
+    pruneEndedMatches(ended, 1000, 1100);
+    assert.equal(ended.has(matchId), true);
+    pruneEndedMatches(ended, 1000, 1101);
+    assert.equal(ended.has(matchId), false);
   });
 });

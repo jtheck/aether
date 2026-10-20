@@ -152,6 +152,7 @@ export function defaultMatchAgoras(worldHalfF, mapW, count = 2, worldHalfZF = wo
 export function spawnPadsForMapType(mapType, worldHalfF, mapW, worldHalfZF = worldHalfF) {
   const spec = mapTypeById(normalizeMapType(mapType, ''));
   if (!spec || spec.id === 'adventure') return [];
+  if (spec.id === 'stress') return stressSpawnDryPads(worldHalfF);
   if (spec.koth) return kothBases(worldHalfF, worldHalfZF);
   const bases = spawnBases(worldHalfF, {
     laneBases: spec.laneBases,
@@ -561,7 +562,7 @@ function agoraCampRole(type) {
   if (type === UNIT.VILLAGER) return 'villager';
   if (type === UNIT.ENGINEER) return 'engineer';
   if (isTransport(type) || isFlyer(type)) return 'park';
-  if (type === UNIT.WARRIOR || type === UNIT.MONK) return 'front';
+  if (type === UNIT.WARRIOR || type === UNIT.CHAMPION || type === UNIT.MONK) return 'front';
   if (type === UNIT.ARCHER || type === UNIT.MYCO) return 'mid';
   return 'rear';
 }
@@ -598,7 +599,7 @@ function spawnArmyAroundAgora(w, layout, owner, baseX, baseZ) {
 }
 
 function kothInfantryRole(type) {
-  if (type === UNIT.WARRIOR || type === UNIT.MONK) return 'front';
+  if (type === UNIT.WARRIOR || type === UNIT.CHAMPION || type === UNIT.MONK) return 'front';
   if (type === UNIT.ARCHER || type === UNIT.MYCO) return 'mid';
   if (type === UNIT.DIRIGIBLE || type === UNIT.APC) return 'flank';
   return 'rear';
@@ -997,6 +998,31 @@ export function stressReservedPoints(worldHalfF = activeWorldHalfF()) {
     }
   }
   return points;
+}
+
+/** World x/z samples so procedural lakes stay off the five pie-ring armies. */
+export function stressSpawnDryPads(worldHalfF = activeWorldHalfF()) {
+  const innerR = worldHalfF * STRESS_RING_INNER_FRAC;
+  const maxR = worldHalfF * STRESS_MAX_RADIUS_FRAC;
+  const usable = ((Math.PI * 2) / STRESS_ARMY_COUNT) * (1 - STRESS_SLICE_GAP_FRAC);
+  const halfSpan = usable / 2;
+  const radialStep = 36;
+  const arcStep = 36;
+  /** @type {[number, number][]} */
+  const pads = [];
+  for (let slice = 0; slice < STRESS_ARMY_COUNT; slice++) {
+    const mid = stressSliceMidAngle(slice);
+    for (let r = innerR; r <= maxR + 1e-6; r += radialStep) {
+      const arcLen = Math.max(0, r) * usable;
+      const n = Math.max(1, Math.ceil(arcLen / arcStep));
+      for (let i = 0; i < n; i++) {
+        const t = n === 1 ? 0.5 : i / (n - 1);
+        const a = mid - halfSpan + t * usable;
+        pads.push([Math.cos(a) * r, Math.sin(a) * r]);
+      }
+    }
+  }
+  return pads;
 }
 
 /** Pack `count` units in a square grid centered on (baseX, baseZ). */

@@ -2,6 +2,7 @@
 // (agora found) beat same-type caster compounds.
 
 import { getUnitDef, UNIT } from './unitTypes.js';
+import { isManaAbility } from './mana.js';
 import { getResource } from './resources.js';
 import { BASE_PYRAMID_BANK } from './storage.js';
 import { applyCasts } from './abilities.js';
@@ -15,11 +16,12 @@ export const COMBO = {
 export const AGORA_FOUND_MINERAL = BASE_PYRAMID_BANK.mineral;
 
 export function isCasterType(typeId) {
-  return !!getUnitDef(typeId).primaryAbility;
+  const id = getUnitDef(typeId).primaryAbility;
+  return isManaAbility(id);
 }
 
 export function isComboVillager(typeId) {
-  return typeId === UNIT.VILLAGER || typeId === UNIT.BRIGAND;
+  return typeId === UNIT.VILLAGER;
 }
 
 /**

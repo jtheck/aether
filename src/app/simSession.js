@@ -192,6 +192,8 @@ export class SimSession {
     /** Continuous render tick. Advances in pump(); snapshot arrival does not reset it. */
     this._displayTickF = 0;
     this._displaySample = { tick: 0, alpha: 1 };
+    /** Set while a replay walks stored poses backward. Display follows this, not the worker. */
+    this._replayPoseSample = null;
     /** Last alpha / display tick actually drawn — pause freezes to these (not live clock). */
     this._lastDisplayAlpha = 1;
     this._lastDisplayTick = 0;
@@ -292,6 +294,7 @@ export class SimSession {
     this._displayBlendMs = TICK_MS;
     this._displayBlendLive = false;
     this._displaySample = { tick: 0, alpha: 1 };
+    this._replayPoseSample = null;
     return {
       count,
       field: this.field,
@@ -454,6 +457,7 @@ export class SimSession {
    * While paused, hold the last *drawn* alpha so projectiles don't take one more step.
    */
   get displayAlpha() {
+    if (this._replayPoseSample) return this._replayPoseSample.alpha;
     if (this.pauseLockstep) {
       if (this._pausedDisplayAlpha == null) {
         this._pausedDisplayAlpha = this._lastDisplayAlpha;
@@ -468,6 +472,7 @@ export class SimSession {
   }
 
   _displayTick() {
+    if (this._replayPoseSample) return this._replayPoseSample.tick;
     if (this.pauseLockstep) {
       if (this._pausedDisplayTick == null) {
         this._pausedDisplayTick = this._lastDisplayTick;
@@ -736,6 +741,7 @@ export class SimSession {
     this._displayBlendLive = false;
     this._displayTickF = 0;
     this._displaySample = { tick: 0, alpha: 1 };
+    this._replayPoseSample = null;
     clearSessionTableState(this);
     this.client = new SimClient();
     this.state = this.client.state;

@@ -1,6 +1,7 @@
 // Unit-tester garden — 2-player mirror with one of every unit and building.
-// Write with: node --input-type=module -e "import { writeFileSync } from 'fs'; import { buildTesterGarden } from './sim/testerGarden.js'; const j=JSON.stringify(buildTesterGarden()); writeFileSync('../maps/tester.garden', j); writeFileSync('maps/tester.garden', j);"
+// Write with: node --input-type=module -e "import { writeFileSync } from 'fs'; import { buildTesterGarden } from './sim/testerGarden.js'; writeFileSync('../maps/dev/tester.garden', JSON.stringify(buildTesterGarden()));"
 
+import { TESTER_GARDEN_URL } from '../houseMaps.js';
 import { createField, TERRAIN, SKIRMISH_MAP_W, SKIRMISH_MAP_H, activeMapW, activeMapH, setActiveMapSize } from './field.js';
 import {
   applyTableSilhouette,
@@ -15,7 +16,7 @@ import { PLACEABLE_BUILDINGS } from './buildings.js';
 import { SCENERY, defaultTreeStock } from './scenery.js';
 
 export const TESTER_GARDEN_NAME = 'unit tester';
-export const TESTER_GARDEN_URL = '/maps/tester.garden';
+export { TESTER_GARDEN_URL };
 export const TESTER_SEED = 0x7e57e5;
 export const TESTER_STARTING_RESOURCES = Object.freeze({ wood: 9999, stone: 9999, mineral: 9999, food: 9999 });
 

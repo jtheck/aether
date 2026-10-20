@@ -10,7 +10,7 @@ const previewPath = path.join(seedDir, 'preview.jpg');
 const gardenPath = path.join(contentDir, 'map.garden');
 const vdfPathOut = path.join(seedDir, 'item.vdf');
 const idPath = path.join(seedDir, 'publishedfileid.txt');
-const gardenSrc = path.join(root, '..', 'maps', 'tester.garden');
+const gardenSrc = path.join(root, '..', 'maps', 'dev', 'tester.garden');
 const previewSrc = path.join(root, '..', 'steam-assets', 'icons', 'app_icon.jpg');
 
 function die(msg) {
@@ -39,7 +39,7 @@ function parsePublishedIdFromVdf(text) {
 
 fs.mkdirSync(contentDir, { recursive: true });
 if (!fs.existsSync(gardenPath)) {
-  if (!fs.existsSync(gardenSrc)) die('Missing maps/tester.garden');
+  if (!fs.existsSync(gardenSrc)) die('Missing maps/dev/tester.garden');
   fs.copyFileSync(gardenSrc, gardenPath);
 }
 if (!fs.existsSync(previewPath)) {

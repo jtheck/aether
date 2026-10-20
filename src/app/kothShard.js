@@ -26,6 +26,9 @@ import { p2pDevModeFromLocation } from './net.js';
 import { getPlayerColor, getPlayerName, getUnitSkins } from './settings.js';
 import { ownerColorsFromRoster, sanitizeOwnerColor } from '../render/ownerTints.js';
 import { aetherSteam } from './steam.js';
+import { rememberLadderId } from './ladderId.js';
+import { noteKothElimination } from './ladderSession.js';
+import { shownKing } from '../sim/kothMeta.js';
 import {
   localOwnedPacks,
   ownerSkinsFromRoster,
@@ -162,8 +165,8 @@ const JOIN_DELAY_TICKS = 40;
 const JOIN_INPUT_SETTLE_TICKS = 20;
 // 4: every join is a drop-in SPAWN_SLOT; the first challenger no longer rebuilds
 // the board (which used to reset every spectator's catch-up and queued claim).
-const KOTH_PROTOCOL_VERSION = 4;
-const MIN_LIVE_PLAYERS = 2;
+const KOTH_PROTOCOL_VERSION = 5;
+const MIN_LIVE_PLAYERS = 3;
 const MAX_ACTIVE_PLAYERS = 5;
 // How long to listen in the matchmaking lobby for an existing match before
 // creating a new one, so two players pressing start near-simultaneously join the
@@ -250,6 +253,11 @@ export function createKothShard(options = {}) {
   const matchLobbyConnectedListeners = new Set();
   const chatListeners = new Set();
   let localUserId = null;
+  /** userId → ladder UUID, learned from presence. */
+  const ladderIds = new Map();
+  /** Scored deaths waiting until every seated ladder id is known. */
+  const pendingBounties = [];
+  const LADDER_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   let session = null;
   /** 1v1 / teams / adventure hold — don't wrap commands as KOTH lockstep. */
   let lobbyMatchHold = false;
@@ -257,6 +265,10 @@ export function createKothShard(options = {}) {
   let lastChatSendAt = 0;
 
   let matchId = generateMatchId();
+  let wantLadderSeat = false;
+  let ladderClaimQueued = false;
+  /** Bound to the public join once the shard object exists. */
+  let requestJoinSeat = () => {};
   let phase = SHARD_PHASE.SANDBOX;
   let roster = createEmptyRoster();
   roster[0] = { userId: null, state: 'active', playerId: 0 };
@@ -583,6 +595,7 @@ export function createKothShard(options = {}) {
         dlc: localDlc(),
         skins: localSkins(),
         color: localColor(),
+        ladderId: rememberLadderId(),
         role,
         appState,
         v: KOTH_PROTOCOL_VERSION,
@@ -844,6 +857,7 @@ export function createKothShard(options = {}) {
     offerEligible = Array.isArray(eligible) ? [...eligible] : [];
     if (from) offerAuthorityId = from;
     localOfferEligible = offerEligible.some((id) => userIdsMatch(id, localUserId));
+    if (localOfferEligible) scheduleLadderClaim();
     if (role !== 'spectator' || !catchUpReady || claimPending()) return;
 
     let nextStatus = '';
@@ -2379,6 +2393,7 @@ export function createKothShard(options = {}) {
     pendingQuorum.clear();
     inputEnableTick = 0;
     claimWhenLevel = false;
+    wantLadderSeat = false;
     offerEpoch = 0;
     offerEligible = [];
     localOfferEligible = false;
@@ -2454,11 +2469,30 @@ export function createKothShard(options = {}) {
     return 'Waiting for Offer';
   }
 
+  function scheduleLadderClaim() {
+    if (!wantLadderSeat || ladderClaimQueued) return;
+    ladderClaimQueued = true;
+    setTimeout(() => {
+      ladderClaimQueued = false;
+      if (!wantLadderSeat) return;
+      if (
+        !catchUpReady
+        || activeCatchupRequestId
+        || role !== 'spectator'
+        || appState === KOTH_APP_STATE.JOINING
+        || !localOfferEligible
+        || !offerEpoch
+      ) return;
+      wantLadderSeat = false;
+      requestJoinSeat();
+    }, 0);
+  }
+
   function getLobbyPresence() {
     const browsing = appState === KOTH_APP_STATE.PRIVATE_SANDBOX && phase !== SHARD_PHASE.LIVE;
     const live = liveMatches.get(matchId);
     const hosting = phase === SHARD_PHASE.LIVE && role === 'player';
-    const playing = phase === SHARD_PHASE.LIVE && role === 'player' && countActive(roster) >= 2;
+    const playing = phase === SHARD_PHASE.LIVE && role === 'player' && countActive(roster) >= MIN_LIVE_PLAYERS;
     const stalled = playing && (session?.lockstepBlockedMs?.() ?? 0) >= LOCKSTEP_STALL_UI_MS;
     pruneStaleMatchMembers();
     const spectators = lobbySpectators();
@@ -2489,6 +2523,7 @@ export function createKothShard(options = {}) {
       ),
       joinLabel: joinActionLabel(),
       players: lobbyPlayers(),
+      kingOwner: shownKing(session?.koth),
       spectators,
       spectatorCount: spectators.length,
     };
@@ -3119,6 +3154,89 @@ export function createKothShard(options = {}) {
     return true;
   }
 
+  function ladderIdFor(userId) {
+    if (!userId) return '';
+    if (userIdsMatch(userId, localUserId)) {
+      const mine = rememberLadderId();
+      if (mine) return mine;
+    }
+    const direct = ladderIds.get(userId);
+    if (direct) return direct;
+    for (const [key, id] of ladderIds) {
+      if (userIdsMatch(key, userId)) return id;
+    }
+    return '';
+  }
+
+  function flushKothBounties() {
+    for (let i = pendingBounties.length - 1; i >= 0; i--) {
+      const item = pendingBounties[i];
+      if (item.sending) continue;
+      const victimLadder = ladderIdFor(item.userId);
+      if (!victimLadder) continue;
+      const survivorIds = [];
+      let missing = false;
+      for (const userId of item.survivorUserIds) {
+        const id = ladderIdFor(userId);
+        if (!id) {
+          missing = true;
+          break;
+        }
+        if (id !== victimLadder && !survivorIds.includes(id)) survivorIds.push(id);
+      }
+      if (missing || !survivorIds.length) continue;
+      item.sending = true;
+      const reporter = rememberLadderId();
+      void noteKothElimination({
+        matchId,
+        tick: item.event.tick | 0,
+        checksum: item.checksum >>> 0,
+        victimId: victimLadder,
+        survivorIds,
+        points: item.event.points | 0,
+        playerId: reporter || victimLadder,
+      }).then((ok) => {
+        if (ok) {
+          const at = pendingBounties.indexOf(item);
+          if (at >= 0) pendingBounties.splice(at, 1);
+        } else {
+          item.sending = false;
+        }
+      });
+    }
+  }
+
+  function reportKothBounty(playerId, userId) {
+    const log = session?.koth?.bounty;
+    if (!Array.isArray(log) || !userId) return;
+    let event = null;
+    for (let i = log.length - 1; i >= 0; i--) {
+      const entry = log[i];
+      if (entry?.victim === playerId && entry.points > 0) {
+        event = entry;
+        break;
+      }
+    }
+    if (!event) return;
+    const key = `${matchId}|${event.tick | 0}|${playerId}`;
+    if (pendingBounties.some((item) => item.key === key)) return;
+    const survivorUserIds = [];
+    for (const slot of roster) {
+      if (slot.state !== 'active' || !slot.userId || slot.playerId === playerId) continue;
+      survivorUserIds.push(slot.userId);
+    }
+    if (!survivorUserIds.length) return;
+    pendingBounties.push({
+      key,
+      userId,
+      event,
+      survivorUserIds,
+      checksum: session?._lastChecksum ?? 0,
+      sending: false,
+    });
+    flushKothBounties();
+  }
+
   function retireCombatWipes() {
     if (phase !== SHARD_PHASE.LIVE || lobbyMatchHold) return;
     // Revolving KOTH does not enter generic post-game observation. Even when the
@@ -3135,6 +3253,7 @@ export function createKothShard(options = {}) {
       if (defeatedPlayers.has(playerId)) continue;
       const authorDefeat = isKing() || playerId === localPlayerId;
       returned.push(slot.userId);
+      reportKothBounty(playerId, slot.userId);
       vacateActiveSeat(playerId, slot.userId, {
         authorDefeat,
         eliminateTick: (session.confirmedTick ?? 0) + 2,
@@ -3585,7 +3704,7 @@ export function createKothShard(options = {}) {
     broadcastPresence();
     emitShard();
     notifyPresentationSync({ role: 'player', appState, localPlayerId: 0, inputEnabled: true, reset: true });
-    onStatus('Match live — waiting for challengers');
+    onStatus('Waiting for 3 players');
   }
 
   // The lone creator does not wait for a second player. It goes live solo as the
@@ -3632,7 +3751,7 @@ export function createKothShard(options = {}) {
     joinShardLobby();
     await notifyLiveStart(true);
     if (DEBUG_KOTH) console.info('[KOTH] solo-live created', { matchId: shortId(matchId) });
-    onStatus('Match live — waiting for challengers');
+    onStatus('Waiting for 3 players');
     upsertNode(observerTree, localUserId, {
       role: 'player',
       depth: 0,
@@ -4457,6 +4576,7 @@ export function createKothShard(options = {}) {
       }
       sendAll({ type: MSG.CATCHUP_READY, matchId, userId: localUserId, tick: msg.tick });
       catchupRetryAttempt = 0;
+      scheduleLadderClaim();
       if (isKing()) refreshSlotOffer([], { force: true });
     } catch (err) {
       if (epoch !== catchupEpoch) return;
@@ -5128,6 +5248,10 @@ export function createKothShard(options = {}) {
     }
     if (data.from) {
       if (typeof data.name === 'string') notePeerName(data.from, data.name);
+      if (typeof data.ladderId === 'string' && LADDER_UUID.test(data.ladderId)) {
+        ladderIds.set(data.from, data.ladderId.toLowerCase());
+        flushKothBounties();
+      }
       if (data.skins && typeof data.skins === 'object' && !Array.isArray(data.skins)) {
         rememberUserSkins(data.from, data.skins);
       } else if (Array.isArray(data.dlc)) {
@@ -5362,6 +5486,7 @@ export function createKothShard(options = {}) {
     const ok = await waitForP2pConsumer(p2p);
     if (!ok) throw new Error('GetFire signaling failed');
     localUserId = p2p.getUserId?.() ?? null;
+    if (localUserId) ladderIds.set(localUserId, rememberLadderId());
     if (role === 'player') roster[0].userId = localUserId;
     {
       const saved = loadSavedMatch();
@@ -5411,7 +5536,7 @@ export function createKothShard(options = {}) {
     broadcastPresence();
   })();
 
-  return {
+  const shard = {
     waitForBoot: () => bootPromise,
     getShard: () => ({
       matchId,
@@ -5524,6 +5649,22 @@ export function createKothShard(options = {}) {
         from: host,
         phase: SHARD_PHASE.LIVE,
       });
+    },
+
+    startLadderHill(id) {
+      if (phase === SHARD_PHASE.LIVE) return false;
+      cancelDiscoverStart();
+      clearSavedMatch();
+      matchId = String(id || generateMatchId());
+      seed = hashSeed(matchId);
+      pinnedMatchId = matchId;
+      aetherSteam.notifyKothLobbyCreated();
+      return startSoloLive();
+    },
+
+    claimSeatWhenReady() {
+      wantLadderSeat = true;
+      scheduleLadderClaim();
     },
 
     startLiveLobby() {
@@ -5699,6 +5840,8 @@ export function createKothShard(options = {}) {
       p2p?.disconnect?.();
     },
   };
+  requestJoinSeat = () => shard.requestJoin();
+  return shard;
 }
 
 function hashSeed(matchId) {

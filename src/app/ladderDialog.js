@@ -1,4 +1,5 @@
 import { ladderSlices } from './ladderBoard.js';
+import { seasonInfo } from './ladderSeason.js';
 import { ladderLooking, ladderQueueReady, leaveLadder, loadLadderBoard, queueLadder, touchLadderName } from './ladderApi.js';
 import { rememberLadderId } from './ladderId.js';
 import { clearLadderAssignment, setLadderAssignment } from './ladderSession.js';
@@ -37,13 +38,16 @@ function fill(el, rows, playerId) {
   el.appendChild(table);
 }
 
-export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu }) {
+export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPlace }) {
   const openBtn = document.getElementById('ladder-open');
   const pop = document.getElementById('ladder_pop');
   const closeBtn = document.getElementById('ladder_close');
   const board1 = document.getElementById('ladder_board_1v1');
   const boardTeams = document.getElementById('ladder_board_teams');
+  const boardHill = document.getElementById('ladder_board_koth');
   const title = document.getElementById('ladder_title');
+  const seasonNum = document.getElementById('ladder_season_num');
+  const seasonStart = document.getElementById('ladder_season_start');
   const findBtn = document.getElementById('ladder_find');
   const status = document.getElementById('ladder_status');
   const topEl = document.getElementById('ladder_top');
@@ -71,11 +75,15 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu }) {
   const playerId = rememberLadderId();
 
   function findLabel() {
-    return boardId === 'teams' ? 'Find 2v2' : 'Find match';
+    const type = boardId === 'teams' ? '2v2' : boardId === 'koth' ? 'KOTH' : '1v1';
+    return `Find ${type} Ladder Match`;
   }
 
   function matchNames(match) {
     const players = match.players || [];
+    if (match.board === 'koth') {
+      return players.map((player) => `${player.name}  ${player.rating}`).join('   ·   ');
+    }
     if (match.board !== 'teams') {
       return players.map((player) => `${player.name}  ${player.rating}`).join('   vs   ');
     }
@@ -88,9 +96,13 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu }) {
   function paint() {
     const view = ladderSlices(board.rows || [], playerId, page);
     page = view.page;
-    if (title) title.textContent = boardId === 'teams' ? 'Teams ladder' : '1v1 ladder';
+    const season = seasonInfo(board.season || '2026-1');
+    if (title) title.textContent = season.name || 'Ladder';
+    if (seasonNum) seasonNum.textContent = season.number == null ? '' : `(Season #${season.number})`;
+    if (seasonStart) seasonStart.textContent = season.started;
     board1?.setAttribute('aria-pressed', boardId === '1v1' ? 'true' : 'false');
     boardTeams?.setAttribute('aria-pressed', boardId === 'teams' ? 'true' : 'false');
+    boardHill?.setAttribute('aria-pressed', boardId === 'koth' ? 'true' : 'false');
     if (findBtn && !searching) findBtn.textContent = findLabel();
     fill(topEl, view.top, playerId);
     if (aroundWrap) aroundWrap.hidden = view.around.length === 0;
@@ -167,16 +179,22 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu }) {
   }
 
   function startMatch(match) {
-    const teams = match.board === 'teams';
-    setLadderAssignment({ ...match, you: playerId, board: teams ? 'teams' : '1v1' });
+    const board = match.board === 'teams' ? 'teams' : match.board === 'koth' ? 'koth' : '1v1';
+    setLadderAssignment({ ...match, you: playerId, board });
+    if (board === 'koth') {
+      onKothPlace?.({ ...match, you: playerId, board });
+      onCloseMenu?.();
+      setOpen(false);
+      return;
+    }
     showCountdown(match);
-    const mode = teams ? 'teams' : 'onevsone';
+    const mode = board === 'teams' ? 'teams' : board === 'koth' ? 'koth' : 'onevsone';
     if (match.role === 'host') {
       matchLobby.createRoom(mode, {
         roomId: match.matchId,
         seed: match.seed,
         ranked: true,
-        roster: teams ? match.players : null,
+        roster: board === '1v1' ? null : match.players,
       });
       return;
     }
@@ -214,11 +232,18 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu }) {
       res = null;
     }
     if (!searching || !res) return;
+    if (res.status === 'join' && res.board === 'koth' && res.matchId) {
+      stopSearch();
+      startMatch(res);
+      return;
+    }
     if (res.status === 'matched') {
-      const teams = boardId === 'teams';
-      const accepted = teams
-        ? res.board === 'teams' && (res.players || []).length === 4
-        : res.board == null || res.board === '1v1';
+      const players = res.players || [];
+      const accepted = boardId === 'teams'
+        ? res.board === 'teams' && players.length === 4
+        : boardId === 'koth'
+          ? res.board === 'koth' && players.length >= 3 && players.length <= 5
+          : res.board == null || res.board === '1v1';
       if (!accepted) return;
       stopSearch();
       startMatch(res);
@@ -234,13 +259,15 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu }) {
     searching = true;
     note = '';
     if (findBtn) findBtn.textContent = 'Cancel search';
-    if (boardId === 'teams') {
+    if (boardId === 'teams' || boardId === 'koth') {
       let ready = false;
-      try { ready = await ladderQueueReady('teams'); } catch { ready = false; }
+      try { ready = await ladderQueueReady(boardId); } catch { ready = false; }
       if (!searching) return;
       if (!ready) {
         stopSearch();
-        note = 'Teams queue is not on the server yet.';
+        note = boardId === 'koth'
+          ? 'KOTH queue is not on the server yet.'
+          : '2v2 queue is not on the server yet.';
         paint();
         return;
       }
@@ -271,6 +298,7 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu }) {
   });
   board1?.addEventListener('click', () => { void showBoard('1v1'); });
   boardTeams?.addEventListener('click', () => { void showBoard('teams'); });
+  boardHill?.addEventListener('click', () => { void showBoard('koth'); });
   prev?.addEventListener('click', () => {
     page -= 1;
     paint();

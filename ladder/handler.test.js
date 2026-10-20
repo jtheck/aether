@@ -339,6 +339,113 @@ test('the teams queue widens until a far rating can fill the table', async () =>
   assert.equal(widened.body.players.some((player) => player.playerId === E), true);
 });
 
+const F = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+const G = '99999999-9999-4999-8999-999999999999';
+const H = '88888888-8888-4888-8888-888888888888';
+const I = '77777777-7777-4777-8777-777777777777';
+
+test('a hill starts at three close players and leaves a far rating waiting', async () => {
+  const { store, handler } = setup();
+  await store.putItem({ pk: 'koth#2026-1', sk: `p#${F}`, playerId: F, rating: 1400, games: 4, wins: 2 });
+  assert.equal((await json(handler, queueJoin(F, 'user-f', 'koth'))).body.status, 'waiting');
+  assert.equal((await json(handler, queueJoin(A, 'user-a', 'koth'))).body.status, 'waiting');
+  assert.equal((await json(handler, queueJoin(B, 'user-b', 'koth'))).body.status, 'waiting');
+  const matched = await json(handler, queueJoin(C, 'user-c', 'koth'));
+  assert.equal(matched.body.status, 'matched');
+  assert.equal(matched.body.board, 'koth');
+  assert.equal(matched.body.players.length, 3);
+  assert.deepEqual(matched.body.players.map((player) => player.playerId), [A, B, C]);
+  assert.deepEqual(matched.body.players.map((player) => player.seat), [0, 1, 2]);
+  const far = await json(handler, queueJoin(F, 'user-f', 'koth'));
+  assert.equal(far.body.status, 'waiting');
+  assert.equal(far.body.board, 'koth');
+});
+
+test('a live hill takes the next players up to five seated and three watching', async () => {
+  const { handler } = setup();
+  await handler(queueJoin(A, 'user-a', 'koth'));
+  await handler(queueJoin(B, 'user-b', 'koth'));
+  const matched = await json(handler, queueJoin(C, 'user-c', 'koth'));
+  assert.equal(matched.body.players.length, 3);
+  const fourth = await json(handler, queueJoin(D, 'user-d', 'koth'));
+  assert.equal(fourth.body.status, 'join');
+  assert.equal(fourth.body.role, 'player');
+  assert.equal(fourth.body.matchId, matched.body.matchId);
+  const fifth = await json(handler, queueJoin(E, 'user-e', 'koth'));
+  assert.equal(fifth.body.status, 'join');
+  assert.equal(fifth.body.role, 'player');
+  const watching = [F, G, H];
+  for (const id of watching) {
+    const joined = await json(handler, queueJoin(id, `user-${id[0]}`, 'koth'));
+    assert.equal(joined.body.status, 'join');
+    assert.equal(joined.body.role, 'spectator');
+    assert.equal(joined.body.matchId, matched.body.matchId);
+  }
+  const ninth = await json(handler, queueJoin(I, 'user-i', 'koth'));
+  assert.equal(ninth.body.status, 'waiting');
+  assert.equal(ninth.body.looking, 1);
+});
+
+test('three queued players open a new hill when every live hill is full', async () => {
+  const { store, handler } = setup();
+  await store.putItem({
+    pk: 'hill#koth',
+    sk: 'h#lobby-full',
+    matchId: 'lobby-full',
+    hostUserId: 'user-z',
+    hostPlayerId: F,
+    rating: 1000,
+    seated: 5,
+    spectators: 3,
+    population: 8,
+    heartbeat: Date.now(),
+  });
+  await handler(queueJoin(A, 'user-a', 'koth'));
+  await handler(queueJoin(B, 'user-b', 'koth'));
+  const opened = await json(handler, queueJoin(C, 'user-c', 'koth'));
+  assert.equal(opened.body.status, 'matched');
+  assert.equal(opened.body.players.length, 3);
+  assert.notEqual(opened.body.matchId, 'lobby-full');
+});
+
+test('three spectators who agree open a hill of their own', async () => {
+  const { handler } = setup();
+  await handler(queueJoin(A, 'user-a', 'koth'));
+  await handler(queueJoin(B, 'user-b', 'koth'));
+  const matched = await json(handler, queueJoin(C, 'user-c', 'koth'));
+  const matchId = matched.body.matchId;
+  const first = await json(handler, post({
+    action: 'hill-split', matchId, playerId: D, userId: 'user-d', name: 'D',
+  }));
+  assert.equal(first.body.status, 'waiting');
+  assert.equal(first.body.agreed, 1);
+  await handler(post({ action: 'hill-split', matchId, playerId: E, userId: 'user-e', name: 'E' }));
+  const third = await json(handler, post({
+    action: 'hill-split', matchId, playerId: F, userId: 'user-f', name: 'F',
+  }));
+  assert.equal(third.body.status, 'matched');
+  assert.equal(third.body.players.length, 3);
+  assert.equal(third.body.role, 'guest');
+  assert.notEqual(third.body.matchId, matchId);
+  const again = await json(handler, post({
+    action: 'hill-split', matchId, playerId: D, userId: 'user-d', name: 'D',
+  }));
+  assert.equal(again.body.status, 'matched');
+  assert.equal(again.body.matchId, third.body.matchId);
+  assert.equal(again.body.role, 'host');
+});
+
+test('leaving the hill queue does not drop a 1v1 search', async () => {
+  const { handler } = setup();
+  await handler(queueJoin(A, 'user-a', 'koth'));
+  await handler(queueJoin(B, 'user-b', '1v1'));
+  const left = await json(handler, post({ action: 'leave', playerId: A, board: 'koth' }));
+  assert.equal(left.body.status, 'left');
+  const still = await json(handler, queueJoin(C, 'user-c', '1v1'));
+  assert.equal(still.body.status, 'matched');
+  assert.equal(still.body.players.some((player) => player.playerId === B), true);
+});
+
 test('leaving the teams queue does not drop a 1v1 search', async () => {
   const { handler } = setup();
   await handler(queueJoin(A, 'user-a', 'teams'));
@@ -389,4 +496,30 @@ test('republishing a settled match after the season changes leaves the new index
   const index = JSON.parse(store.objects.get('ladder/index.json'));
   assert.equal(index.current, '2026-1');
   assert.equal(await store.getItem('1v1#2026-2', `p#${A}`), null);
+});
+
+test('a koth death settles once and a repeat does not move rating again', async () => {
+  const { store, handler } = setup();
+  const body = {
+    action: 'koth',
+    matchId: 'hill-1',
+    playerId: A,
+    tick: 1200,
+    checksum: 7,
+    points: 1,
+    victimId: B,
+    survivorIds: [A],
+  };
+  const first = await json(handler, post(body));
+  assert.equal(first.status, 200);
+  assert.equal(first.body.status, 'settled');
+  const king = first.body.ratings.find((row) => row.playerId === A);
+  const fallen = first.body.ratings.find((row) => row.playerId === B);
+  assert.equal(king.delta, 4);
+  assert.equal(fallen.delta, -4);
+  const again = await json(handler, post(body));
+  assert.equal(again.body.status, 'settled');
+  const row = await store.getItem('koth#2026-1', `p#${A}`);
+  assert.equal(row.rating, 1004);
+  assert.equal(row.games, 1);
 });

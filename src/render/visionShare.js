@@ -25,3 +25,26 @@ export function shareVisionOwnersFromCfg(cfg, playerDefault = 0) {
   }
   return [...ids];
 }
+
+/**
+ * Spectator fog while a camera follow is locked to one player.
+ * That seat's own sight (allies still come from teams). Leaving the follow
+ * returns the spectator union.
+ * @param {{
+ *   localPlayerId?: number,
+ *   shareVisionWith?: number[] | null,
+ *   followOwner?: number | null,
+ *   observing?: boolean,
+ * }} spec
+ * @returns {{ localPlayerId: number, shareVisionWith: number[] }}
+ */
+export function spectatorFollowFog(spec) {
+  const local = spec?.localPlayerId | 0;
+  const share = Array.isArray(spec?.shareVisionWith) ? spec.shareVisionWith : [];
+  const observing = spec?.observing != null ? Boolean(spec.observing) : local < 0;
+  const follow = spec?.followOwner;
+  if (!observing || follow == null || !Number.isFinite(Number(follow)) || (follow | 0) < 0) {
+    return { localPlayerId: local, shareVisionWith: share };
+  }
+  return { localPlayerId: follow | 0, shareVisionWith: [] };
+}

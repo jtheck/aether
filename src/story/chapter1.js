@@ -1,6 +1,5 @@
 // Chapter 1 cinematic beats. Map tiles stay yours to author; this is the reel.
-// Garden file: repo-root maps/chapter1.garden (served as /maps/chapter1.garden).
-// Legacy v1 adventure maps stay in maps/adventure/.
+// Legacy standalone chapter URL (adventure ships via maps/adventure/adventure.campaign).
 
 import {
   CLIP_CAMERA,
@@ -150,7 +149,7 @@ export function chapter1Story() {
 
 /**
  * Tiny v4 board + Chapter 1 reels. Landscape is dressed in chapterLand.js.
- * Write with: node --input-type=module -e "import { writeFileSync } from 'fs'; import { buildChapter1Garden } from './story/chapter1.js'; const j=JSON.stringify(buildChapter1Garden()); writeFileSync('../maps/chapter1.garden', j); writeFileSync('maps/chapter1.garden', j);"
+ * Prefer exporting chapters from Forge into adventure.campaign; this builder is for dev only.
  */
 export function buildChapter1Garden() {
   const prevW = activeMapW();

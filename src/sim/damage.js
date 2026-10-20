@@ -9,6 +9,7 @@ import { unloadPassengers } from './transport.js';
 import { onMycoDeath } from './sporeBloom.js';
 import { armChaseLeash } from './leash.js';
 import { creditDamagedBy, noteWarriorDamage } from './champion.js';
+import { noteOwnerKill, noteOwnerLoss } from './ownerStats.js';
 
 /**
  * @param {object} w
@@ -38,7 +39,12 @@ export function applyDamage(w, target, amount, source = -1) {
   }
   w.hp[target] -= remain;
   if (w.hp[target] <= 0) {
+    const victimOwner = w.owner[target] | 0;
+    const killerOwner = source >= 0 && source < w.count ? w.owner[source] | 0 : -1;
     kill(w, target);
+    if (killerOwner >= 0 && killerOwner !== victimOwner && isHostile(killerOwner, victimOwner)) {
+      noteOwnerKill(w, killerOwner);
+    }
     return true;
   }
   if (source >= 0) tryRetaliate(w, target, source);
@@ -99,4 +105,5 @@ export function kill(w, i) {
   clearPath(w, i);
   if (deathType === UNIT.MYCO) onMycoDeath(w, deathX, deathY);
   creditDamagedBy(w, i);
+  noteOwnerLoss(w, w.owner[i]);
 }

@@ -378,7 +378,7 @@ function resolveAttacks(w, field) {
               damage: unitAttackDamage(w, i, def.attackDamage),
             });
           } else {
-            applyDamageBuilding(w, field, bi, unitAttackDamage(w, i, def.attackDamage));
+            applyDamageBuilding(w, field, bi, unitAttackDamage(w, i, def.attackDamage), w.owner[i] | 0);
           }
           w.attackCd[i] = def.attackCooldown;
           if (!isBuildingAlive(w.buildings?.[bi])) endAttack(w, i);

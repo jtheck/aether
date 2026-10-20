@@ -10,7 +10,7 @@ export const LADDER_FIELD_SIZES = ['tiny', 'small', 'medium'];
 /** Ranked teams rotates the teams default and the next two sizes. */
 export const TEAMS_LADDER_FIELD_SIZES = ['small', 'medium', 'large'];
 
-/** Live chapters from maps/adventure.campaign. Empty until that file loads. */
+/** Live chapters from maps/adventure/adventure.campaign. Empty until that file loads. */
 export function selectableAdventureChapters() {
   return adventureChapters();
 }
@@ -22,6 +22,7 @@ export function gardenUrlForChapter(chapterId) {
   if (ch?.garden) return ch.garden;
   const lower = raw.toLowerCase();
   if (lower === 'session' || lower.startsWith('workshop:') || lower.startsWith('pack:')) return raw;
+  if (raw.startsWith('/maps/')) return raw;
   return '';
 }
 
@@ -57,7 +58,10 @@ export function chapterLabelFor(ref = {}) {
   return name.trim();
 }
 
-/** @typedef {'onevsone' | 'teams' | 'adventure'} LobbyModeId */
+/** Ranked hill rotates the larger boards. The drop wants room around five pads. */
+export const KOTH_LADDER_FIELD_SIZES = ['medium', 'large', 'huge'];
+
+/** @typedef {'onevsone' | 'teams' | 'adventure' | 'koth'} LobbyModeId */
 
 /** @type {Record<LobbyModeId, {
  *   id: LobbyModeId,
@@ -111,6 +115,19 @@ export const MODES = {
     hasChapter: true,
     customMap: false,
     spectators: false,
+  },
+  koth: {
+    id: 'koth',
+    name: 'King of the Hill',
+    typeChannel: 'aether-v2-koth',
+    maxPlayers: 5,
+    teams: false,
+    defaultFieldSize: 'medium',
+    allowAi: false,
+    minHumans: 3,
+    hasChapter: false,
+    customMap: false,
+    spectators: true,
   },
 };
 

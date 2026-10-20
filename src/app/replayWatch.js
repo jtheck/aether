@@ -6,7 +6,9 @@ import {
   liveConfigFromReplay,
   parseReplayFile,
   pickReplayText,
+  replayChecksumExpect,
   replayEndTick,
+  REPLAY_SIM_MISMATCH,
 } from './replay.js';
 import {
   REPLAY_POSE_KEEP,
@@ -15,6 +17,7 @@ import {
   replayReverseFill,
   trimReplayPoses,
 } from './replayPose.js';
+import { replayCamPose } from './replayCam.js';
 import { replayFollowPlan } from './viewFollow.js';
 
 export { REPLAY_POSE_KEEP };
@@ -252,6 +255,12 @@ export function createReplayController(deps) {
     };
   }
 
+  function failStatus(err, fallback) {
+    const message = String(err?.message || err || '');
+    if (/checksum mismatch/i.test(message)) return REPLAY_SIM_MISMATCH;
+    return fallback;
+  }
+
   function endTick() {
     return replayEndTick(state.file);
   }
@@ -463,7 +472,7 @@ export function createReplayController(deps) {
         liveConfigFromReplay(file, { garden: state.garden, skipSplash: true }),
         file.frames,
         want,
-        null,
+        replayChecksumExpect(file, want),
         catchupOptions(from, shouldContinue, onTick),
       );
     }
@@ -495,7 +504,7 @@ export function createReplayController(deps) {
         cfg,
         file.frames,
         want,
-        null,
+        replayChecksumExpect(file, want),
         catchupOptions(0, shouldContinue, onTick),
       );
       ctx.session.watchingReplay = true;
@@ -521,7 +530,7 @@ export function createReplayController(deps) {
         liveConfigFromReplay(file, { garden: state.garden, skipSplash: true }),
         file.frames,
         target,
-        null,
+        replayChecksumExpect(file, target),
         catchupOptions(cur, shouldContinue, onTick),
       );
       ctx.session.watchingReplay = true;
@@ -547,7 +556,7 @@ export function createReplayController(deps) {
     } catch (err) {
       if (state.gen === gen) {
         console.error('[replay] sync failed', err);
-        deps.setStatus('Replay seek failed');
+        deps.setStatus(failStatus(err, 'Replay seek failed'));
       }
       return false;
     } finally {
@@ -613,7 +622,7 @@ export function createReplayController(deps) {
       await moveSimTo(ctx, file, want, shouldContinue, poseRecordFrom(want));
     } catch (err) {
       console.error('[replay] seek failed', err);
-      deps.setStatus('Replay seek failed');
+      deps.setStatus(failStatus(err, 'Replay seek failed'));
     } finally {
       if (gen === state.gen) {
         aborted = state.abortSeek;
@@ -683,7 +692,7 @@ export function createReplayController(deps) {
         else await rebuildToTick(ctx, plan.to, { skipSplash: true, shouldContinue, onTick: record });
       } catch (err) {
         console.error('[replay] reverse fill failed', err);
-        deps.setStatus('Replay reverse failed');
+        deps.setStatus(failStatus(err, 'Replay reverse failed'));
         return false;
       } finally {
         if (state.gen === gen) {
@@ -750,7 +759,15 @@ export function createReplayController(deps) {
           return false;
         }
         const frames = collectFramesForTick(byTick, next, humans);
-        await session.client.commitTickAsync(next, frames);
+        const committedTick = await session.client.commitTickAsync(next, frames);
+        session._lastChecksum = committedTick?.checksum;
+        const drifted = replayChecksumExpect(file, next);
+        if (drifted != null && (session._lastChecksum >>> 0) !== drifted) {
+          state.playing = false;
+          state.speed = 0;
+          deps.setStatus(REPLAY_SIM_MISMATCH);
+          return false;
+        }
         if (state.gen !== gen) return false;
         if ((session.confirmedTick | 0) !== next) session.confirmedTick = next;
         rememberPose(session, next);
@@ -859,7 +876,7 @@ export function createReplayController(deps) {
     } catch (err) {
       if (state.gen === gen) {
         console.error('[replay] playback failed', err);
-        deps.setStatus('Replay playback failed');
+        deps.setStatus(failStatus(err, 'Replay playback failed'));
       }
     } finally {
       if (state.gen === gen) {
@@ -1002,7 +1019,7 @@ export function createReplayController(deps) {
       deps.parkLobby?.();
     } catch (err) {
       console.error('[replay] load failed', err);
-      deps.setStatus('Could not load replay');
+      deps.setStatus(failStatus(err, 'Could not load replay'));
       hide();
     } finally {
       state.busy = false;
@@ -1125,5 +1142,6 @@ export function createReplayController(deps) {
     isWatching,
     getHead,
     followRemote,
+    camPose: (owner, tick) => replayCamPose(state.file?.cams, owner, tick),
   };
 }

@@ -1,11 +1,13 @@
 import { START_RATING } from './elo.js';
 import { INDEX_KEY, boardDocument, boardKey, mergeIndex } from './publish.js';
-import { countLooking, handleLeave, handleName, handleQueue } from './queue.js';
+import { countLooking, handleHill, handleHillSplit, handleLeave, handleName, handleQueue } from './queue.js';
 import {
   boardPartition,
   judgeReports,
+  parseKothReport,
   parseReport,
   playerKey,
+  rateElimination,
   rateMatch,
   resultPartition,
 } from './report.js';
@@ -120,6 +122,101 @@ async function recordIncident(store, { season, kind, matchId, reporterId, subjec
   });
 }
 
+async function settleKoth(store, { season, report, canonical, now }) {
+  const resultPk = `result#koth#${report.matchId}#${report.tick}#${report.victimId}`;
+  const already = await store.getItem(resultPk, SETTLED);
+  if (already) {
+    if (already.canonical !== canonical) {
+      await recordIncident(store, {
+        season,
+        kind: 'discrepancy',
+        matchId: report.matchId,
+        reporterId: report.playerId,
+        subjectId: report.victimId,
+        detail: 'koth report disagreed',
+        at: now(),
+      });
+      return {
+        statusCode: 409,
+        rated: false,
+        body: { ok: false, status: 'conflict', season, board: 'koth', matchId: report.matchId },
+      };
+    }
+    return {
+      statusCode: 200,
+      rated: true,
+      body: { ok: true, status: 'settled', season: already.season, board: 'koth', matchId: report.matchId, ratings: already.deltas },
+    };
+  }
+
+  const pk = boardPartition('koth', season);
+  const ratings = {};
+  for (const id of [report.victimId, ...report.survivorIds]) {
+    const row = await store.getItem(pk, playerKey(id));
+    ratings[id] = {
+      rating: row?.rating ?? START_RATING,
+      games: row?.games ?? 0,
+      wins: row?.wins ?? 0,
+    };
+  }
+  const next = rateElimination(report, ratings);
+  const deltas = next.map((row) => ({
+    playerId: row.playerId,
+    rating: row.rating,
+    delta: row.delta,
+    games: row.games,
+    wins: row.wins,
+  }));
+  const result = await store.settle({
+    settled: {
+      pk: resultPk,
+      sk: SETTLED,
+      canonical,
+      board: 'koth',
+      season,
+      matchId: report.matchId,
+      tick: report.tick,
+      checksum: report.checksum,
+      deltas,
+      at: now(),
+    },
+    players: next.map((row) => ({
+      pk,
+      sk: playerKey(row.playerId),
+      playerId: row.playerId,
+      name: '',
+      oldRating: row.oldRating,
+      oldGames: row.oldGames,
+      rating: row.rating,
+      games: row.games,
+      wins: row.wins,
+    })),
+  });
+  if (!result.ok && result.reason !== 'exists') {
+    return { statusCode: 500, rated: false, body: { ok: false, error: 'could not settle' } };
+  }
+  const settled = result.ok ? null : await store.getItem(resultPk, SETTLED);
+  if (settled && settled.canonical !== canonical) {
+    return {
+      statusCode: 409,
+      rated: false,
+      body: { ok: false, status: 'conflict', season, board: 'koth', matchId: report.matchId },
+    };
+  }
+  return {
+    statusCode: 200,
+    rated: true,
+    body: {
+      ok: true,
+      status: 'settled',
+      season,
+      board: 'koth',
+      matchId: report.matchId,
+      ratings: settled?.deltas ?? deltas,
+    },
+  };
+}
+
 export function createHandler({
   store,
   season,
@@ -142,11 +239,12 @@ export function createHandler({
     if (method === 'GET') {
       const board = String(event?.queryStringParameters?.board ?? '');
       if (event?.queryStringParameters?.looking != null) {
-        const which = event.queryStringParameters.board === 'teams' ? 'teams' : '1v1';
+        const asked = event.queryStringParameters.board;
+        const which = asked === 'teams' || asked === 'koth' ? asked : '1v1';
         const looking = await countLooking(store, clock(), which);
         return respond(200, { ok: true, looking, board: which }, origin, origins);
       }
-      if (board === '1v1' || board === 'teams') {
+      if (board === '1v1' || board === 'teams' || board === 'koth') {
         const raw = await store.getObject(boardKey(season, board));
         let doc = { season, board, updatedAt: now(), rows: [] };
         if (raw) {
@@ -154,7 +252,7 @@ export function createHandler({
         }
         return respond(200, doc, origin, origins);
       }
-      return respond(200, { ok: true, season, boards: ['1v1', 'teams'] }, origin, origins);
+      return respond(200, { ok: true, season, boards: ['1v1', 'teams', 'koth'] }, origin, origins);
     }
     if (method !== 'POST') return respond(405, { ok: false, error: 'method not allowed' }, origin, origins);
 
@@ -176,6 +274,14 @@ export function createHandler({
       }
       return respond(named.status, named.body, origin, origins);
     }
+    if (body?.action === 'hill') {
+      const hill = await handleHill(store, body, { now: clock() });
+      return respond(hill.status, hill.body, origin, origins);
+    }
+    if (body?.action === 'hill-split') {
+      const split = await handleHillSplit(store, body, { now: clock() });
+      return respond(split.status, split.body, origin, origins);
+    }
     if (body?.action === 'queue') {
       const queued = await handleQueue(store, body, { season, now: clock(), random });
       return respond(queued.status, queued.body, origin, origins);
@@ -195,6 +301,16 @@ export function createHandler({
         at: now(),
       });
       return respond(200, { ok: true, status: 'recorded' }, origin, origins);
+    }
+
+    if (body?.action === 'koth') {
+      const parsedKoth = parseKothReport(body);
+      if (!parsedKoth.ok) return respond(400, { ok: false, error: parsedKoth.error }, origin, origins);
+      const settled = await settleKoth(store, { season, report: parsedKoth.report, canonical: parsedKoth.canonical, now });
+      if (settled.rated) {
+        await publish(store, { season, envSeason: season, board: 'koth', now });
+      }
+      return respond(settled.statusCode, settled.body, origin, origins);
     }
 
     const parsed = parseReport(body);

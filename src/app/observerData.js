@@ -99,6 +99,26 @@ export function isComputerOwner(owner, computers) {
  * @param {Record<number, string> | null | undefined} names
  * @param {Array<number | { owner?: number }> | null | undefined} computers
  */
+/** Seated King of the Hill names. Spectators stay on the resource sheet. */
+export function kothNameRoster(presence, koth) {
+  const owners = [];
+  const names = {};
+  const players = presence?.players || [];
+  for (let i = 0; i < players.length; i++) {
+    const player = players[i];
+    if (!player || player.spectator || player.playerId == null || (player.playerId | 0) < 0) continue;
+    const id = player.playerId | 0;
+    owners.push(id);
+    if (player.name) names[id] = player.name;
+  }
+  if (!owners.length && koth?.active) {
+    for (let i = 0; i < koth.active.length; i++) {
+      if (koth.active[i] && !koth.eliminated?.[i]) owners.push(i);
+    }
+  }
+  return { owners, names };
+}
+
 export function observerOwnerName(owner, names, computers) {
   const o = owner | 0;
   const named = names?.[o];
@@ -170,14 +190,18 @@ export function createObserverData(host) {
       return;
     }
     root.hidden = false;
-    const sig = `${owners.join(',')}|${icons ? 1 : 0}`;
+    const namesOnly = Boolean(state?.namesOnly);
+    root.classList.toggle('is-names', namesOnly);
+    const sig = `${namesOnly ? 'n' : 'f'}|${owners.join(',')}|${icons ? 1 : 0}`;
     if (root.dataset.sig !== sig) {
       root.textContent = '';
       rows.clear();
-      const header = makeHeader(icons);
-      for (let i = 0; i < header.length; i++) root.appendChild(header[i]);
+      if (!namesOnly) {
+        const header = makeHeader(icons);
+        for (let i = 0; i < header.length; i++) root.appendChild(header[i]);
+      }
       for (let i = 0; i < owners.length; i++) {
-        const rec = makeRow();
+        const rec = namesOnly ? makeNameRow() : makeRow();
         for (let c = 0; c < rec.cells.length; c++) root.appendChild(rec.cells[c]);
         rows.set(owners[i], rec);
       }
@@ -187,7 +211,8 @@ export function createObserverData(host) {
       const owner = owners[i];
       const rec = rows.get(owner);
       if (!rec) continue;
-      const label = observerOwnerName(owner, state.names, state.computers);
+      const label = ((state.kingOwner | 0) === owner && (state.kingOwner | 0) >= 0 ? '👑 ' : '')
+        + observerOwnerName(owner, state.names, state.computers);
       if (rec.name.textContent !== label) rec.name.textContent = label;
       rec.name.style.color = tintCss(ownerTint(owner));
       const following = followable && followOwner === owner;
@@ -197,6 +222,7 @@ export function createObserverData(host) {
       rec.name.style.cursor = followable ? 'pointer' : '';
       rec.name.style.textDecoration = following ? 'underline' : '';
       rec.name.title = followable ? (following ? 'Following' : 'Follow') : '';
+      if (namesOnly) continue;
       const bank = ownerResourcesFrom(state.resources, owner);
       for (let k = 0; k < RESOURCE_KINDS.length; k++) {
         const kind = RESOURCE_KINDS[k];
@@ -206,7 +232,7 @@ export function createObserverData(host) {
         if (el.textContent !== next) el.textContent = next;
       }
       const army = formatGameNumber(state.world ? livingByOwner(state.world, owner) : 0);
-      if (rec.pop.textContent !== army) rec.pop.textContent = army;
+      if (rec.pop && rec.pop.textContent !== army) rec.pop.textContent = army;
     }
   }
 
@@ -242,6 +268,12 @@ function makeHeader(icons) {
     cells.push(cell);
   }
   return cells;
+}
+
+function makeNameRow() {
+  const name = document.createElement('span');
+  name.style.justifySelf = 'end';
+  return { cells: [name], name, counts: {}, pop: null };
 }
 
 function makeRow() {

@@ -1,11 +1,15 @@
-// Campaign → Fountain / HTML screenplay. Reads the episode manifest and the
-// grove prologue reels; no garden build required.
+﻿// Campaign → Fountain / HTML screenplay. Reads maps/adventure/adventure.campaign (or any
+// bundled .campaign); uses each chapter garden's story reels and objectives.
 
-import { CLIP_CAMERA, CLIP_HOLD, CLIP_LINE } from './timeline.js';
-import { EPISODES } from './campaign.js';
-import { chapter1IntroReel, chapter1WinReel } from './chapter1.js';
-import { chapter2IntroReel, chapter2WinReel } from './chapter2.js';
-import { chapter3IntroReel, chapter3WinReel } from './chapter3.js';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { CLIP_CAMERA, CLIP_HOLD, CLIP_LINE, normalizeStory } from './timeline.js';
+import { isCampaignBundle, normalizeCampaignIndex } from './campaignPack.js';
+import { normalizeObjectives } from './objectives.js';
+
+const here = dirname(fileURLToPath(import.meta.url));
+export const DEFAULT_CAMPAIGN_PATH = join(here, '../../maps/adventure/adventure.campaign');
 
 const ACTION_WIDTH = 60;
 const DIALOGUE_WIDTH = 36;
@@ -103,6 +107,19 @@ function playFromObjectives(objectives) {
   return items.length ? { kind: 'play', items } : null;
 }
 
+function reelClips(story, when) {
+  const s = normalizeStory(story);
+  if (when === 'win') {
+    return s.reels.find((r) => r.when === 'win')?.clips || [];
+  }
+  const start = s.reels.find((r) => r.when === 'start' || r.when === 'intro');
+  return start?.clips || s.reels[0]?.clips || [];
+}
+
+function chapterIdFromFile(file) {
+  return String(file || 'chapter').replace(/\.garden$/i, '').replace(/\W+/g, '-').toLowerCase();
+}
+
 function chapterBeats(episodeName, episodeN, indexInEpisode, def) {
   const chapterNo = `${episodeN}.${indexInEpisode}`;
   const beats = [
@@ -123,66 +140,64 @@ function chapterBeats(episodeName, episodeN, indexInEpisode, def) {
   return beats;
 }
 
-function groveAct() {
-  const chapters = [
-    { id: 'grove-1', name: 'The Grove', intro: chapter1IntroReel(), win: chapter1WinReel(), play: 'REACH the old road north.' },
-    { id: 'grove-2', name: 'The Ridge', intro: chapter2IntroReel(), win: chapter2WinReel(), play: 'TAKE the north ridge.' },
-    { id: 'grove-3', name: 'Clean Ground', intro: chapter3IntroReel(), win: chapter3WinReel(), play: 'REACH the clean hollow.' },
-  ];
+function chapterDefFromGarden(garden, chapterName, theme) {
+  const story = garden?.story;
   return {
-    id: 'prologue',
-    n: 0,
-    name: 'Prologue',
-    theme: 'grove',
-    chapters: chapters.map((ch, i) => ({
-      id: ch.id,
-      name: ch.name,
-      index: i + 1,
-      beats: [
-        ...(i === 0
-          ? [
-            { kind: 'transition', text: 'FADE IN:' },
-            { kind: 'scene', text: 'EXT. THE ANCIENT GROVE - PROLOGUE' },
-            { kind: 'action', text: 'Before the siege. The party is still only four, and the woods are already dying.' },
-          ]
-          : []),
-        { kind: 'scene', text: sceneHeading('grove', ch.name) },
-        ...stepBeats(ch.intro.clips),
-        { kind: 'transition', text: 'CUT TO:' },
-        { kind: 'play', items: [{ verb: '', note: ch.play }] },
-        { kind: 'transition', text: 'CUT TO:' },
-        { kind: 'scene', text: sceneHeading('grove', ch.name, true), later: true },
-        ...stepBeats(ch.win.clips),
-        ...(i === chapters.length - 1 ? [{ kind: 'transition', text: 'FADE OUT.' }] : []),
-      ],
-    })),
+    theme: theme || 'grove',
+    name: chapterName || garden?.n || garden?.name || 'Chapter',
+    intro: reelClips(story, 'start'),
+    win: reelClips(story, 'win'),
+    objectives: normalizeObjectives(garden?.objectives || garden?.obj),
   };
 }
 
+/** @param {string} [path] */
+export function readCampaignBundleForScript(path = DEFAULT_CAMPAIGN_PATH) {
+  const raw = JSON.parse(readFileSync(path, 'utf8'));
+  if (!isCampaignBundle(raw)) throw new Error(`not a campaign bundle: ${path}`);
+  return raw;
+}
+
 /** Structured screenplay used by both Fountain and HTML renderers. */
-export function campaignScriptDocument() {
-  const acts = [groveAct()];
-  for (const ep of EPISODES) {
+export function campaignScriptDocument(opts = {}) {
+  const bundle = opts.bundle ?? readCampaignBundleForScript(opts.bundlePath);
+  const index = normalizeCampaignIndex(bundle);
+  if (!index) throw new Error('campaign index invalid');
+  const acts = [];
+  index.episodes.forEach((ep, epIdx) => {
+    const episodeN = epIdx + 1;
+    const chapters = [];
+    let indexInEpisode = 0;
+    for (const ch of ep.chapters) {
+      if (ch.live === false) continue;
+      const garden = bundle.gardens[ch.file];
+      if (!garden) continue;
+      indexInEpisode += 1;
+      const theme = ep.theme || 'grove';
+      const def = chapterDefFromGarden(garden, ch.name, theme);
+      chapters.push({
+        id: chapterIdFromFile(ch.file),
+        name: ch.name || def.name,
+        index: indexInEpisode,
+        beats: chapterBeats(ep.name, episodeN, indexInEpisode, def),
+      });
+    }
+    if (!chapters.length) return;
     acts.push({
-      id: `ep${ep.n}`,
-      n: ep.n,
+      id: `ep${episodeN}`,
+      n: episodeN,
       name: ep.name,
       theme: ep.theme,
-      chapters: ep.chapters.map((def, idx) => ({
-        id: def.id,
-        name: def.name,
-        index: idx + 1,
-        beats: chapterBeats(ep.name, ep.n, idx + 1, def),
-      })),
+      chapters,
     });
-  }
+  });
   return {
     title: 'AETHER',
-    credit: 'a campaign in five episodes',
+    credit: index.name || bundle.name || 'Adventure',
     author: 'the party',
     date: new Date().toISOString().slice(0, 10),
     notes: [
-      'Generated from the adventure manifest. Spoken lines are as authored.',
+      'Generated from the shipped .campaign file. Spoken lines are as authored in each garden.',
       'PLAY slugs are the live chapter objectives.',
     ],
     acts,
@@ -223,7 +238,7 @@ function fountainBeats(beats) {
   return out;
 }
 
-/** Fountain / screenplay text for the grove prologue + five-episode campaign. */
+/** Fountain / screenplay text for the bundled adventure campaign. */
 export function renderCampaignScript(doc = campaignScriptDocument()) {
   const lines = [
     'Title:',

@@ -102,6 +102,8 @@ export function setupMenu({
       return opt;
     }),
   );
+  const practiceToggle = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#practice-toggle'));
+  const practiceBody = /** @type {HTMLElement | null} */ (drawer.querySelector('#practice-body'));
   const soloBtn = /** @type {HTMLButtonElement} */ (drawer.querySelector('#solo_ai_b'));
   const openReplayBtn = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#open_replay_b'));
   const testerBtn = /** @type {HTMLButtonElement} */ (drawer.querySelector('#unit_tester_b'));
@@ -247,6 +249,12 @@ export function setupMenu({
     } finally {
       testerBtn.disabled = false;
     }
+  });
+
+  practiceToggle?.addEventListener('click', () => {
+    const open = practiceToggle.getAttribute('aria-expanded') !== 'true';
+    practiceToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (practiceBody) practiceBody.hidden = !open;
   });
 
   stressBtn?.addEventListener('click', async () => {

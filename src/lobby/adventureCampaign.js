@@ -8,7 +8,9 @@ import {
   isCampaignBundle,
 } from '../story/campaignPack.js';
 
-export const ADVENTURE_CAMPAIGN_URL = '/maps/adventure.campaign';
+import { ADVENTURE_CAMPAIGN_URL } from '../houseMaps.js';
+
+export { ADVENTURE_CAMPAIGN_URL };
 
 /** @type {{ id: string, name: string, episode: string, garden: string }[]} */
 let chapters = [];

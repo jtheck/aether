@@ -1,6 +1,7 @@
 // Stressful Situation garden — 31-chunk table, pie-ring FFA, authored camera corral.
-// Write with: node --input-type=module -e "import { writeFileSync } from 'fs'; import { buildStressGarden } from './sim/stressGarden.js'; const j=JSON.stringify(buildStressGarden()); writeFileSync('../maps/stress.garden', j); writeFileSync('maps/stress.garden', j);"
+// Write with: node --input-type=module -e "import { writeFileSync } from 'fs'; import { buildStressGarden } from './sim/stressGarden.js'; writeFileSync('../maps/dev/stress.garden', JSON.stringify(buildStressGarden()));"
 
+import { STRESS_GARDEN_URL } from '../houseMaps.js';
 import {
   STRESS_CAMERA_HALF_F,
   STRESS_MAP_H,
@@ -22,7 +23,7 @@ import {
 import * as fx from './fixed.js';
 
 export const STRESS_GARDEN_NAME = 'stressful situation';
-export const STRESS_GARDEN_URL = '/maps/stress.garden';
+export { STRESS_GARDEN_URL };
 export const STRESS_GARDEN_SEED = 0x57e55;
 
 /**

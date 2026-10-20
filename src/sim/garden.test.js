@@ -887,7 +887,7 @@ describe('garden codec', () => {
     assert.equal(live.cameraHalfF, STRESS_CAMERA_HALF_F);
     assert.equal(live.width, STRESS_MAP_W);
     const here = dirname(fileURLToPath(import.meta.url));
-    const onDisk = JSON.parse(readFileSync(join(here, '../../maps/stress.garden'), 'utf8'));
+    const onDisk = JSON.parse(readFileSync(join(here, '../../maps/dev/stress.garden'), 'utf8'));
     assert.deepEqual(onDisk, json);
   });
 });

@@ -10,8 +10,12 @@ async function post(body) {
   return { status: res.status, ...data };
 }
 
+function boardKey(board) {
+  return board === 'teams' || board === 'koth' ? board : '1v1';
+}
+
 async function lookingPayload(board) {
-  const key = board === 'teams' ? 'teams' : '1v1';
+  const key = boardKey(board);
   const res = await fetch(`${LADDER_URL}?looking=1&board=${key}`);
   if (!res.ok) return null;
   return res.json().catch(() => null);
@@ -24,9 +28,10 @@ export async function ladderLooking(board = '1v1') {
 
 /** The live function echoes the board only after the teams queue is deployed. */
 export async function ladderQueueReady(board = '1v1') {
-  if (board !== 'teams') return true;
-  const data = await lookingPayload(board);
-  return data?.board === 'teams';
+  const key = boardKey(board);
+  if (key === '1v1') return true;
+  const data = await lookingPayload(key);
+  return data?.board === key;
 }
 
 export function touchLadderName(playerId, name) {
@@ -38,7 +43,7 @@ export function queueLadder(body) {
 }
 
 export function leaveLadder(playerId, board = '1v1') {
-  return post({ action: 'leave', playerId, board: board === 'teams' ? 'teams' : '1v1' });
+  return post({ action: 'leave', playerId, board: boardKey(board) });
 }
 
 export function postLadderIncident(body) {
@@ -49,8 +54,20 @@ export function postLadderReport(body) {
   return post(body);
 }
 
+export function postLadderKoth(body) {
+  return post({ action: 'koth', ...body });
+}
+
+export function postHill(body) {
+  return post({ action: 'hill', ...body });
+}
+
+export function postHillSplit(body) {
+  return post({ action: 'hill-split', ...body });
+}
+
 export async function loadLadderBoard(pageOrigin = '', board = '1v1') {
-  const key = board === 'teams' ? 'teams' : '1v1';
+  const key = boardKey(board);
   if (String(pageOrigin).includes('aether.garden')) {
     try {
       const indexRes = await fetch('/ladder/index.json');

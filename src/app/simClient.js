@@ -177,6 +177,7 @@ export class SimClient {
         techChanged: !!msg.techChanged,
         resources: msg.resources,
         resourcesChanged: !!msg.resourcesChanged,
+        ownerStats: msg.ownerStats ?? null,
         storageOverflow: msg.storageOverflow ?? null,
         metrics: msg.metrics,
         treeUpdates: msg.treeUpdates ?? null,

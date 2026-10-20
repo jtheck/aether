@@ -1,10 +1,53 @@
 // Post-match command-log replay. KOTH world checkpoints stay for late-join
 // catch-up; this tape is the unpruned input log so we can save the match.
 
+import { packReplayCams } from './replayCam.js';
 import { isWorkshopRef } from './workshop.js';
 
 export const REPLAY_KIND = 'aether-replay';
 export const REPLAY_VERSION = 1;
+/**
+ * Rules generation. Bump when the same command tape would build a different world.
+ * Presentation, fog, and camera changes stay on this number.
+ * Tapes saved before the field existed are generation 1.
+ */
+export const SIM_GENERATION = 1;
+export const REPLAY_SIM_UNSTAMPED = 1;
+export const REPLAY_SIM_UPDATE = 'Update Aether to watch this replay';
+export const REPLAY_SIM_OLD = 'This replay was recorded on older rules and will not play';
+export const REPLAY_SIM_MISMATCH = 'This replay does not match this version of Aether';
+
+/** @param {unknown} value */
+export function replaySimOf(value) {
+  if (value == null || value === '') return REPLAY_SIM_UNSTAMPED;
+  const n = Number(value) | 0;
+  return n > 0 ? n : REPLAY_SIM_UNSTAMPED;
+}
+
+/**
+ * @param {unknown} sim
+ * @param {number} [current]
+ * @returns {string | null}
+ */
+export function replaySimProblem(sim, current = SIM_GENERATION) {
+  const got = replaySimOf(sim);
+  const now = current | 0;
+  if (got > now) return REPLAY_SIM_UPDATE;
+  if (got < now) return REPLAY_SIM_OLD;
+  return null;
+}
+
+/**
+ * Checksum recorded for `file.tick`. Null unless playback is on that tick.
+ * @param {{ tick?: number, checksum?: number | null } | null | undefined} file
+ * @param {number} tick
+ * @returns {number | null}
+ */
+export function replayChecksumExpect(file, tick) {
+  if (file?.checksum == null) return null;
+  if ((tick | 0) !== (file.tick | 0)) return null;
+  return file.checksum >>> 0;
+}
 
 /** @param {unknown} cmd */
 export function cloneReplayCommand(cmd) {
@@ -115,6 +158,7 @@ export function buildReplayFile(session, extra = {}) {
     .filter(Boolean);
   const file = {
     v: REPLAY_VERSION,
+    sim: SIM_GENERATION,
     kind: REPLAY_KIND,
     savedAt: extra.savedAt ?? new Date().toISOString(),
     tick: (session?.confirmedTick | 0) || 0,
@@ -124,6 +168,8 @@ export function buildReplayFile(session, extra = {}) {
     config,
     frames,
   };
+  const cams = packReplayCams(extra.cams ?? session?.replayCams);
+  if (cams.length) file.cams = cams;
   const garden = extra.garden ?? session?.replayGarden ?? null;
   if (garden && isWorkshopRef(config?.gardenUrl)) file.garden = garden;
   return file;
@@ -278,21 +324,25 @@ export function parseReplayFile(raw) {
   if (!data || typeof data !== 'object') throw new Error('Not an Aether replay');
   if (data.kind !== REPLAY_KIND) throw new Error('Not an Aether replay');
   if ((data.v | 0) !== REPLAY_VERSION) throw new Error('Unsupported replay version');
+  const simProblem = replaySimProblem(data.sim);
+  if (simProblem) throw new Error(simProblem);
   if (!data.config || typeof data.config !== 'object') throw new Error('Replay is missing match config');
   if (!Array.isArray(data.frames)) throw new Error('Replay is missing frames');
   const config = replayConfigFromLive(data.config);
   if (!config) throw new Error('Replay is missing match config');
   return {
     v: REPLAY_VERSION,
+    sim: replaySimOf(data.sim),
     kind: REPLAY_KIND,
     savedAt: typeof data.savedAt === 'string' ? data.savedAt : '',
     tick: data.tick | 0,
-    checksum: (data.checksum ?? 0) >>> 0,
+    checksum: data.checksum == null ? null : (data.checksum >>> 0),
     names: data.names && typeof data.names === 'object' && !Array.isArray(data.names)
       ? { ...data.names }
       : {},
     config,
     frames: data.frames.map(cloneReplayFrame).filter(Boolean),
+    cams: packReplayCams(data.cams),
   };
 }
 

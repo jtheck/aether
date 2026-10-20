@@ -31,6 +31,7 @@ import { isCarried } from './transport.js';
 import { canCastAbility, isManaAbility, spendMana, CAST_GCD } from './mana.js';
 import { getUnitCost } from './unitTypes.js';
 import { addResource, canAfford, spendResources } from './resources.js';
+import { noteResourceRefund } from './ownerStats.js';
 import { becomeBrigand } from './brigand.js';
 
 export const ABILITY = {
@@ -243,6 +244,7 @@ function castVillagerBrigandGroup(w, field, casters, aimX, aimY) {
     if (!becomeBrigand(w, i)) {
       addResource(w, owner, 'food', BRIGAND_UPGRADE_COST.food | 0);
       addResource(w, owner, 'wood', BRIGAND_UPGRADE_COST.wood | 0);
+      noteResourceRefund(w, owner, BRIGAND_UPGRADE_COST);
       continue;
     }
     w.abilityCd[i] = BRIGAND_UPGRADE_CD;

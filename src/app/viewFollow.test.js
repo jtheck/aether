@@ -152,6 +152,7 @@ describe('roster status', () => {
     assert.equal(rosterStatusLabel({ replay: true }), 'watching replay');
     assert.equal(rosterStatusLabel({ watching: true }), 'Watching');
     assert.equal(rosterStatusLabel({ ready: true }), 'Ready');
+    assert.equal(rosterStatusLabel({ ready: true, lagging: true }), 'lagging');
     assert.equal(rosterStatusLabel({}), 'Not ready');
   });
 });

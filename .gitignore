@@ -24,6 +24,9 @@ yarn-error.log*
 
 # Note: src/vendor/lite/ is intentionally tracked (prebuilt Lite bake).
 
+# House maps live at repo-root maps/ only (not under src/)
+src/maps/
+
 # Recovery / disk images (do not commit)
 *.img
 *.img.bz2

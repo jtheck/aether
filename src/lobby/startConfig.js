@@ -12,7 +12,7 @@ export function teamByOwnerForMode(modeId, ownerCount, seats) {
   const n = Math.max(1, ownerCount | 0);
   const mode = getMode(modeId);
   if (!mode) return null;
-  if (mode.id === 'onevsone') return null;
+  if (mode.id === 'onevsone' || mode.id === 'koth') return null;
   const out = new Array(n);
   if (mode.teams) {
     for (let i = 0; i < n; i++) {

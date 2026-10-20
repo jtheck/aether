@@ -1,0 +1,9 @@
+{
+  "maps": [
+    {
+      "file": "arena.garden",
+      "name": "The Arena",
+      "mapType": "teams"
+    }
+  ]
+}

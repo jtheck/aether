@@ -26,6 +26,22 @@ npm run prebake
 Re-run when models / VAT clips change. Serve and package both use assets/baked/ when present.
 Static meshes load bake geo+materials (no GLB parse); villager VAT still needs its GLB for skinning.
 
+House maps (repo root, like `assets/`); layout in `maps/README.md`:
+```
+maps/adventure/    shipped adventure.campaign (Forge export)
+maps/1v1/          official 1v1 gardens + index.json (lobby picker)
+maps/teams/        official Teams gardens + index.json
+maps/koth/         KOTH garden(s) (optional)
+maps/dev/          tester + stress snapshots (regenerate from sim/*Garden.js)
+```
+URLs are centralized in `src/houseMaps.js` (e.g. `/maps/adventure/adventure.campaign`).
+
+Adventure screenplay (Fountain + HTML from `maps/adventure/adventure.campaign`):
+```
+npm run build:script
+```
+Writes `story/AETHER.fountain` and `story/AETHER.html`.
+
 Package upload folder:
 ```
 npm run package
@@ -37,8 +53,11 @@ Do not open index.html from disk (file:// / CORS / SAB).
 
 To deploy (this is the only ship path):
  - Do not build a local-only package and call it deployed. Do not edit a Steam library install, `aether.url`, or anything beside the installed exe. A local build or an install edit happens only after the user confirms that, more than once, in the same request.
- - Upload the *contents* of DEPLOY/ to the S3 bucket root (not the DEPLOY folder name)
- - CloudFront → Distributions → Invalidation "/*"
+ - From repo root (AWS CLI configured): `.\deploy-live.ps1`
+   Runs `npm run package` in src/, `aws s3 sync DEPLOY` → `s3://aether.garden/` (us-east-1),
+   sets long-cache on main-/worker-/forge-*.js, invalidates CloudFront E16NES5CQO1ZJ8 + E14MZ80C43O782.
+ - Manual equivalent: upload the *contents* of DEPLOY/ to the S3 bucket root (not the DEPLOY folder name)
+ - CloudFront → Distributions → Invalidation "/*" (both distributions above if axiom subdomain matters)
  - CloudFront MUST send these on HTML (ideally all responses) or the game stays a black/fallback screen:
      Cross-Origin-Opener-Policy: same-origin
      Cross-Origin-Embedder-Policy: require-corp

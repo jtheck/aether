@@ -7,6 +7,7 @@
 // to paper over.
 
 import { mixKothChecksum } from './kothMeta.js';
+import { mixOwnerStats } from './ownerStats.js';
 import { mixAgoraChecksum } from './agora.js';
 import { mixBuildingChecksum } from './buildings.js';
 import { mixTreeChecksum } from './trees.js';
@@ -127,6 +128,7 @@ export function checksum(w, field = null) {
   mix(w.agoraOccupyEndsMatch ?? 1);
   mix(w.storyProtect ?? 0);
   h = mixKothChecksum(h, mix, w.koth);
+  h = mixOwnerStats(h, mix, w);
   h = mixAgoraChecksum(h, mix, w.agoras);
   h = mixBuildingChecksum(h, mix, w.buildings);
   mixTechChecksum(h, mix, w);

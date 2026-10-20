@@ -31,6 +31,7 @@ import { serializeBuildings, applyWorldStructureOccupancy } from '../sim/buildin
 import { bindDoors, serializeDoors, takeDoorUpdates } from '../sim/doorCombat.js';
 import { serializeTech } from '../sim/tech.js';
 import { serializeResources } from '../sim/resources.js';
+import { serializeOwnerStats } from '../sim/ownerStats.js';
 import { takeStorageOverflow } from '../sim/storage.js';
 import { takeTreeUpdates } from '../sim/trees.js';
 import { takeRockUpdates } from '../sim/scenery.js';
@@ -57,11 +58,22 @@ import {
 
 function serializeKoth(k) {
   if (!k) return null;
+  const bounty = [];
+  const n = k.bountyCount | 0;
+  for (let i = 0; i < n; i++) {
+    bounty.push({
+      tick: k.bountyTick?.[i] | 0,
+      victim: k.bountyVictim?.[i] | 0,
+      points: k.bountyPoints?.[i] | 0,
+    });
+  }
   return {
     kingOwner: k.kingOwner,
     scores: Array.from(k.scores),
     active: Array.from(k.active),
     eliminated: Array.from(k.eliminated),
+    exposed: k.exposed ? Array.from(k.exposed) : [],
+    bounty,
   };
 }
 
@@ -271,6 +283,7 @@ self.onmessage = (e) => {
         techChanged,
         resources: serializeResources(world),
         resourcesChanged,
+        ownerStats: serializeOwnerStats(world),
         storageOverflow,
         treeUpdates,
         rockUpdates,

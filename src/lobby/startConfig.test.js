@@ -65,6 +65,7 @@ describe('lobby start config', () => {
 
   it('allies every adventure owner', () => {
     assert.deepEqual(teamByOwnerForMode('adventure', 3), [0, 0, 0]);
+    assert.equal(teamByOwnerForMode('koth', 5), null);
     const cfg = liveConfigFromLobby({
       mode: 'adventure',
       roomId: 'adv',

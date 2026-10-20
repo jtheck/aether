@@ -15,6 +15,7 @@ import * as fx from './fixed.js';
 import { applySerializedTech, serializeTech } from './tech.js';
 import { applySerializedResources, serializeResources } from './resources.js';
 import { applySerializedFoodUpkeep, serializeFoodUpkeep } from './foodUpkeep.js';
+import { ensureKothShape } from './kothMeta.js';
 import { ensureFrogCapacity } from './frogs.js';
 import { ensureFireZoneCapacity } from './fireZones.js';
 import { capacityFor } from './capacity.js';
@@ -119,6 +120,7 @@ export function exportWorldCheckpoint(w, field, checksum) {
     tech: serializeTech(w),
     resources: serializeResources(w),
     foodUpkeepAcc: serializeFoodUpkeep(w),
+    ownerStats: exportOwnerStats(w),
     field: exportFieldMutable(field),
     pendingLightning: exportPendingLightning(w.pendingLightning),
     waveSpawners: exportWaveSpawners(w.waveSpawners),
@@ -253,6 +255,7 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   applySerializedTech(w, checkpoint.tech);
   applySerializedResources(w, checkpoint.resources);
   applySerializedFoodUpkeep(w, checkpoint.foodUpkeepAcc);
+  importOwnerStats(w, checkpoint.ownerStats);
   importFieldMutable(field, checkpoint.field);
   // pass is not checkpointed; shrink rock discs to remaining stock, then OR buildings.
   applyRockOccupancyFromStock(field);
@@ -432,16 +435,58 @@ function importWaveSpawners(w, data) {
   }));
 }
 
+function exportOwnerStats(w) {
+  if (!w.ownerKills) return null;
+  return {
+    kills: encodeTA(w.ownerKills, w.ownerKills.length),
+    razes: encodeTA(w.ownerRazes, w.ownerRazes.length),
+    trained: encodeTA(w.ownerTrained, w.ownerTrained.length),
+    losses: w.ownerLosses ? encodeTA(w.ownerLosses, w.ownerLosses.length) : null,
+    buildingsLost: w.ownerBuildingsLost ? encodeTA(w.ownerBuildingsLost, w.ownerBuildingsLost.length) : null,
+    gathered: w.ownerGathered ? encodeTA(w.ownerGathered, w.ownerGathered.length) : null,
+    spent: w.ownerSpent ? encodeTA(w.ownerSpent, w.ownerSpent.length) : null,
+  };
+}
+
+function importOwnerStats(w, data) {
+  if (!data?.kills) return;
+  const n = data.kills.n | 0;
+  w.ownerKills = new Int32Array(n);
+  w.ownerRazes = new Int32Array(data.razes?.n ?? n);
+  w.ownerTrained = new Int32Array(data.trained?.n ?? n);
+  w.ownerLosses = new Int32Array(data.losses?.n ?? n);
+  w.ownerBuildingsLost = new Int32Array(data.buildingsLost?.n ?? n);
+  w.ownerGathered = new Int32Array(data.gathered?.n ?? 0);
+  w.ownerSpent = new Int32Array(data.spent?.n ?? 0);
+  decodeTAInto(w.ownerKills, data.kills);
+  decodeTAInto(w.ownerRazes, data.razes);
+  decodeTAInto(w.ownerTrained, data.trained);
+  if (data.losses) decodeTAInto(w.ownerLosses, data.losses);
+  if (data.buildingsLost) decodeTAInto(w.ownerBuildingsLost, data.buildingsLost);
+  if (data.gathered) decodeTAInto(w.ownerGathered, data.gathered);
+  if (data.spent) decodeTAInto(w.ownerSpent, data.spent);
+}
+
 function exportKoth(k) {
   if (!k) return null;
-  const established = k.established ?? new Uint8Array(5);
+  ensureKothShape(k);
   return {
     kingOwner: k.kingOwner | 0,
     active: encodeTA(k.active, k.active.length),
     eliminated: encodeTA(k.eliminated, k.eliminated.length),
     joinedAtTick: encodeTA(k.joinedAtTick, k.joinedAtTick.length),
     scores: encodeTA(k.scores, k.scores.length),
-    established: encodeTA(established, established.length),
+    established: encodeTA(k.established, k.established.length),
+    killsAtJoin: encodeTA(k.killsAtJoin, k.killsAtJoin.length),
+    razesAtJoin: encodeTA(k.razesAtJoin, k.razesAtJoin.length),
+    trainedAtJoin: encodeTA(k.trainedAtJoin, k.trainedAtJoin.length),
+    agoraSeen: encodeTA(k.agoraSeen, k.agoraSeen.length),
+    exposed: encodeTA(k.exposed, k.exposed.length),
+    bountyCount: k.bountyCount | 0,
+    bountyTick: encodeTA(k.bountyTick, k.bountyTick.length),
+    bountyVictim: encodeTA(k.bountyVictim, k.bountyVictim.length),
+    bountyPoints: encodeTA(k.bountyPoints, k.bountyPoints.length),
+    opened: k.opened | 0,
   };
 }
 
@@ -460,13 +505,25 @@ function importKoth(w, data) {
       established: new Uint8Array(data.established?.n ?? 5),
     };
   }
-  if (!w.koth.established) w.koth.established = new Uint8Array(data.established?.n ?? 5);
+  ensureKothShape(w.koth);
   w.koth.kingOwner = data.kingOwner | 0;
   decodeTAInto(w.koth.active, data.active);
   decodeTAInto(w.koth.eliminated, data.eliminated);
   decodeTAInto(w.koth.joinedAtTick, data.joinedAtTick);
   decodeTAInto(w.koth.scores, data.scores);
   decodeTAInto(w.koth.established, data.established);
+  if (data.killsAtJoin) decodeTAInto(w.koth.killsAtJoin, data.killsAtJoin);
+  if (data.razesAtJoin) decodeTAInto(w.koth.razesAtJoin, data.razesAtJoin);
+  if (data.trainedAtJoin) decodeTAInto(w.koth.trainedAtJoin, data.trainedAtJoin);
+  if (data.agoraSeen) decodeTAInto(w.koth.agoraSeen, data.agoraSeen);
+  if (data.exposed) decodeTAInto(w.koth.exposed, data.exposed);
+  if (data.bountyTick) {
+    decodeTAInto(w.koth.bountyTick, data.bountyTick);
+    decodeTAInto(w.koth.bountyVictim, data.bountyVictim);
+    decodeTAInto(w.koth.bountyPoints, data.bountyPoints);
+    w.koth.bountyCount = data.bountyCount | 0;
+  }
+  w.koth.opened = data.opened | 0;
 }
 
 function exportAgoras(agoras) {

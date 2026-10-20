@@ -431,6 +431,11 @@ export function createFogOfWar() {
   /** Extra owners whose units/buildings stamp vision (combat stays hostile). */
   const shareVision = new Set();
   let lastStampAt = 0;
+  /** Spectator shroud held while a camera follow stamps one player's fog. */
+  /** @type {Uint8Array | null} */
+  let heldCover = null;
+  /** @type {Uint8Array | null} */
+  let heldExplored = null;
   /** @type {Map<string, object>} */
   const lastBuildings = new Map();
   let buildingSig = '';
@@ -566,6 +571,18 @@ export function createFogOfWar() {
     resetOverlayScratch(n);
     gen = 1;
     lastStampAt = 0;
+  }
+
+  function rememberExplored() {
+    heldCover = cover ? cover.slice() : null;
+    heldExplored = explored ? explored.slice() : null;
+  }
+
+  function recallExplored() {
+    if (heldCover && cover && heldCover.length === cover.length) cover.set(heldCover);
+    if (heldExplored && explored && heldExplored.length === explored.length) explored.set(heldExplored);
+    heldCover = null;
+    heldExplored = null;
   }
 
   function forgetOverlay() {
@@ -730,9 +747,16 @@ export function createFogOfWar() {
     for (let i = 0; i < list.length; i++) shareVision.add(list[i] | 0);
   }
 
+  /** Seats the sim has revealed (KOTH grace expired with no agora). */
+  let exposedOwners = null;
+
+  function isExposed(owner) {
+    return !!(exposedOwners && exposedOwners[owner | 0]);
+  }
+
   function hidesHostile(owner, x, z) {
     if (!enabled) return false;
-    if (isVisionAlly(owner)) return false;
+    if (isVisionAlly(owner) || isExposed(owner)) return false;
     if (isWorldSight(x, z)) return false;
     return !trailOpen(x, z);
   }
@@ -1050,7 +1074,14 @@ export function createFogOfWar() {
     // Dropping that set (or swapping local player) must wipe explored tiles
     // and last-known buildings — otherwise the joiner keeps a second map.
     const shareChanged = input.shareVisionWith !== undefined && !sameShareVision(input.shareVisionWith);
-    if (nextPlayer !== localPlayerId || shareChanged) forgetOverlay();
+    if (nextPlayer !== localPlayerId || shareChanged) {
+      const savedAt = lastStampAt;
+      forgetOverlay();
+      if (input.restoreExplored) {
+        recallExplored();
+        lastStampAt = savedAt;
+      }
+    }
     localPlayerId = nextPlayer;
     if (input.shareVisionWith !== undefined) adoptShareVision(input.shareVisionWith);
     // Spectators (localPlayerId < 0) still run fog when the caller asks, so
@@ -1075,6 +1106,7 @@ export function createFogOfWar() {
     const mask = maskSrc && maskSrc.length >= width * height ? maskSrc : null;
     srcN = 0;
     const world = input.world;
+    exposedOwners = input.exposedOwners ?? world?.koth?.exposed ?? null;
     if (world) {
       const n = world.count | 0;
       const carried = world.carriedBy;
@@ -1141,8 +1173,9 @@ export function createFogOfWar() {
       const key = structureKey(kind === 'agora' ? { ...item, type: 'agora' } : item);
       liveKeys.add(key);
       const ally = isVisionAlly(item.owner);
+      const exposed = isExposed(item.owner);
       const seen = structureTouchesVision(item.x, item.z, item.type ?? kind, isWorldVisible);
-      if (ally || seen) {
+      if (ally || exposed || seen) {
         lastKnown.set(key, cloneBuilding(item));
         out.push(item);
       }
@@ -1767,6 +1800,7 @@ export function createFogOfWar() {
   return {
     reset,
     stamp,
+    rememberExplored,
     isEnabled: () => enabled,
     isWorldVisible,
     isWorldExplored,

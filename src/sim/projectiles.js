@@ -242,6 +242,7 @@ function hitBuilding(w, field, bi, def, amount, source = -1, owner = 0) {
     field,
     bi,
     projectileBuildingDamage(def, b?.type, amount),
+    owner | 0,
   );
   if (dealt > 0 && def.appliesLocustDot) {
     spreadLocust(w, {

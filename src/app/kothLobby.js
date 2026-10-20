@@ -4,7 +4,7 @@ import { formatMatchTime, matchSecondsFromTick } from './simSession.js';
 import { SHARD_ANNOUNCE_MS } from '../koth/protocol.js';
 import { resolveLobbyName } from '../koth/lobbyName.js';
 import { MODE_IDS, getMode } from '../lobby/modes.js';
-import { formatTypeLobbyRow } from './lobbyUi.js';
+import { formatLockstepStallTitle, formatTypeLobbyRow } from './lobbyUi.js';
 
 /** Wait one KOTH presence tick before joining 1v1 / Teams / Adventure. */
 export const TYPE_LISTEN_FALLBACK_MS = SHARD_ANNOUNCE_MS;
@@ -48,7 +48,12 @@ export function formatLobbyRow(lobby) {
 export function formatInLobbyStatus(presence) {
   const meta = lobbyMetaLine(presence);
   const name = resolveLobbyName(presence);
-  if (presence.stalled) return { title: 'Waiting for players…', meta };
+  if (presence.stalled) {
+    const names = (Array.isArray(presence.players) ? presence.players : [])
+      .filter((player) => player?.lagging && !player.spectator)
+      .map((player) => (player.name ?? '').trim() || `Player ${(player.playerId ?? 0) + 1}`);
+    return { title: formatLockstepStallTitle(names) || 'Waiting for players…', meta };
+  }
   if (presence.appState === 'matchmaking') return { title: 'Looking for a match…', meta };
   if (name) return { title: name, meta };
   if (presence.hosting) return { title: 'Your lobby', meta };
@@ -141,11 +146,13 @@ export function shouldShowKothWaitingHud(presence) {
 export function formatLobbyPlayerLine(player) {
   const name = (player?.name ?? '').trim()
     || (player?.spectator ? 'Spectator' : `Player ${(player?.playerId ?? 0) + 1}`);
+  const crowned = player?.king ? '👑 ' : '';
   const bits = [];
   if (player?.you) bits.push('you');
   if (player?.spectator) bits.push('watching');
   if (player?.lagging) bits.push('lagging');
-  return bits.length ? `${name} (${bits.join(', ')})` : name;
+  const line = bits.length ? `${name} (${bits.join(', ')})` : name;
+  return `${crowned}${line}`;
 }
 
 /**
@@ -310,7 +317,12 @@ export function setupKothLobby({
     setText(menuMeta, row.meta);
     setText(waitingTitle, row.title);
     setText(waitingMeta, row.meta);
-    const people = lobbyPeople(presence);
+    const king = presence.kingOwner | 0;
+    const people = lobbyPeople(presence).map((player) => (
+      !player.spectator && king >= 0 && (player.playerId | 0) === king
+        ? { ...player, king: true }
+        : player
+    ));
     syncLobbyPlayers(waitingPlayers, people);
     syncLobbyPlayers(menuPlayers, people);
     if (menuClaim) {

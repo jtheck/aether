@@ -222,11 +222,14 @@ function tickLocustOnBuilding(w, field, bi, b) {
     b.locustAcc = 0;
     const stacks = Math.max(1, b.locustStacks | 0);
     const raw = LOCUST_DOT_DAMAGE * stacks;
+    const src = b.locustSource | 0;
+    const attacker = src >= 0 && src < w.count ? w.owner[src] | 0 : -1;
     applyDamageBuilding(
       w,
       field,
       bi,
       scaleFarmHazardDamage(b.type, raw, FARM_LOCUST_DAMAGE_MUL),
+      attacker,
     );
   }
   if ((b.locustTicks | 0) <= 0) {

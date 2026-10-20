@@ -1,6 +1,8 @@
 // app/ — SimSession (lockstep) + Lite renderer + input.
 
 import { livingByOwner, ORDER, MAX_ENTITIES } from '../sim/world.js';
+import { matchStatOwners, matchStatRows } from './matchStats.js';
+import { shownKing } from '../sim/kothMeta.js';
 import { getUnitDef, isFlyer, isTransport, FLY_HEIGHT } from '../sim/unitTypes.js';
 import {
   DROP_OFF_TYPES,
@@ -73,6 +75,7 @@ import { formatGameNumber } from '../sim/formatGameNumber.js';
 import { createResourceBank } from './resourceBank.js';
 import {
   createObserverData,
+  kothNameRoster,
   namesFromLobbySeats,
   observerSheetOwners,
 } from './observerData.js';
@@ -91,7 +94,7 @@ import { createXrControls } from './xrControls.js';
 import { clearXrEye } from '../render/xrEye.js';
 import { rimKeyForBuildingType, sharedRimKey } from '../render/workRadiusRings.js';
 import { createFogOfWar } from '../render/fogOfWar.js';
-import { shareVisionOwnersFromCfg } from '../render/visionShare.js';
+import { shareVisionOwnersFromCfg, spectatorFollowFog } from '../render/visionShare.js';
 import { selectionGroupsFromBuildings, selectionGroupsFromUnits } from '../render/selectionHud.js';
 import { isManaCaster, manaReadyCount } from '../sim/mana.js';
 import { createLiteExplorerToggle } from '../render/liteExplorer.js';
@@ -156,7 +159,8 @@ import { setupChatHud } from './chatHud.js';
 import { watchCornerStack } from './cornerStack.js';
 import { setupLobbyUi } from './lobbyUi.js';
 import { setupLadderDialog } from './ladderDialog.js';
-import { noteLadderDisconnect, noteLadderResult } from './ladderSession.js';
+import { postHill } from './ladderApi.js';
+import { getLadderAssignment, noteHillBounties, noteLadderDisconnect, noteLadderResult } from './ladderSession.js';
 import { rememberLadderId } from './ladderId.js';
 import {
   buildReplayFile,
@@ -167,7 +171,9 @@ import {
   saveReplayToDisk,
 } from './replay.js';
 import { createReplayController } from './replayWatch.js';
-import { createViewFollow, unpackBuildings } from './viewFollow.js';
+import { sameUserId } from '../lobby/ids.js';
+import { noteReplayCam } from './replayCam.js';
+import { createViewFollow, unpackBuildings, unwrapView } from './viewFollow.js';
 import { chapterIdForGardenUrl, chapterLabelFor, gardenUrlForChapter, getMode, isLobbyPlayMode, lobbyAllowsSpectators } from '../lobby/modes.js';
 import { liveConfigFromLobby } from '../lobby/startConfig.js';
 import { createMatchStory } from '../story/matchPlay.js';
@@ -629,6 +635,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   const skirmish = bootCfg.mode === 'skirmish';
   let kothLobbyUi = { refresh() {} };
   let lobbyUi = { refresh() {} };
+  /** Replay roster click: play this owner's saved camera. Null when idle. */
+  let replayCamOwner = null;
   let ladderUi = { refresh() {}, close() {} };
   const queuedStory = [];
   let chatHud = {
@@ -742,6 +750,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     buildings: livingBuildingList(session.buildings ?? buildings),
     agoras: session.agoras ?? agoras,
     field: session.field,
+    exposedOwners: session.koth?.exposed,
     localPlayerId: bootCfg.localPlayerId,
     shareVisionWith: shareVisionOwnersFromCfg(bootCfg),
     enabled:
@@ -1124,6 +1133,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   /** Temporary cinematic reveal: null, 'all', or a list of owner ids. */
   let cinematicReveal = null;
   let fogShareVisionWith = baseShareVisionWith;
+  /** Player id whose fog is currently stamped, or null for the spectator union. */
+  let appliedFogFollow = null;
   /** After a combat wipe, stamp no sources so the visited veil can finish decaying. */
   let fogDecayOnly = false;
   function fogActive() {
@@ -1171,23 +1182,45 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   const sceneryFogAt = (x, z) => fog.fogFactorAt(x, z);
   let sceneryFogOn = null;
+  function cameraFollowOwner() {
+    if (session.watchingReplay && replayCamOwner != null) return replayCamOwner | 0;
+    const live = viewFollow?.ownerTarget?.();
+    if (live == null) return null;
+    if (session.role === 'spectator' || (localPlayerId | 0) < 0) return live | 0;
+    return null;
+  }
+
   function stampFog(opts) {
     if (liveConfigQuietFog && !opts?.force) return;
+    const follow = cameraFollowOwner();
+    const entering = appliedFogFollow == null && follow != null;
+    const leaving = appliedFogFollow != null && follow == null;
+    if (entering) fog.rememberExplored?.();
+    appliedFogFollow = follow;
+    const view = spectatorFollowFog({
+      localPlayerId,
+      shareVisionWith: fogShareVisionWith,
+      followOwner: follow,
+      observing: session.role === 'spectator' || (localPlayerId | 0) < 0,
+    });
     const t0 = frameProf ? performance.now() : 0;
     try {
       fog.stamp({
         world: fogDecayOnly ? null : session.state,
         buildings: fogDecayOnly ? [] : livingBuildingList(session.buildings),
         agoras: fogDecayOnly ? [] : session.agoras,
+        exposedOwners: fogDecayOnly ? null : session.koth?.exposed,
         field: session.field,
-        localPlayerId,
-        shareVisionWith: fogShareVisionWith,
+        localPlayerId: view.localPlayerId,
+        shareVisionWith: view.shareVisionWith,
         enabled: fogActive(),
+        restoreExplored: Boolean(opts?.restoreExplored || leaving),
       });
     } catch (err) {
       console.warn('[fog] stamp failed', err);
       return;
     }
+    if (entering || leaving) refreshFoggedProps();
     const t1 = frameProf ? performance.now() : 0;
     // Recolor trees/rocks before syncOverlay — that upload clears the dirty list
     // and marks the overlay painted.
@@ -1516,6 +1549,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       shareWith: fogShareVisionWith,
     });
     const showSheet = sheetOwners.length > 0;
+    const hillPresence = matchMeta.mode === 'koth' ? kothShard?.getLobbyPresence?.() : null;
+    const namesOnly = Boolean(
+      hillPresence && !observing && !hillPresence.browsing && hillPresence.role === 'player',
+    );
+    const roster = namesOnly ? kothNameRoster(hillPresence, session.koth) : null;
     const showIcons = resourceBank.ready && !observing;
     if (showIcons) {
       resourceBank.paint({
@@ -1533,18 +1571,25 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         koth: session.koth,
       });
     }
+    const lobbyNames = namesFromLobbySeats(observerLobby?.getState?.()?.seats);
     observerData.paint({
-      hidden: !showSheet,
+      hidden: namesOnly ? roster.owners.length === 0 : !showSheet,
+      namesOnly,
       resources: session.resources,
       buildings: session.buildings,
       agoras: session.agoras,
       world: session.state,
-      owners: sheetOwners,
-      names: namesFromLobbySeats(observerLobby?.getState?.()?.seats),
+      owners: namesOnly ? roster.owners : sheetOwners,
+      names: namesOnly ? { ...lobbyNames, ...roster.names } : lobbyNames,
       computers: session.aiPlayers,
+      kingOwner: shownKing(session.koth),
     });
+    if (!session.watchingReplay && replayCamOwner != null) {
+      replayCamOwner = null;
+      stampFog();
+    }
     observerData.setFollowTarget?.({
-      owner: viewFollow?.ownerTarget?.() ?? null,
+      owner: session.watchingReplay ? replayCamOwner : (viewFollow?.ownerTarget?.() ?? null),
       enabled: observing && showSheet,
     });
     // Observer sheet owns other-army banks. The old bottom dump is gone
@@ -1728,8 +1773,57 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     pushSelectionFollow();
   }
 
+  function replayViewTick() {
+    const base = session._displayTick?.();
+    const alpha = Number(session.displayAlpha);
+    const tick = Number.isFinite(base) ? base : (session.confirmedTick | 0);
+    return tick + (Number.isFinite(alpha) ? alpha : 0);
+  }
+
+  function applyReplayCam() {
+    if (replayCamOwner == null || !session.watchingReplay) return;
+    const pose = replayCtl?.camPose?.(replayCamOwner, replayViewTick());
+    if (!pose) return;
+    renderer.cameraController?.setPose?.(pose);
+  }
+
+  /** Toggle playback of one player's saved camera. A second click releases it. */
+  function setReplayCamOwner(owner) {
+    const id = owner | 0;
+    if (!Number.isFinite(Number(owner))) return;
+    if (replayCamOwner === id) replayCamOwner = null;
+    else {
+      replayCamOwner = id;
+      viewFollow?.clear?.();
+    }
+    paintResources();
+    applyReplayCam();
+    stampFog();
+  }
+
+  function noteRemoteReplayCam(raw) {
+    if (session.role !== 'player' || session.watchingReplay || !session.replayConfig) return;
+    const msg = unwrapView(raw);
+    if (!msg || msg.pid == null) return;
+    if ((msg.pid | 0) === (localPlayerId | 0)) return;
+    if (sameUserId(msg.from, kothShard?.getUserId?.())) return;
+    if (!session.replayCams) session.replayCams = [];
+    noteReplayCam(session.replayCams, {
+      tick: Number.isFinite(Number(msg.t)) ? (msg.t | 0) : (session.confirmedTick | 0),
+      pid: msg.pid | 0,
+      x: msg.x,
+      z: msg.z,
+      r: msg.r,
+      a: msg.a,
+    });
+  }
+
   function pushSelectionFollow() {
     const cam = renderer.cameraController;
+    if (replayCamOwner != null && session.watchingReplay) {
+      cam?.stopFollow?.();
+      return;
+    }
     if (viewFollow?.isFollowing?.()) {
       cam?.stopFollow?.();
       return;
@@ -3389,6 +3483,19 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       screenshotHud.release();
     }
   });
+  function placeLadderHill(match) {
+    const presence = kothShard?.getLobbyPresence?.();
+    if (presence?.inLobby && presence.matchId && presence.matchId !== match.matchId) {
+      kothShard.leaveLiveLobby?.();
+    }
+    if (match.role === 'host') {
+      kothShard?.startLadderHill?.(match.matchId);
+      return;
+    }
+    kothShard?.joinLiveLobby?.(match.matchId, match.hostUserId);
+    if (match.role !== 'spectator') kothShard?.claimSeatWhenReady?.();
+  }
+
   const kothLobbyOpts = {
     kothShard,
     onLeaveSolo: () => leaveLoadingScreenSolo(ctxRef?.current),
@@ -3466,12 +3573,43 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       onCloseMenu: () => sideMenu.close(),
       onFollowReplay: (userId) => viewFollow?.toggleUser?.(userId),
       getFollowUser: () => viewFollow?.userTarget?.() ?? null,
+      getKing: () => shownKing(session.koth),
     });
     ladderUi = setupLadderDialog({
       matchLobby,
       getUserId: () => kothShard.getUserId(),
       onCloseMenu: () => sideMenu.close(),
+      onKothPlace: placeLadderHill,
     });
+    setInterval(() => {
+      const assignment = getLadderAssignment();
+      if (!assignment || assignment.board !== 'koth' || !assignment.matchId) return;
+      const presence = kothShard.getLobbyPresence?.();
+      if (!presence || presence.browsing || presence.matchId !== assignment.matchId) return;
+      const seated = (presence.players || []).filter((player) => player.userId && !player.spectator);
+      if (!seated.length) return;
+      const mine = kothShard.getUserId?.();
+      const listed = seated.find((player) => player.userId === assignment.hostUserId);
+      const keeper = listed || seated.reduce((best, player) => (
+        (player.playerId | 0) < (best.playerId | 0) ? player : best
+      ), seated[0]);
+      if (!mine || keeper.userId !== mine) return;
+      const rated = assignment.players || [];
+      let rating;
+      if (rated.length) {
+        let sum = 0;
+        for (const player of rated) sum += player.rating | 0;
+        rating = Math.round(sum / rated.length);
+      }
+      void postHill({
+        matchId: assignment.matchId,
+        hostUserId: keeper.userId,
+        hostPlayerId: assignment.hostPlayerId || assignment.you,
+        seated: presence.activeCount ?? seated.length,
+        spectators: presence.spectatorCount | 0,
+        ...(rating != null ? { rating } : {}),
+      });
+    }, 5000);
   } else {
     kothLobbyUi = setupKothLobby(kothLobbyOpts);
   }
@@ -3517,7 +3655,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     onReplayWatch: (on) => observerLobby?.setReplayWatch?.(on),
   });
   replayCtl.bind();
-  observerData.setFollowHandler?.((owner) => viewFollow?.toggleOwner?.(owner));
+  observerData.setFollowHandler?.((owner) => {
+    if (session.watchingReplay) {
+      setReplayCamOwner(owner);
+      return;
+    }
+    viewFollow?.toggleOwner?.(owner);
+  });
   viewFollow = createViewFollow({
     sample: () => {
       const head = replayCtl.getHead?.();
@@ -3525,6 +3669,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       return {
         from: kothShard?.getUserId?.() ?? null,
         playerId: localPlayerId,
+        tick: replayViewTick(),
         pose: renderer.cameraController?.getPose?.() ?? {},
         units: sel.units,
         buildings: sel.buildings,
@@ -3541,6 +3686,18 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (session.role !== 'player') return false;
       return lobbyOn || Boolean(kothShard?.inLiveMatch?.());
     },
+    shouldRecord: () => session.role === 'player' && !session.watchingReplay && Boolean(session.replayConfig),
+    record: (msg) => {
+      if (!session.replayCams) session.replayCams = [];
+      noteReplayCam(session.replayCams, {
+        tick: Number.isFinite(Number(msg.t)) ? (msg.t | 0) : (session.confirmedTick | 0),
+        pid: msg.pid | 0,
+        x: msg.x,
+        z: msg.z,
+        r: msg.r,
+        a: msg.a,
+      });
+    },
     localUserId: () => kothShard?.getUserId?.() ?? null,
     localOwner: () => localPlayerId,
     lobbyActive: () => Boolean(observerLobby?.isActive?.()),
@@ -3554,12 +3711,20 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       replayCtl.followRemote?.(msg.rt, msg.rs || 0);
     },
     onTarget: () => {
+      if (viewFollow?.isFollowing?.()) replayCamOwner = null;
       lobbyUi.refresh?.();
       paintResources();
+      stampFog();
     },
   });
-  kothShard?.subscribeDataMessage?.((msg) => viewFollow?.receive?.(msg));
-  kothShard?.subscribeLobbyMessage?.((msg) => viewFollow?.receive?.(msg));
+  kothShard?.subscribeDataMessage?.((msg) => {
+    noteRemoteReplayCam(msg);
+    viewFollow?.receive?.(msg);
+  });
+  kothShard?.subscribeLobbyMessage?.((msg) => {
+    noteRemoteReplayCam(msg);
+    viewFollow?.receive?.(msg);
+  });
 
   // Walk everyone so idle→walk skinning is under load (not just idle poses).
   if (animStress > 0) {
@@ -3604,9 +3769,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       renderer.setCount(renderEntityCount);
       syncDrawnEntities();
     }
+    const hillPresence = kothShard?.getLobbyPresence?.();
+    if (!(hillPresence?.inLobby && !hillPresence.parked)) noteHillBounties(session);
     if (
       session.kothMatchOver
-      && matchMeta.mode !== 'koth'
       && !matchOverShown
       && !session.watchingReplay
       && !session.replayingCatchUp
@@ -3661,9 +3827,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     matchStory.tick(deltaMs);
     exitMarks.tick();
     renderer.cameraController?.tick?.(deltaMs);
-    if (!document.hidden && renderer.cameraController?.takeUserAim?.()) viewFollow?.userSteered?.();
+    if (!document.hidden && renderer.cameraController?.takeUserAim?.()) {
+      viewFollow?.userSteered?.();
+      if (replayCamOwner != null) {
+        replayCamOwner = null;
+        paintResources();
+        stampFog();
+      }
+    }
     const followedPose = viewFollow?.cameraPose?.(performance.now());
     if (followedPose) renderer.cameraController?.setPose?.(followedPose);
+    else applyReplayCam();
     viewFollow?.publish?.(performance.now());
     session.pump(deltaMs);
     tickAdventureObjectives();
@@ -5087,7 +5261,66 @@ function showAdventureResult(title, sub) {
   if (titleEl) titleEl.textContent = title;
   else el.textContent = sub ? `${title} — ${sub}` : title;
   if (subEl) subEl.textContent = sub || '';
+  paintMatchStats(session);
   el.hidden = false;
+}
+
+function kindTitle(split) {
+  if (!split) return '';
+  return `wood ${split.wood}   stone ${split.stone}   mineral ${split.mineral}   food ${split.food}`;
+}
+
+function paintMatchStats(board = session) {
+  const table = document.getElementById('match-stats');
+  if (!table) return;
+  const rows = matchStatRows(board?.ownerStats, matchStatOwners(board));
+  table.replaceChildren();
+  if (!rows.length) {
+    table.hidden = true;
+    return;
+  }
+  const head = document.createElement('tr');
+  for (const label of ['', 'Kill', 'Lost', 'Train', 'Raze', 'Bldg', 'Gathered', 'Spent']) {
+    const th = document.createElement('th');
+    th.textContent = label;
+    if (label === 'Bldg') th.title = 'Buildings lost';
+    if (label === 'Raze') th.title = 'Buildings razed';
+    if (label === 'Train') th.title = 'Units trained';
+    head.append(th);
+  }
+  table.append(head);
+  for (const row of rows) {
+    const tr = document.createElement('tr');
+    const cells = [
+      ownerName(row.owner),
+      row.kills,
+      row.losses,
+      row.trained,
+      row.razes,
+      row.buildingsLost,
+      row.gathered,
+      row.spent,
+    ];
+    for (let i = 0; i < cells.length; i++) {
+      const td = document.createElement('td');
+      td.textContent = String(cells[i]);
+      if (i === 6) td.title = kindTitle(row.gatheredBy);
+      if (i === 7) td.title = kindTitle(row.spentBy);
+      tr.append(td);
+    }
+    table.append(tr);
+  }
+  table.hidden = false;
+}
+
+function ownerName(owner) {
+  const seats = lobbyResultSeats;
+  if (Array.isArray(seats)) {
+    const seat = seats.find((s) => s.index === owner);
+    const name = (seat?.name ?? '').trim();
+    if (name) return name;
+  }
+  return `Player ${formatGameNumber(owner)}`;
 }
 
 function showMatchOver(session) {
@@ -5133,6 +5366,7 @@ function showMatchOver(session) {
   if (titleEl) titleEl.textContent = title;
   else el.textContent = sub ? `${title} — ${sub}` : title;
   if (subEl) subEl.textContent = sub;
+  paintMatchStats(session);
   el.hidden = false;
 }
 
@@ -5297,6 +5531,7 @@ const SPLASH_SETTLE_FRAMES = 14;
 const SPLASH_SETTLE_MAX_MS = 900;
 
 function workerSimMode(mode) {
+  if (mode === 'koth') return 'koth';
   if (mode === 'staging' || mode === 'sandbox') return 'staging';
   if (mode === 'skirmish' || isLobbyPlayMode(mode)) return 'skirmish';
   if (mode === '1vai') return '1vai';
@@ -5442,7 +5677,9 @@ async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
       ? 'Teams'
       : snapshot.mode === 'adventure'
         ? 'Adventure'
-        : '1v1';
+        : snapshot.mode === 'koth'
+          ? 'King of the Hill'
+          : '1v1';
     setStatusText(`${label} — match on`);
   } catch (err) {
     ctx.localSoloHold = heldSolo;

@@ -25,6 +25,7 @@ import { unitPopCost } from './pop.js';
 import { ORDER } from './world.js';
 import { MAX_WAYPOINTS, PATH_STYLE, queuePath } from './path.js';
 import { spendResources, addResource, canAffordBank } from './resources.js';
+import { noteResourceRefund, noteSpent } from './ownerStats.js';
 import { addGatherIncome } from './storage.js';
 import {
   agoraFoundCost,
@@ -1489,8 +1490,9 @@ export function applyPlaceBuilding(w, field, cmd) {
   if (type === 'agora') {
     if (!selectionHasAgoraFound(w, cmd.entities, owner)) return -1;
     const bank = ownerBank(w, owner);
-    if (!canAffordAgoraFound(bank)) return -1;
-    refundCost = cloneRefundCost(agoraFoundCost(bank));
+    const purse = !!w.koth;
+    if (!canAffordAgoraFound(bank, purse)) return -1;
+    refundCost = cloneRefundCost(agoraFoundCost(bank, purse));
     if (!spendResources(w, owner, refundCost)) return -1;
   } else if (!spendResources(w, owner, getBuildingCost(type))) {
     return -1;
@@ -1805,6 +1807,7 @@ export function applyCancelConstruction(w, field, cmd) {
   if (b.built !== 0) return;
   if (!isBuildingAlive(b)) return;
   const cost = getBuildingRefundCost(b);
+  noteResourceRefund(w, playerId, cost);
   for (const kind in cost) addResource(w, playerId, kind, cost[kind] | 0);
   b.hp = 0;
   if (field) {
@@ -1844,7 +1847,11 @@ function refundTracks(w, b) {
     const count = t.count | 0;
     if (count <= 0) continue;
     const cost = t.kind === 'upgrade' ? getTechCost(t.id) : getUnitCost(t.unitType);
-    for (const kind in cost) addResource(w, owner, kind, (cost[kind] | 0) * count);
+    for (const kind in cost) {
+      const n = (cost[kind] | 0) * count;
+      addResource(w, owner, kind, n);
+      noteSpent(w, owner, kind, -n);
+    }
   }
 }
 

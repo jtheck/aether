@@ -86,7 +86,18 @@ export function ownerBank(w, owner) {
 /**
  * @param {{ wood?: number, stone?: number, mineral?: number, food?: number } | null | undefined} bank
  */
-export function agoraFoundCost(bank) {
+/** Wood and stone in one KOTH agora purse. Mineral stays AGORA_FOUND_MINERAL. */
+export const AGORA_PURSE_WOOD = BASE_PYRAMID_BANK.wood;
+export const AGORA_PURSE_STONE = BASE_PYRAMID_BANK.stone;
+
+export function agoraFoundCost(bank, purse = false) {
+  if (purse) {
+    return {
+      mineral: AGORA_FOUND_MINERAL,
+      wood: AGORA_PURSE_WOOD,
+      stone: AGORA_PURSE_STONE,
+    };
+  }
   return {
     mineral: AGORA_FOUND_MINERAL,
     wood: bank?.wood | 0,
@@ -97,8 +108,10 @@ export function agoraFoundCost(bank) {
 /**
  * @param {{ wood?: number, stone?: number, mineral?: number, food?: number } | null | undefined} bank
  */
-export function canAffordAgoraFound(bank) {
-  return (bank?.mineral | 0) >= AGORA_FOUND_MINERAL;
+export function canAffordAgoraFound(bank, purse = false) {
+  if ((bank?.mineral | 0) < AGORA_FOUND_MINERAL) return false;
+  if (!purse) return true;
+  return (bank?.wood | 0) >= AGORA_PURSE_WOOD && (bank?.stone | 0) >= AGORA_PURSE_STONE;
 }
 
 export function cloneRefundCost(cost) {

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { shareVisionOwnersFromCfg } from './visionShare.js';
+import { shareVisionOwnersFromCfg, spectatorFollowFog } from './visionShare.js';
 
 describe('shareVisionOwnersFromCfg', () => {
   it('returns nothing for a normal playing client', () => {
@@ -54,6 +54,24 @@ describe('shareVisionOwnersFromCfg', () => {
         ],
       }),
       [2, 3, 4],
+    );
+  });
+});
+
+describe('spectatorFollowFog', () => {
+  it('stamps the followed player and returns the spectator union when the follow drops', () => {
+    const share = [0, 1, 2];
+    assert.deepEqual(
+      spectatorFollowFog({ localPlayerId: -1, shareVisionWith: share, followOwner: 1, observing: true }),
+      { localPlayerId: 1, shareVisionWith: [] },
+    );
+    assert.deepEqual(
+      spectatorFollowFog({ localPlayerId: -1, shareVisionWith: share, followOwner: null, observing: true }),
+      { localPlayerId: -1, shareVisionWith: share },
+    );
+    assert.deepEqual(
+      spectatorFollowFog({ localPlayerId: 0, shareVisionWith: [], followOwner: 1, observing: false }),
+      { localPlayerId: 0, shareVisionWith: [] },
     );
   });
 });

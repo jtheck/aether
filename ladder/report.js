@@ -157,3 +157,88 @@ export function rateMatch(report, ratings) {
     };
   });
 }
+
+/** KOTH elimination. K = 8 per hill point, each survivor against the victim. */
+export const KOTH_POINT_K = 8;
+
+/**
+ * @param {{ victimId: string, survivorIds: string[], points: number }} report
+ * @param {Record<string, { rating: number, games: number, wins: number }>} ratings
+ */
+export function rateElimination(report, ratings) {
+  const k = KOTH_POINT_K * (report.points | 0);
+  const victimId = report.victimId;
+  const victimRating = ratings[victimId]?.rating ?? START_RATING;
+  const survivors = [...report.survivorIds].filter((id) => id && id !== victimId).sort();
+  const rows = [];
+  let victimDelta = 0;
+  for (const id of survivors) {
+    const current = ratings[id] ?? { rating: START_RATING, games: 0, wins: 0 };
+    const delta = ratingDelta(current.rating, victimRating, 1, k);
+    victimDelta += ratingDelta(victimRating, current.rating, 0, k);
+    rows.push({
+      playerId: id,
+      oldRating: current.rating,
+      oldGames: current.games,
+      rating: current.rating + delta,
+      games: current.games + 1,
+      wins: current.wins + 1,
+      delta,
+    });
+  }
+  const victim = ratings[victimId] ?? { rating: START_RATING, games: 0, wins: 0 };
+  rows.push({
+    playerId: victimId,
+    oldRating: victim.rating,
+    oldGames: victim.games,
+    rating: victim.rating + victimDelta,
+    games: victim.games + 1,
+    wins: victim.wins,
+    delta: victimDelta,
+  });
+  return rows;
+}
+
+export function kothCanonical(report) {
+  const survivors = [...report.survivorIds].sort().join(',');
+  return [report.points | 0, report.tick | 0, report.victimId, survivors].join('|');
+}
+
+export function parseKothReport(body) {
+  if (!body || body.action !== 'koth') return { ok: false, error: 'not a koth report' };
+  const matchId = String(body.matchId ?? '').toLowerCase();
+  if (!MATCH_ID.test(matchId)) return { ok: false, error: 'invalid matchId' };
+  const points = body.points | 0;
+  if (points < 1 || points > 3) return { ok: false, error: 'invalid points' };
+  if (typeof body.tick !== 'number' || !Number.isInteger(body.tick) || body.tick < 0 || body.tick > 1e12) {
+    return { ok: false, error: 'invalid tick' };
+  }
+  const checksum = uint32(body.checksum);
+  if (checksum == null) return { ok: false, error: 'invalid checksum' };
+  const victimId = String(body.victimId ?? '').toLowerCase();
+  if (!UUID.test(victimId)) return { ok: false, error: 'invalid victim' };
+  if (!Array.isArray(body.survivorIds) || body.survivorIds.length < 1 || body.survivorIds.length > 4) {
+    return { ok: false, error: 'invalid survivors' };
+  }
+  const survivorIds = [];
+  const seen = new Set();
+  for (const raw of body.survivorIds) {
+    const id = String(raw ?? '').toLowerCase();
+    if (!UUID.test(id) || id === victimId || seen.has(id)) return { ok: false, error: 'invalid survivors' };
+    seen.add(id);
+    survivorIds.push(id);
+  }
+  const playerId = String(body.playerId ?? '').toLowerCase();
+  if (!UUID.test(playerId)) return { ok: false, error: 'invalid playerId' };
+  const report = {
+    board: 'koth',
+    matchId,
+    tick: body.tick,
+    checksum,
+    points,
+    victimId,
+    survivorIds,
+    playerId,
+  };
+  return { ok: true, report, canonical: kothCanonical(report) };
+}

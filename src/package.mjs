@@ -19,6 +19,7 @@ import {
 import { gzipSync } from 'zlib';
 import { join, extname } from 'path';
 import { fileURLToPath } from 'url';
+import { listHouseMapRelPaths, resolveMapsUrl } from './mapsResolve.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const REPO = fileURLToPath(new URL('..', import.meta.url));
@@ -172,12 +173,19 @@ if (doObfuscate) {
 // Static copies
 cpSync(join(REPO, 'assets'), join(DEPLOY, 'assets'), { recursive: true });
 {
-  const mapsSrc = join(REPO, 'maps');
   const mapsDst = join(DEPLOY, 'maps');
   mkdirSync(mapsDst, { recursive: true });
-  for (const name of readdirSync(mapsSrc)) {
-    if (!name.endsWith('.garden')) continue;
-    cpSync(join(mapsSrc, name), join(mapsDst, name));
+  for (const rel of listHouseMapRelPaths(REPO)) {
+    const src = resolveMapsUrl(REPO, `maps/${rel}`);
+    if (!src) continue;
+    const dst = join(mapsDst, rel);
+    mkdirSync(join(dst, '..'), { recursive: true });
+    cpSync(src, dst);
+  }
+  const readme = join(REPO, 'maps', 'README.md');
+  if (existsSync(readme)) {
+    mkdirSync(mapsDst, { recursive: true });
+    cpSync(readme, join(mapsDst, 'README.md'));
   }
 }
 cpSync(join(ROOT, 'icons'), join(DEPLOY, 'icons'), { recursive: true });

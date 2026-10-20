@@ -181,6 +181,38 @@ describe('fogOfWar stamp + hide', () => {
     assert.equal(fog.hidesHostile(1, half - 2, half - 2), false);
   });
 
+  it('restores the spectator shroud after a one-player camera follow', () => {
+    const field = fakeField(40, 40);
+    const fog = createFogOfWar();
+    fog.reset(field);
+    const both = fakeWorld([
+      { owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 },
+      { owner: 1, type: UNIT.VILLAGER, x: 48, z: 0 },
+    ]);
+    const onlyHome = fakeWorld([{ owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 }]);
+    fog.stamp({
+      world: both, field, localPlayerId: -1, shareVisionWith: [0, 1], enabled: true, buildings: [], agoras: [],
+    });
+    assert.equal(fog.isWorldExplored(48, 0), true);
+    fog.rememberExplored();
+    fog.stamp({
+      world: onlyHome, field, localPlayerId: 0, shareVisionWith: [], enabled: true, buildings: [], agoras: [],
+    });
+    assert.equal(fog.isWorldExplored(48, 0), false);
+    fog.stamp({
+      world: onlyHome,
+      field,
+      localPlayerId: -1,
+      shareVisionWith: [0, 1],
+      enabled: true,
+      buildings: [],
+      agoras: [],
+      restoreExplored: true,
+    });
+    assert.equal(fog.isWorldExplored(48, 0), true);
+    assert.equal(fog.hidesHostile(1, 48, 0), false);
+  });
+
   it('keeps sight when nobody changes tile, and drops it after they leave', () => {
     const field = fakeField(40, 40);
     const fog = createFogOfWar();

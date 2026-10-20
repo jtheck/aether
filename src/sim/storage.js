@@ -14,6 +14,7 @@
 
 import * as fx from './fixed.js';
 import { addResource, getResource, RESOURCE_KINDS } from './resources.js';
+import { noteGathered } from './ownerStats.js';
 import { ownerHasTech, TECH } from './tech.js';
 
 export const RESOURCE_SLOT_LABELS = Object.freeze([
@@ -49,9 +50,11 @@ export const FULL_STACK_BANK = Object.freeze({
   food: MAX_RESOURCE_SLOTS * SLOT_AMOUNT.food,
 });
 
-/** KOTH opening bank — full pyramids, with a double food stash. */
+/** KOTH opening bank — two agora purses, and a double food stash. */
 export const KOTH_STARTING_RESOURCES = Object.freeze({
-  ...BASE_PYRAMID_BANK,
+  wood: BASE_PYRAMID_BANK.wood * 2,
+  stone: BASE_PYRAMID_BANK.stone * 2,
+  mineral: BASE_PYRAMID_BANK.mineral * 2,
   food: FULL_STACK_BANK.food,
 });
 
@@ -470,6 +473,7 @@ export function addGatherIncome(w, owner, kind, amount, asReturn = false) {
     const room = cap - current;
     if (add <= room) {
       addResource(w, owner, kind, add);
+      noteGathered(w, owner, kind, add);
       return add;
     }
     addResource(w, owner, kind, room);
@@ -480,6 +484,7 @@ export function addGatherIncome(w, owner, kind, amount, asReturn = false) {
     credited = overflowCredit(add, w.tick);
     if (credited) addResource(w, owner, kind, credited);
   }
+  if (credited > 0) noteGathered(w, owner, kind, credited);
   if (asReturn && credited < add) {
     const slots = ownerSlotCount(w.buildings, owner, kind, 'fixed', w);
     noteStorageOverflow(w, owner, kind, overflowHintLabel(slots));

@@ -809,7 +809,7 @@ export function createMatchLobby({
 
   function maybeRankedStart() {
     if (!ranked || !hosting || phase !== 'waiting' || startBusy) return;
-    const need = getMode(mode)?.maxPlayers ?? 0;
+    const need = rankedRoster?.length || getMode(mode)?.maxPlayers || 0;
     if (countHumans(seats) < need) return;
     if (!canStart(mode, seats)) return;
     requestStart();
@@ -854,7 +854,7 @@ export function createMatchLobby({
 
   /** Ranked: mix the board size and drop a seed that strands a start. */
   function prepareRankedLadder() {
-    if (!ranked || (mode !== 'onevsone' && mode !== 'teams')) return;
+    if (!ranked || (mode !== 'onevsone' && mode !== 'teams' && mode !== 'koth')) return;
     if (settings.chapter) return;
     const deal = ladderMatchDeal(settings.seed, mode);
     settings.fieldSize = deal.fieldSize;
@@ -1159,6 +1159,12 @@ export function createMatchLobby({
     lockstepStalled() {
       if (!lockstepOn || !session || phase !== 'playing') return false;
       return (session.lockstepBlockedMs?.() ?? 0) >= LOCKSTEP_STALL_UI_MS;
+    },
+    /** Player ids whose tick confirm lockstep is parked on, once the stall card is up. */
+    lockstepWaiters() {
+      if (!lockstepOn || !session || phase !== 'playing') return [];
+      if ((session.lockstepBlockedMs?.() ?? 0) < LOCKSTEP_STALL_UI_MS) return [];
+      return session.lockstepWaiters?.() ?? [];
     },
     getState: snapshot,
     isActive: () => phase !== 'idle',

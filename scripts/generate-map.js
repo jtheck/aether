@@ -190,6 +190,7 @@ function generateArenaMap() {
     ta: tiles.join(','),
     th: generateThumbnail(),
     sp: spawnPoints.map(s => `${s.x},${s.y}`).join(';'),
+    mt: 'onevsone',
     gt: '1v1,2v2,ffa'
   };
   
@@ -331,6 +332,7 @@ function generateIslandMap() {
     ta: tiles,
     th: generateThumbnail(),
     sp: spawnPoints.map(s => `${s.x},${s.y}`).join(';'),
+    mt: 'onevsone',
     gt: '1v1'
   };
 }
@@ -338,55 +340,32 @@ function generateIslandMap() {
 // Generate maps
 const arena = generateArenaMap();
 const island = generateIslandMap();
+const arenaTeams = { ...arena, n: 'The Arena', mt: 'teams' };
 
-// Save to maps folder
-const mapsDir = path.join(__dirname, '..', 'maps');
+const mapsRoot = path.join(__dirname, '..', 'maps');
+const oneV1 = path.join(mapsRoot, '1v1');
+const teamsDir = path.join(mapsRoot, 'teams');
+fs.mkdirSync(oneV1, { recursive: true });
+fs.mkdirSync(teamsDir, { recursive: true });
 
-fs.writeFileSync(
-  path.join(mapsDir, 'arena.garden'),
-  JSON.stringify(arena)
-);
-console.log('✅ Created arena.garden');
+fs.writeFileSync(path.join(oneV1, 'arena.garden'), JSON.stringify(arena));
+fs.writeFileSync(path.join(oneV1, 'island.garden'), JSON.stringify(island));
+fs.writeFileSync(path.join(teamsDir, 'arena.garden'), JSON.stringify(arenaTeams));
+console.log('✅ Created 1v1 and teams sample gardens');
 
-fs.writeFileSync(
-  path.join(mapsDir, 'island.garden'),
-  JSON.stringify(island)
-);
-console.log('✅ Created island.garden');
-
-// Update index.json with thumbnails from map data
-const index = {
+const oneV1Index = {
   maps: [
-    {
-      name: "The Arena",
-      file: "arena.garden",
-      width: 64,
-      height: 64,
-      players: "2-4",
-      author: "Opus",
-      description: "A classic circular arena with four entry paths. Fight for control of the sacred pool!",
-      lore: "Long ago, the gods carved this arena from the living earth, a place where mortals could prove their worth. The central pool is said to grant visions to those who control it.",
-      thumbnail: arena.th
-    },
-    {
-      name: "Paradise Island", 
-      file: "island.garden",
-      width: 48,
-      height: 48,
-      players: "2",
-      author: "Opus",
-      description: "A lush island paradise surrounded by endless ocean. Two factions vie for dominance.",
-      lore: "Discovered by explorers seeking the edge of the world, this island became a battleground when both expeditions claimed it as their own. The beaches still bear the scars of their first encounter.",
-      thumbnail: island.th
-    }
-  ]
+    { file: 'island.garden', name: 'Paradise Island', mapType: 'onevsone' },
+    { file: 'arena.garden', name: 'The Arena', mapType: 'onevsone' },
+  ],
+};
+const teamsIndex = {
+  maps: [{ file: 'arena.garden', name: 'The Arena', mapType: 'teams' }],
 };
 
-fs.writeFileSync(
-  path.join(mapsDir, 'index.json'),
-  JSON.stringify(index, null, 2)
-);
-console.log('✅ Updated maps/index.json');
+fs.writeFileSync(path.join(oneV1, 'index.json'), `${JSON.stringify(oneV1Index, null, 2)}\n`);
+fs.writeFileSync(path.join(teamsDir, 'index.json'), `${JSON.stringify(teamsIndex, null, 2)}\n`);
+console.log('✅ Updated maps/1v1/index.json and maps/teams/index.json');
 
 console.log('\n🗺️ House maps created!');
 

@@ -122,6 +122,11 @@
       white-space: nowrap;
     }
     #observer-data[hidden] { display: none; }
+    #observer-data.is-names {
+      grid-template-columns: auto;
+      justify-items: end;
+      row-gap: 0.2em;
+    }
     #observer-data .obs-pop { color: var(--pop-ink); opacity: 0.68; }
     #radial-prices { position: fixed; inset: 0; z-index: 10002; pointer-events: none; }
     #radial-prices .radial-price {
@@ -275,7 +280,7 @@
       letter-spacing: 0.06em;
       line-height: 1.15;
       color: var(--player, #c8cbd0);
-      text-shadow: 0px 0px 21px #fff;
+      text-shadow: 0px 0px 21px #fff, 0px 0px 7px #fff;
       border-bottom: 2px solid var(--player, #c8cbd0);
     }
     #side_menu .settings-split { border: 0; border-top: 1px solid #2a3140; margin: 2px 0 16px; }
@@ -381,17 +386,32 @@
       padding-left: 8px;
       border-left: 1px solid #2a3140;
     }
+    #side_menu #ladder-open {
+      margin: 2px 0 14px;
+      padding: 10px 12px;
+      background: #14120c;
+      border: 1px solid #6a5424;
+      border-radius: 3px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      text-align: center;
+      color: #e0b050;
+    }
+    #side_menu #ladder-open:hover,
+    #side_menu #ladder-open:focus-visible {
+      border-color: #e0b050;
+      color: #fff;
+    }
+    #side_menu #ladder-open:active {
+      border-color: darkmagenta;
+      color: darkmagenta;
+    }
     #side_menu .menu-solo {
       margin-top: 4px;
       padding-top: 10px;
       border-top: 1px solid #2a3140;
-    }
-    #side_menu .menu-solo h4 {
-      margin: 0 0 10px;
-      font-size: 12px;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      opacity: .75;
     }
     #side_menu .lobby-seat-group { margin-bottom: 8px; }
     #side_menu .lobby-seat-group-title { opacity: .7; margin-bottom: 4px; }
@@ -586,11 +606,27 @@
       color: #f2fbff;
     }
     #match-over[hidden] { display: none; }
+    #match-over { overflow-x: auto; }
     #match-over-sub {
       margin-top: 2px;
       font: 500 12px/1.3 system-ui, sans-serif;
       opacity: .75;
     }
+    #match-lobby-overlay:not(.is-parked):has(#match-over:not([hidden])) .match-lobby-panel {
+      width: min(520px, 96vw);
+    }
+    #match-stats {
+      width: 100%;
+      margin-top: 8px;
+      border-collapse: collapse;
+      font: 500 11px/1.3 system-ui, sans-serif;
+    }
+    #match-stats[hidden] { display: none; }
+    #match-stats th, #match-stats td { padding: 2px 4px; text-align: right; white-space: nowrap; }
+    #match-stats th:first-child, #match-stats td:first-child {
+      text-align: left; max-width: 9em; overflow: hidden; text-overflow: ellipsis;
+    }
+    #match-stats th { opacity: .6; font-weight: 500; }
     #match-lobby-overlay .lobby-seat-group { margin-bottom: 10px; }
     #match-lobby-overlay .lobby-seat-group-title { opacity: .7; margin-bottom: 4px; }
     #match-lobby-overlay .lobby-seat { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
@@ -661,13 +697,30 @@
       font: 13px/1.45 system-ui, sans-serif;
     }
     #ladder_pop .ladder-bar {
-      display: flex; align-items: center; gap: 10px; flex: 0 0 auto;
+      display: flex; align-items: flex-start; gap: 10px; flex: 0 0 auto;
       padding: 8px 8px 8px 16px;
     }
-    #ladder_pop .ladder-bar h3 { margin: 0; font-size: 15px; font-weight: 600; }
-    #ladder_status { margin: 0; font-size: 11px; color: #e0b050; white-space: nowrap; }
+    #ladder_pop .ladder-bar h3 { margin: 0; flex: 1; font-size: 15px; font-weight: 600; }
+    #ladder_pop .ladder-season-meta { margin-left: auto; padding-top: 2px; text-align: right; }
+    #ladder_pop .ladder-season-meta p { margin: 0; font-size: 11px; color: #e0b050; white-space: nowrap; }
+    #ladder_pop .ladder-modes {
+      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin: 10px 0 0;
+    }
+    #ladder_pop .ladder-modes .btn {
+      display: flex; align-items: center; justify-content: center;
+      width: 100%; margin: 0; padding: 8px 6px; text-align: center;
+      font-size: 12px; font-weight: 600; line-height: 1.2;
+    }
+    #ladder_pop .ladder-modes .btn[aria-pressed="true"],
+    #ladder_pop .ladder-modes .btn[aria-pressed="true"]:hover,
+    #ladder_pop .ladder-modes .btn[aria-pressed="true"]:focus-visible {
+      border-color: #e0b050; color: #e0b050;
+    }
+    #ladder_pop .ladder-play { display: flex; flex-direction: column; align-items: center; }
+    #ladder_pop #ladder_find { margin: 10px 0 0; text-align: center; }
+    #ladder_pop #ladder_status { margin: 6px 0 0; font-size: 11px; color: #e0b050; text-align: center; }
     #ladder_close {
-      position: static; margin-left: auto; width: 28px; height: 28px; padding: 0;
+      position: static; margin-left: 0; width: 28px; height: 28px; padding: 0;
       background: transparent; color: inherit; border: 0; font: 18px/1 system-ui, sans-serif;
       cursor: pointer; opacity: .7;
     }
@@ -790,6 +843,7 @@
       <div id="match-over" hidden>
         <div id="match-over-title"></div>
         <div id="match-over-sub"></div>
+        <table id="match-stats" hidden></table>
       </div>
       <h3 id="match-lobby-title">Lobby</h3>
       <div class="match-replay-row">
@@ -888,7 +942,6 @@
             <div class="lobby-type-list" role="list"></div>
             <div class="lobby-type-empty note">Listening for lobbies…</div>
             <button type="button" class="btn lobby-create">Create 1 vs 1 lobby</button>
-            <button type="button" class="btn" id="ladder-open" aria-controls="ladder_pop" aria-expanded="false">Ladder</button>
           </div>
         </div>
         <div class="lobby-drawer menu-mode" data-mode="teams">
@@ -907,6 +960,7 @@
             <button type="button" class="btn lobby-create">Create Adventure lobby</button>
           </div>
         </div>
+        <button type="button" class="btn" id="ladder-open" aria-controls="ladder_pop" aria-expanded="false">Competition ladder</button>
       </div>
       <div class="row" id="menu-match" hidden>
         <div id="menu-match-status"></div>
@@ -919,23 +973,27 @@
 
 
       <div class="menu-solo">
-        <h4>Offline</h4>
-      <div class="row">
-        <button type="button" class="btn" id="solo_ai_b">1v1 vs AI</button>
-        <div class="note">Offline match — same armies as a live game.</div>
-      </div>
-      <div class="row">
-        <button type="button" class="btn" id="unit_tester_b">Unit tester</button>
-        <div class="note">Mirrored 1v1 — one of every unit and building.</div>
-      </div>
-      <div class="row">
-        <button type="button" class="btn" id="stressful_b">Stressful Situation</button>
-        <div class="note">Five-way FFA — 1000 units per player.</div>
-      </div>
-      <div class="row">
-        <button type="button" class="btn" id="open_replay_b">Open replay</button>
-        <div class="note">Watch a saved .gecho — a garden echo of a match.</div>
-      </div>
+        <div class="lobby-drawer menu-mode">
+          <button type="button" class="btn lobby-drawer-toggle" id="practice-toggle" aria-expanded="false" aria-controls="practice-body">Practice</button>
+          <div class="lobby-drawer-body" id="practice-body" hidden>
+            <div class="row">
+              <button type="button" class="btn" id="open_replay_b">Open replay</button>
+              <div class="note">Watch a saved .gecho — a garden echo of a match.</div>
+            </div>
+            <div class="row">
+              <button type="button" class="btn" id="solo_ai_b">1v1 vs AI</button>
+              <div class="note">Offline match — same armies as a live game.</div>
+            </div>
+            <div class="row">
+              <button type="button" class="btn" id="unit_tester_b">Unit tester</button>
+              <div class="note">Mirrored 1v1 — one of every unit and building.</div>
+            </div>
+            <div class="row">
+              <button type="button" class="btn" id="stressful_b">Stressful Situation</button>
+              <div class="note">Five-way FFA — 1000 units per player.</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
     <div class="page" data-page="settings">
@@ -1045,16 +1103,23 @@
   <div id="ladder_pop" hidden>
     <div class="ladder-card" role="dialog" aria-modal="true" aria-labelledby="ladder_title">
       <div class="ladder-bar">
-        <h3 id="ladder_title">1v1 ladder</h3>
-        <span id="ladder_status"></span>
+        <h3 id="ladder_title">Two Words: Move In</h3>
+        <div class="ladder-season-meta">
+          <p id="ladder_season_num">(Season #0)</p>
+          <p id="ladder_season_start">Started October 19, 2026</p>
+        </div>
         <button type="button" id="ladder_close" aria-label="Close ladder">×</button>
       </div>
       <div class="ladder-body">
-      <p>
-        <button type="button" class="btn" id="ladder_board_1v1" aria-pressed="true">1v1</button>
-        <button type="button" class="btn" id="ladder_board_teams" aria-pressed="false">Teams</button>
-      </p>
-      <button type="button" class="btn" id="ladder_find">Find match</button>
+      <div class="ladder-modes" role="group" aria-label="Ladder">
+        <button type="button" class="btn" id="ladder_board_1v1" data-board="1v1" aria-pressed="true">1v1</button>
+        <button type="button" class="btn" id="ladder_board_teams" data-board="teams" aria-pressed="false">2v2</button>
+        <button type="button" class="btn" id="ladder_board_koth" data-board="koth" aria-pressed="false">KOTH</button>
+      </div>
+      <div class="ladder-play">
+        <button type="button" class="btn" id="ladder_find">Find 1v1 Ladder Match</button>
+        <p id="ladder_status"></p>
+      </div>
       <h4>Top 10</h4>
       <div id="ladder_top"></div>
       <div id="ladder_around_wrap">
@@ -1168,6 +1233,15 @@
             <dt>Trigger, sweep</dt><dd>Lasso select on the field</dd>
             <dt>Grip + trigger</dt><dd>Add to selection</dd>
             <dt>Both triggers, sweep</dt><dd>Two lassos, one selection</dd>
+          </dl>
+        </div>
+      </details>
+      <details>
+        <summary>King of the Hill</summary>
+        <div class="help-body">
+          <dl class="help-keys">
+            <dt>Agora</dt><dd>None at the start</dd>
+            <dt>Ability</dt><dd>4 villagers and an engineer plant an agora. Casters in that selection block it</dd>
           </dl>
         </div>
       </details>

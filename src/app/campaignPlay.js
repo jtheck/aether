@@ -71,15 +71,7 @@ export function continuationGardenRef({
 export async function loadPlayIndex(ref, opts = {}) {
   const current = String(ref || '');
   try {
-    if (current.startsWith('/maps/')) {
-      const fetchIndex = opts.fetchIndex || (async () => {
-        const res = await fetch('/maps/campaign.json');
-        if (!res.ok) return null;
-        return res.json();
-      });
-      return normalizeCampaignIndex(await fetchIndex());
-    }
-    if (current.toLowerCase().startsWith('pack:')) {
+    if (current.startsWith('/maps/') || current.toLowerCase().startsWith('pack:')) {
       const text = typeof opts.packText === 'function' ? await opts.packText() : await readCampaignPack();
       return text ? normalizeCampaignIndex(JSON.parse(text)) : null;
     }

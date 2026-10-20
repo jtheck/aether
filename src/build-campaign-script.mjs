@@ -1,4 +1,4 @@
-// Generate a Fountain screenplay from the adventure campaign.
+// Fountain + HTML screenplay from maps/adventure/adventure.campaign (Forge export).
 //
 //   npm run build:script        (from src/)
 

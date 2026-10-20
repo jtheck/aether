@@ -113,6 +113,7 @@ export function formatHudMatchClock(totalSec) {
 export function clearSessionTableState(session) {
   if (!session) return;
   session.koth = null;
+  session.ownerStats = null;
   session.kothMatchOver = 0;
   session.matchWinner = -1;
   session._checkpoint = null;
@@ -157,6 +158,8 @@ export class SimSession {
     /** Unpruned command tape for post-match save. Catch-up still prunes the live ledgers. */
     this.replayFrames = [];
     this.replayFrameIds = new Set();
+    /** @type {{ tick: number, pid: number, x: number, z: number, r: number, a: number }[]} */
+    this.replayCams = [];
     this.replayConfig = null;
     this.replayGarden = null;
     this.watchingReplay = false;
@@ -207,6 +210,7 @@ export class SimSession {
     this.resetting = false;
     this._bgPumpTimer = null;
     this.koth = null;
+    this.ownerStats = null;
     this.kothMatchOver = 0;
     this.matchWinner = -1;
     this.agoras = [];
@@ -285,6 +289,7 @@ export class SimSession {
     this.tech = tech ?? this.client._tech ?? [];
     this.resources = resources ?? this.client._resources ?? [];
     this.koth = null;
+    this.ownerStats = null;
     this.kothMatchOver = 0;
     this.matchWinner = -1;
     this._bindStepHandler();
@@ -721,6 +726,7 @@ export class SimSession {
     this.committedLedgerFrames = [];
     this.replayFrames = [];
     this.replayFrameIds = new Set();
+    this.replayCams = [];
     this.replayConfig = null;
     this.snapshots.clear();
     this.projectileSnapshots.clear();
@@ -776,6 +782,7 @@ export class SimSession {
     this.committedLedgerFrames = other.committedLedgerFrames;
     this.replayFrames = other.replayFrames ?? this.replayFrames;
     this.replayFrameIds = other.replayFrameIds ?? this.replayFrameIds;
+    this.replayCams = other.replayCams ?? this.replayCams;
     this.replayConfig = other.replayConfig ?? this.replayConfig;
     this.snapshots = other.snapshots;
     this.snapshotRing = other.snapshotRing;
@@ -806,6 +813,7 @@ export class SimSession {
     this.pauseLockstep = false;
     this.resetting = false;
     this.koth = other.koth;
+    this.ownerStats = other.ownerStats;
     this.kothMatchOver = other.kothMatchOver;
     this._lastChecksum = other._lastChecksum;
     this.simMetrics = other.simMetrics;
@@ -869,6 +877,7 @@ export class SimSession {
       if (extra?.koth) this.koth = extra.koth;
       if (extra?.kothMatchOver != null) this.kothMatchOver = extra.kothMatchOver;
       if (extra?.matchWinner != null) this.matchWinner = extra.matchWinner;
+      if (extra?.ownerStats) this.ownerStats = extra.ownerStats;
       if (extra?.agoras) this.agoras = extra.agoras;
       if (extra?.buildings) {
         this.buildings = extra.buildings;

@@ -17,6 +17,8 @@ import {
 } from './sporeBloom.js';
 import { FIRE_ZONE_DAMAGE_INTERVAL } from './fireZones.js';
 import { damageDoorsInRadius } from './doorCombat.js';
+import { isHostile } from './teams.js';
+import { noteBuildingLost, noteOwnerRaze } from './ownerStats.js';
 
 /** Gather / storage buildings — smash these last, and don't peel off a march for them. */
 const ECONOMY_BUILDING_TYPES = new Set(['camp', 'mine', 'farm', 'silo']);
@@ -103,7 +105,16 @@ export function constructionSiteHasWorkers(w, bi) {
   return false;
 }
 
-export function applyDamageBuilding(w, field, bi, amount) {
+function creditRaze(w, b, attackerOwner) {
+  if (!buildingIsFinished(b) || b.type === 'agora') return;
+  const attacker = attackerOwner | 0;
+  const victim = b.owner | 0;
+  noteBuildingLost(w, victim);
+  if (attacker < 0 || attacker === victim || !isHostile(attacker, victim)) return;
+  noteOwnerRaze(w, attacker);
+}
+
+export function applyDamageBuilding(w, field, bi, amount, attackerOwner = -1) {
   const b = w.buildings?.[bi];
   if (!isBuildingAlive(b) || amount <= 0) return 0;
   // Empty foundations are paper — any hit ruins them. On-site builders harden.
@@ -116,7 +127,10 @@ export function applyDamageBuilding(w, field, bi, amount) {
   const dealt = (b.hp | 0) - next;
   b.hp = next;
   w.buildingsDirty = 1;
-  if (next <= 0) ruinBuilding(w, field, bi);
+  if (next <= 0) {
+    creditRaze(w, b, attackerOwner);
+    ruinBuilding(w, field, bi);
+  }
   return dealt;
 }
 
@@ -150,7 +164,7 @@ function pushFarmInkDrips(w, b) {
 }
 
 /** Buildings in the bloom (friendly fire); farms take extra and drip ink. */
-export function damageBuildingsInBloom(w, field, _owner, cx, cy, radius, amount = SPORE_BLOOM_DAMAGE) {
+export function damageBuildingsInBloom(w, field, owner, cx, cy, radius, amount = SPORE_BLOOM_DAMAGE) {
   const buildings = w.buildings;
   if (!radius || radius <= 0) return 0;
   let hit = 0;
@@ -160,7 +174,7 @@ export function damageBuildingsInBloom(w, field, _owner, cx, cy, radius, amount 
     const reach = radius + buildingFootprintHalf(b.type);
     if (fx.dist2(cx, cy, b.x, b.z) > fx.mul(reach, reach)) continue;
     const dmg = scaleFarmHazardDamage(b.type, amount, FARM_SPORE_DAMAGE_MUL);
-    if (applyDamageBuilding(w, field, bi, dmg) <= 0) continue;
+    if (applyDamageBuilding(w, field, bi, dmg, owner | 0) <= 0) continue;
     hit++;
     if (b.type === 'farm') pushFarmInkDrips(w, b);
   }
@@ -236,6 +250,7 @@ export function pulseFireZoneBuildings(w, field) {
         field,
         bi,
         scaleFarmHazardDamage(b.type, baseDamage, FARM_FIRE_DAMAGE_MUL),
+        store.owner[slot] | 0,
       );
     }
   }

@@ -4,7 +4,7 @@
 // Each `npm run package` rewrites CACHE to aether-<mainHash>.
 // Never intercept or cache.put the worker script itself.
 
-const CACHE = "aether-5";
+const CACHE = "aether-6";
 const offlineFallbackPage = "/config/offline.html";
 
 function workerScriptPath(url) {
@@ -24,7 +24,7 @@ function isWorkerScript(url) {
 // (not bundled), so it cannot import that constant.
 function isAdventureCampaign(request) {
   try {
-    return new URL(request.url).pathname === "/maps/adventure.campaign";
+    return new URL(request.url).pathname === "/maps/adventure/adventure.campaign";
   } catch {
     return false;
   }
@@ -67,7 +67,7 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE).then(async (cache) => {
       await cache.add(offlineFallbackPage).catch(() => {});
-      await cache.add("/maps/adventure.campaign").catch(() => {});
+      await cache.add("/maps/adventure/adventure.campaign").catch(() => {});
     }),
   );
 });

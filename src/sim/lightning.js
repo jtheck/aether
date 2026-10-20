@@ -308,7 +308,7 @@ export function deliverLightningStrike(
   if (hit.kind === LIGHTNING_HIT.UNIT && hit.target >= 0 && damage > 0) {
     applyDamage(w, hit.target, damage, source);
   } else if (hit.kind === LIGHTNING_HIT.BUILDING && hit.target >= 0 && damage > 0) {
-    applyDamageBuilding(w, field, hit.target, damage);
+    applyDamageBuilding(w, field, hit.target, damage, owner | 0);
   }
   pushLightningFx(w, hit.x, hit.y, hit.kind);
   return hit;

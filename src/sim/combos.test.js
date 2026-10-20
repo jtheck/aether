@@ -62,6 +62,13 @@ describe('combo classify', () => {
       wood: 80,
       stone: 45,
     });
+    assert.deepEqual(agoraFoundCost({ wood: 240, stone: 180, mineral: 60 }, true), {
+      mineral: 30,
+      wood: 120,
+      stone: 90,
+    });
+    assert.equal(canAffordAgoraFound({ mineral: 30, wood: 119, stone: 90 }, true), false);
+    assert.equal(canAffordAgoraFound({ mineral: 30, wood: 120, stone: 90 }, true), true);
   });
 });
 

@@ -107,6 +107,28 @@ describe('koth lobby rows', () => {
     });
     assert.equal(stalled.title, 'Waiting for players…');
     assert.equal(stalled.meta, '2/5  ·  2s');
+    const named = formatInLobbyStatus({
+      stalled: true,
+      activeCount: 2,
+      seats: 5,
+      tick: 40,
+      players: [
+        { name: 'Blind', you: true },
+        { name: 'Aria', lagging: true, playerId: 1 },
+      ],
+    });
+    assert.equal(named.title, 'Aria is lagging');
+    const both = formatInLobbyStatus({
+      stalled: true,
+      activeCount: 3,
+      seats: 5,
+      tick: 40,
+      players: [
+        { name: 'Aria', lagging: true },
+        { name: 'Sam', lagging: true },
+      ],
+    });
+    assert.equal(both.title, 'Aria and Sam are lagging');
   });
 
   it('hides the KOTH browser while another game type is live', () => {
@@ -200,6 +222,7 @@ describe('koth lobby rows', () => {
     assert.equal(formatLobbyPlayerLine({ name: 'Sam', spectator: true }), 'Sam (watching)');
     assert.equal(formatLobbyPlayerLine({ name: 'Sam', you: true, spectator: true }), 'Sam (you, watching)');
     assert.equal(formatLobbyPlayerLine({ name: 'Aria', lagging: true }), 'Aria (lagging)');
+    assert.equal(formatLobbyPlayerLine({ name: 'Aria', king: true }), '👑 Aria');
   });
 
   it('lists spectators after seated players', () => {

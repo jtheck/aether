@@ -9,7 +9,7 @@ import { installAdventureCampaign, loadAdventureCampaign } from './adventureCamp
 const here = dirname(fileURLToPath(import.meta.url));
 
 describe('shipped adventure campaign', () => {
-  const bundle = JSON.parse(readFileSync(join(here, '../../maps/adventure.campaign'), 'utf8'));
+  const bundle = JSON.parse(readFileSync(join(here, '../../maps/adventure/adventure.campaign'), 'utf8'));
 
   it('lists every live chapter under its episode', () => {
     assert.equal(isCampaignBundle(bundle), true);

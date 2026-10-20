@@ -1,4 +1,5 @@
 import { formatGameNumber } from './formatGameNumber.js';
+import { noteSpent } from './ownerStats.js';
 
 // Per-owner resource banks (wood / stone / mineral / food).
 //
@@ -106,7 +107,12 @@ export function addResource(w, owner, kind, amount) {
  */
 export function spendResources(w, owner, cost) {
   if (!canAfford(w, owner, cost)) return false;
-  for (const kind in cost) addResource(w, owner, kind, -(cost[kind] | 0));
+  for (const kind in cost) {
+    const n = cost[kind] | 0;
+    if (!n) continue;
+    addResource(w, owner, kind, -n);
+    if (n > 0) noteSpent(w, owner, kind, n);
+  }
   return true;
 }
 

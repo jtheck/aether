@@ -84,6 +84,10 @@ describe('lobby ui copy', () => {
       formatSeatName({ name: 'Overseer', userId: 'p2p-bbb222' }, 'p2p-aaa111'),
       'Overseer',
     );
+    assert.equal(
+      formatSeatName({ name: 'Aria', userId: 'p2p-bbb222', index: 1 }, 'p2p-aaa111', 1),
+      '👑 Aria',
+    );
   });
 
   it('formats countdown seconds', () => {
@@ -291,10 +295,16 @@ function lobbyDom() {
   }
   put('match-lobby-overlay', new FakeEl('div', { hidden: true }));
   put('match-lobby-min', new FakeEl('button'));
+  put('match-lobby-title', new FakeEl('h3'));
+  put('match-lobby-note', new FakeEl('div'));
+  put('match-lobby-seats', new FakeEl('div'));
   return {
     drawers,
     overlay: byId.get('match-lobby-overlay'),
     min: byId.get('match-lobby-min'),
+    title: byId.get('match-lobby-title'),
+    note: byId.get('match-lobby-note'),
+    seats: byId.get('match-lobby-seats'),
     create(mode) {
       return drawers.querySelector(`[data-mode="${mode}"]`).querySelector('.lobby-create');
     },
@@ -305,6 +315,7 @@ function lobbyDom() {
       const prev = globalThis.document;
       globalThis.document = {
         getElementById: (id) => byId.get(id) ?? null,
+        createElement: (tag) => new FakeEl(tag),
       };
       return () => {
         if (prev === undefined) delete globalThis.document;
@@ -354,7 +365,7 @@ describe('custom map picker', () => {
         title: 'Open',
         gardens: [{ file: 'map.garden', name: 'Open' }],
       },
-    ], 'session', [{ id: 'session', name: 'My map' }], 'onevsone');
+    ], 'session', [{ id: 'session', name: 'My map' }], 'onevsone', []);
     assert.deepEqual(opts.map((row) => row.name), ['My map', 'Duel', 'Open']);
     assert.equal(opts[0].id, 'session');
   });
@@ -433,8 +444,8 @@ describe('match lobby overlay', () => {
         phase: 'playing',
         playerCount: 2,
         seats: [
-          { kind: 'human', name: 'Blind', userId: 'u1', ready: true },
-          { kind: 'human', name: 'Aria', userId: 'u2', ready: true },
+          { kind: 'human', name: 'Blind', userId: 'u1', ready: true, index: 0 },
+          { kind: 'human', name: 'Aria', userId: 'u2', ready: true, index: 1 },
         ],
       };
       const ui = setupLobbyUi({
@@ -446,6 +457,7 @@ describe('match lobby overlay', () => {
           startBlockReason: () => '',
           countdownMs: () => 0,
           lockstepStalled: () => stalled,
+          lockstepWaiters: () => (stalled ? [1] : []),
         },
         getUserId: () => 'u1',
       });
@@ -455,6 +467,10 @@ describe('match lobby overlay', () => {
       ui.refresh();
       assert.equal(dom.overlay.hidden, false);
       assert.equal(dom.overlay.className.includes('is-lag'), true);
+      assert.equal(dom.title.textContent, 'Aria is lagging');
+      assert.equal(dom.note.textContent, 'Aria is lagging');
+      const statuses = dom.seats.querySelectorAll('.lobby-seat-status').map((el) => el.textContent);
+      assert.deepEqual(statuses, ['Ready', 'lagging']);
     } finally {
       restore();
     }

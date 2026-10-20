@@ -14,7 +14,7 @@ import { applyTableSilhouette } from './tableShape.js';
 import { UNIT } from './unitTypes.js';
 import { createAgoras } from './agora.js';
 import { getResource, STARTING_RESOURCES } from './resources.js';
-import { BASE_PYRAMID_BANK, KOTH_STARTING_RESOURCES } from './storage.js';
+import { KOTH_STARTING_RESOURCES } from './storage.js';
 import {
   KOTH_ARMY,
   KOTH_UNITS_PER_ARMY,
@@ -168,12 +168,12 @@ describe('1vAI home agoras', () => {
 });
 
 describe('koth combat spawn', () => {
-  it('opens each seat on a full pre-silo pyramid and a double food stash', () => {
+  it('opens each seat with two agora purses and a double food stash', () => {
     const w = buildWorldFromConfig({ seed: 5, mode: 'koth', activeSlots: [0, 1] });
     for (const owner of [0, 1]) {
-      assert.equal(getResource(w, owner, 'wood'), BASE_PYRAMID_BANK.wood);
-      assert.equal(getResource(w, owner, 'stone'), BASE_PYRAMID_BANK.stone);
-      assert.equal(getResource(w, owner, 'mineral'), BASE_PYRAMID_BANK.mineral);
+      assert.equal(getResource(w, owner, 'wood'), KOTH_STARTING_RESOURCES.wood);
+      assert.equal(getResource(w, owner, 'stone'), KOTH_STARTING_RESOURCES.stone);
+      assert.equal(getResource(w, owner, 'mineral'), KOTH_STARTING_RESOURCES.mineral);
       assert.equal(getResource(w, owner, 'food'), KOTH_STARTING_RESOURCES.food);
     }
   });

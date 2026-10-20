@@ -19,6 +19,7 @@ import {
   stampUnitRallyHops,
 } from './buildings.js';
 import { grantTech, ownerHasTech, TECH } from './tech.js';
+import { noteOwnerTrained } from './ownerStats.js';
 
 /**
  * @param {object} w
@@ -44,6 +45,7 @@ function spawnTrainedUnit(w, field, b, unitType) {
     }
   }
   const i = spawn(w, { x: sx, y: sz, type: unitType, owner: b.owner | 0 });
+  noteOwnerTrained(w, b.owner | 0);
   // Rally point (player-set) or default walk-out past the doorway.
   let rx;
   let rz;

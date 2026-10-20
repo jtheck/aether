@@ -14,6 +14,6 @@ export function roundDelta(value) {
 }
 
 /** Points added to `rating` for `score` (1 win, 0 loss) against `opponent`. */
-export function ratingDelta(rating, opponent, score) {
-  return roundDelta(K * (score - expectedScore(rating, opponent)));
+export function ratingDelta(rating, opponent, score, k = K) {
+  return roundDelta(k * (score - expectedScore(rating, opponent)));
 }

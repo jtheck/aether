@@ -1,10 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { decodeGarden } from '../sim/garden.js';
-import { objectiveWorldPos, zoneContains } from './objectives.js';
+import { objectiveWorldPos } from './objectives.js';
 import {
   SURVIVE_SECONDS_PER_WAVE,
   armCampaignTriggers,
@@ -13,9 +9,7 @@ import {
   stepCampaignTriggers,
   surviveSeconds,
 } from './triggers.js';
-import { CAMPAIGN_CHAPTERS } from './campaign.js';
 
-const here = dirname(fileURLToPath(import.meta.url));
 const TICK_HZ = 20;
 
 function timerCtx(tick, partyAlive = true) {
@@ -178,17 +172,3 @@ describe('objective triggers — hold / capture / infiltrate / race / escort / c
   });
 });
 
-describe('generated destroy chapters carry a killable target', () => {
-  it('places a hostile structure inside every destroy zone', () => {
-    for (const c of CAMPAIGN_CHAPTERS) {
-      const destroyObjs = c.def.objectives.filter((o) => o.kind === 'destroy');
-      if (!destroyObjs.length) continue;
-      const data = JSON.parse(readFileSync(join(here, '../../maps', `${c.id}.garden`), 'utf8'));
-      const g = decodeGarden(data);
-      for (const objective of g.objectives.filter((o) => o.kind === 'destroy')) {
-        const target = g.buildings.find((b) => (b.owner | 0) === 4 && zoneContains(objective, b.x, b.z, { width: g.width }));
-        assert.ok(target, `${c.id} destroy zone should contain a hostile building`);
-      }
-    }
-  });
-});

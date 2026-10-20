@@ -89,9 +89,11 @@ export const CMD = {
 
 export function applyCommands(world, field, commands) {
   if (!commands || commands.length === 0) return;
+  const holding = world.koth && !world.koth.opened;
 
   for (let c = 0; c < commands.length; c++) {
     const cmd = commands[c];
+    if (holding && cmd.type !== CMD.SPAWN_SLOT && cmd.type !== CMD.FORCE_ELIMINATE) continue;
     switch (cmd.type) {
       case CMD.MOVE:
         applyMove(world, field, cmd.entities, cmd.tx, cmd.ty, ORDER.MOVE);
@@ -449,10 +451,12 @@ function applySpawnSlot(world, playerId) {
   if (playerId == null || playerId < 0) return;
   // KOTH seats revolve into the same world. A previous zero-survivor state must
   // not keep the newly populated round in post-game mode.
-  world.kothMatchOver = 0;
-  world.matchWinner = -1;
+  if (!world.koth?.opened) {
+    world.kothMatchOver = 0;
+    world.matchWinner = -1;
+  }
   if (livingByOwner(world, playerId) > 0) return;
-  if (world.koth) kothRegisterJoin(world.koth, playerId, world.tick);
+  if (world.koth) kothRegisterJoin(world.koth, playerId, world.tick, world);
   spawnKothSlot(world, playerId);
 }
 

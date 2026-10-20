@@ -1,4 +1,4 @@
-import { getMode, isLobbyMode } from './modes.js';
+import { MODE_IDS, getMode, isLobbyMode } from './modes.js';
 
 export const LOBBY_PROTOCOL_VERSION = 1;
 export const ANNOUNCE_MS = 3500;
@@ -37,7 +37,7 @@ export function matchChannel(mode, roomId) {
 /** @param {string | undefined} lobbyName */
 export function parseMatchChannel(lobbyName) {
   if (!lobbyName) return null;
-  for (const id of ['onevsone', 'teams', 'adventure']) {
+  for (const id of MODE_IDS) {
     const prefix = `${typeChannel(id)}:`;
     if (lobbyName.startsWith(prefix)) {
       return { mode: id, roomId: lobbyName.slice(prefix.length) };

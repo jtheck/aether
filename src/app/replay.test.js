@@ -14,7 +14,13 @@ import {
   replayOpponentName,
   replayModeSlug,
   saveReplayToDisk,
+  replayChecksumExpect,
+  replaySimOf,
+  replaySimProblem,
   REPLAY_KIND,
+  REPLAY_SIM_OLD,
+  REPLAY_SIM_UPDATE,
+  SIM_GENERATION,
 } from './replay.js';
 
 describe('replayConfigFromLive', () => {
@@ -115,6 +121,7 @@ describe('buildReplayFile', () => {
     assert.equal(file.v, 1);
     assert.equal(file.tick, 400);
     assert.equal(file.checksum, 0xabc);
+    assert.equal(file.sim, SIM_GENERATION);
     assert.equal(file.names[0], 'Blind');
     assert.equal(file.frames[0].tick, 12);
     file.frames[0].commands[0].entities.push(9);
@@ -214,6 +221,10 @@ describe('parseReplayFile', () => {
       exportReplayLedger() {
         return [{ tick: 3, playerId: 0, commands: [{ type: 1, entities: [2] }] }];
       },
+      replayCams: [
+        { tick: 4, pid: 0, x: 12, z: -3, r: 80, a: 0.5 },
+        { tick: 9, pid: 1, x: 40, z: 2, r: 70, a: 0 },
+      ],
     }, { names: { 0: 'Blind' }, savedAt: '2026-09-08T00:00:00.000Z' });
     const parsed = parseReplayFile(JSON.stringify(built));
     assert.equal(parsed.kind, REPLAY_KIND);
@@ -221,6 +232,35 @@ describe('parseReplayFile', () => {
     assert.equal(parsed.names[0], 'Blind');
     assert.equal(parsed.config.mode, 'onevsone');
     assert.equal(parsed.frames[0].tick, 3);
+    assert.equal(parsed.sim, SIM_GENERATION);
+    const unstamped = parseReplayFile({
+      v: 1,
+      kind: REPLAY_KIND,
+      tick: 10,
+      checksum: 4,
+      config: { seed: 1, mode: 'koth' },
+      frames: [],
+    });
+    assert.equal(unstamped.sim, replaySimOf(null));
+    assert.equal(replaySimProblem(SIM_GENERATION + 1), REPLAY_SIM_UPDATE);
+    assert.equal(replaySimProblem(SIM_GENERATION, SIM_GENERATION + 1), REPLAY_SIM_OLD);
+    assert.throws(
+      () => parseReplayFile({
+        v: 1,
+        kind: REPLAY_KIND,
+        sim: SIM_GENERATION + 1,
+        config: { seed: 1, mode: 'koth' },
+        frames: [],
+      }),
+      new RegExp(REPLAY_SIM_UPDATE),
+    );
+    assert.equal(replayChecksumExpect({ tick: 80, checksum: 7 }, 80), 7);
+    assert.equal(replayChecksumExpect({ tick: 80, checksum: 7 }, 12), null);
+    assert.equal(replayChecksumExpect({ tick: 80, checksum: null }, 80), null);
+    assert.deepEqual(parsed.cams, [
+      [4, 0, 12, -3, 80, 0.5],
+      [9, 1, 40, 2, 70, 0],
+    ]);
     assert.throws(() => parseReplayFile('{"kind":"nope"}'), /Not an Aether replay/);
     assert.throws(() => parseReplayFile('not-json'), /valid JSON/);
   });

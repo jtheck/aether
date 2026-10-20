@@ -82,6 +82,7 @@ export function packView(sample, seq) {
     }
     if (b.length) msg.b = b;
   }
+  if (Number.isFinite(Number(sample.tick))) msg.t = sample.tick | 0;
   if (sample.replay) {
     msg.rt = sample.replay.tick | 0;
     msg.rs = Number(sample.replay.speed) || 0;
@@ -289,8 +290,9 @@ export function cameraFollowMode(local, remote) {
   return 'ease';
 }
 
-/** Seat column: replay viewer, spectator, ready, or waiting. */
+/** Seat column: replay viewer, spectator, lockstep stall, ready, or waiting. */
 export function rosterStatusLabel(person) {
+  if (person?.lagging) return 'lagging';
   if (person?.replay) return 'watching replay';
   if (person?.watching) return 'Watching';
   if (person?.ready) return 'Ready';
@@ -361,7 +363,9 @@ export function createViewFollow(deps) {
 
   function publish(now) {
     if (target) return;
-    if (deps.shouldPublish && !deps.shouldPublish()) return;
+    const sending = !deps.shouldPublish || deps.shouldPublish();
+    const recording = Boolean(deps.shouldRecord?.());
+    if (!sending && !recording) return;
     if (lastSent && (now - lastSentAt) < VIEW_MIN_MS) return;
     const packed = packView(deps.sample?.() ?? {}, seq);
     if (!packed) return;
@@ -372,7 +376,8 @@ export function createViewFollow(deps) {
     lastSent = packed;
     lastSentAt = now;
     seq = (seq + 1) >>> 0 || 1;
-    deps.send?.(packed);
+    if (recording) deps.record?.(packed);
+    if (sending) deps.send?.(packed);
   }
 
   function accept(msg) {

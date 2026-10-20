@@ -7,6 +7,7 @@ import { aetherSteam } from './steam.js';
 import { stashSessionGarden, writeCampaignPack } from './gardenSession.js';
 import { formatWorkshopRef, isWorkshopRef } from './workshop.js';
 import { flattenCampaignChapters, formatPackRef, isCampaignBundle, normalizeCampaignIndex } from '../story/campaignPack.js';
+import { fetchOfficialHouseMaps } from '../houseMapCatalog.js';
 
 /**
  * @param {object} lobby
@@ -27,6 +28,39 @@ export function formatTypeLobbyRow(lobby) {
 }
 
 /**
+ * Headline while lockstep is parked on one or more peers.
+ * Empty when no one is identified yet.
+ * @param {string[]} names
+ */
+export function formatLockstepStallTitle(names) {
+  const list = [];
+  const seen = new Set();
+  for (const raw of names || []) {
+    const name = String(raw ?? '').trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    list.push(name);
+  }
+  if (list.length === 0) return '';
+  if (list.length === 1) return `${list[0]} is lagging`;
+  if (list.length === 2) return `${list[0]} and ${list[1]} are lagging`;
+  return `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]} are lagging`;
+}
+
+/** Seat names for the player ids lockstep is waiting on. */
+export function namesForLockstepWaiters(seats, waiterIds) {
+  const names = [];
+  for (const id of waiterIds || []) {
+    const playerId = id | 0;
+    const seat = (seats || []).find((s) => (
+      s?.kind === 'human' && Number.isInteger(s.index) && s.index === playerId
+    ));
+    names.push((seat?.name || '').trim() || `Player ${playerId + 1}`);
+  }
+  return names;
+}
+
+/**
  * @param {object} state
  * @returns {{ title: string, meta: string }}
  */
@@ -40,10 +74,11 @@ export function formatMatchStatus(state) {
 }
 
 /** @param {{ name?: string, userId?: string | null }} seat @param {string | null} localId */
-export function formatSeatName(seat, localId) {
+export function formatSeatName(seat, localId, kingOwner = -1) {
   const name = (seat.name || 'Player').trim() || 'Player';
   const you = sameUserId(seat.userId, localId) ? ' (you)' : '';
-  return `${name}${you}`;
+  const crowned = !seat.watching && kingOwner >= 0 && (seat.index | 0) === kingOwner;
+  return `${crowned ? '👑 ' : ''}${name}${you}`;
 }
 
 /** @param {string} modeId */
@@ -140,7 +175,9 @@ function paintMoves(row, userId, hostMoves) {
   }
 }
 
-function paintSeats(container, seats, { teams, localId, compact, spectators, hostMoves, followUserId }) {
+function paintSeats(container, seats, {
+  teams, localId, compact, spectators, hostMoves, followUserId, kingOwner = -1, laggingIds = null,
+}) {
   if (!container) return;
   const groups = teams
     ? [
@@ -198,9 +235,14 @@ function paintSeats(container, seats, { teams, localId, compact, spectators, hos
       const nameEl = row.querySelector('.lobby-seat-name');
       const statusEl = row.querySelector('.lobby-seat-status');
       if (seat.kind === 'human') {
-        setText(nameEl, formatSeatName(seat, localId));
+        setText(nameEl, formatSeatName(seat, localId, seat.watching ? -1 : kingOwner));
         if (nameEl) nameEl.style.color = seat.color || '';
-        setText(statusEl, rosterStatusLabel(seat));
+        const lagging = Boolean(
+          laggingIds
+          && Number.isInteger(seat.index)
+          && laggingIds.has(seat.index),
+        );
+        setText(statusEl, rosterStatusLabel({ ...seat, lagging }));
         const canFollow = Boolean(seat.replay) && !sameUserId(seat.userId, localId);
         const following = canFollow && followUserId && sameUserId(seat.userId, followUserId);
         if (canFollow) row.dataset.replayUser = seat.userId;
@@ -325,8 +367,10 @@ export function chapterSelectOptions(workshopItems, current, search, hostname, l
   return official.concat(local, extra);
 }
 
-/** Workshop and loaded gardens that fit this 1v1 or teams lobby. Field and seed are the generated map. */
-export function customMapSelectOptions(workshopItems, current, localMaps, modeId) {
+/** Workshop, official house maps, and loaded gardens for 1v1 / teams. Empty chapter = generated field. */
+export function customMapSelectOptions(workshopItems, current, localMaps, modeId, officialMaps) {
+  const official = (Array.isArray(officialMaps) ? officialMaps : [])
+    .filter((row) => row?.id && mapTypeFitsLobby(row.mapType, modeId));
   const local = (Array.isArray(localMaps) ? localMaps : [])
     .filter((row) => row?.id)
     .map((row) => ({ id: row.id, name: row.name || row.id, group: row.group || '' }));
@@ -342,14 +386,14 @@ export function customMapSelectOptions(workshopItems, current, localMaps, modeId
     }
   }
   const cur = String(current || '');
-  const known = [...local, ...extra];
+  const known = [...official, ...local, ...extra];
   if (cur && !known.some((row) => row.id === cur)) {
     extra.unshift({
       id: cur,
       name: cur === 'session' ? 'Custom map' : isWorkshopRef(cur) ? 'Workshop map' : 'Custom map',
     });
   }
-  return [...local, ...extra];
+  return [...official, ...local, ...extra];
 }
 
 /**
@@ -363,7 +407,7 @@ export function customMapSelectOptions(workshopItems, current, localMaps, modeId
  * @param {() => string | null} [opts.getFollowUser]
  */
 export function setupLobbyUi({
-  gameLobby, matchLobby, isKothLive, getUserId, onCloseMenu, onFollowReplay, getFollowUser,
+  gameLobby, matchLobby, isKothLive, getUserId, onCloseMenu, onFollowReplay, getFollowUser, getKing,
 }) {
   const drawersRoot = document.getElementById('menu-lobbies');
   const sidebar = document.getElementById('menu-match');
@@ -423,7 +467,27 @@ export function setupLobbyUi({
   let workshopItems = [];
   let localChapters = [];
   let localMaps = [];
+  /** @type {Record<string, { id: string, name: string, group?: string, mapType?: string }[]>} */
+  let officialHouseMaps = { onevsone: [], teams: [] };
   let lastWorkshopPull = 0;
+  let lastOfficialPull = 0;
+
+  function pullOfficialHouseMaps() {
+    const now = Date.now();
+    if (now - lastOfficialPull < 3000) return;
+    lastOfficialPull = now;
+    void Promise.all([
+      fetchOfficialHouseMaps('onevsone'),
+      fetchOfficialHouseMaps('teams'),
+    ]).then(([onevsone, teams]) => {
+      const sig = `${onevsone.map((r) => r.id).join()}|${teams.map((r) => r.id).join()}`;
+      const prev = `${officialHouseMaps.onevsone.map((r) => r.id).join()}|${officialHouseMaps.teams.map((r) => r.id).join()}`;
+      if (sig === prev) return;
+      officialHouseMaps = { onevsone, teams };
+      lastSig = '';
+      refresh();
+    });
+  }
 
   function pullWorkshopChapters() {
     const now = Date.now();
@@ -451,6 +515,7 @@ export function setupLobbyUi({
       live, active, open, lists,
       state?.phase, state?.playerCount, state?.countdownEndsAt,
       Boolean(matchLobby.lockstepStalled?.()),
+      (matchLobby.lockstepWaiters?.() ?? []).join(','),
       Math.ceil((matchLobby.countdownMs?.() ?? 0) / 200),
       state?.settings?.fieldSize, state?.settings?.seed, state?.settings?.chapter,
       state?.settings?.allowSpectators,
@@ -458,6 +523,8 @@ export function setupLobbyUi({
       workshopItems.flatMap((item) => (item.gardens || []).map((g) => `${item.id}:${g.file}:${g.mapType || ''}`)).join(),
       localChapters.map((row) => row.id).join(),
       localMaps.map((row) => row.id).join(),
+      officialHouseMaps.onevsone.map((row) => row.id).join(),
+      officialHouseMaps.teams.map((row) => row.id).join(),
       JSON.stringify(state?.seats ?? []),
       JSON.stringify(state?.spectators ?? []),
       state?.watching,
@@ -484,6 +551,10 @@ export function setupLobbyUi({
 
     const inPlay = state?.phase === 'playing';
     const stalled = Boolean(matchLobby.lockstepStalled?.());
+    const waiterIds = stalled ? (matchLobby.lockstepWaiters?.() ?? []) : [];
+    const laggingIds = new Set(waiterIds.map((id) => id | 0));
+    const stallTitle = formatLockstepStallTitle(namesForLockstepWaiters(state?.seats, waiterIds))
+      || 'Waiting for players…';
     const ranked = Boolean(state?.ranked);
     const showOverlay = ranked
       ? matchOverOn
@@ -516,16 +587,19 @@ export function setupLobbyUi({
     );
     const canClickStart = state.hosting && matchLobby.canStart() && state.phase === 'waiting';
 
-    setText(sideStatus, status.title);
+    setText(sideStatus, inPlay && stalled ? stallTitle : status.title);
     setText(sideMeta, status.meta);
-    setText(panelTitle, `${mode?.name ?? 'Lobby'} — ${state.hosting ? 'host' : status.title}`);
+    setText(panelTitle, inPlay && stalled
+      ? stallTitle
+      : `${mode?.name ?? 'Lobby'} — ${state.hosting ? 'host' : status.title}`);
     const hostMoves = state.hosting && (state.phase === 'waiting' || state.phase === 'countdown');
     const followUserId = getFollowUser?.() ?? null;
+    const kingOwner = state.mode === 'koth' ? (getKing?.() ?? -1) : -1;
     paintSeats(sideSeats, state.seats, {
-      teams: Boolean(mode?.teams), localId, compact: true, spectators: state.spectators, hostMoves, followUserId,
+      teams: Boolean(mode?.teams), localId, compact: true, spectators: state.spectators, hostMoves, followUserId, kingOwner, laggingIds,
     });
     paintSeats(panelSeats, state.seats, {
-      teams: Boolean(mode?.teams), localId, compact: false, spectators: state.spectators, hostMoves, followUserId,
+      teams: Boolean(mode?.teams), localId, compact: false, spectators: state.spectators, hostMoves, followUserId, kingOwner, laggingIds,
     });
 
     setHidden(sideReady, state.hosting || state.watching);
@@ -551,7 +625,7 @@ export function setupLobbyUi({
     }
 
     const note = inPlay && stalled
-      ? 'Waiting for players…'
+      ? stallTitle
       : inPlay
       ? 'Match running.'
       : state.phase === 'countdown' || state.phase === 'starting'
@@ -564,6 +638,7 @@ export function setupLobbyUi({
 
     const hostControls = state.hosting && state.phase === 'waiting';
     if (mode?.hasChapter || mode?.customMap) pullWorkshopChapters();
+    if (mode?.customMap) pullOfficialHouseMaps();
     fillSelect(fieldSelect, FIELD_SIZES, state.settings.fieldSize);
     fillSelect(chapterSelect, chapterSelectOptions(
       workshopItems,
@@ -577,6 +652,7 @@ export function setupLobbyUi({
       state.settings.chapter,
       localMaps,
       state.mode,
+      officialHouseMaps[state.mode] || [],
     );
     fillSelect(
       mapSelect,
@@ -602,7 +678,7 @@ export function setupLobbyUi({
     setHidden(fieldRow, Boolean(mode?.hasChapter) || usingCustomMap);
     setHidden(seedRow, Boolean(mode?.hasChapter) || usingCustomMap);
     setHidden(chapterRow, !mode?.hasChapter);
-    setHidden(mapRow, !mode?.customMap || mapOptions.length === 0);
+    setHidden(mapRow, !mode?.customMap);
     setHidden(document.getElementById('match-lobby-load-row'), !mode?.customMap);
     setHidden(spectatorRow, !mode?.spectators);
   }

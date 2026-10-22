@@ -123,7 +123,7 @@ export function radialClickKind(h) {
 
 /**
  * Agora pads and action-radial building upgrades both emit kind: 'building'.
- * The open menu decides which one it is — do not let upgrade handling run
+ * The open menu decides which one it is - do not let upgrade handling run
  * first or agora clicks no-op when no production building is selected.
  * @param {{ kind?: string, id?: string } | string | null | undefined} picked
  * @param {{ buildRadialOpen?: boolean }} [ctx]
@@ -172,7 +172,7 @@ export function placementDownKind(s = {}) {
 
 /**
  * Lift while placing. Mouse hover keeps the ghost under the cursor, so a
- * tap that never yawed stamps — even when the ray hits the agora under the
+ * tap that never yawed stamps - even when the ray hits the agora under the
  * plot. The compact hub still leaves. Touch lifts leave the ghost sitting;
  * 1^ is the stamp there, and an agora tap still exits.
  * @param {{
@@ -205,7 +205,7 @@ export function placementReleaseKind(s = {}) {
 
 /**
  * Ghost follows aim unless a rotate / confirm press owns it. Touch has no
- * hover — only a live preview drag walks the ghost.
+ * hover - only a live preview drag walks the ghost.
  * @param {{
  *   confirming?: boolean,
  *   rotating?: boolean,
@@ -238,7 +238,7 @@ export function radialHubFramedBuilding(h, framed) {
  * LMB on a foreign unit/building: inspect (collar + HP) when idle;
  * keep attack / a-move when the player already has orderable troops.
  * When order gestures are off (`canIssueOrders` false) the click inspects
- * even with a selection — select/look, do not issue.
+ * even with a selection - select/look, do not issue.
  * @param {boolean} hasOwnOrderableSelection
  * @param {boolean} [canIssueOrders]
  */
@@ -288,7 +288,7 @@ export function canAcceptIssuedCommands(s = {}) {
 
 /**
  * Mobile 2-finger tap leaves build UI instead of force-moving.
- * Rally selections are included — RMB dismissMenus leaves those for force-move.
+ * Rally selections are included - RMB dismissMenus leaves those for force-move.
  * @param {boolean} placing
  * @param {boolean} hasBuildingSelection
  * @param {boolean} radialOpen

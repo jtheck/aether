@@ -29,7 +29,7 @@ export function isBrowsePresence(data) {
     && data?.phase !== SHARD_PHASE.LIVE;
 }
 
-/** Peer said they left `matchId` — drop them from that lobby, keep the match. */
+/** Peer said they left `matchId` - drop them from that lobby, keep the match. */
 export function isMatchLeavePresence(data, matchId) {
   return !!(data?.left && data.from && data.matchId && data.matchId === matchId);
 }
@@ -44,7 +44,7 @@ export function isLiveMatchMember(data, matchId) {
   return true;
 }
 
-/** In `matchId` as a spectator — not a browser and not a seated player. */
+/** In `matchId` as a spectator - not a browser and not a seated player. */
 export function isSpectatorMember(data, matchId) {
   if (!isLiveMatchMember(data, matchId)) return false;
   return data.role === 'spectator' || data.appState === KOTH_APP_STATE.SPECTATOR;

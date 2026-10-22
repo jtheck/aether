@@ -1,4 +1,4 @@
-// Field reticle for gamepad play — a plus + ring sitting on the terrain.
+// Field reticle for gamepad play - a plus + ring sitting on the terrain.
 // View-center follow lives in the renderer; this only paints a world point.
 
 import {

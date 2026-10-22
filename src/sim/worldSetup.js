@@ -1,4 +1,4 @@
-// Demo spawn layouts — used by the sim worker at init.
+// Demo spawn layouts - used by the sim worker at init.
 
 import { createWorld, spawn, STRESS_ENTITY_LIMIT } from './world.js';
 import { UNIT, UNIT_DEFS, isFlyer, isMilitary, isTransport } from './unitTypes.js';
@@ -29,7 +29,7 @@ import * as fx from './fixed.js';
 
 /** Staging AI cold start. */
 const STAGING_AI_VILLAGERS = 5;
-/** Skirmish match start — a few villagers per side, no army. */
+/** Skirmish match start - a few villagers per side, no army. */
 const SKIRMISH_START_VILLAGERS = 3;
 /** Army block sits this far toward map center from the agora. */
 const ARMY_FORWARD = 36;
@@ -59,13 +59,13 @@ export const STRESS_ARMY_COUNT = 1 + STRESS_AI_OWNERS.length;
 
 /**
  * Inset of the side-midline bases. Corner spawns sit at those two midlines'
- * intersection — not the map corner itself.
+ * intersection - not the map corner itself.
  */
 export const SPAWN_BASE_INSET = 0.6;
 /** Even KOTH drop pads around the hill. */
 export const KOTH_SPAWN_COUNT = 5;
 
-/** Cardinal side-midline pads — 1v1 / match agoras on larger boards. */
+/** Cardinal side-midline pads - 1v1 / match agoras on larger boards. */
 export function sideBases(worldHalfF = activeWorldHalfF(), worldHalfZF = worldHalfF) {
   const mx = worldHalfF * SPAWN_BASE_INSET;
   const mz = worldHalfZF * SPAWN_BASE_INSET;
@@ -77,7 +77,7 @@ export function sideBases(worldHalfF = activeWorldHalfF(), worldHalfZF = worldHa
   ];
 }
 
-/** Five even KOTH drop pads — west first, then CCW. */
+/** Five even KOTH drop pads - west first, then CCW. */
 export function kothBases(worldHalfF = activeWorldHalfF(), worldHalfZF = worldHalfF) {
   const rx = worldHalfF * SPAWN_BASE_INSET;
   const rz = worldHalfZF * SPAWN_BASE_INSET;
@@ -95,7 +95,7 @@ export function kothBases(worldHalfF = activeWorldHalfF(), worldHalfZF = worldHa
   return out;
 }
 
-/** Team lanes — south pair (A), north pair (B). */
+/** Team lanes - south pair (A), north pair (B). */
 export function laneBases(worldHalfF = activeWorldHalfF(), worldHalfZF = worldHalfF) {
   const mx = worldHalfF * SPAWN_BASE_INSET;
   const mz = worldHalfZF * SPAWN_BASE_INSET;
@@ -124,7 +124,7 @@ export function usesCornerSpawnBases(mapW) {
   return (mapW | 0) === TINY_MAP_W;
 }
 
-/** Match / Forge spawn points — corners on the 5-chunk board, sides otherwise. */
+/** Match / Forge spawn points - corners on the 5-chunk board, sides otherwise. */
 export function spawnBases(worldHalfF = activeWorldHalfF(), opts = {}) {
   const halfZ = opts.worldHalfZF ?? worldHalfF;
   if (opts.laneBases) return laneBases(worldHalfF, halfZ);
@@ -208,7 +208,7 @@ const ENEMY_ARMY = [
   { type: UNIT.APC, count: 1 },
 ];
 
-/** KOTH drop — combat only, plus a dirigible and APC on the flanks. */
+/** KOTH drop - combat only, plus a dirigible and APC on the flanks. */
 const KOTH_ARMY = [
   { type: UNIT.WARRIOR, count: 8 },
   { type: UNIT.ARCHER, count: 6 },
@@ -222,7 +222,7 @@ const KOTH_ARMY = [
   { type: UNIT.APC, count: 1 },
 ];
 
-/** Riders stuffed into each flank vehicle — fills the 6-seat hull. */
+/** Riders stuffed into each flank vehicle - fills the 6-seat hull. */
 const KOTH_VEHICLE_CARGO = [
   UNIT.VILLAGER,
   UNIT.VILLAGER,
@@ -246,7 +246,7 @@ function stressTypeWeight(def) {
   return 10;
 }
 
-/** Combat bag for the pie-ring mass — no monks, civilians, or vehicles. */
+/** Combat bag for the pie-ring mass - no monks, civilians, or vehicles. */
 const STRESS_COMBAT_TYPES = [];
 for (const def of UNIT_DEFS) {
   if (def.id === UNIT.MONK) continue;
@@ -267,7 +267,7 @@ const STRESS_SUPPORT_TYPES = [
 /** Menu button / documented default (`?stress=1000`). */
 export const STRESS_MENU_PER_SIDE = 1000;
 
-/** Inner hole of the 5-slice pie — a good ways from origin. */
+/** Inner hole of the 5-slice pie - a good ways from origin. */
 export const STRESS_RING_INNER_FRAC = 0.30;
 /** Unused fraction of each 72° slice so neighboring ranks don't kiss. */
 const STRESS_SLICE_GAP_FRAC = 0.16;
@@ -359,7 +359,7 @@ function scaledKothArmyLayout(n) {
   return scaledLayoutFrom(KOTH_ARMY, KOTH_LAYOUT_UNITS, n);
 }
 
-/** Spawn one army — default layout, or packed scaled mix when armyPerSide > 0. */
+/** Spawn one army - default layout, or packed scaled mix when armyPerSide > 0. */
 function spawnConfiguredArmy(w, owner, baseX, baseZ) {
   if (_armyPerSide > 0) {
     spawnArmyPacked(w, scaledArmyLayout(_armyPerSide), owner, baseX, baseZ);
@@ -442,7 +442,7 @@ export function armyPerSideFromSearch(search = '') {
 export function animStressPerSideFromSearch(search = '') {
   const n = parseInt(new URLSearchParams(search).get('animStress') || '0', 10);
   if (!Number.isFinite(n) || n <= 0) return 0;
-  // Two-army VAT path — GPU/skinning will die long before the entity ceiling.
+  // Two-army VAT path - GPU/skinning will die long before the entity ceiling.
   return Math.min(n, STRESS_ENTITY_LIMIT >> 1);
 }
 
@@ -452,7 +452,7 @@ function spawnArmy(w, layout, owner, baseX, baseZ) {
 
 /**
  * Grid facing map center: columns = types (lateral), rows = depth toward enemy.
- * @param {number} forward0 — offset from agora toward center for the first row
+ * @param {number} forward0 - offset from agora toward center for the first row
  */
 function spawnArmyOriented(w, layout, owner, baseX, baseZ, forward0) {
   const len = Math.hypot(baseX, baseZ) || 1;
@@ -557,7 +557,7 @@ function spawnRanks(w, owner, types, baseX, baseZ, fX, fZ, rX, rZ, forward0) {
   return row;
 }
 
-/** Melee up front, missile middle, casters behind — villagers ring the agora. */
+/** Melee up front, missile middle, casters behind - villagers ring the agora. */
 function agoraCampRole(type) {
   if (type === UNIT.VILLAGER) return 'villager';
   if (type === UNIT.ENGINEER) return 'engineer';
@@ -753,7 +753,7 @@ function nearestKothPad(bases, x, z) {
   return best;
 }
 
-/** Pad radius for "agora in this spawn" — just under half the neighbor spacing. */
+/** Pad radius for "agora in this spawn" - just under half the neighbor spacing. */
 function kothPadClearanceR2(bases) {
   let minD2 = Infinity;
   for (let i = 0; i < bases.length; i++) {
@@ -890,7 +890,7 @@ export function spawnCameraHomeXZ(w, owner, agoras = w?.agoras, worldHalfF = w?.
   return army;
 }
 
-/** Mid-angle of pie slice `i` — player 0 faces west, then CCW. */
+/** Mid-angle of pie slice `i` - player 0 faces west, then CCW. */
 export function stressSliceMidAngle(slice) {
   return Math.PI + (slice | 0) * ((Math.PI * 2) / STRESS_ARMY_COUNT);
 }
@@ -1139,7 +1139,7 @@ export function buildWorldFromConfig({
     return w;
   }
 
-  // Skirmish — a real 1v1 opening: each side gets an agora and a few villagers,
+  // Skirmish - a real 1v1 opening: each side gets an agora and a few villagers,
   // no army, no building showcase, and no KOTH center plinth / scoring.
   if (mode === 'skirmish') {
     const slots = activeSlots?.length ? activeSlots : [PLAYER, AI_OWNER];
@@ -1154,7 +1154,7 @@ export function buildWorldFromConfig({
     return w;
   }
 
-  // 1vAI — home agoras and a camped army. Occupy or a wipe ends it.
+  // 1vAI - home agoras and a camped army. Occupy or a wipe ends it.
   // Not KOTH: no center drop, no hill score, no king elimination.
   if (mode === '1vai') {
     const slots = activeSlots?.length ? activeSlots : [PLAYER, AI_OWNER];

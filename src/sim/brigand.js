@@ -8,7 +8,7 @@ import { isDoorAlive } from './doorCombat.js';
 import { ORDER } from './world.js';
 import { isCarried } from './transport.js';
 
-/** ~20s at 20 Hz — brigand form without an active fight. */
+/** ~20s at 20 Hz - brigand form without an active fight. */
 export const BRIGAND_IDLE_REVERT_TICKS = 400;
 
 function setUnitType(w, i, type) {

@@ -1,4 +1,4 @@
-/** Chunked infinite volume — load/unload cubic regions around a focus point. */
+/** Chunked infinite volume - load/unload cubic regions around a focus point. */
 
 /**
  * @param {number} x
@@ -52,7 +52,7 @@ export function maxChunksForRadius(radius) {
 /**
  * Full-chunk equivalents inside the inscribed live sphere
  * (r = (radius + 0.5) * chunkSize). Particle budget divides by this, not the
- * paging cube — corner chunks never fill and must not steal quota.
+ * paging cube - corner chunks never fill and must not steal quota.
  * @param {number} radius
  */
 export function sphereChunkEquivalent(radius) {
@@ -80,7 +80,7 @@ export function chunkBounds(cx, cy, cz, chunkSize) {
 export const STREAM_CORE_RADIUS = 1;
 /** Widen FOV so off-screen standby + quantized look stay filled. */
 export const STREAM_FOV_PAD = 1.55;
-/** Look hash step (radians) — pad covers the gap between bins. */
+/** Look hash step (radians) - pad covers the gap between bins. */
 export const STREAM_LOOK_QUANT = (8 * Math.PI) / 180;
 /** In-view cubes rush to this fraction of their sphere-scaled want before pad / behind ease. */
 export const STREAM_FRUSTUM_MIN_FRAC = 0.45;
@@ -260,7 +260,7 @@ export function chunkWanted(cx, cy, cz, focus, camera, chunkSize, chunkRadius, o
   });
 }
 
-/** Tight view (no FOV pad) — what the camera actually sees. */
+/** Tight view (no FOV pad) - what the camera actually sees. */
 export function chunkHitsView(cx, cy, cz, chunkSize, camera, chunkRadius, opts = {}) {
   return chunkSphereHitsFrustum(cx, cy, cz, chunkSize, camera, {
     far: (chunkRadius + 0.5) * chunkSize + chunkSize * 1.5,
@@ -301,7 +301,7 @@ export function streamDistanceScale(dist, chunkSize, chunkRadius) {
 
 /**
  * Multiplier on the volume want for one emitter-keep cube.
- * Flat at 1 — a per-cube bump draws a line on the keep boundary.
+ * Flat at 1 - a per-cube bump draws a line on the keep boundary.
  * @param {number} keepChunks
  */
 export function emitterDensityScale(keepChunks) {

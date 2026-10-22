@@ -149,14 +149,14 @@ export function createBabylonBackend() {
     async init(canvasEl) {
       canvas = canvasEl;
       const B = globalThis.BABYLON;
-      if (!B) throw new Error('BABYLON global missing — load vendor/babylon9.js first');
+      if (!B) throw new Error('BABYLON global missing - load vendor/babylon9.js first');
 
       engine = new B.Engine(canvas, true, {
         preserveDrawingBuffer: false,
         stencil: false,
         adaptToDeviceRatio: true,
       });
-      // Timer-query GPU cost — CPU/RAF stay vsync-pinned at ~60 even with headroom.
+      // Timer-query GPU cost - CPU/RAF stay vsync-pinned at ~60 even with headroom.
       try {
         engine.captureGPUFrameTime?.(true);
       } catch {
@@ -167,7 +167,7 @@ export function createBabylonBackend() {
       scene.shadowsEnabled = false;
 
       // Same seat as Three: (0, 5, −5), look −Z, pitch down 0.7.
-      // Default FreeCamera + setTarget(origin) looks +Z — 180° off the default backend.
+      // Default FreeCamera + setTarget(origin) looks +Z - 180° off the default backend.
       const startPitch = 0.7;
       camera = new B.FreeCamera('camera', new B.Vector3(0, 5, -5), scene);
       camera.setTarget(new B.Vector3(0, 5 - Math.sin(startPitch), -5 - Math.cos(startPitch)));
@@ -245,7 +245,7 @@ export function createBabylonBackend() {
       createTetraField(B);
     },
 
-    /** Bob the classic tetra grid — call once per frame. */
+    /** Bob the classic tetra grid - call once per frame. */
     syncWaveEmitters,
 
     tickScenery() {
@@ -325,9 +325,9 @@ export function createBabylonBackend() {
           { type: 0, size: size },
           scene,
         );
-        // True 3D volume — no billboard
+        // True 3D volume - no billboard
       } else {
-        // plane / quad — hard-edge circle via alphatest (discard), not soft blend
+        // plane / quad - hard-edge circle via alphatest (discard), not soft blend
         mesh = B.MeshBuilder.CreatePlane(
           `species_${spec.id}`,
           { width: size, height: size },
@@ -338,7 +338,7 @@ export function createBabylonBackend() {
           const circle = getHardCircleTexture(B);
           mat.opacityTexture = circle;
           mat.emissiveTexture = circle;
-          // Cutout only — discard corners. Not soft alphablend.
+          // Cutout only - discard corners. Not soft alphablend.
           mat.transparencyMode = B.Material.MATERIAL_ALPHATEST;
           mat.alphaCutOff = 0.5;
           mat.useAlphaFromDiffuseTexture = false;
@@ -408,7 +408,7 @@ export function createBabylonBackend() {
 
     /**
      * GPU frame cost in ms (last-sec average). 0 if timer queries unavailable.
-     * This is what throttle should use — not RAF/CPU dt under vsync.
+     * This is what throttle should use - not RAF/CPU dt under vsync.
      */
     getGpuFrameMs() {
       if (!engine?.getGPUFrameTimeCounter) return 0;

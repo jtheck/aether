@@ -113,7 +113,7 @@ describe('drayage slow-aware rally pathing', () => {
     assert.equal(buildingTrainsOnlyFlyers('perch'), true);
     assert.equal(buildingTrainsOnlyFlyers('barracks'), false);
     const field = openField();
-    // Impassable wall — ground A* would detour or fail; air ignores it.
+    // Impassable wall - ground A* would detour or fail; air ignores it.
     for (let tz = 0; tz < field.height; tz++) {
       field.pass[tz * field.width + 8] = 0;
     }

@@ -436,7 +436,7 @@
   // Rows 5-7: [unused] - reserved for future models
   let billboardAtlas = null;
   let billboardMaterial = null;
-  let billboardRoot = null; // Parent node — keeps inspector tidy
+  let billboardRoot = null; // Parent node - keeps inspector tidy
   let sceneryRoot = null; // Parent for instanced scenery containers
   let terrainRoot = null; // Parent for dynamic table pieces (floors, edges, corners)
 
@@ -675,7 +675,7 @@
   const BILLBOARD_PLANE_HALF_HEIGHT = BILLBOARD_PLANE_HEIGHT * 0.5;
 
   // Get a billboard instance from the pool (optimized)
-  // options.groundUnitSprite: mesh origin at feet — instanced meshes don't reliably honor bottom pivots,
+  // options.groundUnitSprite: mesh origin at feet - instanced meshes don't reliably honor bottom pivots,
   // so we keep pivot at center and lift by half the scaled plane height (see syncUnitBillboardPositionFromMesh).
   function getBillboardInstance(modelPath, position, scale, scene, options = {}) {
     const groundUnitSprite = !!(options && options.groundUnitSprite);
@@ -880,7 +880,7 @@
       model.root.position.set(0, -1000, 0);
       model.root.setEnabled(true); // Master must be enabled for instances to render
       
-      // Master meshes must NOT be pickable — only instances should be.
+      // Master meshes must NOT be pickable - only instances should be.
       // Without this, clicks can hit the master at (0,-1000,0) and resolve
       // to grid tile (0,0), sending villagers to the map corner.
       model.root.isPickable = false;
@@ -1147,7 +1147,7 @@
 
   // Static chunk scenery: only re-yaw billboards past ~20° (less busy). Buildings/units: always face camera.
   const BILLBOARD_ROTATE_THRESHOLD = 0.35;
-  // When camera is nearly over the billboard on XZ, atan2 jumps wildly — hold last yaw until you orbit out.
+  // When camera is nearly over the billboard on XZ, atan2 jumps wildly - hold last yaw until you orbit out.
   const BILLBOARD_MIN_HORIZONTAL_DIST_SQ = 8 * 8;
 
   function applyBillboardYawTowardCameraXZ(bb, camX, camZ) {
@@ -1281,7 +1281,7 @@
     // CRITICAL: Immediately evaluate and set correct initial state
     // This prevents any flash of full detail at far distances
     
-    // PRIORITY 1: Billboard-only mode — billboards, except agora (enlarged flag only)
+    // PRIORITY 1: Billboard-only mode - billboards, except agora (enlarged flag only)
     if (BILLBOARD_ONLY_MODE) {
       if (lastLod.lodType === 'agora-flag') {
         model.root.setEnabled(true);
@@ -4555,7 +4555,7 @@ let pov2 = 240;
       const maxDim = Math.max(worldWidth, worldHeight);
       const minDim = Math.min(worldWidth, worldHeight);
 
-      // Closest zoom-in: scale with map size but cap — uncapped minDim*fraction on large maps (~56+) made “more zoom” edits invisible.
+      // Closest zoom-in: scale with map size but cap - uncapped minDim*fraction on large maps (~56+) made “more zoom” edits invisible.
       const scaledClose = minDim * 0.19;
       gfx.camera.lowerRadiusLimit = Math.max(16, Math.min(scaledClose, 36));
       gfx.camera.upperRadiusLimit = Math.max(150, maxDim * 1.5); // Reduced maximum to keep camera closer to ground
@@ -5179,7 +5179,7 @@ let pov2 = 240;
     // Initialize FX system
     if (window.fx) {
       fx.init(scene);
-      // T key barrel tests disabled in normal play — call fx.setupBarrelLauncher() from console if needed.
+      // T key barrel tests disabled in normal play - call fx.setupBarrelLauncher() from console if needed.
       
       // Initialize projectiles system
       if (window.projectiles && window.projectiles.init) {
@@ -6413,15 +6413,15 @@ let pov2 = 240;
       // Base height ramps up away from the play area
       const baseHeight = (0.15 + distanceCurve * 0.85) * 130;
 
-      // Octave 1 — broad rolling shapes (largest amplitude)
+      // Octave 1 - broad rolling shapes (largest amplitude)
       const o1 = (Math.sin(x * f0 + seed * 1.3) * Math.cos(z * f0 * 0.9 + seed * 0.7)
                 + Math.sin(z * f0 * 1.1 + seed * 2.1)) * 55 * distanceCurve;
 
-      // Octave 2 — medium ridges
+      // Octave 2 - medium ridges
       const o2 = (Math.sin(x * f1 + z * f1 * 0.6 + seed * 3.7)
                 + Math.cos(z * f1 * 1.2 - x * f1 * 0.4 + seed * 0.9)) * 25 * distanceCurve;
 
-      // Octave 3 — fine craggy detail
+      // Octave 3 - fine craggy detail
       const o3 = Math.sin(x * f2 * 1.1 + seed * 5.3)
                * Math.sin(z * f2 * 0.9 + seed * 4.1) * 15 * distanceCurve;
 

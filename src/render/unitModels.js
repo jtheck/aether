@@ -52,7 +52,7 @@ export function unitModelTypeIds() {
   return [...ids];
 }
 
-/** Depth-first — first mesh with geometry/material in a loaded glTF hierarchy. */
+/** Depth-first - first mesh with geometry/material in a loaded glTF hierarchy. */
 export function findFirstMesh(node) {
   if (node?.material) return node;
   for (const child of node?.children ?? []) {
@@ -84,7 +84,7 @@ export function isFxSocketNode(node) {
   return /anchor/i.test(gltfNodeBaseName(node));
 }
 
-/** Uniform scale from a column-major world matrix (abs — Blender may mirror). */
+/** Uniform scale from a column-major world matrix (abs - Blender may mirror). */
 function worldUniformScale(w) {
   const sx = Math.hypot(w[0], w[1], w[2]);
   const sy = Math.hypot(w[4], w[5], w[6]);
@@ -171,7 +171,7 @@ function bakeSourceGeometry(source, world) {
     normals,
     indices,
     uvs: source._cpuUvs ? new Float32Array(source._cpuUvs) : null,
-    // Second UV set (lightmap/AO channel) — only present on models that bake one.
+    // Second UV set (lightmap/AO channel) - only present on models that bake one.
     uv2: source._cpuUv2 ? new Float32Array(source._cpuUv2) : null,
     material: source.material,
     reverseWinding: true,
@@ -259,7 +259,7 @@ async function loadCpuMeshPackage(engine, url) {
   let pending = meshCpuCache.get(url);
   if (!pending) {
     pending = (async () => {
-      // VAT units use /vat/* dumps — never probe /meshes/ (avoids villager.json 404 RTT).
+      // VAT units use /vat/* dumps - never probe /meshes/ (avoids villager.json 404 RTT).
       // Skinning still needs the live GLB; mesh packages are for static models only.
       if (Object.values(VAT_UNIT_DEFS).some((d) => d.url === url)) {
         const { parts: baked, sockets } = await bakeGltfParts(engine, url);
@@ -276,7 +276,7 @@ async function loadCpuMeshPackage(engine, url) {
           const meta = await jsonRes.json();
           const bin = await binRes.arrayBuffer();
 
-          // v2+: materials + textures in bake — no GLB load.
+          // v2+: materials + textures in bake - no GLB load.
           // v3 already merged one part per visual material; older dumps merge here.
           if ((meta.version | 0) >= 2 && Array.isArray(meta.materials)) {
             const sliced = (meta.parts ?? []).map((part) => ({
@@ -315,7 +315,7 @@ async function loadCpuMeshPackage(engine, url) {
             };
           }
 
-          // Legacy bake: geo only — pull materials from GLB.
+          // Legacy bake: geo only - pull materials from GLB.
           const sources = await loadMaterialSources(engine, url);
           const raw = (meta.parts ?? []).map((part, index) => {
             const src = sources[part.materialIndex] ?? sources[index] ?? sources[0];
@@ -415,7 +415,7 @@ function meshesFromCpuPackage(engine, url, pkg) {
 
 /**
  * Load a glTF, bake hierarchy world matrices into verts, one mesh per source
- * primitive (preserves multi-material). Authored origin and scale are kept —
+ * primitive (preserves multi-material). Authored origin and scale are kept -
  * no foot rebasing or resize. Uses offline bake when present; session-cached.
  *
  * @returns {Promise<object[]>}

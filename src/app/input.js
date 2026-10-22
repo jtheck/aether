@@ -1,4 +1,4 @@
-// app/input.js — wires camera + game selection behind a single pointer hub.
+// app/input.js - wires camera + game selection behind a single pointer hub.
 // Mouse + touch + standard-mapping gamepad (leash cursor, LT/RT orders, LB/RB
 // paint-select, B / D-pad Left cast, D-pad U/R/D + Y/X/A control groups).
 // Place overlay: aim walks the ghost; A / LT / RT stamp, B cancels, bumpers yaw.
@@ -17,7 +17,7 @@ import { aetherSteam, createSteamOverlayGuard } from './steam.js';
 /**
  * @param {object} opts
  * @param {HTMLCanvasElement} opts.canvas
- * @param {object} opts.renderer — must expose cameraController (from createRenderer)
+ * @param {object} opts.renderer - must expose cameraController (from createRenderer)
  * @param {object|(() => object)} opts.world
  * @param {Uint8Array} opts.selected
  * @param {number} opts.localPlayerId
@@ -27,8 +27,8 @@ import { aetherSteam, createSteamOverlayGuard } from './steam.js';
  * @param {(x: number, z: number, y?: number) => void} [opts.onOrder]
  * @param {(x: number, z: number, y?: number) => void} [opts.onAbilityHold]
  * @param {() => boolean} [opts.canInteract]
- * @param {() => boolean} [opts.canIssueCommands] — when false, select/inspect only (no order markers)
- * @param {() => boolean} [opts.inputActive] — gates camera + game (boot splash)
+ * @param {() => boolean} [opts.canIssueCommands] - when false, select/inspect only (no order markers)
+ * @param {() => boolean} [opts.inputActive] - gates camera + game (boot splash)
  */
 export function setupInput(opts) {
   const camera = opts.renderer.cameraController;

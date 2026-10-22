@@ -799,7 +799,7 @@ class Behavior {
         const effectiveSpeed = Math.max(0, speedInput) * 0.08;
         
         // Movement is driven entirely by setting velocity below.
-        // Do NOT also add an impulse — the physics loop does vel += imp,
+        // Do NOT also add an impulse - the physics loop does vel += imp,
         // which would double the speed and cause overshooting.
         
         // Calculate target rotation to face movement direction
@@ -2503,7 +2503,7 @@ class ManualGatherBehavior extends Behavior {
                     this.resetNav();
                     
                     if (this._seekRepathCount >= 3) {
-                        // Can't reach this resource — go idle instead of hugging the edge
+                        // Can't reach this resource - go idle instead of hugging the edge
                         if (window.behaviorManager) {
                             window.behaviorManager.setBehavior(this.unit, 'linger', {
                                 center: { x: this.unit.pb.state.loc.x, z: this.unit.pb.state.loc.z },
@@ -5637,18 +5637,18 @@ registerAbilitySpec({
     durationTicks: 30,
     castDelayTicks: 5,
     lockMovementDuringCast: true,
-    allowedUnitTypes: ['archer', 'ballister'],
+    allowedUnitTypes: ['archer', 'marksman'],
     buildParams(unit, worldPos) {
         const targetPoint = getAbilityPointTarget({ targetPoint: worldPos });
         if (!targetPoint) return null;
-        const isBallister = unit?.type === 'ballister';
+        const isMarksman = unit?.type === 'marksman';
         return {
             targetPoint,
-            shotCount: isBallister ? 7 : 5,
-            shotIntervalTicks: isBallister ? 2 : 3,
-            impactRadius: (window.TILE_SIZE || 4) * (isBallister ? 1.05 : 0.75),
-            patternRadius: (window.TILE_SIZE || 4) * (isBallister ? 0.9 : 0.6),
-            damage: Math.max(1, Math.round((unit.attackDamage || (isBallister ? 14 : 8)) * (isBallister ? 0.85 : 0.7))),
+            shotCount: isMarksman ? 7 : 5,
+            shotIntervalTicks: isMarksman ? 2 : 3,
+            impactRadius: (window.TILE_SIZE || 4) * (isMarksman ? 1.05 : 0.75),
+            patternRadius: (window.TILE_SIZE || 4) * (isMarksman ? 0.9 : 0.6),
+            damage: Math.max(1, Math.round((unit.attackDamage || (isMarksman ? 14 : 8)) * (isMarksman ? 0.85 : 0.7))),
             projectileType: 'arrow'
         };
     },

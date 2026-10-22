@@ -141,7 +141,7 @@ describe('villager brigand form', () => {
     assert.equal(getResource(w, 0, 'food'), 80);
     assert.equal(getResource(w, 0, 'wood'), 90);
     applyCasts(w, field, [vill], null, fx.fromInt(24), 0);
-    assert.equal(getResource(w, 0, 'food'), 80, 'already brigand — no second spend');
+    assert.equal(getResource(w, 0, 'food'), 80, 'already brigand - no second spend');
     assert.equal(getResource(w, 0, 'wood'), 90);
   });
 

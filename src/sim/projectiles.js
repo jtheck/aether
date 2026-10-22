@@ -167,7 +167,7 @@ function applyAimScatter(w, x, y, aimX, aimY, scatter) {
   let maxOffset = fx.mul(dist, scatter);
   const cap = fx.fromFloat(20);
   if (maxOffset > cap) maxOffset = cap;
-  // Signed [-1, 1) from the sim RNG — farther shots use a larger maxOffset.
+  // Signed [-1, 1) from the sim RNG - farther shots use a larger maxOffset.
   const nx = (rngFrac(w.rng) - fx.HALF) * 2;
   const ny = (rngFrac(w.rng) - fx.HALF) * 2;
   return {

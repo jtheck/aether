@@ -1580,7 +1580,7 @@ function getRandomColor() {
         ui._pathDebugCanvas = c;
       }
       ui._pathDebugCanvas.style.display = 'block';
-      console.log('[PathDebug] ON  —  press G to toggle');
+      console.log('[PathDebug] ON  -  press G to toggle');
       const field = window.liveField;
       if (field) console.log(`[PathDebug] blockedTiles: ${field.blockedTiles.size}, slowTiles: ${field.slowTiles.size}`);
       ui._drawPathDebug();
@@ -2110,7 +2110,7 @@ function getRandomColor() {
               createTargetMarker(new BABYLON.Vector3(tPos.x, 0, tPos.z));
             }
           } else {
-            // Friendly or neutral unit — select it
+            // Friendly or neutral unit - select it
             if (window.player && window.player.selectUnit) {
               window.player.clearSelection();
               window.player.selectUnit(unit);
@@ -2134,7 +2134,7 @@ function getRandomColor() {
     }
     
     // Check if we clicked on a menu element - if so, don't process as terrain click
-    // elementFromPoint expects viewport (client) coordinates — not canvas-local x/y
+    // elementFromPoint expects viewport (client) coordinates - not canvas-local x/y
     const clickedElement = document.elementFromPoint(e.clientX, e.clientY);
     if (clickedElement && (
       clickedElement.closest('.radial-menu-button') ||
@@ -2148,7 +2148,7 @@ function getRandomColor() {
     )) {
       return;
     }
-    // Pointerup right after menu dismissed (DOM target removed under cursor) — ignore terrain command
+    // Pointerup right after menu dismissed (DOM target removed under cursor) - ignore terrain command
     if (e.type === 'pointerup' && e.button === 0 &&
         window.suppressTerrainPointerUpUntil && Date.now() < window.suppressTerrainPointerUpUntil) {
       return;
@@ -4020,7 +4020,7 @@ window.showStoryDialogue = function(message, type, onContinue) {
   if (existing) existing.remove();
   
   // Pause the game while dialogue is shown.
-  // If a scene is playing, it already owns the pause state — don't touch it.
+  // If a scene is playing, it already owns the pause state - don't touch it.
   const scenePlaying = window.ui && window.ui._scenePlaying;
   const wasPaused = window.currentMatch?.isPaused;
   if (window.currentMatch && !scenePlaying) {

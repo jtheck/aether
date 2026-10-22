@@ -1,4 +1,4 @@
-// Grid navigation field — tiles, shallow height, marching-squares atlases, A*.
+// Grid navigation field - tiles, shallow height, marching-squares atlases, A*.
 //
 // Sim owns tile authority. Render reads a snapshot; never mutates this.
 // World positions are Q16.16 fixed-point; tile size matches v1 (4 world units).
@@ -9,7 +9,7 @@ export const TILE = fx.fromFloat(4);
 export const HALF_TILE = fx.div(TILE, fx.fromInt(2));
 export const TILE_SIZE_F = 4;
 
-/** Table silhouette chunks — keep in sync with tableShape.DEFAULT_CELL_SIZE. */
+/** Table silhouette chunks - keep in sync with tableShape.DEFAULT_CELL_SIZE. */
 export const TABLE_CHUNK_TILES = 16;
 
 /**
@@ -37,19 +37,19 @@ export function snapTilesToOddChunks(tiles, cellSize = TABLE_CHUNK_TILES) {
   return n * size;
 }
 
-/** Smallest lobby / Forge board — 5×5 chunks (odd). */
+/** Smallest lobby / Forge board - 5×5 chunks (odd). */
 export const TINY_MAP_CHUNKS = 5;
 export const TINY_MAP_W = tilesForOddChunks(TINY_MAP_CHUNKS);
 export const TINY_MAP_H = TINY_MAP_W;
-/** Normal play board — 13×13 chunks (odd). */
+/** Normal play board - 13×13 chunks (odd). */
 export const DEFAULT_MAP_CHUNKS = 13;
 export const DEFAULT_MAP_W = tilesForOddChunks(DEFAULT_MAP_CHUNKS);
 export const DEFAULT_MAP_H = DEFAULT_MAP_W;
-/** Small skirmish board — one step down from default (matches Forge's 9-chunk size). */
+/** Small skirmish board - one step down from default (matches Forge's 9-chunk size). */
 export const SKIRMISH_MAP_CHUNKS = 9;
 export const SKIRMISH_MAP_W = tilesForOddChunks(SKIRMISH_MAP_CHUNKS);
 export const SKIRMISH_MAP_H = SKIRMISH_MAP_W;
-/** Stress / animStress only — 31×31 chunks (odd). */
+/** Stress / animStress only - 31×31 chunks (odd). */
 export const STRESS_MAP_CHUNKS = 31;
 export const STRESS_MAP_W = tilesForOddChunks(STRESS_MAP_CHUNKS);
 export const STRESS_MAP_H = STRESS_MAP_W;
@@ -58,7 +58,7 @@ export const STRESS_MAP_H = STRESS_MAP_W;
  * Anything longer uses terrain LOD.
  */
 export const LOD_MAP_CHUNKS = STRESS_MAP_CHUNKS + 2;
-/** Forge presets — 5 / 9 / 13 chunks. The editor also accepts any odd count in range. */
+/** Forge presets - 5 / 9 / 13 chunks. The editor also accepts any odd count in range. */
 export const FORGE_MAP_SIZES = [TINY_MAP_CHUNKS, SKIRMISH_MAP_CHUNKS, DEFAULT_MAP_CHUNKS]
   .map((chunks) => tilesForOddChunks(chunks));
 /** Smallest Forge board. Largest is past stress; A* scratch grows to fit. */
@@ -88,7 +88,7 @@ export const MAP_H = DEFAULT_MAP_H;
 export const WORLD_HALF_F = (MAP_W * TILE_SIZE_F) / 2;
 export const WORLD_HALF = fx.fromInt(WORLD_HALF_F);
 
-/** Active session dims — set by createField/buildField / setActiveMapSize. */
+/** Active session dims - set by createField/buildField / setActiveMapSize. */
 let _mapW = MAP_W;
 let _mapH = MAP_H;
 let _worldHalfF = WORLD_HALF_F;
@@ -105,7 +105,7 @@ export function worldHalfZFFromMap(mapH) {
 }
 
 /**
- * Stress play-camera box — 19 chunks covers the pie ring
+ * Stress play-camera box - 19 chunks covers the pie ring
  * (inner ~0.30·table … support ~0.90·table − 32) and still leaves a vista rim.
  */
 export const STRESS_CAMERA_CHUNKS = 19;
@@ -156,7 +156,7 @@ export function setActiveMapSize(mapW = DEFAULT_MAP_W, mapH = DEFAULT_MAP_H) {
   ensureAstarCapacity(w * h);
 }
 
-/** Map tile counts for boot config — large board under stress / oversized armies. */
+/** Map tile counts for boot config - large board under stress / oversized armies. */
 export function mapSizeForConfig({ stressPerSide = 0, animStressPerSide = 0, armyPerSide = 0, mapW, mapH } = {}) {
   if (mapW != null && mapH != null) {
     return { mapW: mapW | 0, mapH: mapH | 0 };
@@ -192,7 +192,7 @@ const ATLAS_CELL_EMPTY = 12;
 
 /**
  * Sets that blend only among themselves. Grass / dirt / water stay on their
- * own sheets. `order` is low to high — later members draw over earlier ones.
+ * own sheets. `order` is low to high - later members draw over earlier ones.
  * `pairs` is [high, low, atlas]. Two members need one sheet. A third member
  * needs a sheet for each pair it forms; until those exist, a lower tile
  * touched by two higher members shows only the higher blob.
@@ -257,7 +257,7 @@ export function blendSetLayer(types, width, height, x, z) {
   return ((sheet >= 0 ? sheet : set.pairs[0][2]) << 8) | ATLAS_CELL_EMPTY;
 }
 
-/** World-Y scale for heightMap (0–1) — tile ripples plus edge-locked region lift. */
+/** World-Y scale for heightMap (0–1) - tile ripples plus edge-locked region lift. */
 export const HEIGHT_AMPLITUDE = 14;
 /**
  * Shallow dish under the water surface.
@@ -307,7 +307,7 @@ export const SLOW_PATH_COST_MUL = fx.fromFloat(1 / 0.45);
  * open ground is expensive enough that a nearby grove wins a detour.
  */
 export const TREE_SEEK_OPEN_MUL = fx.fromFloat(4);
-/** Matches scenery.SCENERY.TREE — field.js cannot import scenery (cycle). */
+/** Matches scenery.SCENERY.TREE - field.js cannot import scenery (cycle). */
 const SCENERY_TREE = 1;
 
 /** Marching-squares case (0–15) → atlas cell index (matches v1 atlas art). */
@@ -332,11 +332,11 @@ export function createField(seed = 0, dims = {}) {
     activeMask: new Uint8Array(n),
     pass: new Uint8Array(n),
     slowMask: new Uint8Array(n),
-    /** Slow tiles owned by farms/agoras — survives tree fell clears. */
+    /** Slow tiles owned by farms/agoras - survives tree fell clears. */
     structureSlowMask: new Uint8Array(n),
-    /** 1-tile yellow ring around rocks — survives tree fell clears. */
+    /** 1-tile yellow ring around rocks - survives tree fell clears. */
     rockSlowMask: new Uint8Array(n),
-    /** Yellow ring inside the table silhouette — survives tree fell clears. */
+    /** Yellow ring inside the table silhouette - survives tree fell clears. */
     tableSlowMask: new Uint8Array(n),
     sceneryType: new Uint8Array(n),
     /** Visual-only Forge stamps (mushrooms, wagons). No pass / gather. */
@@ -351,7 +351,7 @@ export function createField(seed = 0, dims = {}) {
     rockStock: new Uint16Array(n),
     rockDirty: [],
     rockStockHash: 0,
-    // 1 on a farm's CENTER tile — an infinite food node villagers work in place.
+    // 1 on a farm's CENTER tile - an infinite food node villagers work in place.
     foodNode: new Uint8Array(n),
     heightMap: new Float32Array(n),
     /** Natural per-tile ripples (0–1). Region lift is composed on top. */
@@ -387,8 +387,8 @@ export function buildField(seed = 0, dims = {}) {
 }
 
 /**
- * Land mask and pass bits only. Same terrain as buildField — height is not
- * an input to the water cut — so a pre-match check can skip the mesh.
+ * Land mask and pass bits only. Same terrain as buildField - height is not
+ * an input to the water cut - so a pre-match check can skip the mesh.
  * @param {number} [seed]
  * @param {{ width?: number, height?: number, spawnPads?: Array<[number, number]>, spawnPadClearTiles?: number }} [dims]
  */
@@ -400,7 +400,7 @@ export function buildTerrainField(seed = 0, dims = {}) {
   return field;
 }
 
-/** @deprecated Prefer buildField — kept for call sites / tests. */
+/** @deprecated Prefer buildField - kept for call sites / tests. */
 export function buildDemoField(seed = 0) {
   return buildField(seed);
 }
@@ -756,7 +756,7 @@ export function isSlowTile(field, tx, tz) {
   return field.slowMask?.[tileKey(tx, tz)] !== 0;
 }
 
-/** Living tree (stock) or scenery tree mark — not farm/rock/table yellow. */
+/** Living tree (stock) or scenery tree mark - not farm/rock/table yellow. */
 export function isTreeTile(field, tx, tz) {
   if (!inBounds(tx, tz)) return false;
   const i = tileKey(tx, tz);
@@ -826,9 +826,9 @@ export function tileCenterY(tz) {
 }
 
 /**
- * Bresenham tile walk — true if every tile on the line is passable.
+ * Bresenham tile walk - true if every tile on the line is passable.
  * @param {object} [opts]
- * @param {boolean} [opts.avoidSlow] — also reject slowMask tiles (Drayage string-pull).
+ * @param {boolean} [opts.avoidSlow] - also reject slowMask tiles (Drayage string-pull).
  */
 export function lineClear(field, x0, z0, x1, z1, opts = null) {
   const avoidSlow = !!opts?.avoidSlow;
@@ -865,8 +865,8 @@ export function lineClear(field, x0, z0, x1, z1, opts = null) {
  * Returns 0 if no path.
  *
  * @param {object} [opts]
- * @param {boolean} [opts.slowAware] — charge extra to enter slowMask tiles (rally / Drayage / monk).
- * @param {boolean} [opts.treeSeek] — charge extra to enter non-tree tiles (myco wander).
+ * @param {boolean} [opts.slowAware] - charge extra to enter slowMask tiles (rally / Drayage / monk).
+ * @param {boolean} [opts.treeSeek] - charge extra to enter non-tree tiles (myco wander).
  */
 // Reused A* scratch. Starts at the stress board and grows when a larger map is activated.
 const ASTAR_STRESS_CELLS = STRESS_MAP_W * STRESS_MAP_H;
@@ -948,7 +948,7 @@ export function findPath(field, sx, sy, ex, ey, wx, wy, maxWp = 32, opts = null)
     return 1;
   }
 
-  // Geometric LOS shortcut — skip when costing slow / preferring trees.
+  // Geometric LOS shortcut - skip when costing slow / preferring trees.
   if (!slowAware && !treeSeek && lineClear(field, startX, startY, ex, ey)) {
     wx[0] = ex;
     wy[0] = ey;
@@ -1490,7 +1490,7 @@ export function generateHeightMap(field) {
   }
 }
 
-/** Seeded chunk lift (0–1) as a standalone array — pure in (seed, width, height). */
+/** Seeded chunk lift (0–1) as a standalone array - pure in (seed, width, height). */
 export function computeSeedRegionLift(seed, width, height) {
   const out = new Float32Array(width * height);
   const cellSize = TABLE_CHUNK_TILES;
@@ -1519,7 +1519,7 @@ function isEdgeLockedTile(field, tx, tz) {
   return false;
 }
 
-/** 0 on the table rim, 1 inward — keeps extra lift from spilling off the rails. */
+/** 0 on the table rim, 1 inward - keeps extra lift from spilling off the rails. */
 export function computeEdgeLock(field) {
   const { width, height } = field;
   const n = width * height;
@@ -1564,7 +1564,7 @@ function isOffTableTile(field, tx, tz) {
   return !!(activeMask && activeMask[tz * width + tx] === 0);
 }
 
-/** Silhouette outline — off-table + tiles that touch it. Ignores plinth stamps. */
+/** Silhouette outline - off-table + tiles that touch it. Ignores plinth stamps. */
 function isTableRimTile(field, tx, tz) {
   if (isOffTableTile(field, tx, tz)) return true;
   for (let dz = -1; dz <= 1; dz++) {
@@ -1940,7 +1940,7 @@ export function paintRegionLevel(field, tx, tz, target, strength = 1, radius = 0
   return dirty;
 }
 
-/** Garden files omit baked height — rebuild ripples + seeded lift from the seed. */
+/** Garden files omit baked height - rebuild ripples + seeded lift from the seed. */
 export function applySeededHeight(field) {
   generateHeightMap(field);
   seedRegionLift(field);
@@ -2153,7 +2153,7 @@ function marchingCase(x, z, density, width, height) {
 }
 
 function cornerFilled(cx, cz, density, width, height) {
-  // Corner shared by up to 4 tiles — filled if any neighbor is filled.
+  // Corner shared by up to 4 tiles - filled if any neighbor is filled.
   let max = 0;
   const samples = [
     [cx, cz],
@@ -2196,7 +2196,7 @@ function updatePassFromWater(field) {
 
 /**
  * Walkable partial-water cells only (water terrain, not solid tileType 12).
- * Does not mark grass–water atlas grass — those are dry shore.
+ * Does not mark grass–water atlas grass - those are dry shore.
  */
 export function isTerrainSlowTile(field, tileIndex) {
   if (!field?.pass || field.pass[tileIndex] === 0) return false;
@@ -2220,7 +2220,7 @@ export function applyTerrainSlow(field) {
 
 function nearestPassable(field, tx, tz, radius) {
   // First Chebyshev ring with a free tile, then the Euclidean-nearest on that
-  // ring. Corners of a ring are ~√2 farther than cardinals — old first-hit
+  // ring. Corners of a ring are ~√2 farther than cardinals - old first-hit
   // order parked miners on a diagonal outside harvest reach of moss/snow rocks.
   for (let r = 1; r <= radius; r++) {
     let best = null;

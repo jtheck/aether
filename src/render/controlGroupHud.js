@@ -1,4 +1,4 @@
-// Control-group pads — camera-locked hollow rounded triangles on the
+// Control-group pads - camera-locked hollow rounded triangles on the
 // left/right edges, nested in/out/in so they interlock. Six colours
 // (red / green / black left, blue / yellow / white right).
 
@@ -20,7 +20,7 @@ export const CONTROL_GROUP_DEFS = Object.freeze([
 ]);
 
 export const CONTROL_GROUP_SIZE_PX = 54;
-/** Horizontal span — slimmer than the old square so they don't eat the playfield. */
+/** Horizontal span - slimmer than the old square so they don't eat the playfield. */
 export const CONTROL_GROUP_WIDTH_PX = 36;
 /** One X carries sixteen. Two overlapping X's is the display cap. */
 export const TALLY_X_VALUE = 16;

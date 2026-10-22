@@ -14,7 +14,7 @@ const params = new URLSearchParams(location.search);
 const BACKEND_PARAM = (params.get('backend') || '').toLowerCase();
 /** Three is the default. Lite / BJS9 stay behind ?backend=. */
 let BACKEND = BACKEND_PARAM || 'three';
-// Store/GPU buffers size to this — keep default sane (8M prealloc was freezing mid machines
+// Store/GPU buffers size to this - keep default sane (8M prealloc was freezing mid machines
 // at 16k live). Raise with ?n= / ?cap= on a strong box (max 16M).
 const CAPACITY = clampInt(params.get('cap'), 1_500_000, 1000, 16_000_000);
 const INITIAL = clampInt(params.get('n'), Math.min(1_500_000, CAPACITY), 100, CAPACITY);
@@ -71,7 +71,7 @@ async function main() {
   const nCeiling = INITIAL;
   const rFloor = 1;
   const rCeiling = CHUNK_RADIUS;
-  // Don't boot at the floor/r=1 — looks empty and deadlocks if FPS can't clear the band.
+  // Don't boot at the floor/r=1 - looks empty and deadlocks if FPS can't clear the band.
   const nBoot = throttleOn ? Math.min(nCeiling, 120_000) : INITIAL;
   const rBoot = throttleOn ? Math.min(3, rCeiling) : rCeiling;
   let nAim = nBoot;
@@ -103,7 +103,7 @@ async function main() {
   const FPS_LO = 41.4; // below → shed
   const FPS_HI = 44.4; // above → add
 
-  /** Per ~100ms tune — ease spreads the actual fill so this can be brisk. */
+  /** Per ~100ms tune - ease spreads the actual fill so this can be brisk. */
   function aimDelta(fps) {
     const err = Math.abs(fps - FPS_TARGET);
     let pct = 0.028;
@@ -179,7 +179,7 @@ async function main() {
       else scene.debugLayer.show();
       return;
     }
-    // G — toggle chunk volume wireframes
+    // G - toggle chunk volume wireframes
     if (evt.key === 'g' || evt.key === 'G') {
       const on = renderer.toggleChunkWireframes();
       console.log(`[axiom] chunk wireframes ${on ? 'on' : 'off'}`);
@@ -210,7 +210,7 @@ async function main() {
     probe.show(probeSites(pose), world.time);
     const uploads = world.getRenderSpecies();
     for (const upload of uploads) renderer.uploadSpecies(upload);
-    // Wireframes only when the streamed set changes — signature sort was GC hell every frame.
+    // Wireframes only when the streamed set changes - signature sort was GC hell every frame.
     if (world.chunksVersion !== lastChunksVersion) {
       lastChunksVersion = world.chunksVersion;
       renderer.syncChunkWireframes(world.getChunkBounds());
@@ -237,7 +237,7 @@ async function main() {
 
   console.log(
     `[axiom] backend=${BACKEND} chunk volume size=${CHUNK_SIZE} radius=${CHUNK_RADIUS} ` +
-      `budget=${INITIAL}/${CAPACITY} boot=${nAim}/r${rAim} throttle=${throttleOn ? 'up' : 'off'} — ` +
+      `budget=${INITIAL}/${CAPACITY} boot=${nAim}/r${rAim} throttle=${throttleOn ? 'up' : 'off'} - ` +
       `ESDF fly (R/C up/down), wheel forward/back + side-strafe, pad sticks + LT/RT, LB/RB shape, mobi stick (look-dir), G cube wires, Y/Space emitter ring, F9 inspector`,
   );
 }

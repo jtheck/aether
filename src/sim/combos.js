@@ -12,7 +12,7 @@ export const COMBO = {
   COMPOUND: 'compound',
 };
 
-/** Half of the 12-icon mineral stack — six icons, same as a base pyramid. */
+/** Half of the 12-icon mineral stack - six icons, same as a base pyramid. */
 export const AGORA_FOUND_MINERAL = BASE_PYRAMID_BANK.mineral;
 
 export function isCasterType(typeId) {

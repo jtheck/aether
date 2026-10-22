@@ -250,7 +250,7 @@ function endOfLifeHopsToNearestWater() {
           w.frogs.destX[slot] - w.frogs.originX[slot],
           w.frogs.destY[slot] - w.frogs.originY[slot],
         );
-        // Short hop — not a single leap all the way to water (~22 units away).
+        // Short hop - not a single leap all the way to water (~22 units away).
         assert.ok(firstStepDist < fx.fromFloat(18), 'escape hops are short');
         assert.ok(firstStepDist > fx.fromFloat(5), 'escape hops still move');
         // First landing should still be short of the water tile.
@@ -391,7 +391,7 @@ function confuseCanTurnOnAlly() {
     type: UNIT.WARRIOR,
     owner: 1,
   });
-  // Force the RNG path by retrying — deterministic seeds eventually hit chance.
+  // Force the RNG path by retrying - deterministic seeds eventually hit chance.
   let confused = false;
   for (let attempt = 0; attempt < 64 && !confused; attempt++) {
     w.order[a] = ORDER.IDLE;

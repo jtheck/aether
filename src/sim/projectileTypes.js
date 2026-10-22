@@ -221,7 +221,7 @@ export const PROJECTILE_DEFS = [
     color: [0.18, 0.22, 0.1],
     launchHeight: 2.6,
     arcHeight: 1.35,
-    /** Swarm is particles only — hide the core orb. */
+    /** Swarm is particles only - hide the core orb. */
     hidden: 1,
     renderCapacity: 4096,
   },

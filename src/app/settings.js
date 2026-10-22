@@ -18,11 +18,11 @@ const BUILDING_SKINS_KEY = 'buildingSkins';
 export const SHADOW_LABELS = ['Off', 'Low', 'Med', 'Full'];
 
 // v1's Low/Med were blob shadows drawn under each unit; Lite only ships CSM, so
-// the tiers are cascade count x map size instead. Two cascades is the floor —
+// the tiers are cascade count x map size instead. Two cascades is the floor -
 // a single cascade renders the scene black.
 //
 // Index 0 (Off) still carries dimensions: the generator is always constructed
-// (see renderer.js — detaching it poisons the near cascade on re-enable), so Off
+// (see renderer.js - detaching it poisons the near cascade on re-enable), so Off
 // allocates the cheapest depth texture we can and just stops feeding it casters.
 export const SHADOW_TIERS = [
   { numCascades: 2, mapSize: 1024 },
@@ -34,7 +34,7 @@ export const SHADOW_TIERS = [
 /** Fallback when the GPU is unrecognised or storage is unavailable. */
 export const DEFAULT_SHADOW_MODE = 2;
 
-/** Particles / socket fire / aura sparkles — live-applied (unlike shadow map size). */
+/** Particles / socket fire / aura sparkles - live-applied (unlike shadow map size). */
 export const FX_LABELS = ['Off', 'Low', 'Med', 'Full'];
 
 /**
@@ -184,7 +184,7 @@ export function setShadowMode(mode) {
 
 /**
  * Shadow mode for this session. `?shadows=0` is a one-off override for
- * profiling — it forces Off without overwriting the saved preference.
+ * profiling - it forces Off without overwriting the saved preference.
  */
 export function resolveShadowMode() {
   if (new URLSearchParams(location.search).get('shadows') === '0') return 0;
@@ -207,7 +207,7 @@ export function setFxMode(mode) {
 }
 
 /**
- * FX mode for this session. `?fx=0` is a one-off override for profiling —
+ * FX mode for this session. `?fx=0` is a one-off override for profiling -
  * it forces Off without overwriting the saved preference.
  */
 export function resolveFxMode() {
@@ -237,7 +237,7 @@ export function setAaEnabled(on) {
 }
 
 /**
- * AA for this session. `?aa=0` / `?aa=1` are one-off overrides for profiling —
+ * AA for this session. `?aa=0` / `?aa=1` are one-off overrides for profiling -
  * they do not overwrite the saved preference.
  */
 export function resolveAaEnabled() {
@@ -291,7 +291,7 @@ export function shadowModeForAdapter(info) {
   if (vendor === 'intel') return arch.startsWith('gen-') ? 1 : 2;
   if (vendor === 'nvidia') return 3;
   // AMD reuses architecture names across APUs and discrete cards, and Apple
-  // silicon spans a wide range — neither can be split apart from here.
+  // silicon spans a wide range - neither can be split apart from here.
   return DEFAULT_SHADOW_MODE;
 }
 

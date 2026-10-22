@@ -48,15 +48,15 @@ const COLLAR_RENDER_ORDER = 110;
 const BUILDING_RENDER_ORDER = 120;
 /** Unfinished sites sit smaller until villagers raise them. */
 const SITE_SCALE = 0.58;
-/** First work — a small pop off the foundation. */
+/** First work - a small pop off the foundation. */
 const WORK_START_SCALE = 0.70;
-/** Near-done (~2/3 progress) — most of the way to full size. */
+/** Near-done (~2/3 progress) - most of the way to full size. */
 const NEAR_DONE_SCALE = 0.88;
 const CONSTRUCT_STAGE_SCALE = [SITE_SCALE, WORK_START_SCALE, NEAR_DONE_SCALE];
 /** Collapse when a building leaves the sim list. */
 const FALL_MS = 520;
 
-/** Building selection sizes — same idea as unit S / caster / vehicle collars. */
+/** Building selection sizes - same idea as unit S / caster / vehicle collars. */
 export const BUILDING_SEL_SIZE = /** @type {const} */ ({
   s: 4.2,
   m: 7.0,
@@ -375,7 +375,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
 
   /**
    * Load the CPU/GPU template for one GLB. Ghost clones stay off the scene
-   * until setGhost() — hidden thin-instances still tax writeBuffer.
+   * until setGhost() - hidden thin-instances still tax writeBuffer.
    * @param {string} url
    * @returns {Promise<boolean>}
    */
@@ -490,7 +490,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
   }
 
   /**
-   * Fixed S/M/L world size — does not HUD-scale with camera (menu does that).
+   * Fixed S/M/L world size - does not HUD-scale with camera (menu does that).
    */
   function applySelectionHighlight() {
     const n = selAnchors.length;
@@ -1033,9 +1033,9 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
 
   /**
    * Touch-rotate test against the placement ghost mesh.
-   * Null means the ghost mesh is not ready — caller keeps the footprint box.
+   * Null means the ghost mesh is not ready - caller keeps the footprint box.
    * @param {object | null} ray
-   * @param {number} [maxT] ground clip — hits past this are buried
+   * @param {number} [maxT] ground clip - hits past this are buried
    * @returns {boolean | null}
    */
   function ghostHitOnRay(ray, maxT = Infinity) {
@@ -1087,7 +1087,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
       for (let slot = 0; slot < count; slot++) {
         const o = slot * 16;
         if (!(m[o + 15] > 0)) continue;
-        // Squashed wrecks are mid-collapse — don't keep smoking.
+        // Squashed wrecks are mid-collapse - don't keep smoking.
         if (m[o + 5] < Math.abs(m[o]) * 0.35) continue;
         fn(batch.typeId, m, slot, sockets);
       }

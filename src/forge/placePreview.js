@@ -1,4 +1,4 @@
-// Forge placement preview — the same building props and unit meshes as a match,
+// Forge placement preview - the same building props and unit meshes as a match,
 // stood on the authored tiles instead of colored boxes.
 
 import {

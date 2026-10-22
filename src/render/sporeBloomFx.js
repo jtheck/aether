@@ -25,7 +25,7 @@ export function createSporeBloomFx(emit, groundYAt, mushrooms = null) {
   const pendingImpacts = [];
   const IMPACT_HIT_COUNT = 4;
   const IMPACT_KILL_COUNT = 6;
-  /** Seed-tile wisps — delayed so ink drips lead; stop just before trees sprout. */
+  /** Seed-tile wisps - delayed so ink drips lead; stop just before trees sprout. */
   /** @type {Map<string, { x: number, z: number, growAtTick: number, delay: number, acc: number }>} */
   const seeds = new Map();
   /** Quick cast-confirm lines along the seed arc. */
@@ -141,7 +141,7 @@ export function createSporeBloomFx(emit, groundYAt, mushrooms = null) {
 
   /**
    * Round ink beads: hang + swell, then drop.
-   * Alpha blend required — additive black is invisible.
+   * Alpha blend required - additive black is invisible.
    */
   function emitOneDroplet(x, z, gy) {
     const ang = Math.random() * Math.PI * 2;
@@ -237,7 +237,7 @@ export function createSporeBloomFx(emit, groundYAt, mushrooms = null) {
     }
   }
 
-  /** Purple / green fungal wisps — slow, floaty spore-drift (not sparks). */
+  /** Purple / green fungal wisps - slow, floaty spore-drift (not sparks). */
   function emitSeedWisps(dt) {
     for (const s of seeds.values()) {
       if (simTick >= s.growAtTick - WISP_END_LEAD_TICKS) continue;
@@ -291,7 +291,7 @@ export function createSporeBloomFx(emit, groundYAt, mushrooms = null) {
       const m = pendingMushrooms[i];
       m.wait -= dt;
       if (m.wait > 0) continue;
-      // Keep retrying until the GLB bridge is ready — don't drop the seed.
+      // Keep retrying until the GLB bridge is ready - don't drop the seed.
       if (!mushrooms?.spawnCluster?.(m.x, m.z, m.growAtTick)) continue;
       pendingMushrooms.splice(i, 1);
     }

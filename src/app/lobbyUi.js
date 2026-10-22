@@ -321,7 +321,7 @@ function fillSelect(select, values, current, labelOf = (v) => v) {
 
 function workshopChapterLabel(item, garden) {
   const title = item.title || garden.name || item.id;
-  if ((item.gardens?.length || 0) > 1) return `${title} — ${garden.name || garden.file}`;
+  if ((item.gardens?.length || 0) > 1) return `${title} - ${garden.name || garden.file}`;
   return title;
 }
 
@@ -340,7 +340,7 @@ export function chapterSelectOptions(workshopItems, current, search, hostname, l
         extra.push({
           id: formatWorkshopRef(item.id, ch.file),
           name: packed.length > 1 ? (ch.name || ch.file) : title,
-          group: packed.length > 1 ? [title, ch.episode].filter(Boolean).join(' — ') : '',
+          group: packed.length > 1 ? [title, ch.episode].filter(Boolean).join(' - ') : '',
         });
       }
       continue;
@@ -559,14 +559,17 @@ export function setupLobbyUi({
     const showOverlay = ranked
       ? matchOverOn
       : (active && (!inPlay || stalled)) || matchOverOn;
-    overlay?.classList.toggle('is-ranked-result', Boolean(ranked && matchOverOn));
+    // No room: the score card stands alone. A fresh lobby must not wear it.
+    const scoreOnly = Boolean(matchOverOn && !active);
+    overlay?.classList.toggle('is-ranked-result', Boolean((ranked && matchOverOn) || scoreOnly));
     const overlayOpening = Boolean(overlay?.hidden && showOverlay);
     if (overlayOpening) overlayParked = false;
     overlay?.classList.toggle('is-lag', Boolean(showOverlay && inPlay && stalled));
     overlay?.classList.toggle('is-parked', Boolean(showOverlay && overlayParked && !(inPlay && stalled)));
     setHidden(sidebar, !active || ranked);
     setHidden(overlay, !showOverlay);
-    setHidden(overlayPanel, !active);
+    setHidden(overlayPanel, !active && !scoreOnly);
+    setHidden(panelLeave, scoreOnly);
     if (overlayMin) {
       const compact = Boolean(overlay?.classList.contains('is-parked'));
       overlayMin.textContent = compact ? '+' : '−';
@@ -591,7 +594,7 @@ export function setupLobbyUi({
     setText(sideMeta, status.meta);
     setText(panelTitle, inPlay && stalled
       ? stallTitle
-      : `${mode?.name ?? 'Lobby'} — ${state.hosting ? 'host' : status.title}`);
+      : `${mode?.name ?? 'Lobby'} - ${state.hosting ? 'host' : status.title}`);
     const hostMoves = state.hosting && (state.phase === 'waiting' || state.phase === 'countdown');
     const followUserId = getFollowUser?.() ?? null;
     const kingOwner = state.mode === 'koth' ? (getKing?.() ?? -1) : -1;

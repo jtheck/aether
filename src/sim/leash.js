@@ -1,5 +1,5 @@
 // Chase rope for fights a unit started itself (idle aggro, attack-move peel,
-// retaliation). Measured from where that attack began, not from the target —
+// retaliation). Measured from where that attack began, not from the target -
 // melee never gets "far" from whoever it is hitting.
 //
 // A clicked attack (attackFocus) is not leashed. Giving up remembers the foe
@@ -9,7 +9,7 @@
 import * as fx from './fixed.js';
 import { getUnitDef } from './unitTypes.js';
 
-/** 5/2 — idle, retaliation, and attack-move share one rope. */
+/** 5/2 - idle, retaliation, and attack-move share one rope. */
 const LEASH_NUM = 5;
 const LEASH_DEN = 2;
 /**
@@ -38,7 +38,7 @@ export function clearChaseLeash(w, i) {
   if (w.leashDrop) w.leashDrop[i] = -1;
 }
 
-/** Home arrival / finished march — the ignored foe can be picked up again. */
+/** Home arrival / finished march - the ignored foe can be picked up again. */
 export function releaseLeashDrop(w, i) {
   if (w.leashDrop) w.leashDrop[i] = -1;
 }

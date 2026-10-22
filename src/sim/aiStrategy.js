@@ -1,4 +1,4 @@
-// Match AI strategy — what to spend on, and how the standing army behaves.
+// Match AI strategy - what to spend on, and how the standing army behaves.
 //
 // Unit sim stays the last mile (aggro, combat, pathing). This layer only
 // issues the same group commands a human could: gather, place, train,
@@ -12,7 +12,7 @@ import { isAlly, isHostile } from './teams.js';
 import { getUnitDef } from './unitTypes.js';
 
 export const AI_STANCE = {
-  /** No army orders — unit sim aggro is the only fight. */
+  /** No army orders - unit sim aggro is the only fight. */
   HOLD: 'hold',
   /** Intercept hostiles in the agora yard. Never F2 the map. */
   DEFEND: 'defend',
@@ -34,7 +34,7 @@ export const ARMY_DECIDE_INTERVAL = 40;
 
 /**
  * User-facing competence (how well they play the bank). Heat stays
- * personality — how loud they answer a fight. Defaults ride together
+ * personality - how loud they answer a fight. Defaults ride together
  * until a menu splits them.
  */
 export const AI_DIFFICULTY = {
@@ -134,7 +134,7 @@ export const AI_STRATEGIES = {
     castChance: 28,
     castCap: 6,
   },
-  // Angryboi — same facts, louder reply. Still only answers what was shown.
+  // Angryboi - same facts, louder reply. Still only answers what was shown.
   reckless: {
     economy: true,
     path: AI_PATH.ARMY,
@@ -195,7 +195,7 @@ export function resolveAiStrategy(entry) {
 }
 
 /**
- * What hostiles have put on the table this tick — pads and the yard.
+ * What hostiles have put on the table this tick - pads and the yard.
  * No memory: they only know what is showing. Sitting on a quiet enemy
  * pad is not a show (that pad's bar is dark).
  */
@@ -266,7 +266,7 @@ export function captureIntent(w, strategy) {
   const home = agoraForOwner(w.agoras, owner);
   const homeScore = agoraCaptureScore(home);
   const shown = shownHostiles(w, owner, strategy.defendRangeF ?? 0);
-  // Quiet pad scores 0 — never treat "any agora exists" as a show.
+  // Quiet pad scores 0 - never treat "any agora exists" as a show.
   const guard = homeScore > 0 && homeScore >= (strategy.guardAt ?? 9);
   const occupyEnds = (w.agoraOccupyEndsMatch ?? 1) !== 0;
   const contest = pickContestAgora(w, owner, strategy.heat, occupyEnds, homeScore, shown);

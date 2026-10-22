@@ -1,4 +1,4 @@
-// VAT (baked vertex animation) unit templates — one bake + thin instances.
+// VAT (baked vertex animation) unit templates - one bake + thin instances.
 // Villager GLB is multi-primitive (body / TeamColor shirt / pants / kicks); each
 // primitive is its own skinned mesh and must be baked + instanced together.
 //
@@ -63,7 +63,7 @@ export const BRIGAND_TORCH_SOCKET = Object.freeze({
 
 const VILLAGER_VAT = {
   url: '/assets/models/villager.glb',
-  // Raw glTF scale — no aftermarket resize (instance matrix only).
+  // Raw glTF scale - no aftermarket resize (instance matrix only).
   scale: 1,
   idleClip: 'idle',
   walkClip: 'walk_cycle',
@@ -257,7 +257,7 @@ export function vatInstanceTexelWidth(instanceCount) {
 
 /**
  * Allocate Lite's instance-param texture at `reserved` slots on first upload.
- * Later `setInstances` with fewer slots only writeTexture — they must not grow,
+ * Later `setInstances` with fewer slots only writeTexture - they must not grow,
  * because grow `destroy()`s the old GPUTexture while PBR still holds a cached
  * bind group (WebGPU: "Destroyed texture 64x1 RGBA32Float used in a submit").
  *
@@ -344,7 +344,7 @@ export function vatSampleGroups(resolved) {
   return loco.length ? loco : bakeGroups;
 }
 
-/** Floor for pottering — short legs, keep the farm walk from sliding. */
+/** Floor for pottering - short legs, keep the farm walk from sliding. */
 export const VAT_WALK_RATE_MIN = 0.51;
 /** Full-speed orders play faster than the walk clip so they read as a run. */
 export const VAT_WALK_RATE_MAX = 2.04;
@@ -846,7 +846,7 @@ function meshFromPosedPart(engine, url, index, source, positions, gltf) {
 
 /**
  * One still from the idle clip, baked like the static icon meshes.
- * Null when the GLB has no idle clip — caller keeps the bind-pose bake.
+ * Null when the GLB has no idle clip - caller keeps the bind-pose bake.
  * @returns {Promise<object[] | null>}
  */
 export async function loadIdleIconMeshes(engine, url) {

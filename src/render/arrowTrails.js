@@ -12,7 +12,7 @@ import {
 
 const CAPACITY = 32768;
 const LIFETIME_MS = 240;
-// Arrow render length is ~3 — keep streaks readable and clear of the shaft.
+// Arrow render length is ~3 - keep streaks readable and clear of the shaft.
 const BASE_WIDTH = 0.18;
 const BASE_LENGTH = 3.4;
 const BEHIND_GAP = 1.9;

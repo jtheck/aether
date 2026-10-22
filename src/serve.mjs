@@ -1,5 +1,5 @@
 // Dev server: serves src/ directly (app + sim as native ES modules).
-// vendor/lite.bundle.js is prebuilt — run `npm run build:lite` when Lite version changes.
+// vendor/lite.bundle.js is prebuilt - run `npm run build:lite` when Lite version changes.
 // COOP/COEP required for SharedArrayBuffer / sim worker.
 
 import { createServer } from 'http';
@@ -49,7 +49,7 @@ function resolvePath(urlPath) {
   if (safe.startsWith('maps/')) {
     return resolveMapsUrl(REPO, safe) ?? join(REPO, ...safe.split('/'));
   }
-  // Soft-landing for no-WebGPU — serve src/axiom/ at /axiom/
+  // Soft-landing for no-WebGPU - serve src/axiom/ at /axiom/
   const axiomPath = resolveSrcDir(safe, 'axiom');
   if (axiomPath) return axiomPath;
   // Lite map editor at src/forge/ (ESM; shares sim/ + render/)
@@ -61,17 +61,17 @@ function resolvePath(urlPath) {
 try {
   await access(join(ROOT, 'vendor', 'lite', 'liteVendor.js'));
 } catch {
-  console.warn('⚠️  vendor/lite/ missing — run: npm run build:lite');
+  console.warn('⚠️  vendor/lite/ missing - run: npm run build:lite');
 }
 try {
   await access(join(ROOT, 'vendor', 'lite-explorer', 'explorer.js'));
 } catch {
-  console.warn('⚠️  vendor/lite-explorer/ missing — run: npm run build:explorer');
+  console.warn('⚠️  vendor/lite-explorer/ missing - run: npm run build:explorer');
 }
 try {
   await access(join(ROOT, 'vendor', 'howler.js'));
 } catch {
-  console.warn('⚠️  vendor/howler.js missing — run: npm run build:howler');
+  console.warn('⚠️  vendor/howler.js missing - run: npm run build:howler');
 }
 
 createServer(async (req, res) => {
@@ -105,5 +105,5 @@ createServer(async (req, res) => {
   console.log(`axiom soft-landing at http://localhost:${PORT}/axiom/`);
   console.log(`forge editor at http://localhost:${PORT}/forge/`);
   console.log(`lite XR probe at http://localhost:${PORT}/xr-probe/`);
-  console.log('edit app/ sim/ render/ — refresh browser, no rebuild');
+  console.log('edit app/ sim/ render/ - refresh browser, no rebuild');
 });

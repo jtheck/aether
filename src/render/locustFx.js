@@ -23,7 +23,7 @@ const LANDING_SITES = 3;
 /** Hard cap across shots + chew sites so a saturated blob cannot fill the particle pool. */
 const MAX_INSECTS = 200;
 
-/** Match PARTICLE_CULL_MAX_RANGE — far swarms stay in sync, they just do not emit. */
+/** Match PARTICLE_CULL_MAX_RANGE - far swarms stay in sync, they just do not emit. */
 const CULL_RANGE = PARTICLE_CULL_MAX_RANGE;
 
 const BODY = [
@@ -356,7 +356,7 @@ export function createLocustFx(emit, opts = {}) {
       return;
     }
     // Incoming shot: split the same insects across impact + hops. Do not mint
-    // a full pack per site — that is what blew the particle pool to 65k.
+    // a full pack per site - that is what blew the particle pool to 65k.
     const ordered = dests.slice();
     ordered.sort((a, b) => dist2(a.x, a.z, from.x, from.z) - dist2(b.x, b.z, from.x, from.z));
     const lush = ordered.slice(0, LANDING_SITES);

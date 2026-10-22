@@ -1,4 +1,4 @@
-// Lite-native Forge — table silhouette + terrain paint. No sim worker.
+// Lite-native Forge - table silhouette + terrain paint. No sim worker.
 
 import {
   createEngine,
@@ -53,7 +53,7 @@ import {
 } from '../sim/tableShape.js';
 import { TERRAIN } from '../sim/field.js';
 import { decodeGarden, encodeGarden, fieldFromGarden } from '../sim/garden.js';
-import { stageSessionGarden, writeCampaignPack, writeSessionGarden } from '../app/gardenSession.js';
+import { stageLocalGarden, stageSessionGarden, writeCampaignPack, writeSessionGarden } from '../app/gardenSession.js';
 import {
   addChapter,
   addEpisode,
@@ -82,10 +82,10 @@ import {
   workshopPageUrl,
 } from '../app/workshop.js';
 import { RESOURCE_KINDS, STARTING_RESOURCES } from '../sim/resources.js';
-import { applyAuthoredScenery, clearAllScenery, clearOffTableScenery, clearSceneryOnWater, populateScenery, paintSceneryBrush, SCENERY } from '../sim/scenery.js';
+import { applyAuthoredScenery, clearAllScenery, clearOffTableScenery, clearSceneryCoveringTiles, clearSceneryOnWater, populateScenery, paintSceneryBrush, SCENERY } from '../sim/scenery.js';
 import { DOODAD, paintDoodadBrush } from '../sim/doodads.js';
 import { UNIT_DEFS } from '../sim/unitTypes.js';
-import { BUILDING_FOOTPRINTS, BUILDING_YAW_SNAP, PLACEABLE_BUILDINGS, snapBuildingWorld, snapBuildingYaw } from '../sim/buildings.js';
+import { BUILDING_FOOTPRINTS, BUILDING_YAW_SNAP, PLACEABLE_BUILDINGS, forEachFootprintTile, snapBuildingWorld, snapBuildingYaw } from '../sim/buildings.js';
 import {
   OPENING_REACH,
   applyWallOccupancy,
@@ -190,14 +190,14 @@ const WALL_FIELDS = [
 ];
 
 const state = {
-  layer: 'table',
+  layer: 'select',
   terrain: TERRAIN.GRASS,
   lift: 0,
   scenery: SCENERY.TREE,
   stamp: 'scenery',
   doodad: DOODAD.WAGON,
-  placeKind: 'unit',
-  placeType: 1,
+  placeKind: '',
+  placeType: 0,
   owner: 0,
   /** Grabbed placements: { kind: 'unit'|'building'|'agora'|'objective', index }[]. */
   placePicks: [],
@@ -208,7 +208,7 @@ const state = {
   sceneryDensity: 10,
   showGrid: false,
   showScenery: true,
-  showChunks: true,
+  showChunks: false,
   showTiles: false,
   mapName: '',
   /** Garden `mt`. Generate lays out starts for this type. */
@@ -308,6 +308,7 @@ let storySheet = null;
 let placeDrag = null;
 /** Drag on empty ground. Becomes a select box once the pointer travels. */
 let placeBox = null;
+let ringGesture = null;
 /** New value each scenery stroke, so another pass can hit different tiles. */
 let scenerySalt = 1;
 const hist = createHistory();
@@ -549,9 +550,48 @@ async function flushSceneryPaint() {
   }
 }
 
+function stampStructureClaim() {
+  if (!field) return;
+  const n = field.width * field.height;
+  if (!field.structureClaim || field.structureClaim.length !== n) {
+    field.structureClaim = new Uint8Array(n);
+  } else {
+    field.structureClaim.fill(0);
+  }
+  const claim = (type, x, z) => {
+    forEachFootprintTile(field, type, fx.fromFloat(x), fx.fromFloat(z), (_tx, _tz, i) => {
+      field.structureClaim[i] = 1;
+    });
+  };
+  for (const b of state.buildings) claim(String(b.type), b.x, b.z);
+  for (const g of state.agoras) claim('agora', g.x, g.z);
+}
+
+function clearResourcesUnderPlacements() {
+  if (!field?.sceneryType) return [];
+  const tiles = [];
+  const claim = (type, x, z) => {
+    forEachFootprintTile(field, type, fx.fromFloat(x), fx.fromFloat(z), (tx, tz) => {
+      tiles.push({ tx, tz });
+    });
+  };
+  for (const b of state.buildings) claim(String(b.type), b.x, b.z);
+  for (const g of state.agoras) claim('agora', g.x, g.z);
+  const dirty = clearSceneryCoveringTiles(field, tiles);
+  if (dirty.length) field.sceneryAuthored = true;
+  return dirty;
+}
+
+function settlePlacementScenery() {
+  const dirty = clearResourcesUnderPlacements();
+  if (dirty.length) queueSceneryPaint(dirty);
+}
+
 function placeGeneratedScenery() {
   if (!field) return;
+  stampStructureClaim();
   populateScenery(field, null, reservedFromPlacements());
+  clearResourcesUnderPlacements();
   field.sceneryAuthored = true;
 }
 
@@ -610,6 +650,7 @@ function selectedHop(edit, id, index, pending = false) {
 }
 
 function renderWaveEditor(force = false) {
+  renderGoalList();
   const host = document.getElementById('wave-zone-list');
   if (!host || !field) return;
   const active = document.activeElement;
@@ -628,52 +669,26 @@ function renderWaveEditor(force = false) {
     return b;
   };
 
-  if (!zones.length && !state.waveRoute.length) {
-    const empty = document.createElement('p');
-    empty.className = 'hint';
-    empty.textContent = 'No zones yet. Place one, then select it here to set the trigger.';
-    host.appendChild(empty);
-  }
-
-  for (const obj of zones) {
+  const obj = editingId ? zones.find((z) => z.id === editingId) : null;
+  if (obj) {
     const ends = isTerminalObjective(obj) ? ' · ends' : '';
     const row = document.createElement('div');
-    row.className = 'row';
+    row.className = 'row stay';
     row.appendChild(addBtn(
-      `${obj.kind || 'zone'}${ends}${obj.label ? ` “${obj.label}”` : ''} · ${obj.tx | 0}, ${obj.tz | 0}`,
+      `${obj.label || obj.kind || 'Ring'}${ends}`,
       { waveAct: 'select-zone', waveId: obj.id },
-      { active: editingId === obj.id },
+      { active: true },
     ));
     row.appendChild(addBtn('Remove', { waveAct: 'remove-zone', waveId: obj.id }));
     host.appendChild(row);
-    if (editingId !== obj.id) continue;
     host.appendChild(triggerPanel(obj));
-    const attack = document.createElement('p');
-    attack.className = 'block-title';
-    attack.textContent = 'Attack';
-    host.appendChild(attack);
     host.appendChild(waveFields(obj));
-    const pathNote = document.createElement('p');
-    pathNote.className = 'field-note';
-    pathNote.textContent = 'Form up is where they appear. Later stops are the march. The zone is the last stop. No stops, and they appear in a ring around it.';
-    host.appendChild(pathNote);
     host.appendChild(hopList(obj.params?.route || [], obj.id, false));
-  }
-
-  if (state.waveRoute.length) {
-    const pending = document.createElement('p');
-    pending.className = 'hint';
-    pending.textContent = 'Hops waiting for a zone. They attach to the next zone you place.';
-    host.appendChild(pending);
+  } else if (state.waveRoute.length) {
     host.appendChild(hopList(state.waveRoute, '', true));
   }
-  if (!editingId) {
-    const next = document.createElement('p');
-    next.className = 'block-title';
-    next.textContent = 'Attack on the next zone';
-    host.appendChild(next);
-    host.appendChild(waveFields(null));
-  }
+  syncBench();
+  syncHand();
 }
 
 function zoneInput(obj, field, value) {
@@ -1066,7 +1081,6 @@ function groupOrigins(picks = livePicks()) {
 }
 
 function syncPlacePickUi() {
-  const el = document.getElementById('place-pick-hint');
   const picks = livePicks();
   const remove = document.getElementById('btn-place-remove');
   if (remove) remove.disabled = picks.length === 0;
@@ -1085,32 +1099,26 @@ function syncPlacePickUi() {
     else if (picks.length > 0 && document.activeElement !== nameEl) nameEl.value = '';
   }
   syncFactionUi(picks);
-  if (picks.length > 1) {
-    if (el) {
-      el.textContent = `${picks.length} selected. Drag to move the group. [ ] turns it. Remove or Delete takes them off.`;
-    }
-    return;
+  syncBench();
+  syncHand();
+}
+
+/** Implicit forge alliances when the garden has no saved `teamByOwner`. */
+function defaultForgeTeam(id) {
+  if (state.mapType !== 'adventure') return id;
+  if (id < 4) return SIDE_BASE;
+  const otherSides = SIDE_LETTERS.length - 1;
+  const total = FACTIONS.length - 4;
+  const slot = id - 4;
+  const base = Math.floor(total / otherSides);
+  const extra = total % otherSides;
+  let left = slot;
+  for (let s = 0; s < otherSides; s++) {
+    const block = base + (s < extra ? 1 : 0);
+    if (left < block) return SIDE_BASE + 1 + s;
+    left -= block;
   }
-  const pick = picks[0];
-  const item = pick ? placeList(pick.kind)?.[pick.index] : null;
-  if (!item) {
-    if (el) {
-      el.textContent = 'Drag a box to select units and buildings. Click empty ground to place. Drag a selection to move it. Rotate turns it. Remove or Delete takes it off. Shift-click takes the one under the cursor.';
-    }
-    return;
-  }
-  if (pick.kind === 'unit') {
-    if (el) {
-      const who = item.name || 'Unit';
-      el.textContent = `${who} selected. Drag to move. [ ] rotates. Remove or Delete takes it off.`;
-    }
-    return;
-  }
-  if (el) {
-    const label = pick.kind === 'building' ? 'Building' : pick.kind === 'agora' ? 'Agora' : 'Zone';
-    const turn = pick.kind === 'building' ? ' [ ] rotates.' : '';
-    el.textContent = `${label} selected. Drag to move.${turn} Remove or Delete takes it off.`;
-  }
+  return SIDE_BASE + otherSides;
 }
 
 function authoredTeam(id) {
@@ -1118,8 +1126,7 @@ function authoredTeam(id) {
     const t = state.teamByOwner[id];
     return Number.isInteger(t) ? t : id;
   }
-  if (state.mapType === 'adventure' && id < 4) return SIDE_BASE;
-  return id;
+  return defaultForgeTeam(id);
 }
 
 function displaySide(id) {
@@ -1141,25 +1148,162 @@ function displaySide(id) {
 
 function materializeTeams() {
   if (state.teamByOwner) return;
-  state.teamByOwner = FACTIONS.map((f) => (
-    state.mapType === 'adventure' && f.id < 4 ? SIDE_BASE : f.id
-  ));
+  state.teamByOwner = FACTIONS.map((f) => defaultForgeTeam(f.id));
+}
+
+function armySides() {
+  if (state.mapType === 'adventure' || state.mapType === 'stress') {
+    return [{ id: 0, name: 'Players' }, { id: 4, name: 'Enemy' }];
+  }
+  const spec = MAP_TYPES.find((t) => t.id === state.mapType);
+  const count = spec?.players > 0 ? spec.players : 4;
+  return FACTIONS.slice(0, count).map((f) => ({ id: f.id, name: f.name }));
+}
+
+function renderArmySides() {
+  const sel = document.getElementById('place-owner');
+  if (sel) {
+    const adventure = state.mapType === 'adventure' || state.mapType === 'stress';
+    for (const opt of sel.options) {
+      if (opt.dataset.split) continue;
+      const id = Number(opt.value);
+      const faction = FACTIONS.find((f) => f.id === id);
+      if (!faction) continue;
+      opt.textContent = adventure && id === 0 ? 'Players' : adventure && id === 4 ? 'Enemy' : faction.name;
+    }
+  }
+  const paint = (host) => {
+    if (!host) return;
+    host.replaceChildren();
+    for (const side of armySides()) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.classList.toggle('active', state.owner === side.id);
+      const dot = document.createElement('i');
+      dot.style.background = factionCss(side.id);
+      const word = document.createElement('span');
+      word.textContent = side.name;
+      b.append(dot, word);
+      b.addEventListener('click', () => {
+        state.owner = side.id;
+        if (sel) {
+          sel.value = String(side.id);
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        renderArmySides();
+        syncHand();
+      });
+      host.appendChild(b);
+    }
+  };
+  paint(document.getElementById('army-sides'));
+  paint(document.getElementById('army-held-ink'));
+}
+
+function kindWord(kind) {
+  const s = String(kind || 'reach');
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+const GOAL_INKS = [
+  [0.30, 0.62, 1.00],
+  [0.95, 0.42, 0.28],
+  [0.35, 0.82, 0.45],
+  [0.95, 0.78, 0.25],
+  [0.70, 0.42, 0.95],
+  [0.20, 0.80, 0.82],
+  [0.95, 0.48, 0.72],
+  [0.62, 0.85, 0.30],
+];
+
+function goalInk(index) {
+  return GOAL_INKS[index % GOAL_INKS.length];
+}
+
+function goalCss(index) {
+  const c = goalInk(index);
+  return `rgb(${Math.round(c[0] * 255)}, ${Math.round(c[1] * 255)}, ${Math.round(c[2] * 255)})`;
+}
+
+function goalMaking() {
+  return state.placeKind === 'objective';
+}
+
+function renderGoalList() {
+  const host = document.getElementById('goal-list');
+  const kinds = document.getElementById('goal-new');
+  const newer = document.getElementById('goal-new-btn');
+  if (kinds) kinds.hidden = !goalMaking();
+  if (newer) newer.classList.toggle('active', goalMaking());
+  if (!host) return;
+  host.replaceChildren();
+  if (!state.objectives.length) {
+    const empty = document.createElement('div');
+    empty.textContent = 'None on the map.';
+    host.appendChild(empty);
+    if (goalMaking()) renderGoalKinds();
+    return;
+  }
+  state.objectives.forEach((obj, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.classList.toggle('active', state.waveEdit?.id === obj.id);
+    const sw = document.createElement('i');
+    sw.className = 'swatch';
+    sw.style.background = goalCss(i);
+    const word = document.createElement('span');
+    word.textContent = obj.label || kindWord(obj.kind);
+    b.append(sw, word);
+    b.addEventListener('click', () => selectGoal(i));
+    host.appendChild(b);
+  });
+  if (goalMaking()) renderGoalKinds();
+}
+
+function renderGoalKinds() {
+  const host = document.getElementById('goal-kinds');
+  const sel = document.getElementById('place-obj-kind');
+  if (!host || !sel) return;
+  const current = sel.value || 'reach';
+  host.replaceChildren();
+  for (const kind of OBJ_KINDS) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = kindWord(kind);
+    b.classList.toggle('active', kind === current);
+    b.addEventListener('click', () => {
+      sel.value = kind;
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      state.placeKind = 'objective';
+      state.waveEdit = null;
+      state.placePicks = [];
+      renderWaveEditor();
+      renderGoalKinds();
+      syncHand();
+    });
+    host.appendChild(b);
+  }
+}
+
+function syncBench() {
+  const picks = livePicks();
+  const holdingPiece = picks.some((p) => p.kind === 'unit' || p.kind === 'building' || p.kind === 'agora');
+  const stamps = document.getElementById('army-stamps');
+  const held = document.getElementById('army-held');
+  if (stamps) stamps.hidden = holdingPiece;
+  if (held) held.hidden = !holdingPiece;
 }
 
 function allianceHint() {
-  if (state.teamByOwner) return 'Factions on the same side fight together. Own fights alone.';
-  if (state.mapType === 'adventure') {
-    return 'Nothing saved yet, so Blue, Red, Green, and Yellow fight together and every other faction fights alone. Pick a side to save it on this map.';
-  }
-  if (state.mapType === 'koth') {
-    return 'Nothing saved yet, so the five seats fight each other. Pick a side to save alliances on this map.';
-  }
-  return 'Nothing saved yet, so every faction fights alone. Pick a side to save alliances on this map.';
+  return '';
 }
 
 function renderAllianceEditor() {
   const list = document.getElementById('alliance-list');
   const hint = document.getElementById('alliance-hint');
+  const box = document.getElementById('map-sides');
+  const adventure = state.mapType === 'adventure' || state.mapType === 'stress';
+  if (box) box.hidden = adventure;
   if (hint) hint.textContent = allianceHint();
   if (!list) return;
   const options = ['own', ...SIDE_LETTERS];
@@ -1175,6 +1319,7 @@ function renderAllianceEditor() {
       <select data-alliance="${f.id}">${opts}</select>
     </div>`;
   }).join('');
+  renderArmySides();
 }
 
 function syncFactionUi(picks) {
@@ -1195,7 +1340,7 @@ function syncFactionUi(picks) {
       split.value = '';
       split.dataset.split = '1';
       split.disabled = true;
-      split.textContent = '—';
+      split.textContent = '-';
       sel.prepend(split);
     }
     sel.value = '';
@@ -1453,6 +1598,17 @@ function disarmZoneStamp() {
   document.querySelectorAll('[data-place="objective"]').forEach((el) => el.classList.remove('active'));
 }
 
+function selectGoal(index) {
+  const obj = state.objectives[index];
+  if (!obj) return;
+  if (state.placeKind !== 'wavehop') state.placeKind = '';
+  state.waveEdit = { id: obj.id };
+  state.placePicks = [{ kind: 'objective', index }];
+  renderWaveEditor();
+  syncPlacePickUi();
+  updatePlaceMarkers();
+}
+
 function selectZoneAt(index, pos, e) {
   const obj = state.objectives[index];
   state.waveEdit = obj ? { id: obj.id } : null;
@@ -1462,6 +1618,55 @@ function selectZoneAt(index, pos, e) {
   syncPlacePickUi();
   updatePlaceMarkers();
   try { canvas.setPointerCapture(e.pointerId); } catch { /* already gone */ }
+}
+
+function ringCenter(obj) {
+  const half = worldHalfFFromField(field);
+  const halfZ = worldHalfZFFromField(field);
+  return {
+    x: ((obj.tx | 0) + 0.5) * TILE_SIZE_F - half,
+    z: ((obj.tz | 0) + 0.5) * TILE_SIZE_F - halfZ,
+  };
+}
+
+function paintRingRadius(obj) {
+  obj.r = Math.max(1, obj.r);
+  const input = document.querySelector(`input[data-zone-field="radius"][data-zone-id="${obj.id}"]`);
+  if (input && document.activeElement !== input) input.value = String(obj.r);
+  updatePlaceMarkers();
+}
+
+function beginRingResize(index) {
+  const obj = state.objectives[index];
+  if (!obj) return;
+  state.waveEdit = { id: obj.id };
+  state.placePicks = [{ kind: 'objective', index }];
+  ringGesture = { index, mode: 'radius' };
+  renderWaveEditor();
+  syncPlacePickUi();
+  updatePlaceMarkers();
+}
+
+function beginRingDraw(pos, e) {
+  applyPlace(pos);
+  const index = state.objectives.length - 1;
+  const obj = state.objectives[index];
+  if (!obj) return;
+  ringGesture = { index, mode: 'draw', moved: false, cx: e.clientX, cy: e.clientY };
+}
+
+function moveRingGesture(pos, e) {
+  if (!ringGesture || !pos) return;
+  const obj = state.objectives[ringGesture.index];
+  if (!obj) return;
+  if (ringGesture.mode === 'draw') {
+    const travel = Math.hypot(e.clientX - ringGesture.cx, e.clientY - ringGesture.cy);
+    if (travel < 6) return;
+    ringGesture.moved = true;
+  }
+  const c = ringCenter(obj);
+  obj.r = Math.max(1, Math.round((Math.hypot(pos.x - c.x, pos.z - c.z) / TILE_SIZE_F) * 2) / 2);
+  paintRingRadius(obj);
 }
 
 function handleZonePointerDown(pos, e) {
@@ -1479,14 +1684,16 @@ function handleZonePointerDown(pos, e) {
   }
   const hit = hitZone(pos);
   if (hit) {
-    disarmZoneStamp();
+    const obj = state.objectives[hit.index];
+    const reach = Math.max(TILE_SIZE_F, (Number(obj?.r) || 4) * TILE_SIZE_F);
+    if (hit.d > reach * 0.62) {
+      beginRingResize(hit.index);
+      return;
+    }
     selectZoneAt(hit.index, pos, e);
     return;
   }
-  if (state.placeKind === 'objective') {
-    applyPlace(pos);
-    disarmZoneStamp();
-  }
+  if (state.placeKind === 'objective') beginRingDraw(pos, e);
 }
 
 function handlePlacePointerDown(pos, e) {
@@ -1527,6 +1734,7 @@ function applyPlace(pos, { remove = false } = {}) {
   const tz = Math.floor((pos.z + halfZ) / TILE_SIZE_F);
   if (tx < 0 || tz < 0 || tx >= field.width || tz >= field.height) return;
   if (field.activeMask?.[tz * field.width + tx] === 0) return;
+  if (!state.placeKind) return;
   if (state.placeKind === 'party') {
     placeStoryPartyAt(tx, tz);
   } else if (state.placeKind === 'unit') {
@@ -1567,6 +1775,7 @@ function applyPlace(pos, { remove = false } = {}) {
   } else if (state.placeKind === 'agora') {
     const snapped = snapBuildingWorld('agora', fx.fromFloat(pos.x), fx.fromFloat(pos.z));
     state.agoras.push({ owner: state.owner, x: fx.toFloat(snapped.x), z: fx.toFloat(snapped.z) });
+    settlePlacementScenery();
   } else {
     const snapped = snapBuildingWorld(String(state.placeType), fx.fromFloat(pos.x), fx.fromFloat(pos.z));
     state.buildings.push({
@@ -1576,6 +1785,7 @@ function applyPlace(pos, { remove = false } = {}) {
       z: fx.toFloat(snapped.z),
       yaw: 0,
     });
+    settlePlacementScenery();
   }
   updatePlaceMarkers();
 }
@@ -1612,15 +1822,27 @@ function removeNearestPlacement(pos) {
   }
 }
 
-function pushZoneRing(pos, idx, x, y, z, span) {
-  const edge = 0.55;
-  const lift = 0.28;
-  const half = span * 0.5;
-  pushBoxMarker(pos, idx, x, y, z - half, span + edge, lift, edge);
-  pushBoxMarker(pos, idx, x, y, z + half, span + edge, lift, edge);
-  pushBoxMarker(pos, idx, x - half, y, z, edge, lift, span + edge);
-  pushBoxMarker(pos, idx, x + half, y, z, edge, lift, span + edge);
-  pushBoxMarker(pos, idx, x, y, z, 1.1, 2.2, 1.1);
+function pushGoalRing(pos, idx, x, z, radius) {
+  const lift = 0.55;
+  const ribbon = 0.34;
+  const n = Math.max(1, Math.ceil((radius * 2) / (TILE_SIZE_F * 0.5)));
+  const yAt = (px, pz) => (field ? surfaceHeightAt(field, px, pz) : 0);
+  const side = (ax, az, bx, bz) => {
+    for (let i = 0; i < n; i++) {
+      const t0 = i / n;
+      const t1 = (i + 1) / n;
+      const x0 = ax + (bx - ax) * t0;
+      const z0 = az + (bz - az) * t0;
+      const x1 = ax + (bx - ax) * t1;
+      const z1 = az + (bz - az) * t1;
+      const y = Math.max(yAt(x0, z0), yAt(x1, z1), yAt((x0 + x1) * 0.5, (z0 + z1) * 0.5)) + lift;
+      pushSelectEdge(pos, idx, x0, y, z0, x1, y, z1, ribbon);
+    }
+  };
+  side(x - radius, z - radius, x + radius, z - radius);
+  side(x + radius, z - radius, x + radius, z + radius);
+  side(x + radius, z + radius, x - radius, z + radius);
+  side(x - radius, z + radius, x - radius, z - radius);
 }
 
 function pushBoxMarker(pos, idx, x, y, z, sx, sy, sz) {
@@ -1650,7 +1872,7 @@ function updatePlaceMarkers() {
   if (!engine || !scene) return;
   const half = field ? worldHalfFFromField(field) : 0;
   const halfZ = field ? worldHalfZFFromField(field) : 0;
-  const addMarker = (name, positions, indices, color) => {
+  const addMarker = (name, positions, indices, color, order = 0) => {
     if (!positions.length) return;
     const pos = new Float32Array(positions);
     const normals = new Float32Array(pos.length);
@@ -1658,12 +1880,13 @@ function updatePlaceMarkers() {
     const mesh = createMeshFromData(engine, name, pos, normals, new Uint32Array(indices));
     const mat = createStandardMaterial();
     mat.diffuseColor = color;
-    mat.emissiveColor = color.map((c) => c * 0.35);
+    mat.emissiveColor = order ? color : color.map((c) => c * 0.35);
     mat.ambientColor = color.map((c) => c * 0.4);
     mat.specularColor = [0, 0, 0];
     mat.backFaceCulling = false;
     mesh.material = mat;
     mesh.pickable = false;
+    if (order) mesh.renderOrder = order;
     addToScene(scene, mesh);
     placeMeshes.push(mesh);
   };
@@ -1693,15 +1916,17 @@ function updatePlaceMarkers() {
     pushBoxMarker(gPos, gIdx, g.x, groundY(g.x, g.z, 0.4), g.z, 16, 4, 16);
   }
   addMarker('forge-agoras', gPos, gIdx, [0.95, 0.85, 0.25]);
-  const oPos = [];
-  const oIdx = [];
-  for (const obj of state.objectives) {
-    const wx = (obj.tx + 0.5) * TILE_SIZE_F - half;
-    const wz = (obj.tz + 0.5) * TILE_SIZE_F - halfZ;
-    const span = Math.max(4, (obj.r || 4) * TILE_SIZE_F * 2);
-    pushZoneRing(oPos, oIdx, wx, groundY(wx, wz, 0.15), wz, span);
+  if (field) {
+    state.objectives.forEach((obj, i) => {
+      const c = ringCenter(obj);
+      const radius = Math.max(TILE_SIZE_F, (Number(obj.r) || 4) * TILE_SIZE_F);
+      const pos = [];
+      const idx = [];
+      pushGoalRing(pos, idx, c.x, c.z, radius);
+      const ink = goalInk(i).map((v) => (state.waveEdit?.id === obj.id ? Math.min(1, v + 0.22) : v));
+      addMarker(`forge-goal-${i}`, pos, idx, ink, 48);
+    });
   }
-  addMarker('forge-objectives', oPos, oIdx, [0.15, 0.45, 0.72]);
   if (field) {
     const hopPos = [];
     const hopIdx = [];
@@ -2362,6 +2587,7 @@ function setWallTool(tool) {
     clearSectionMarker();
     updateOpeningMarker(lastBrushWorld);
   }
+  syncHand();
 }
 
 function wallOpeningMode() {
@@ -2450,7 +2676,7 @@ async function rebuildTerrain() {
     }
     terrain = next;
     terrain.setSceneryVisible?.(state.showScenery);
-    grid = createTileGridOverlay(engine, scene, snap, { edges: false });
+    grid = createTileGridOverlay(engine, scene, snap, { edges: false, overModels: true });
     grid.setVisible(state.showGrid);
     if (!sceneRegistered) {
       await registerScene(scene);
@@ -2525,6 +2751,7 @@ function setTableTool(tool) {
   document.getElementById('table-tool-props')?.classList.toggle('active', state.tableTool === 'props');
   syncPropUi();
   updateSelectUi();
+  syncHand();
 }
 
 function syncPropUi() {
@@ -2566,9 +2793,9 @@ function syncPropUi() {
       yaw.value = String(Math.round((pose.yaw * 180) / Math.PI) % 360);
     }
   }
-  if (scaleLabel) scaleLabel.textContent = pose ? String(Math.round(pose.scale)) : '—';
-  if (yLabel) yLabel.textContent = pose ? String(Math.round(pose.y)) : '—';
-  if (yawLabel) yawLabel.textContent = pose ? String(Math.round((pose.yaw * 180) / Math.PI) % 360) : '—';
+  if (scaleLabel) scaleLabel.textContent = pose ? String(Math.round(pose.scale)) : '-';
+  if (yLabel) yLabel.textContent = pose ? String(Math.round(pose.y)) : '-';
+  if (yawLabel) yawLabel.textContent = pose ? String(Math.round((pose.yaw * 180) / Math.PI) % 360) : '-';
   const remove = document.getElementById('btn-prop-remove');
   if (remove) remove.disabled = !pose;
 }
@@ -2706,6 +2933,7 @@ function applyAt(pos, { add = false } = {}) {
     const key = `scenery:${tx}:${tz}:${state.brush}:${state.stamp}:${stamp}:${state.sceneryDensity}`;
     if (key === lastPaintKey) return;
     lastPaintKey = key;
+    if (state.stamp !== 'doodad') stampStructureClaim();
     const dirty = state.stamp === 'doodad'
       ? paintDoodadBrush(field, tx, tz, state.doodad, state.brush, {
         density: state.sceneryDensity / 10,
@@ -2951,7 +3179,7 @@ let holdStoryCamera = false;
 
 function applyStorySample(s) {
   if (!s) return;
-  if (s.camera && cam && field && !holdStoryCamera) {
+  if (s.camera && cam && field && !holdStoryCamera && state.layer === 'story') {
     const live = s.camera.char ? speakerWorldPos(s.camera.char) : null;
     const tile = worldFromTile(s.camera.tx, s.camera.tz);
     cam.setPose({
@@ -3094,11 +3322,11 @@ function storyClipLabel(clip) {
   const stamp = `${t.toFixed(1)}s`;
   if (clip.kind === CLIP_LINE) {
     const who = clip.speaker ? `${clip.speaker}: ` : '';
-    return `${stamp} Line — ${who}${clip.text || '…'}`;
+    return `${stamp} Line - ${who}${clip.text || '…'}`;
   }
   if (clip.kind === CLIP_HOLD) return `${stamp} Pause`;
   const end = `${clip.tx | 0}, ${clip.tz | 0}`;
-  return `${stamp} Camera — ${end}`;
+  return `${stamp} Camera - ${end}`;
 }
 
 function renderStoryClipList() {
@@ -3399,6 +3627,7 @@ function renderCampaignDraft() {
   const list = document.getElementById('campaign-tree');
   if (!list) return;
   list.replaceChildren();
+  syncChapterTitle();
   const eps = campaignDraft.episodes;
   eps.forEach((episode, epIdx) => {
     const head = document.createElement('div');
@@ -3409,7 +3638,7 @@ function renderCampaignDraft() {
     name.type = 'text';
     name.maxLength = 80;
     name.value = episode.name;
-    name.title = 'Episode heading — focus to make new chapters land here';
+    name.title = 'Episode heading - focus to make new chapters land here';
     name.addEventListener('focus', () => {
       armHistory();
       setCurrentEpisode(campaignDraft, epIdx);
@@ -3440,13 +3669,29 @@ function renderCampaignDraft() {
       name.type = 'text';
       name.maxLength = 80;
       name.value = ch.name;
-      name.title = 'Chapter name';
-      name.addEventListener('input', () => renameChapter(campaignDraft, ch.file, name.value));
+      name.title = 'Chapter name in the campaign';
+      name.dataset.file = ch.file;
+      name.addEventListener('input', () => {
+        renameChapter(campaignDraft, ch.file, name.value);
+        if (ch.file === activeChapterFile) {
+          state.mapName = name.value;
+          const mapName = document.getElementById('map-name');
+          if (mapName && document.activeElement !== mapName) mapName.value = name.value;
+          syncChapterTitle();
+        }
+      });
       row.append(iconButton(on ? 'On' : 'Off', on ? 'Players can play this chapter. Click to switch it off.' : 'Players skip this chapter. Click to switch it on.', () => {
         setChapterLive(campaignDraft, ch.file, !on);
         renderCampaignDraft();
       }, { active: on }), num, name);
-      row.append(iconButton('✎', 'Load this chapter onto the table to edit it', () => editChapter(ch.file), { active: ch.file === activeChapterFile }));
+      if (ch.file === activeChapterFile) {
+        row.classList.add('here');
+        const here = document.createElement('span');
+        here.className = 'num';
+        here.textContent = 'on the table';
+        row.append(here);
+      }
+      row.append(iconButton('✎', 'Put this chapter on the table', () => editChapter(ch.file), { active: ch.file === activeChapterFile }));
       row.append(iconButton('↑', 'Move up (into previous episode at the top)', () => { if (moveChapter(campaignDraft, ch.file, -1)) renderCampaignDraft(); }, { disabled: epIdx === 0 && chIdx === 0 }));
       row.append(iconButton('↓', 'Move down (into next episode at the bottom)', () => { if (moveChapter(campaignDraft, ch.file, 1)) renderCampaignDraft(); }, { disabled: epIdx === eps.length - 1 && chIdx === episode.chapters.length - 1 }));
       row.append(iconButton('✕', 'Remove chapter', () => {
@@ -3491,7 +3736,7 @@ function editChapter(file) {
 
 function saveActiveChapter() {
   if (!activeChapterFile) {
-    alert('Open a chapter first — press Edit on a chapter, make your changes, then Save.');
+    alert('This chapter is not in the campaign. Add this chapter first.');
     return;
   }
   flushActiveChapter();
@@ -3573,27 +3818,23 @@ function playCampaign() {
 function playMap() {
   const json = JSON.stringify(gardenPayload());
   const url = '/?garden=session&solo=1';
-  let where = 'overflow';
+  let gen = null;
   try {
-    where = stageSessionGarden(json);
+    stageSessionGarden(json);
+    gen = stageLocalGarden(json);
   } catch (err) {
     console.error(err);
     alert('Could not start that map.');
     return;
   }
-  if (where === 'session') {
-    window.open(url, '_blank');
-    return;
-  }
-  // Open during the click, then navigate once IndexedDB has the garden.
-  // A later window.open is blocked once the quota fallback goes async.
-  const opened = window.open('about:blank', '_blank');
-  writeSessionGarden(json).then(() => {
-    if (opened) opened.location.replace(url);
-    else alert('Allow popups to play the map.');
-  }).catch((err) => {
+  // Open the match directly. about:blank is an opaque origin under COOP, so
+  // the opener cannot navigate it afterwards. localStorage is already visible
+  // to the new tab; IndexedDB catches gardens that do not fit there.
+  const pending = writeSessionGarden(json, gen);
+  const opened = window.open(url, '_blank');
+  if (!opened) alert('Allow popups to play the map.');
+  pending.catch((err) => {
     console.error(err);
-    try { opened?.close(); } catch { /* already closed */ }
     alert('Could not start that map.');
   });
 }
@@ -3633,6 +3874,7 @@ function applyGardenJson(json) {
     syncLightUi();
   }
   applyCameraBound();
+  clearResourcesUnderPlacements();
   syncFormFromField();
   syncPlacePickUi();
   renderAllianceEditor();
@@ -3647,7 +3889,7 @@ function importFile(file) {
   file.text().then((text) => {
     const data = JSON.parse(text);
     if (isCampaignBundle(data)) {
-      alert('That\u2019s a campaign — open the Campaign tab and use its Import button.');
+      alert('That\u2019s a campaign - open the Campaign tab and use its Import button.');
       return;
     }
     applyGardenJson(data);
@@ -3673,7 +3915,7 @@ async function loadGardenFromSearch() {
 
 function workshopOptionLabel(item, garden) {
   const title = item.title || garden.name || item.id;
-  if ((item.gardens?.length || 0) > 1) return `${title} — ${garden.name || garden.file}`;
+  if ((item.gardens?.length || 0) > 1) return `${title} - ${garden.name || garden.file}`;
   return title;
 }
 
@@ -3835,6 +4077,7 @@ async function beginWorkshopPublish() {
   if (hint) hint.textContent = 'Taking a snapshot…';
   workshopPreviewJpeg = '';
   dlg?.classList.add('open');
+  placeMenus();
   const preview = await captureWorkshopPreview();
   workshopPreviewJpeg = preview.replace(/^data:image\/jpeg;base64,/, '');
   if (imgEl && preview) {
@@ -3917,11 +4160,9 @@ function syncWorkshopChrome() {
   const steam = aetherSteam.isAvailable();
   const select = document.getElementById('workshop-maps');
   const load = document.getElementById('btn-workshop-load');
-  const publish = document.getElementById('btn-workshop-publish');
   const hint = document.getElementById('workshop-hint');
   if (select) select.hidden = !steam;
   if (load) load.hidden = !steam;
-  if (publish) publish.hidden = !steam;
   if (hint) {
     hint.textContent = steam
       ? 'Subscribe to a map on Steam Workshop, then Load it here. Publish uploads this map, or the campaign if you have added chapters. Play opens a solo match from this map.'
@@ -4004,7 +4245,7 @@ function updateSelectUi() {
     radEl.max = String(Math.floor(maxCellRadius(shape.cellSize)));
     if (sameR) radEl.value = String(radii[0]);
   }
-  if (radLabel) radLabel.textContent = sameR ? String(radii[0]) : '—';
+  if (radLabel) radLabel.textContent = sameR ? String(radii[0]) : '-';
 }
 
 function syncFormFromField() {
@@ -4029,17 +4270,143 @@ function syncFormFromField() {
   syncWallUi();
 }
 
+function toolOf(layer) {
+  if (layer === 'file') return 'file';
+  if (layer === 'terrain') return 'land';
+  if (layer === 'table') return 'table';
+  if (layer === 'scenery') return 'trees';
+  if (layer === 'walls') return 'walls';
+  if (layer === 'place') return 'army';
+  if (layer === 'zones') return 'goal';
+  if (layer === 'story') return 'story';
+  if (layer === 'light') return 'light';
+  return '';
+}
+
+function pickTool(tool) {
+  if (toolOf(state.layer) === tool) {
+    restHand();
+    return;
+  }
+  const layer = tool === 'land' ? 'terrain'
+    : tool === 'trees' ? 'scenery'
+    : tool === 'army' ? 'place'
+    : tool === 'goal' ? 'zones'
+    : tool;
+  setLayer(layer);
+}
+
+function handLabel() {
+  if (state.layer === 'file') return 'File';
+  if (state.layer === 'terrain') {
+    if (state.lift === 'level') return 'Level';
+    if (state.lift === 1) return 'Raise';
+    if (state.lift === -1) return 'Lower';
+    if (state.terrain === TERRAIN.DIRT) return 'Dirt';
+    if (state.terrain === TERRAIN.WATER) return 'Water';
+    if (state.terrain === TERRAIN.GRAVEL) return 'Gravel';
+    if (state.terrain === TERRAIN.TILE) return 'Tile';
+    return 'Grass';
+  }
+  if (state.layer === 'table') return state.tableTool === 'props' ? 'Prop' : 'Table';
+  if (state.layer === 'scenery') return state.stamp === 'doodad' ? 'Doodad' : 'Trees';
+  if (state.layer === 'walls') return 'Wall';
+  if (state.layer === 'place') {
+    const picks = livePicks().filter((p) => p.kind !== 'objective');
+    if (picks.length > 1) return `${picks.length} selected`;
+    if (picks.length === 1) {
+      const item = placeList(picks[0].kind)?.[picks[0].index];
+      if (picks[0].kind === 'unit') {
+        return item?.name || UNIT_DEFS.find((u) => u.id === (item?.type | 0))?.name || 'Unit';
+      }
+      if (picks[0].kind === 'agora') return 'Agora';
+      return PLACEABLE_BUILDINGS.find((b) => b.id === item?.type)?.name || 'Building';
+    }
+    if (state.placeKind === 'party') return 'Party';
+    if (state.placeKind === 'agora') return 'Agora';
+    if (state.placeKind === 'unit') return UNIT_DEFS.find((u) => u.id === (state.placeType | 0))?.name || 'Unit';
+    if (state.placeKind === 'building') {
+      return PLACEABLE_BUILDINGS.find((b) => b.id === state.placeType)?.name || 'Building';
+    }
+    return armySides().find((s) => s.id === state.owner)?.name || 'Army';
+  }
+  if (state.layer === 'zones') {
+    if (state.placeKind === 'wavehop') return 'March stop';
+    const held = state.waveEdit?.id ? state.objectives.find((o) => o.id === state.waveEdit.id) : null;
+    if (held) return held.label || kindWord(held.kind);
+    if (state.placeKind === 'objective') return kindWord(document.getElementById('place-obj-kind')?.value || 'reach');
+    return 'Goal';
+  }
+  if (state.layer === 'story') {
+    const clip = currentReel().clips.find((c) => c.id === state.storyClipId);
+    if (!clip) return 'Story';
+    if (clip.kind === CLIP_LINE) return clip.speaker || 'Line';
+    if (clip.kind === CLIP_HOLD) return 'Pause';
+    return 'Camera';
+  }
+  if (state.layer === 'light') return 'Light';
+  return 'Select';
+}
+
+function syncHand() {
+  const el = document.getElementById('holding');
+  if (el) el.textContent = `Holding: ${handLabel()}`;
+}
+
+function syncChapterTitle() {
+  const btn = document.getElementById('btn-chapter');
+  const place = document.getElementById('chapter-place');
+  const loc = activeChapterFile ? locateChapter(campaignDraft, activeChapterFile) : null;
+  const map = state.mapName || 'Untitled';
+  if (btn) btn.textContent = loc ? `${campaignDraft.name} · ${loc.chapter.name || map}` : map;
+  if (place) {
+    place.textContent = loc
+      ? `In ${campaignDraft.name} · ${loc.episode.name || 'Episode'} · chapter ${loc.chIndex + 1}.`
+      : 'Not in the campaign.';
+  }
+}
+
+function restHand() {
+  state.placeKind = '';
+  state.placePicks = [];
+  placeDrag = null;
+  placeBox = null;
+  ringGesture = null;
+  state.propArmed = false;
+  state.waveEdit = null;
+  document.querySelectorAll('[data-place]').forEach((el) => el.classList.remove('active'));
+  if (state.wallDraft?.length) cancelWallDraft();
+  setLayer('select');
+  syncPlacePickUi();
+  updatePlaceMarkers();
+}
+
+function placeMenus() {
+  const tray = document.getElementById('forge-ui');
+  const sheet = document.getElementById('story-sheet');
+  const dlg = document.getElementById('workshop-publish-dlg');
+  const trayOpen = !!tray?.classList.contains('open');
+  const x = trayOpen ? 84 + (tray.offsetWidth || 260) + 8 : 84;
+  if (sheet) sheet.style.left = `${x}px`;
+  if (dlg?.classList.contains('open')) dlg.style.left = `${x}px`;
+}
+
 function setLayer(layer) {
   if (layer !== state.layer && state.selected.length) {
     state.selected = [];
     updateSelectIndicator();
   }
   state.layer = layer;
-  document.querySelectorAll('[data-layer]').forEach((b) => {
-    b.classList.toggle('active', b.dataset.layer === layer);
+  const tool = toolOf(layer);
+  document.querySelectorAll('#forge-rail [data-tool]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.tool === tool);
   });
+  const tray = document.getElementById('forge-ui');
+  if (tray) {
+    tray.classList.toggle('open', !!tool);
+  }
   document.getElementById('panel-file').style.display = layer === 'file' ? 'block' : 'none';
-  document.getElementById('panel-campaign').style.display = layer === 'campaign' ? 'block' : 'none';
+  document.getElementById('panel-campaign').style.display = layer === 'file' ? 'block' : 'none';
   document.getElementById('panel-table').style.display = layer === 'table' ? 'block' : 'none';
   document.getElementById('panel-terrain').style.display = layer === 'terrain' ? 'block' : 'none';
   document.getElementById('panel-scenery').style.display = layer === 'scenery' ? 'block' : 'none';
@@ -4049,7 +4416,7 @@ function setLayer(layer) {
   if (zonesPanel) zonesPanel.style.display = layer === 'zones' ? 'block' : 'none';
   document.getElementById('panel-light').style.display = layer === 'light' ? 'block' : 'none';
   if (layer === 'zones') {
-    if (state.placeKind !== 'wavehop') disarmZoneStamp();
+    if (state.placeKind !== 'wavehop' && state.placeKind !== 'objective') state.placeKind = '';
     renderWaveEditor();
   }
   const storyPanel = document.getElementById('panel-story');
@@ -4071,6 +4438,9 @@ function setLayer(layer) {
   refreshBrushCursor();
   updateWallGhost();
   updateSelectIndicator();
+  syncHand();
+  syncBench();
+  placeMenus();
 }
 
 function liftToken(raw) {
@@ -4086,6 +4456,7 @@ function setTerrain(type) {
   });
   document.querySelectorAll('[data-lift]').forEach((b) => b.classList.remove('active'));
   refreshBrushCursor();
+  syncHand();
 }
 
 function setLift(dir) {
@@ -4096,6 +4467,7 @@ function setLift(dir) {
     b.classList.toggle('active', liftToken(b.dataset.lift) === dir);
   });
   refreshBrushCursor();
+  syncHand();
 }
 
 function isTextEditing(el) {
@@ -4136,26 +4508,33 @@ function captureDocument() {
 }
 
 function applyDocument(snap) {
-  applyGardenJson(snap.garden);
-  state.wallDraft = (snap.wallDraft || []).map((p) => ({ x: p.x, z: p.z }));
-  state.wallDraftOpenings = (snap.wallDraftOpenings || []).map((o) => ({ ...o }));
-  state.wallKind = snap.wallKind === 'dungeon' ? 'dungeon' : 'castle';
-  state.waveRoute = (snap.waveRoute || []).map((hop) => [hop[0], hop[1]]);
-  state.waveDraft = {
-    waves: snap.waveDraft?.waves | 0,
-    era: snap.waveDraft?.era | 0,
-  };
-  state.waveEdit = snap.waveEdit ? { ...snap.waveEdit } : null;
-  campaignDraft = JSON.parse(JSON.stringify(snap.campaign));
-  activeChapterFile = snap.activeChapterFile || null;
-  syncWallTools();
-  updateWallMeshes();
-  renderWaveEditor(true);
-  updatePlaceMarkers();
-  const nameEl = document.getElementById('campaign-name');
-  if (nameEl) nameEl.value = campaignDraft.name;
-  renderCampaignDraft();
-  syncStoryEditor();
+  // applyGardenJson refreshes the story reel (seek → applyStorySample). Keep the
+  // editor camera while undo/redo restores map data.
+  holdStoryCamera = true;
+  try {
+    applyGardenJson(snap.garden);
+    state.wallDraft = (snap.wallDraft || []).map((p) => ({ x: p.x, z: p.z }));
+    state.wallDraftOpenings = (snap.wallDraftOpenings || []).map((o) => ({ ...o }));
+    state.wallKind = snap.wallKind === 'dungeon' ? 'dungeon' : 'castle';
+    state.waveRoute = (snap.waveRoute || []).map((hop) => [hop[0], hop[1]]);
+    state.waveDraft = {
+      waves: snap.waveDraft?.waves | 0,
+      era: snap.waveDraft?.era | 0,
+    };
+    state.waveEdit = snap.waveEdit ? { ...snap.waveEdit } : null;
+    campaignDraft = JSON.parse(JSON.stringify(snap.campaign));
+    activeChapterFile = snap.activeChapterFile || null;
+    syncWallTools();
+    updateWallMeshes();
+    renderWaveEditor(true);
+    updatePlaceMarkers();
+    const nameEl = document.getElementById('campaign-name');
+    if (nameEl) nameEl.value = campaignDraft.name;
+    renderCampaignDraft();
+    syncStoryEditor();
+  } finally {
+    holdStoryCamera = false;
+  }
 }
 
 function syncHistoryUi() {
@@ -4275,28 +4654,20 @@ function mountUi() {
   const ui = document.createElement('div');
   ui.id = 'forge-ui';
   ui.innerHTML = `
-    <h1>Forge</h1>
-    <div class="row">
-      <button data-layer="file">File</button>
-      <button data-layer="campaign">Campaign</button>
-      <button data-layer="table" class="active">Table</button>
-      <button data-layer="terrain">Terrain</button>
-      <button data-layer="scenery">Scenery</button>
-      <button data-layer="walls">Walls</button>
-      <button data-layer="place">Army</button>
-      <button data-layer="zones">Zones</button>
-      <button data-layer="story">Story</button>
-      <button data-layer="light">Light</button>
-    </div>
-    <div id="stats" class="hint"></div>
     <div id="panel-file" class="panel" style="display:none">
+      <p class="block-title">This chapter</p>
+      <div id="chapter-place">Not in the campaign.</div>
       <label>Name</label>
-      <input id="map-name" type="text" placeholder="Map name">
+      <input id="map-name" type="text" placeholder="Chapter name">
       <label>Map type</label>
       <select id="map-type">
         ${MAP_TYPES.map((t) => `<option value="${t.id}"${t.id === state.mapType ? ' selected' : ''}>${t.name}</option>`).join('')}
       </select>
-      <p class="hint">Saved on the .garden file. Generate keeps that type’s starts on grass. 1 vs 1 and Teams also get home agoras. King of the Hill clears the five drop pads. Adventure leaves the land alone.</p>
+      <div id="map-sides">
+        <p class="block-title">Sides</p>
+        <p class="hint" id="alliance-hint"></p>
+        <div id="alliance-list"></div>
+      </div>
       <label>Starting wood</label>
       <input id="start-wood" type="number" min="0" value="${STARTING_RESOURCES.wood}">
       <label>Starting stone</label>
@@ -4316,8 +4687,9 @@ function mountUi() {
         <button id="btn-generate">Generate</button>
         <button id="btn-random" type="button">Random</button>
         <button id="btn-export">Export .garden</button>
-        <button id="btn-import">Import</button>
-        <button id="btn-play">Play</button>
+        <button id="btn-import">Import .garden</button>
+        <button id="btn-workshop-publish" type="button">Publish</button>
+        <button id="btn-play">Play chapter</button>
       </div>
       <label>Steam Workshop</label>
       <select id="workshop-maps">
@@ -4326,28 +4698,28 @@ function mountUi() {
       <div class="row">
         <button id="btn-workshop-load" type="button">Load subscribed</button>
         <a id="btn-workshop-browse" class="kakko" href="${workshopPageUrl()}" target="_blank" rel="noopener noreferrer">Browse Workshop</a>
-        <button id="btn-workshop-publish" type="button">Publish to Workshop</button>
       </div>
       <input id="import-file" type="file" accept=".garden,.json" style="display:none">
       <p class="hint" id="workshop-hint">Subscribe and publish from the Steam build. On the web, export a .garden or a .campaign, then Load it in Adventure. Play opens a solo match from this map.</p>
     </div>
     <div id="panel-campaign" class="panel" style="display:none">
-      <label>Campaign name</label>
+      <p class="block-title">Campaign</p>
+      <div>Chapters below belong to this campaign.</div>
+      <label>Name</label>
       <input id="campaign-name" type="text" maxlength="80" value="Campaign">
       <div class="row">
-        <button id="btn-episode-new" type="button">Add episode</button>
-        <button id="btn-chapter-add" type="button">Add current map</button>
+        <button id="btn-chapter-add" type="button">Add this chapter</button>
         <button id="btn-chapter-new" type="button">New chapter</button>
+        <button id="btn-chapter-save" type="button">Save this chapter</button>
       </div>
       <div class="row">
-        <button id="btn-chapter-save" type="button">Save chapter</button>
-        <button id="btn-campaign-import" type="button">Import</button>
+        <button id="btn-episode-new" type="button">Add episode</button>
+        <button id="btn-campaign-import" type="button">Import .campaign</button>
         <button id="btn-campaign-export" type="button">Export .campaign</button>
-        <button id="btn-campaign-play" type="button">Play</button>
+        <button id="btn-campaign-play" type="button">Play campaign</button>
       </div>
       <input id="campaign-import-file" type="file" accept=".garden,.campaign,.json" style="display:none">
       <div id="campaign-tree"></div>
-      <p class="hint">Episodes are headings. On a chapter, players can play it. Off keeps it in the file and players skip it. An episode whose chapters are all Off is hidden from players. ✎ loads a chapter onto the table; ↑/↓ reorder; ✕ removes. New chapters land in the focused episode.</p>
     </div>
     <div id="workshop-publish-dlg">
       <label>Publish name</label>
@@ -4362,16 +4734,17 @@ function mountUi() {
         <button id="btn-workshop-publish-cancel" type="button">Cancel</button>
       </div>
     </div>
-    <div id="panel-table" class="panel">
+    <div id="panel-table" class="panel" style="display:none">
       <p id="select-hint" class="hint">Click to select. Shift-click to add. Double-click to toggle on/off.</p>
-      <label><input id="chunk-enabled" type="checkbox" checked disabled> Chunk enabled</label>
+      <label class="check"><input id="chunk-enabled" type="checkbox" checked disabled> Chunk enabled</label>
+      <p id="chunk-note" class="field-note">Double-click a chunk to toggle it as well.</p>
       <label>Radius <span id="radius-label">${DEFAULT_CELL_RADIUS}</span></label>
       <input id="chunk-radius" type="range" min="${PLINTH_CELL_RADIUS}" max="32" step="1" value="${DEFAULT_CELL_RADIUS}" disabled>
-      <label><input id="center-plinth" type="checkbox"> Center plinth</label>
-      <p class="hint">-1 places a plinth. 0 is a sharp corner with none. Raise the radius to fillet that corner. Outer rails get matching side plinths. Odd boards can also plant a center plinth — check to put one in the middle.</p>
+      <label class="check"><input id="center-plinth" type="checkbox"> Center plinth</label>
+      <p class="hint">-1 places a plinth. 0 is a sharp corner with none. Raise the radius to fillet that corner. Outer rails get matching side plinths. Odd boards can also plant a center plinth - check to put one in the middle.</p>
       <label>Camera bound <span id="camera-bound-label">100%</span></label>
       <input id="camera-bound" type="range" min="20" max="100" value="100">
-      <p class="hint">Pan and zoom stay inside this box. 100% is the full table — lower it to keep a vista rim the camera cannot cross.</p>
+      <p class="hint">Pan and zoom stay inside this box. 100% is the full table - lower it to keep a vista rim the camera cannot cross.</p>
       <div class="row">
         <button id="btn-enable-all">Enable all chunks</button>
       </div>
@@ -4392,50 +4765,44 @@ function mountUi() {
       <input id="prop-y" type="range" min="-800" max="40" step="1" value="0" disabled>
       <label>Turn <span id="prop-yaw-label">0</span></label>
       <input id="prop-yaw" type="range" min="0" max="360" step="1" value="0" disabled>
-      <p class="hint">Props sit beside the table or in a hole. Disc or Castle arms one drop — click the ground once, then chunk clicks work again. Double-click a chunk to turn it on or off. Click a prop to drag it. They do not block movement.</p>
+      <p class="hint">Props sit beside the table or in a hole. Disc or Castle arms one drop - click the ground once, then chunk clicks work again. Double-click a chunk to turn it on or off. Click a prop to drag it. They do not block movement.</p>
     </div>
     <div id="panel-terrain" class="panel" style="display:none">
-      <div class="row">
-        <button data-terrain="${TERRAIN.GRASS}" class="active">Grass</button>
-        <button data-terrain="${TERRAIN.DIRT}">Dirt</button>
-        <button data-terrain="${TERRAIN.WATER}">Water</button>
+      <div class="palette">
+        <button data-terrain="${TERRAIN.GRASS}" class="active"><i class="swatch" style="background:#7d9a3a"></i>Grass</button>
+        <button data-terrain="${TERRAIN.DIRT}"><i class="swatch" style="background:#9a6a3c"></i>Dirt</button>
+        <button data-terrain="${TERRAIN.WATER}"><i class="swatch" style="background:#3a7ea8"></i>Water</button>
+        <button data-terrain="${TERRAIN.GRAVEL}"><i class="swatch" style="background:#8d887c"></i>Gravel</button>
+        <button data-terrain="${TERRAIN.TILE}"><i class="swatch" style="background:#c4b49a"></i>Tile</button>
         <button data-lift="1">Raise</button>
         <button data-lift="-1">Lower</button>
         <button data-lift="level">Level</button>
-      </div>
-      <div class="row">
-        <button data-terrain="${TERRAIN.GRAVEL}">Gravel</button>
-        <button data-terrain="${TERRAIN.TILE}">Tile</button>
       </div>
       <label>Brush <span id="brush-label">1</span></label>
       <input id="brush-size" type="range" min="0" max="6" value="1">
       <label>Strength <span id="lift-strength-label">6</span></label>
       <input id="lift-strength" type="range" min="1" max="10" value="6">
-      <p class="hint">Raise and lower ease across the brush. Level keeps the height you first click and pulls the stroke toward it. Strength is how hard each stamp pushes. The table edge stays between the rail and the floor; the middle can go further. Tile blends into gravel. Both meet grass, dirt, and water on a straight edge.</p>
     </div>
     <div id="panel-scenery" class="panel" style="display:none">
-      <div class="row">
-        <button data-scenery="${SCENERY.TREE}" class="active">Tree</button>
-        <button data-scenery="${SCENERY.ROCK_PLAIN}">Rock</button>
-        <button data-scenery="${SCENERY.ROCK_MOSS}">Moss rock</button>
-        <button data-scenery="${SCENERY.ROCK_SNOW}">Big rock</button>
-        <button data-scenery="${SCENERY.NONE}">Erase trees / rocks</button>
-      </div>
-      <div class="row">
-        <button data-doodad="${DOODAD.MUSHROOM}">Mushroom</button>
-        <button data-doodad="${DOODAD.WAGON}">Wagon</button>
+      <div class="palette">
+        <button data-scenery="${SCENERY.TREE}" class="active"><i class="swatch" style="background:#3d6b32"></i>Tree</button>
+        <button data-scenery="${SCENERY.ROCK_PLAIN}"><i class="swatch" style="background:#8a8680"></i>Rock</button>
+        <button data-scenery="${SCENERY.ROCK_MOSS}"><i class="swatch" style="background:#5d7354"></i>Moss rock</button>
+        <button data-scenery="${SCENERY.ROCK_SNOW}"><i class="swatch" style="background:#d5d8df"></i>Big rock</button>
+        <button data-scenery="${SCENERY.NONE}">Erase trees</button>
+        <button data-doodad="${DOODAD.MUSHROOM}"><i class="swatch" style="background:#c4563a"></i>Mushroom</button>
+        <button data-doodad="${DOODAD.WAGON}"><i class="swatch" style="background:#6a5340"></i>Wagon</button>
         <button data-doodad="${DOODAD.NONE}">Erase doodads</button>
       </div>
       <label>Brush <span id="scenery-brush-label">1</span></label>
       <input id="scenery-brush-size" type="range" min="0" max="6" value="1">
       <label>Density <span id="scenery-density-label">100%</span></label>
       <input id="scenery-density" type="range" min="1" max="10" value="10">
-      <div class="row">
+      <div class="row stay">
         <button id="btn-gen-scenery">Generate trees / rocks</button>
         <button id="btn-clear-scenery">Clear scenery</button>
         <button id="btn-clear-doodads">Clear doodads</button>
       </div>
-      <p class="hint">Trees and rocks gather / block. Doodads are paint-only — they do not path or harvest. Grove mushrooms still sprout on their own when a stand matures. A new map already includes them. Generate fills around what you painted. Clear removes trees and rocks from the map. The Scenery checkbox only hides them.</p>
     </div>
     <div id="panel-walls" class="panel" style="display:none">
       <p class="hint" id="wall-aim">Wall: click corners. Right-click finishes the run. Backspace drops the last corner. Erase takes out one section.</p>
@@ -4463,80 +4830,57 @@ function mountUi() {
       <p class="hint">Castle is large pale ashlar. Dungeon is the same wall in smaller grey stone. The choice sticks to the run you finish.</p>
     </div>
     <div id="panel-place" class="panel" style="display:none">
-      <p class="block-title">Selected</p>
-      <label>Faction</label>
-      <div class="row faction-row">
-        <span id="faction-swatch" class="faction-swatch" style="background:${factionCss(0)}"></span>
-        <select id="place-owner">
+      <div id="army-stamps">
+        <div id="army-sides" class="ink"></div>
+        <div class="palette">
+          <button data-place="party" type="button"><i class="swatch" style="background:#e6c35c"></i>Party</button>
+          ${UNIT_DEFS.map((u) => `<button data-place="unit" data-type="${u.id}"><i class="swatch" style="background:rgb(${Math.round(u.color[0] * 255)}, ${Math.round(u.color[1] * 255)}, ${Math.round(u.color[2] * 255)})"></i>${u.name}</button>`).join('')}
+        </div>
+        <div class="palette">
+          <button data-place="agora" data-type="agora"><i class="swatch" style="background:#e6c35c"></i>Agora</button>
+          ${PLACEABLE_BUILDINGS.map((b) => {
+            const ink = b.category === 'elemental' ? '#7d6aa8' : b.category === 'advanced' ? '#8aa0b8' : '#c4a574';
+            return `<button data-place="building" data-type="${b.id}"><i class="swatch" style="background:${ink}"></i>${b.name}</button>`;
+          }).join('')}
+        </div>
+      </div>
+      <div id="army-held" hidden>
+        <label>Name</label>
+        <input id="place-name" type="text" placeholder="Name">
+        <div id="army-held-ink" class="ink"></div>
+        <select id="place-owner" hidden>
           ${FACTIONS.map((f) => `<option value="${f.id}"${f.id === 0 ? ' selected' : ''}>${f.name}</option>`).join('')}
         </select>
-      </div>
-      <p class="hint">The dash means this selection holds more than one faction. King of the Hill uses the first five.</p>
-      <p class="block-title">Alliances</p>
-      <p class="hint" id="alliance-hint"></p>
-      <div id="alliance-list"></div>
-      <div class="row">
-        <button id="place-rot-l" type="button" disabled>Rotate left</button>
-        <button id="place-rot-r" type="button" disabled>Rotate right</button>
-        <button id="btn-place-remove" type="button" disabled>Remove</button>
-      </div>
-      <p id="place-pick-hint" class="hint">Drag a box to select units and buildings. Click empty ground to place. Drag a selection to move it. Rotate turns it. Remove or Delete takes it off. Shift-click takes the one under the cursor.</p>
-      <label>Units</label>
-      <label>Unit name</label>
-      <input id="place-name" type="text" placeholder="Stumpey">
-      <div class="row">
-        <button data-place="party" type="button">Party</button>
-      </div>
-      <div class="row">
-        ${UNIT_DEFS.map((u) => `<button data-place="unit" data-type="${u.id}">${u.name}</button>`).join('')}
-      </div>
-      <p class="hint">Party stands the four heroes on the next click.</p>
-      <label>Buildings</label>
-      <div class="row">
-        <button data-place="agora" data-type="agora">Agora</button>
-        ${PLACEABLE_BUILDINGS.map((b) => `<button data-place="building" data-type="${b.id}">${b.name}</button>`).join('')}
+        <div class="row stay">
+          <button id="place-rot-l" type="button" disabled>Rotate left</button>
+          <button id="place-rot-r" type="button" disabled>Rotate right</button>
+          <button id="btn-place-remove" type="button" disabled>Remove</button>
+        </div>
       </div>
     </div>
     <div id="panel-zones" class="panel" style="display:none">
-      <p class="hint">The blue ring on the map is a zone. Click Zone, then the ground, to place one. Click a ring to edit it. Remove on that zone takes it off. Shift-click the ring does the same.</p>
-      <p class="block-title">New zone</p>
-      <div class="row">
-        <button data-place="objective" data-type="objective">Zone</button>
+      <div class="palette" id="goal-list"></div>
+      <div class="row stay">
+        <button id="goal-new-btn" type="button">New goal</button>
       </div>
-      <label class="field"><span class="field-name">Kind</span>
-        <select id="place-obj-kind">
+      <div id="goal-new" hidden>
+        <div class="palette" id="goal-kinds"></div>
+        <select id="place-obj-kind" hidden>
           ${OBJ_KINDS.map((k) => `<option value="${k}">${k}</option>`).join('')}
         </select>
-        <span class="field-note">What has to happen inside the ring.</span>
-      </label>
-      <label class="field"><span class="field-name">Ends the chapter</span>
-        <select id="place-obj-terminal">
+        <select id="place-obj-terminal" hidden>
           <option value="">No</option>
           <option value="1">Yes</option>
         </select>
-        <span class="field-note">Yes wins the chapter when this zone finishes. Escape and advance always do.</span>
-      </label>
-      <label class="field"><span class="field-name">Radius</span>
-        <input id="place-obj-r" type="number" min="1" step="1" value="5">
-        <span class="field-note">Tiles. The ring is this wide.</span>
-      </label>
-      <label class="field"><span class="field-name">Label</span>
-        <input id="place-obj-label" type="text" placeholder="Reach the old road">
-        <span class="field-note">Short name for the objective.</span>
-      </label>
-      <label class="field"><span class="field-name">Message</span>
-        <input id="place-obj-message" type="text">
-        <span class="field-note">Shown when it completes.</span>
-      </label>
-      <label class="field"><span class="field-name">Next</span>
-        <input id="place-obj-next" type="text" placeholder="chapter file, or blank">
-        <span class="field-note">A chapter file. Blank keeps campaign order.</span>
-      </label>
-      <p class="block-title">Placed</p>
+        <input id="place-obj-r" type="hidden" value="5">
+        <input id="place-obj-label" type="hidden" value="">
+        <input id="place-obj-message" type="hidden" value="">
+        <input id="place-obj-next" type="hidden" value="">
+      </div>
       <div id="wave-zone-list"></div>
     </div>
     <div id="panel-story" class="panel" style="display:none">
-      <div class="row">
+      <div class="row stay">
         <button id="story-reel-intro" type="button" class="active">Intro</button>
         <button id="story-reel-win" type="button">Win</button>
         <label>Reveal
@@ -4547,7 +4891,7 @@ function mountUi() {
           </select>
         </label>
       </div>
-      <div class="row">
+      <div class="row stay">
         <button id="story-to-start" type="button">|&lt;</button>
         <button id="story-rew" type="button">&lt;&lt;</button>
         <button id="story-play" type="button">Play</button>
@@ -4643,7 +4987,7 @@ function mountUi() {
       <p class="hint">Brightness is the whole map, sky included. Intensity is one light. A strong fill washes the shadows. Body 1 casts them.</p>
       <label>Preset</label>
       <select id="light-preset">
-        <option value="">— pick a mood —</option>
+        <option value="">- pick a mood -</option>
         ${CELESTIAL_PRESETS.map((p) => `<option value="${p.id}">${p.name}</option>`).join('')}
       </select>
       <label>Brightness <span id="light-exposure-label"></span></label>
@@ -4673,23 +5017,68 @@ function mountUi() {
     </div>
   `;
   document.body.appendChild(ui);
+  const dlg = document.getElementById('workshop-publish-dlg');
+  if (dlg) document.body.appendChild(dlg);
+  const top = document.createElement('div');
+  top.id = 'forge-top';
+  top.innerHTML = `
+    <button id="btn-chapter" type="button">Untitled</button>
+    <button id="btn-top-play" type="button">Play</button>
+    <span id="holding">Holding: Select</span>
+    <span id="stats"></span>
+    <span class="spacer"></span>
+  `;
   const view = document.createElement('div');
   view.id = 'forge-view';
   view.innerHTML = `
     <button id="btn-undo" type="button" title="Ctrl+Z" disabled>Undo</button>
     <button id="btn-redo" type="button" title="Ctrl+Y" disabled>Redo</button>
     <label title="Red is blocked, yellow is slow"><input id="show-grid" type="checkbox"> Collision</label>
-    <label title="Chunk outlines"><input id="show-chunks" type="checkbox" checked> Chunk borders</label>
+    <label title="Chunk outlines"><input id="show-chunks" type="checkbox"> Chunk borders</label>
     <label title="Tile corners, plus the slope diagonal"><input id="show-tiles" type="checkbox"> Tile wireframe</label>
     <label title="Hide trees, rocks, and doodads without removing them"><input id="show-scenery" type="checkbox" checked> Scenery</label>
   `;
-  document.body.appendChild(view);
-  ui.addEventListener('pointerdown', (e) => e.stopPropagation());
-  ui.addEventListener('pointermove', (e) => e.stopPropagation());
-  ui.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
-
-  ui.querySelectorAll('[data-layer]').forEach((b) => {
-    b.addEventListener('click', () => setLayer(b.dataset.layer));
+  top.appendChild(view);
+  document.body.appendChild(top);
+  const rail = document.createElement('div');
+  rail.id = 'forge-rail';
+  rail.innerHTML = `
+    <button type="button" data-tool="file">File</button>
+    <button type="button" data-tool="table">Table</button>
+    <button type="button" data-tool="land">Land</button>
+    <button type="button" data-tool="trees">Trees</button>
+    <button type="button" data-tool="walls">Walls</button>
+    <button type="button" data-tool="army">Army</button>
+    <button type="button" data-tool="goal">Goal</button>
+    <button type="button" data-tool="story">Story</button>
+    <button type="button" data-tool="light">Light</button>
+  `;
+  document.body.appendChild(rail);
+  for (const el of [ui, top, rail]) {
+    el.addEventListener('pointerdown', (e) => e.stopPropagation());
+    el.addEventListener('pointermove', (e) => e.stopPropagation());
+    el.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
+  }
+  document.getElementById('btn-chapter')?.addEventListener('click', () => pickTool('file'));
+  const placeChrome = () => {
+    const bar = document.getElementById('forge-top');
+    if (!bar) return;
+    const y = `${Math.ceil(bar.getBoundingClientRect().bottom) + 6}px`;
+    for (const id of ['forge-rail', 'forge-ui', 'workshop-publish-dlg']) {
+      const el = document.getElementById(id);
+      if (el) el.style.top = y;
+    }
+    placeMenus();
+  };
+  placeChrome();
+  window.addEventListener('resize', placeChrome);
+  document.getElementById('btn-top-play')?.addEventListener('click', () => {
+    const live = (campaignDraft.episodes || []).some((ep) => (ep.chapters || []).some((ch) => ch.live !== false));
+    if (live) playCampaign();
+    else playMap();
+  });
+  rail.querySelectorAll('[data-tool]').forEach((b) => {
+    b.addEventListener('click', () => pickTool(b.dataset.tool));
   });
   ui.querySelectorAll('[data-terrain]').forEach((b) => {
     b.addEventListener('click', () => setTerrain(Number(b.dataset.terrain)));
@@ -4706,6 +5095,7 @@ function mountUi() {
       });
       ui.querySelectorAll('[data-doodad]').forEach((x) => x.classList.remove('active'));
       refreshBrushCursor();
+      syncHand();
     });
   });
   ui.querySelectorAll('[data-doodad]').forEach((b) => {
@@ -4717,6 +5107,7 @@ function mountUi() {
       });
       ui.querySelectorAll('[data-scenery]').forEach((x) => x.classList.remove('active'));
       refreshBrushCursor();
+      syncHand();
     });
   });
   ui.querySelectorAll('[data-place]').forEach((b) => {
@@ -4736,9 +5127,13 @@ function mountUi() {
       }
       syncPlacePickUi();
       updatePlaceMarkers();
+      if (b.dataset.place === 'objective') {
+        state.waveEdit = null;
+        renderWaveEditor();
+      }
+      syncHand();
     });
   });
-  ui.querySelector('[data-place="unit"]')?.classList.add('active');
   renderAllianceEditor();
   document.getElementById('alliance-list').addEventListener('change', (e) => {
     const sel = e.target.closest('select[data-alliance]');
@@ -4766,6 +5161,7 @@ function mountUi() {
       }
     }
     syncFactionUi(livePicks());
+    renderArmySides();
     if (changed) updatePlaceMarkers();
   });
   document.getElementById('place-name')?.addEventListener('input', (e) => {
@@ -4781,6 +5177,17 @@ function mountUi() {
     deletePlacePick();
   });
   const waveList = document.getElementById('wave-zone-list');
+  document.getElementById('goal-new-btn')?.addEventListener('click', () => {
+    if (state.placeKind === 'objective') state.placeKind = '';
+    else {
+      state.placeKind = 'objective';
+      state.waveEdit = null;
+      state.placePicks = [];
+    }
+    renderWaveEditor();
+    syncHand();
+    updatePlaceMarkers();
+  });
   waveList?.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-wave-act]');
     if (!btn || !waveList.contains(btn)) return;
@@ -4850,7 +5257,9 @@ function mountUi() {
   syncPlaceTerminal();
   renderWaveEditor();
   document.getElementById('btn-gen-scenery').addEventListener('click', () => {
+    stampStructureClaim();
     populateScenery(field, null, reservedFromPlacements(), { keepExisting: true });
+    clearResourcesUnderPlacements();
     field.sceneryAuthored = true;
     queueSceneryPaint(null, { full: true });
     grid?.refreshOccupancy(field);
@@ -4870,6 +5279,12 @@ function mountUi() {
   });
   document.getElementById('map-name').addEventListener('input', (e) => {
     state.mapName = e.target.value;
+    if (activeChapterFile) {
+      renameChapter(campaignDraft, activeChapterFile, e.target.value);
+      const listed = document.querySelector(`#campaign-tree input[data-file="${CSS.escape(activeChapterFile)}"]`);
+      if (listed && document.activeElement !== listed) listed.value = e.target.value;
+    }
+    syncChapterTitle();
   });
   document.getElementById('map-type').addEventListener('change', (e) => {
     state.mapType = normalizeMapType(e.target.value);
@@ -5084,6 +5499,7 @@ function mountUi() {
   });
   document.getElementById('campaign-name')?.addEventListener('input', (e) => {
     renameCampaign(campaignDraft, e.target.value);
+    syncChapterTitle();
   });
   renderCampaignDraft();
   document.getElementById('btn-import').addEventListener('click', () => {
@@ -5117,6 +5533,8 @@ function mountUi() {
   });
   syncWorkshopChrome();
   bindHistory();
+  setLayer('select');
+  syncChapterTitle();
 }
 
 function loadForgeCelestial() {
@@ -5168,7 +5586,7 @@ function readLightUi() {
   s.contrast = Number(document.getElementById('light-contrast').value);
   celestial.apply(s);
   persistCelestial();
-  // Hand-tuning diverges from the preset — drop the label so it is not misleading.
+  // Hand-tuning diverges from the preset - drop the label so it is not misleading.
   const presetSel = document.getElementById('light-preset');
   if (presetSel) presetSel.value = '';
   syncLightUi();
@@ -5244,6 +5662,10 @@ async function main() {
       state.storyClipId = id;
       syncStoryEditor();
     },
+    onNudge: (id, patch) => {
+      state.storyClipId = id;
+      patchSelectedClip(patch);
+    },
   });
   document.body.appendChild(storySheet.el);
   storySheet.setOpen(state.layer === 'story');
@@ -5305,7 +5727,7 @@ async function main() {
         handleZonePointerDown(pos, e);
       } else if (state.layer === 'table' && state.tableTool === 'props' && propGesture(pos)) {
         placeOrGrabProp(pos);
-      } else {
+      } else if (state.layer === 'table' || state.layer === 'terrain' || state.layer === 'scenery' || state.layer === 'story') {
         applyAt(pos, { add: e.shiftKey });
       }
     }
@@ -5330,6 +5752,7 @@ async function main() {
     if (state.painting && (state.layer === 'terrain' || state.layer === 'scenery') && e.buttons & 1) {
       applyAt(pos);
     }
+    if (ringGesture && (e.buttons & 1)) moveRingGesture(pos, e);
     if (placeBox && state.layer === 'place' && (e.buttons & 1) && pos) {
       if (!placeBox.active) {
         const travel = Math.hypot(e.clientX - placeBox.cx, e.clientY - placeBox.cy);
@@ -5360,16 +5783,23 @@ async function main() {
     const panned = cam.handlePointerUp(e);
     if (e.button === 0 && state.layer === 'place') finishPlaceBox();
     if (e.button !== 2 || panned || storyDriving()) return;
-    if (state.layer === 'walls') {
+    if (state.layer === 'walls' && (state.wallDraft?.length || wallOpeningMode() || state.wallTool === 'erase')) {
       if (wallOpeningMode() || state.wallTool === 'erase') setWallTool('lay');
       else finishWallRun();
       return;
     }
-    if (state.layer === 'place' && state.placePicks.length) clearPlacePick();
+    if (state.layer === 'place' && state.placePicks.length) {
+      clearPlacePick();
+      return;
+    }
+    if (state.layer !== 'select') restHand();
   });
   window.addEventListener('pointerup', () => {
+    ringGesture = null;
+    const draggedPlacement = !!placeDrag?.armed;
     finishPlaceBox();
     placeDrag = null;
+    if (draggedPlacement) settlePlacementScenery();
     propDrag = null;
     if (propReturnChunks) {
       propReturnChunks = false;
@@ -5394,23 +5824,24 @@ async function main() {
   });
   window.addEventListener('keydown', (e) => {
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName);
+    if (!typing && e.key === 'Escape') {
+      if (state.layer === 'place' && state.placePicks.length) {
+        e.preventDefault();
+        clearPlacePick();
+        return;
+      }
+      if (state.layer !== 'select') {
+        e.preventDefault();
+        restHand();
+        return;
+      }
+    }
     if (state.layer === 'story' && !typing && e.code === 'Space') {
       e.preventDefault();
       storyPlayer?.toggle();
       return;
     }
     const slider = e.target?.tagName === 'INPUT' && e.target.type === 'range';
-    if (state.layer === 'table' && !typing && e.key === 'Escape' && (state.tableTool === 'props' || state.propArmed)) {
-      e.preventDefault();
-      setTableTool('chunks');
-      return;
-    }
-    if (state.layer === 'walls' && e.key === 'Escape') {
-      e.preventDefault();
-      if (wallOpeningMode() || state.wallTool === 'erase') setWallTool('lay');
-      else cancelWallDraft();
-      return;
-    }
     if (state.layer === 'walls' && (!typing || slider) && e.target?.tagName !== 'BUTTON') {
       if (e.key === 'Enter') {
         e.preventDefault();
@@ -5427,11 +5858,6 @@ async function main() {
       if (e.key === '[' || e.key === ']') {
         e.preventDefault();
         rotatePlacePick(e.key === ']' ? 1 : -1);
-        return;
-      }
-      if (e.key === 'Escape' && state.placePicks.length) {
-        e.preventDefault();
-        clearPlacePick();
         return;
       }
       if ((e.key === 'Delete' || e.key === 'Backspace') && state.placePicks.length) {

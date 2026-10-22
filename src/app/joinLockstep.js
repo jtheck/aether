@@ -1,4 +1,4 @@
-// Late-join lockstep — keep a 3rd+ client following the live clock after
+// Late-join lockstep - keep a 3rd+ client following the live clock after
 // catch-up reset, and put seat / catch-up-ready messages on the broadcast
 // fallback that 3-tab meshes need when WebRTC between some pairs fails.
 
@@ -67,7 +67,7 @@ export function shouldAddJoinerToQuorumNow({ confirmedTick = 0, joinTick = 0 } =
 
 /**
  * A remote joiner enters the quorum on its FIRST CONFIRM at or past the agreed
- * tick — never on the agreed tick alone.
+ * tick - never on the agreed tick alone.
  *
  * Scheduling it by tick meant every peer parked at `joinTick + 1` waiting on a
  * client that might be seconds away, or might never arrive: the join froze the
@@ -81,7 +81,7 @@ export function canAdmitJoinerToQuorum({ confirmTick = 0, earliestTick = 0 } = {
   return (confirmTick | 0) >= (earliestTick | 0);
 }
 
-/** After reset(), peerConfirmedTick is empty — seed through the attached tip. */
+/** After reset(), peerConfirmedTick is empty - seed through the attached tip. */
 export function seedPeerConfirmTick(tipTick) {
   return (tipTick | 0) + 1;
 }
@@ -128,7 +128,7 @@ const BROADCAST_FALLBACK_TYPES = new Set([
   'slot_claim',
   'slot_offer_end',
   // Presence only advertises a peer's OWN sponsor, so an observer that misses
-  // its assignment never learns who to pull from — and every player refuses it
+  // its assignment never learns who to pull from - and every player refuses it
   // because their tree says somebody else owns that observer.
   'sponsor_assign',
   'sponsor_handoff',
@@ -139,7 +139,7 @@ export function shouldBroadcastLockstepFallback(type) {
   return BROADCAST_FALLBACK_TYPES.has(type);
 }
 
-/** A claim with no JOIN_ACCEPT by now is lost — release the HUD and retry. */
+/** A claim with no JOIN_ACCEPT by now is lost - release the HUD and retry. */
 export const SLOT_CLAIM_TIMEOUT_MS = 9000;
 export const MAX_SLOT_CLAIM_ATTEMPTS = 3;
 
@@ -153,7 +153,7 @@ export function shouldApplyOfferState({
   currentEpoch = 0,
   endedEpoch = 0,
 } = {}) {
-  // Epochs are wall-clock milliseconds — well past 2^31, so no bitwise coercion.
+  // Epochs are wall-clock milliseconds - well past 2^31, so no bitwise coercion.
   const next = Number(incomingEpoch) || 0;
   if (next <= 0) return false;
   if (next < (Number(currentEpoch) || 0)) return false;
@@ -165,7 +165,7 @@ export function shouldApplyOfferState({
  *
  * `ledgerTransferId` is a promise that chunks are on their way. Advertising one
  * without sending the chunks parks the joiner on "Receiving catch-up ledger…"
- * until the retry timer, which then makes the identical offer — the loop that
+ * until the retry timer, which then makes the identical offer - the loop that
  * kept 3rd+ players on the loading-screen world while the lobby said they were
  * in the match.
  */

@@ -1,4 +1,4 @@
-// Lobby identity — GetFire userId only. Never peerId, never display name.
+// Lobby identity - GetFire userId only. Never peerId, never display name.
 
 /** Exact match only. Suffix / endsWith matching is how two peers collapse into one. */
 export function sameUserId(a, b) {

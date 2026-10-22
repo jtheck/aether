@@ -98,7 +98,7 @@ export function createResourceBank(host) {
 
   /**
    * One-shot pop per wasted return: yellow on the next locked slot (7 / a).
-   * A full stack (no hint) is a no-op — don't wash the whole kind.
+   * A full stack (no hint) is a no-op - don't wash the whole kind.
    * @param {{ owner: number, kind: string, hint?: string | null, tone?: string }[] | null | undefined} events
    * @param {number} owner
    */
@@ -148,7 +148,7 @@ export function orderResourceColumns(svg) {
 }
 
 /**
- * Sit each count in the pile pocket, on one even 4-column grid — same
+ * Sit each count in the pile pocket, on one even 4-column grid - same
  * left-edge spacing as the stacks, not the live icon width.
  * @param {HTMLElement} root
  * @param {SVGSVGElement | null} svg

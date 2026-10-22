@@ -191,12 +191,12 @@ describe('fogOfWar stamp + hide', () => {
     ]);
     const onlyHome = fakeWorld([{ owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 }]);
     fog.stamp({
-      world: both, field, localPlayerId: -1, shareVisionWith: [0, 1], enabled: true, buildings: [], agoras: [],
+      world: both, field, localPlayerId: -1, shareVisionWith: [0, 1], enabled: true, buildings: [], agoras: [], now: 1000,
     });
     assert.equal(fog.isWorldExplored(48, 0), true);
     fog.rememberExplored();
     fog.stamp({
-      world: onlyHome, field, localPlayerId: 0, shareVisionWith: [], enabled: true, buildings: [], agoras: [],
+      world: onlyHome, field, localPlayerId: 0, shareVisionWith: [], enabled: true, buildings: [], agoras: [], now: 1000,
     });
     assert.equal(fog.isWorldExplored(48, 0), false);
     fog.stamp({
@@ -208,9 +208,21 @@ describe('fogOfWar stamp + hide', () => {
       buildings: [],
       agoras: [],
       restoreExplored: true,
+      now: 1000,
     });
     assert.equal(fog.isWorldExplored(48, 0), true);
     assert.equal(fog.hidesHostile(1, 48, 0), false);
+    // The other army is not in this stamp, so its hole is only the restored
+    // cover. That tile must be queued or the shroud upload leaves it black.
+    assert.equal(fog.overlayAlphaAt(48, 0), 0);
+    const far = worldToTileF(field, 48, 0);
+    let queued = false;
+    fog.forEachDirtyTile((i) => {
+      const tz = (i / field.width) | 0;
+      const tx = i - tz * field.width;
+      if (tx === far.tx && tz === far.tz) queued = true;
+    });
+    assert.equal(queued, true);
   });
 
   it('keeps sight when nobody changes tile, and drops it after they leave', () => {
@@ -509,7 +521,7 @@ describe('fogOfWar overlay edge', () => {
     assert.equal(fog.hidesHostile(1, 0, 0), false);
 
     // Civilian radius is 8 tiles (32wu). 36wu is one tile past the hard circle
-    // but still inside the 3-tile fade — units stay up with the overlay.
+    // but still inside the 3-tile fade - units stay up with the overlay.
     assert.equal(fog.isWorldVisible(36, 0), false);
     assert.equal(fog.isWorldSight(36, 0), true);
     assert.equal(fog.hidesHostile(1, 36, 0), false);
@@ -743,7 +755,7 @@ describe('fogOfWar field reset', () => {
       { owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 },
       { owner: 1, type: UNIT.WARRIOR, x: far, z: far },
     ]);
-    // Omit shareVisionWith — a field reset is a new match; leftover FFA share
+    // Omit shareVisionWith - a field reset is a new match; leftover FFA share
     // must not keep stamping the old allies.
     fog.stamp({
       world: smallWorld,

@@ -6,7 +6,7 @@
 // full 12. Stone and mineral share mines. Caps are soft: income past the
 // unlocked cap is cut to 25% (see overflowCredit) instead of being hard
 // rejected, so refunds and spends stay on the uncapped addResource path.
-// Scribes doubles that tax line only — icons and silo unlocks stay the same.
+// Scribes doubles that tax line only - icons and silo unlocks stay the same.
 //
 // An attached silo is also a haul drop-off and a satellite gather circle of
 // the source's work radius (see gather.js). Slot pairing stays unique; every
@@ -34,7 +34,7 @@ export const SLOT_AMOUNT = Object.freeze({
   food: 20,
 });
 
-/** A filled 6-icon pyramid — the soft cap before any silo pair. */
+/** A filled 6-icon pyramid - the soft cap before any silo pair. */
 export const BASE_PYRAMID_BANK = Object.freeze({
   wood: BASE_SLOTS * SLOT_AMOUNT.wood,
   stone: BASE_SLOTS * SLOT_AMOUNT.stone,
@@ -42,7 +42,7 @@ export const BASE_PYRAMID_BANK = Object.freeze({
   food: BASE_SLOTS * SLOT_AMOUNT.food,
 });
 
-/** Both silo rows unlocked — 12 icons. */
+/** Both silo rows unlocked - 12 icons. */
 export const FULL_STACK_BANK = Object.freeze({
   wood: MAX_RESOURCE_SLOTS * SLOT_AMOUNT.wood,
   stone: MAX_RESOURCE_SLOTS * SLOT_AMOUNT.stone,
@@ -50,7 +50,7 @@ export const FULL_STACK_BANK = Object.freeze({
   food: MAX_RESOURCE_SLOTS * SLOT_AMOUNT.food,
 });
 
-/** KOTH opening bank — two agora purses, and a double food stash. */
+/** KOTH opening bank - two agora purses, and a double food stash. */
 export const KOTH_STARTING_RESOURCES = Object.freeze({
   wood: BASE_PYRAMID_BANK.wood * 2,
   stone: BASE_PYRAMID_BANK.stone * 2,
@@ -71,7 +71,7 @@ export const SILO_SOURCE_TYPE = Object.freeze({
   food: 'farm',
 });
 
-/** Camp / mine / farm — a silo beside one of these is "attached". */
+/** Camp / mine / farm - a silo beside one of these is "attached". */
 export const SILO_SOURCE_TYPES = Object.freeze(['camp', 'mine', 'farm']);
 const SILO_SOURCE_TYPE_SET = new Set(SILO_SOURCE_TYPES);
 
@@ -130,7 +130,7 @@ export function isSiloSourceType(type) {
 }
 
 /**
- * Live silos sitting next to `source` (same owner). Slot pairing is separate —
+ * Live silos sitting next to `source` (same owner). Slot pairing is separate -
  * every in-range silo is a satellite drop-off and an extra gather circle.
  * @param {object[] | null | undefined} buildings
  * @param {object | null | undefined} source
@@ -391,7 +391,7 @@ export function overflowHintLabel(unlocked) {
 
 /**
  * Icon to flash when the bank is short (e.g. village trickle can't pay food).
- * Targets the stack being filled — not the next silo-locked slot.
+ * Targets the stack being filled - not the next silo-locked slot.
  * @param {number} amount
  * @param {number} unlocked
  * @param {string} kind

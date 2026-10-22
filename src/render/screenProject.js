@@ -1,6 +1,6 @@
 /**
  * Clip-space → canvas pixels. Column-major view-projection, same convention
- * as renderer.worldToScreen. Writes into `out` — no allocations.
+ * as renderer.worldToScreen. Writes into `out` - no allocations.
  * @param {ArrayLike<number>} vp
  * @param {number} x
  * @param {number} y

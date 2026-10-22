@@ -1,4 +1,4 @@
-// Team hostility — owner → team map (null = FFA: each owner is its own team).
+// Team hostility - owner → team map (null = FFA: each owner is its own team).
 // Same pattern as setActiveMapSize: set once at world init in the sim worker.
 // Optional neutral pairs: different teams that do not fight (they still fight
 // everyone else). Cleared whenever assignments change.

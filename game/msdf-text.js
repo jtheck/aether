@@ -1,7 +1,7 @@
 // MSDF Text Renderer using custom shader
 // Crisp text at any scale using multi-channel signed distance fields
 
-/** Same as `HEALTH_DOTS_RENDERING_GROUP` in health-display.js — draw over world depth so unit speech is not buried in geometry. */
+/** Same as `HEALTH_DOTS_RENDERING_GROUP` in health-display.js - draw over world depth so unit speech is not buried in geometry. */
 const UNIT_OVERLAY_RENDERING_GROUP_ID = 2;
 
 const MSDFText = {

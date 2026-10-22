@@ -173,7 +173,7 @@ export function createFireballFx(emit) {
       const pz = ball.cz + b.rz * cs * rad + b.uz * sn * rad;
       const c = arm === 0 ? c0 : tint();
       const size = puffSize(3.1);
-      // Ride a little, then slip behind — full inherit made the swirl lift with the orb.
+      // Ride a little, then slip behind - full inherit made the swirl lift with the orb.
       const ride = 0.22;
       const swirl = 0.45;
       emitBody({
@@ -255,7 +255,7 @@ export function createFireballFx(emit) {
     ball.seen = true;
     if (ball.winding && !winding) emitLaunch(ball);
     ball.winding = !!winding;
-    // Snap to the interpolated orb — easing left the swirl a frame behind.
+    // Snap to the interpolated orb - easing left the swirl a frame behind.
     ball.cx = x;
     ball.cy = y;
     ball.cz = z;

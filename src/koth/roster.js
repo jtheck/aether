@@ -1,4 +1,4 @@
-// Deterministic roster — slots, reservations, spectator promotion.
+// Deterministic roster - slots, reservations, spectator promotion.
 
 import { MAX_SLOTS, assignSlotsFromUserIds, cloneSlots } from './protocol.js';
 

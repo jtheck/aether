@@ -1,5 +1,5 @@
 // Rewrite existing v2 mesh packages to v3 (merged parts + baked AABBs).
-// No WebGPU — reads assets/baked/meshes and writes in place.
+// No WebGPU - reads assets/baked/meshes and writes in place.
 
 import { readdir, readFile, writeFile } from 'fs/promises';
 import { join, dirname } from 'path';

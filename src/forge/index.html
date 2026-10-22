@@ -8,14 +8,43 @@
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #0e1418; color: #ddd; font: 13px/1.4 sans-serif; }
     canvas { display: block; width: 100%; height: 100%; }
+    #forge-top {
+      position: absolute; top: 8px; left: 8px; right: 8px; z-index: 6;
+      display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+      background: rgba(18, 22, 28, 0.92); border: 1px solid #333; padding: 6px 10px;
+    }
+    #forge-top .spacer { flex: 1 1 12px; }
+    #forge-top button {
+      background: #243038; color: #eee; border: 1px solid #3a4450;
+      padding: 3px 8px; cursor: pointer; font: inherit; flex: 0 0 auto;
+    }
+    #forge-top #btn-chapter {
+      background: transparent; border: 0; padding: 0;
+      max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    #holding { color: #9cc; white-space: nowrap; flex: 0 0 auto; }
+    #stats { color: #888; white-space: nowrap; flex: 0 0 auto; }
+    #forge-rail {
+      position: absolute; top: 48px; left: 8px; z-index: 5;
+      display: flex; flex-direction: column; gap: 2px;
+      background: rgba(18, 22, 28, 0.92); border: 1px solid #333; padding: 4px;
+    }
+    #forge-rail button {
+      display: block; width: 64px; margin: 0; text-align: left;
+      background: transparent; color: #ccc; border: 0; padding: 6px 8px; cursor: pointer;
+    }
+    #forge-rail button.active { outline: 1px solid #ccc; color: #fff; }
     #forge-ui {
-      position: absolute; top: 10px; left: 10px; width: 260px;
-      max-height: calc(100% - 20px); overflow: auto;
+      display: none;
+      position: absolute; top: 48px; left: 84px; width: 260px;
+      max-height: calc(100% - 60px); overflow: auto;
       background: rgba(18, 22, 28, 0.92); border: 1px solid #333; padding: 10px;
     }
-    #forge-ui h1 { margin: 0 0 8px; font-size: 16px; }
+    #forge-ui.open { display: block; }
     #forge-ui label { display: block; margin: 6px 0 2px; color: #aaa; }
     #forge-ui input, #forge-ui select, #forge-ui textarea { width: 100%; box-sizing: border-box; }
+    #forge-ui label.check { display: flex; align-items: center; gap: 8px; }
+    #forge-ui label.check input { width: auto; flex: 0 0 auto; margin: 0; }
     #forge-ui textarea { min-height: 72px; resize: vertical; }
     #forge-ui .block-title { margin: 14px 0 4px; color: #9cc; font-size: 12px; }
     #forge-ui .field-name { display: block; color: #ddd; }
@@ -26,6 +55,55 @@
     #forge-ui .alliance-name { flex: 1; min-width: 0; }
     #forge-ui .alliance-row select { flex: 0 0 88px; }
     #forge-ui button { margin: 2px 2px 2px 0; }
+    #forge-ui .palette {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+      margin: 6px 0;
+    }
+    #forge-ui .palette button {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 0;
+      padding: 4px 6px;
+      text-align: left;
+      background: #1b232b;
+      color: #ddd;
+      border: 1px solid #333;
+    }
+    #forge-ui .palette button.active { outline: 1px solid #eee; color: #fff; }
+    #forge-ui .swatch {
+      width: 14px;
+      height: 14px;
+      flex: 0 0 auto;
+      border: 1px solid rgba(255, 255, 255, 0.35);
+    }
+    #forge-ui .ink { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 8px; }
+    #forge-ui .ink button {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      width: 58px;
+      margin: 0;
+      padding: 2px 0;
+      background: transparent;
+      color: #aaa;
+      border: 0;
+    }
+    #forge-ui .ink i {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      display: block;
+    }
+    #forge-ui .ink button.active { color: #fff; }
+    #forge-ui .ink button.active i { border-color: #fff; }
+    #forge-ui .hint, #forge-ui .field-note { display: none; }
+    #forge-ui #wall-aim, #forge-ui #wall-status, #forge-ui #chunk-note { display: block; }
+    #story-clip-list { display: none; }
     .row { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
     .row button.active { outline: 1px solid #ccc; }
     #campaign-tree { margin: 4px 0; }
@@ -39,7 +117,7 @@
     #campaign-tree .row.off { opacity: 0.55; }
     #campaign-tree .ep.idle input { color: #677; }
     #campaign-tree .num { color: #777; min-width: 15px; text-align: right; }
-    /* v1 kakko links — corner brackets, aqua / darkmagenta */
+    /* v1 kakko links - corner brackets, aqua / darkmagenta */
     #forge-ui a.kakko {
       text-decoration: none; color: #fff; white-space: nowrap; font-size: .8em;
     }
@@ -51,28 +129,27 @@
     #workshop-publish-dlg {
       display: none;
       position: absolute;
-      left: 280px;
-      top: 0;
+      left: 84px;
+      top: 48px;
       width: 280px;
       background: rgba(18, 22, 28, 0.94);
       border: 1px solid #333;
       padding: 10px;
       z-index: 8;
     }
+    #workshop-publish-dlg label { display: block; margin: 6px 0 2px; color: #aaa; }
+    #workshop-publish-dlg input, #workshop-publish-dlg textarea { width: 100%; box-sizing: border-box; }
     #workshop-publish-dlg.open { display: block; }
     #workshop-publish-dlg img { width: 100%; margin: 6px 0; background: #111; }
     .panel { margin-top: 8px; }
     #forge-view {
-      position: absolute;
-      top: 10px;
-      left: 302px;
-      z-index: 4;
       display: flex;
-      gap: 14px;
+      flex-wrap: wrap;
+      gap: 8px 12px;
       align-items: center;
-      background: rgba(18, 22, 28, 0.92);
-      border: 1px solid #333;
-      padding: 6px 10px;
+      flex: 1 1 auto;
+      max-width: 100%;
+      min-width: 0;
     }
     #forge-view label {
       display: flex;
@@ -87,7 +164,7 @@
     #story-sheet {
       display: none;
       position: absolute;
-      left: 280px; right: 10px; bottom: 10px;
+      left: 84px; right: 10px; bottom: 10px;
       height: 104px;
       background: rgba(18, 22, 28, 0.92);
       border: 1px solid #333;

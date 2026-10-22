@@ -1,4 +1,4 @@
-// Gather-reach rings — terrain-draped annulus.
+// Gather-reach rings - terrain-draped annulus.
 // Owner-colored outer rim fading through the resource tint into transparency.
 // Vertices sample ground height so the ribbon sits on the terrain instead of
 // burying. Same-kind overlapping disks draw as a union outline: visible arcs
@@ -36,7 +36,7 @@ const MAX_LINK_SEGS = 160;
 const LINK_HALF = 0.32;
 const LINK_STEP = 2.2;
 
-/** Bright rim colors — replace the old hard-white edge. */
+/** Bright rim colors - replace the old hard-white edge. */
 export const RIM_WHITE = Object.freeze([1, 1, 1]);
 export const RESOURCE_RIM_RGB = Object.freeze({
   wood: Object.freeze([0.94, 0.66, 0.32]),
@@ -137,7 +137,7 @@ export function pointInsideOtherDisk(x, z, disks, selfIndex, epsilon = RING_CLIP
 }
 
 /**
- * Outer-arc midpoint of segment `i` — the point we test for the union clip.
+ * Outer-arc midpoint of segment `i` - the point we test for the union clip.
  * @param {{ x: number, z: number, radius: number }} disk
  * @param {number} i
  * @param {number} [segments]
@@ -212,7 +212,7 @@ function sameRimPoint(ax, az, bx, bz) {
 }
 
 /**
- * Visible CCW rim spans of one disk — the pieces that sit on the union outline.
+ * Visible CCW rim spans of one disk - the pieces that sit on the union outline.
  * @param {{ x: number, z: number, radius: number }[]} disks
  * @param {number} selfIndex
  * @returns {{ diskIndex: number, a0: number, a1: number, sx: number, sz: number, ex: number, ez: number, closed: boolean }[]}
@@ -448,7 +448,7 @@ function allocMesh(engine, name, maxSegs, rimOnly = false) {
   for (let s = 0; s < maxSegs; s++) {
     const vb = s * VERTS_PER_SEG;
     const o = vb * 2;
-    // Independent quad — uv.y drives the film fade (1 = owner rim).
+    // Independent quad - uv.y drives the film fade (1 = owner rim).
     const inner = rimOnly ? 1 : 0;
     uvs[o] = 0;
     uvs[o + 1] = 1;

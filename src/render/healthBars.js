@@ -9,7 +9,7 @@
 // above 66%, yellow above 33%, then red. Agora capture is five dots, no bars.
 // Contest (still owned) walks right → left and inks each pip. Unlock pauses,
 // melts the whole row right → left, then seed-builds it left → right. After
-// that the pad is neutral — anyone can fight — and gaining walks left → right.
+// that the pad is neutral - anyone can fight - and gaining walks left → right.
 // Losing the owner drips ink. A new owner gets the menu-logo wish.
 // A stalled tug coughs both until a side wins. Victory wishes on every dot.
 
@@ -42,18 +42,18 @@ export const UNIT_CHIP_COUNT = 7;
 export const BUILDING_CHIP_COUNT = 9;
 /** Capture meter: five milestone dots. */
 export const AGORA_CHIP_COUNT = 5;
-/** Same as the dot count — contest and gain both use all five. */
+/** Same as the dot count - contest and gain both use all five. */
 export const AGORA_LARGE_CHIP_COUNT = AGORA_CHIP_COUNT;
 /** Leftover meter segments. The row no longer draws the bars between dots. */
 export const AGORA_DASH_COUNT = AGORA_CHIP_COUNT - 1;
-/** Milestone segments — one per dot. */
+/** Milestone segments - one per dot. */
 export const AGORA_SEG_COUNT = AGORA_CHIP_COUNT;
 export const AGORA_FX_INK = 'ink';
 export const AGORA_FX_DANDELION = 'dandelion';
 export const AGORA_FX_MIX = 'mix';
 /** Capture row is the five dots. */
 export const AGORA_SPRITE_COUNT = AGORA_CHIP_COUNT;
-/** Sentinel — a dot that has left its owner, or is not yet claimed. */
+/** Sentinel - a dot that has left its owner, or is not yet claimed. */
 export const AGORA_TINT_NEUTRAL = -2;
 /** Mid gray. Dark enough to sit under a team swatch, light enough to not read as ink. */
 export const AGORA_NEUTRAL_RGB = [0.58, 0.6, 0.63];
@@ -82,15 +82,15 @@ export const CHIP_SMALL_CORNER_MUL = 0.48;
 export const CHIP_LEAD_CORNER_MUL = 1;
 /** Rim thickness on HP chips, as a fraction of the atlas cell. */
 export const CHIP_BASELINE_MUL = 0.075;
-/** Bottom edge — darker than the fill. */
+/** Bottom edge - darker than the fill. */
 export const CHIP_BASELINE_ALPHA = 0.5;
-/** Top and right rim — lighter than the fill. */
+/** Top and right rim - lighter than the fill. */
 export const CHIP_EDGE_ALPHA = 1;
 /** Fill inside the rim. Dimmer so the right edge reads brighter. */
 export const CHIP_BODY_ALPHA = 0.55;
 /** Right-edge thickness, as a fraction of the atlas cell. Wider than the top rim. */
 export const CHIP_RIGHT_MUL = 0.18;
-/** Right edge — full atlas value, brighter than the fill and the top rim. */
+/** Right edge - full atlas value, brighter than the fill and the top rim. */
 export const CHIP_RIGHT_SHADE = 1;
 /** Sprite alpha is raised so the dropped middle stays near the old look. */
 export const CHIP_FILL_ALPHA_GREEN = 0.5;
@@ -99,7 +99,7 @@ export const CHIP_TEAM_FILL_ALPHA = 1;
 
 /** Fallback world diameter if the camera eye is unknown. */
 export const NORMAL_DOT_DIAMETER = 0.4;
-/** Main-dot size in CSS pixels — world size scales with distance to hold this. */
+/** Main-dot size in CSS pixels - world size scales with distance to hold this. */
 export const TARGET_DOT_PX = 8;
 /**
  * Agora capture chips at the flag's reference distance.
@@ -108,11 +108,11 @@ export const TARGET_DOT_PX = 8;
  */
 export const TARGET_AGORA_DOT_PX = 14;
 const DOT_DIAMETER_MAIN_MUL = 0.88;
-/** First HP pip — a tick larger than the other chips. */
+/** First HP pip - a tick larger than the other chips. */
 export const DOT_DIAMETER_FIRST_MUL = 0.96;
 /** Leftover from the old interstitial team pips. */
 export const DOT_DIAMETER_ALTERNATE_MUL = 0.58;
-/** Circles stay 1:1 — leftover from the old wide squares. */
+/** Circles stay 1:1 - leftover from the old wide squares. */
 export const DOT_ALTERNATE_WIDTH_MUL = 1;
 /** Horizontal scale of the team triangle vs a normal chip. */
 export const DOT_DIAMETER_LEAD_MUL = 1.22 - 1 / TARGET_DOT_PX;
@@ -126,7 +126,7 @@ export const TEAM_WEDGE_INSET = 0.78;
 export const TEAM_WEDGE_X_LEFT = -0.44;
 /** Where the hypotenuse meets the line, fraction from center. */
 export const TEAM_WEDGE_X_TIP = 0.40;
-/** Right edge of the cell — a short tail past the tip so the join stays seamless. */
+/** Right edge of the cell - a short tail past the tip so the join stays seamless. */
 export const TEAM_WEDGE_X_EXTENT = 0.46;
 /** Team-line center in the cell. Negative is screen-up; the triangle hangs below. */
 export const TEAM_WEDGE_Y_LINE = -0.42;
@@ -136,15 +136,15 @@ export const TEAM_WEDGE_Y_LOW = 0.46;
 export const TEAM_WEDGE_EDGE_MUL = 0.14;
 /** How far the left edge mixes toward white, past the team color. */
 export const TEAM_WEDGE_EDGE_LIFT = 0.42;
-/** Ready-mana / filled-seat dots under the HP line — a hair under the HP chips. */
+/** Ready-mana / filled-seat dots under the HP line - a hair under the HP chips. */
 export const DOT_DIAMETER_UNDER_MUL = 0.86;
-/** Center gap — visual tiles are smaller than the billboard, so this can sit under 0.72. */
+/** Center gap - visual tiles are smaller than the billboard, so this can sit under 0.72. */
 const DOT_SPACING_MUL = 0.82;
 /** Fallback only when the camera eye is unknown. */
 const LINE_HEIGHT_MUL = 0.30;
 /** Underline stays one CSS pixel; the atlas stroke fills the cell so this is real. */
 export const LINE_MIN_PX = 1;
-/** Atlas half-extent of the underline — near 0.5 so billboard height ≈ stroke. */
+/** Atlas half-extent of the underline - near 0.5 so billboard height ≈ stroke. */
 export const LINE_ATLAS_HALF_MUL = 0.48;
 export const LINE_DOWN_MUL = 0.68;
 /** Cut this fraction off the right end of the underline. */
@@ -154,19 +154,19 @@ const UNDER_SPACING_MUL = 1.22;
 const UNDER_SPACING_PACKED_MUL = 0.98;
 /** Saturated cobalt fill. The atlas darkens this under the pale ring tint. */
 export const RGB_MANA = [0.16, 0.40, 0.92];
-/** Ring around a ready-mana dot — lighter than the fill, not a white halo. */
+/** Ring around a ready-mana dot - lighter than the fill, not a white halo. */
 export const RGB_MANA_RING = [0.40, 0.58, 0.96];
 /** Disc radius in the mana cell. The ring sits between inner and outer. */
 const MANA_DISC_OUTER = 0.44;
 const MANA_DISC_INNER = 0.30;
-/** Filled vehicle seats — same cool grey as HUD `--pop-ink` (`#b8c0cc`). */
+/** Filled vehicle seats - same cool grey as HUD `--pop-ink` (`#b8c0cc`). */
 export const RGB_SEAT = [184 / 255, 192 / 255, 204 / 255];
-/** Agora milestone dots — a bit smaller so five still fit the roof. */
+/** Agora milestone dots - a bit smaller so five still fit the roof. */
 export const DOT_DIAMETER_AGORA_LARGE_MUL = 1.72;
-/** Rectangle connectors between the dots — close to square, not a thin bar. */
+/** Rectangle connectors between the dots - close to square, not a thin bar. */
 export const DOT_DIAMETER_AGORA_DASH_W_MUL = 0.98;
 export const DOT_DIAMETER_AGORA_DASH_H_MUL = 0.86;
-/** Leftover name — dash height vs the old small-circle size. */
+/** Leftover name - dash height vs the old small-circle size. */
 export const DOT_DIAMETER_AGORA_SMALL_MUL = DOT_DIAMETER_AGORA_DASH_H_MUL;
 /** Gap between capture dots, as a fraction of the dot diameter. */
 export const AGORA_DOT_GAP_MUL = 0.38;
@@ -178,7 +178,7 @@ export const AGORA_DASH_TRACK_ALPHA = 0.42;
 export const AGORA_LEAD_PULSE_MUL = 0.14;
 export const AGORA_CONTESTED_RGB = [1, 1, 1];
 export const AGORA_INK_RGB = [0, 0, 0];
-/** Empty dash track / live fill — ink and paper, not team swatches. */
+/** Empty dash track / live fill - ink and paper, not team swatches. */
 export const AGORA_DASH_TRACK_RGB = [0, 0, 0];
 export const AGORA_DASH_FILL_RGB = [1, 1, 1];
 /** Live pip wink. Slow, and only a short slice of the cycle is the flash color. */
@@ -524,7 +524,7 @@ export function worldSizeForScreenPx(screenPx, distance, viewportHeight, fov) {
 
 /**
  * Underline height in world units. Always one CSS pixel once the camera
- * distance is known — chip scale used to shrink this under a pixel.
+ * distance is known - chip scale used to shrink this under a pixel.
  */
 export function chipLineHeight(normalDot, distance, viewportHeight, fov) {
   if (distance > 1e-3) {
@@ -533,7 +533,7 @@ export function chipLineHeight(normalDot, distance, viewportHeight, fov) {
   return Math.max(0, normalDot) * LINE_HEIGHT_MUL;
 }
 
-/** Underline width and row offset — left edge stays, right end is trimmed. */
+/** Underline width and row offset - left edge stays, right end is trimmed. */
 export function chipLineLayout(totalWidth, spacing) {
   const full = Math.max(spacing, totalWidth + spacing * 0.55);
   const width = full * (1 - LINE_RIGHT_TRIM);
@@ -742,7 +742,7 @@ export function chipBarState(ratio, count) {
   return { filled, rgb, band };
 }
 
-/** At 1 HP, hide the last pip — only the left team mark stays. */
+/** At 1 HP, hide the last pip - only the left team mark stays. */
 export function chipBarFilled(ratio, count, hp) {
   if (Number.isFinite(hp) && (hp | 0) <= 1) return 0;
   return chipBarState(ratio, count).filled;
@@ -759,7 +759,7 @@ export function chipWidthMul(_index) {
   return 1;
 }
 
-/** In-row chips are HP only — team color lives on the left pip + underline. */
+/** In-row chips are HP only - team color lives on the left pip + underline. */
 export function chipIsTeamDot(_index) {
   return false;
 }
@@ -805,7 +805,7 @@ export function underDotFrame(flags = {}) {
   return FRAME_LEAD_ROUND;
 }
 
-/** Ready mana charges, or filled vehicle seats — not both. */
+/** Ready mana charges, or filled vehicle seats - not both. */
 export function underDotCount(flags = {}) {
   if (flags.agora || flags.building) return 0;
   const seats = flags.seatsFilled | 0;
@@ -849,7 +849,7 @@ export function agoraChipFilled(progress, count = AGORA_CHIP_COUNT, maxTicks = A
   return agoraMeterParts(progress, count, maxTicks).filled;
 }
 
-/** 0..1 capture meter — dashes and milestones both use this. */
+/** 0..1 capture meter - dashes and milestones both use this. */
 export function agoraProgressRatio(state = {}) {
   if ((state.phase | 0) === AGORA_PHASE_TUG) {
     return Math.min(1, Math.max(0, (state.tug | 0) / AGORA_TUG_TICKS));
@@ -857,7 +857,7 @@ export function agoraProgressRatio(state = {}) {
   return Math.min(1, Math.max(0, (state.progress | 0) / AGORA_CAPTURE_TICKS));
 }
 
-/** Neutral tug — anyone can fight. Contest (lock) still has an owner. */
+/** Neutral tug - anyone can fight. Contest (lock) still has an owner. */
 export function agoraIsNeutral(state = {}) {
   return (state.phase | 0) === AGORA_PHASE_TUG;
 }
@@ -920,7 +920,7 @@ export function agoraFlipStyle(t, kind = AGORA_FX_INK) {
   return { rgb: null, size: 0.12 + 0.88 * ease, drop: dandelion ? 0 : (1 - ease) * 0.16 };
 }
 
-/** Dot currently being taken — contest from the right, gain from the left. */
+/** Dot currently being taken - contest from the right, gain from the left. */
 export function agoraChipLeadIndex(state = {}) {
   const { filled, frac } = agoraMeterState(state);
   const live = (state.capturer | 0) >= 0 || (state.contested | 0) !== 0 || filled > 0 || frac > 0;
@@ -1058,7 +1058,7 @@ export function agoraCaptureMix(state = {}) {
   return Math.min(1, Math.max(0, (state.progress | 0) / AGORA_CAPTURE_TICKS));
 }
 
-/** Flag / agora body RGB — pulls toward the capturer as the meter fills. */
+/** Flag / agora body RGB - pulls toward the capturer as the meter fills. */
 export function agoraPropTint(state = {}) {
   const ownerRgb = ownerTint(state.owner | 0);
   const mix = agoraCaptureMix(state);
@@ -1374,7 +1374,7 @@ export function createHealthBars(engine, scene, opts = {}) {
   const slots = [];
   for (let i = 0; i < capacity; i++) slots.push(makeSlot());
   let used = 0;
-  /** Highest slot that was live last frame — `end()` only hides this tail. */
+  /** Highest slot that was live last frame - `end()` only hides this tail. */
   let prevUsed = 0;
   let viewH = 720;
   let viewW = 1280;
@@ -1512,7 +1512,7 @@ export function createHealthBars(engine, scene, opts = {}) {
      * @param {number} x
      * @param {number} y chip-row world Y (above head / roof)
      * @param {number} z
-     * @param {number} _unitSize unused — chips are a fixed small size for all units
+     * @param {number} _unitSize unused - chips are a fixed small size for all units
      * @param {number} ratio 0..1
      * @param {{ armor?: boolean, holy?: boolean, building?: boolean, agora?: boolean, owner?: number, founder?: number, capturer?: number, progress?: number, tug?: number, phase?: number, contested?: number, direction?: number, hold?: number, rite?: number, hp?: number, manaReady?: number, seatsFilled?: number }} [flags]
      */
@@ -1620,7 +1620,7 @@ export function createHealthBars(engine, scene, opts = {}) {
           spr.position[2] = pz;
           spr.sizeWorld[0] = d;
           spr.sizeWorld[1] = d;
-          // Dark ring — tint the white atlas frame.
+          // Dark ring - tint the white atlas frame.
           spr.color[0] = 0.07;
           spr.color[1] = 0.07;
           spr.color[2] = 0.08;

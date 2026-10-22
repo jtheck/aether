@@ -1,4 +1,4 @@
-// Tiny Chapter 3 — last beat of the grove road.
+// Tiny Chapter 3 - last beat of the grove road.
 
 import {
   CLIP_CAMERA,

@@ -1,5 +1,5 @@
 // Fire in the body of the tree. Tongues sit in the trunk and inner canopy
-// and are large enough to join, so the tree reads as burning — not as
+// and are large enough to join, so the tree reads as burning - not as
 // pinprick lights on the outer leaves.
 
 /** Keep in sync with scenery tree variant `modelScale`. */

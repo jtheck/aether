@@ -1,4 +1,4 @@
-// Decisive-match wipe — HUD pop is living units. When agora occupy also
+// Decisive-match wipe - HUD pop is living units. When agora occupy also
 // ends the match, a side with 0 pop loses. Taking one agora only ends it
 // once that side holds no agora (see agora.js). KOTH keeps its own elimination.
 
@@ -8,7 +8,7 @@ import { teamOf } from './teams.js';
 const MAX_SEATS = 8;
 
 /**
- * After combat each tick — if only one participant team still has pop, they win.
+ * After combat each tick - if only one participant team still has pop, they win.
  * Seats are agora founders. A leftover village does not save a wiped army.
  * @param {object} w
  */

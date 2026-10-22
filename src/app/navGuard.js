@@ -3,7 +3,7 @@
 
 const LISTEN_OPTS = { capture: true };
 
-/** X1 / X2 — browser Back / Forward on most mice. */
+/** X1 / X2 - browser Back / Forward on most mice. */
 export function isBrowserNavMouseButton(button) {
   return button === 3 || button === 4;
 }

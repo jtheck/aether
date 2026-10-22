@@ -1,5 +1,5 @@
 // Offline bake artifact helpers (VAT dumps, mesh packages, socket tables).
-// Files live under /assets/baked/ — produced by `npm run prebake`.
+// Files live under /assets/baked/ - produced by `npm run prebake`.
 
 /** @param {string} glbUrl e.g. /assets/models/tavern.glb */
 export function bakedMeshStem(glbUrl) {
@@ -86,7 +86,7 @@ export async function hasBakedVat(glbUrl) {
 export async function tryFetch(url) {
   try {
     // no-cache: always revalidate (ETag/304). force-cache stuck returning
-    // visitors on old unhashed bake/GLB bytes after deploy — hard-to-kill on mobile.
+    // visitors on old unhashed bake/GLB bytes after deploy - hard-to-kill on mobile.
     const res = await fetch(url, { cache: 'no-cache' });
     if (!res.ok) return null;
     return res;

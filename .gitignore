@@ -1,7 +1,7 @@
 # Dependencies (npm install restores these)
 node_modules/
 
-# Upload artifact (npm run package) — keep folder via .gitkeep
+# Upload artifact (npm run package) - keep folder via .gitkeep
 DEPLOY/**
 !DEPLOY/.gitkeep
 

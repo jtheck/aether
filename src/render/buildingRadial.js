@@ -1,4 +1,4 @@
-// Agora build menu — tilted annulus framing the agora. Hub hole stays on the
+// Agora build menu - tilted annulus framing the agora. Hub hole stays on the
 // building; near the screen edge the disc slides off the building, then
 // shrinks, then fades.
 // Option angles stay screen-stable; hover/click uses CPU pad discs (the
@@ -59,7 +59,7 @@ import { xrEye } from './xrEye.js';
 /** Layout at HUD scale = 1 (ring outer radius in world units). */
 const MENU_Y = 2.4;
 /**
- * Outer option ring — fixed band width, pushed out from the center pie
+ * Outer option ring - fixed band width, pushed out from the center pie
  * (pads move out; pie + pad size stay put).
  */
 const MENU_RING_OUTER = 18.25;
@@ -80,14 +80,14 @@ const PAD_H = 0.22;
 const PAD_LIFT = 1.35;
 /** Extra lift of icons along the menu normal above their pad ring. */
 const ICON_LIFT = 0.85;
-/** Pad disc + lifted icon mesh — clicks aim at the art, not just the hit circle. */
+/** Pad disc + lifted icon mesh - clicks aim at the art, not just the hit circle. */
 const ICON_PICK_R = 5.2;
 const OPTION_SCALE = 0.468;
 /** Units/buildings stay at OPTION_SCALE; tall meshes shrink to this box. */
 const ICON_FIT_EXTENT = PAD_OUTER * 1.4;
 /** Hub preview while ghost-placing (a bit larger than a pad icon). */
 const PLACE_ICON_SCALE = OPTION_SCALE * 1.6;
-/** Center category pie — fixed size (not tied to ring radius). */
+/** Center category pie - fixed size (not tied to ring radius). */
 const PIE_OUTER = 11.6;
 const PIE_INNER = 6.6;
 const PIE_H = 0.4;
@@ -111,11 +111,11 @@ const BUTTON_RING_ROTATIONS = /** @type {const} */ ({
 });
 /**
  * Lean from horizontal toward the camera (not a full billboard).
- * ~32° — readable without standing the ring on end.
+ * ~32° - readable without standing the ring on end.
  */
 const MENU_TILT = 0.56;
 /**
- * Screen-edge pin (project agora → clamp → place on ray). Off for now — menu
+ * Screen-edge pin (project agora → clamp → place on ray). Off for now - menu
  * stays above the agora. Flip to true when revisiting the HUD placement.
  */
 const EDGE_PIN_HUD = false;
@@ -136,12 +136,12 @@ const LABEL_LIFT = 1.25;
 const PRICE_FONT_SIZE = 16;
 const PRICE_SCREEN_SCALE = 0.78;
 const PRICE_DOWN = 6.35;
-/** Pads + prices around the hub — used to keep the disc on-screen. */
+/** Pads + prices around the hub - used to keep the disc on-screen. */
 const SCREEN_FIT_RADIUS =
   RIM_R + Math.max(PAD_OUTER + PAD_BORDER, PRICE_DOWN) + 2.8;
 const PRICE_TEXT_COLOR = [0.72, 0.86, 0.92, 1];
 const LABEL_TEXT_COLOR = [0.86, 0.96, 1, 1];
-/** Resting icon wash — white, slightly red if broke, slightly black if locked. */
+/** Resting icon wash - white, slightly red if broke, slightly black if locked. */
 const ICON_WASH = {
   ok: [0.82, 0.82, 0.82],
   unafford: [0.9, 0.5, 0.48],
@@ -161,7 +161,7 @@ const PRICE_WASH = {
 const HUD_EDGE_MARGIN_FRAC = 0.2;
 const MAX_OPTIONS = 5;
 
-/** Main ring only — sits above the world, so let terrain/units read through a bit. */
+/** Main ring only - sits above the world, so let terrain/units read through a bit. */
 const MENU_RING_ALPHA = 0.55;
 /** 🚫 bar through a locked (missing prereq) building icon. */
 const LOCK_SLASH_LEN = 1.62;
@@ -737,7 +737,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   hideMesh(menuRing);
   addToScene(scene, menuRing);
 
-  /** Center category pie — 3 wedges. Angles match rim coords (−π/2 = screen-top). */
+  /** Center category pie - 3 wedges. Angles match rim coords (−π/2 = screen-top). */
   const sliceSpan = (Math.PI * 2) / CATEGORIES.length;
   const sliceStart0 = -Math.PI / 2 - sliceSpan * 0.5 + PIE_ROTATION;
   /** @type {{ id: CategoryId, mesh: object, mat: object, outline: object, outlineMat: object, startAng: number, endAng: number }[]} */
@@ -780,7 +780,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     pieSlices.push({ id: cat.id, mesh, mat, outline, outlineMat, startAng, endAng });
   }
 
-  /** Pad rings under each option — own material so hover can recolor. */
+  /** Pad rings under each option - own material so hover can recolor. */
   /** @type {{ mesh: object, mat: object, outline: object, outlineMat: object }[]} */
   const pads = [];
   const padOutlineOuter = PAD_OUTER + PAD_BORDER;
@@ -813,7 +813,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     pads.push({ mesh: pad, mat, outline, outlineMat });
   }
 
-  /** Locked-prereq 🚫 bars — one per pad, shown only when that slot is gated. */
+  /** Locked-prereq 🚫 bars - one per pad, shown only when that slot is gated. */
   /** @type {object[]} */
   const lockSlashes = [];
   for (let i = 0; i < MAX_OPTIONS; i++) {
@@ -944,7 +944,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   /** @type {CategoryId} */
   let activeCategory = 'basic';
   /**
-   * After a pie-slice click, hover no longer switches pages — so the cursor can
+   * After a pie-slice click, hover no longer switches pages - so the cursor can
    * cross other wedges to reach ring buildings without flipping the menu.
    */
   let categoryLocked = false;
@@ -1315,7 +1315,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   /**
    * @param {CategoryId | string} catId
    * @param {{ lock?: boolean }} [opts]
-   *   lock: true after a pie click — hover stops changing pages until reopen.
+   *   lock: true after a pie click - hover stops changing pages until reopen.
    */
   function setCategory(catId, opts = {}) {
     if (!CATEGORIES.some((c) => c.id === catId)) return;
@@ -2025,7 +2025,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     return open;
   }
 
-  /** Stick pie targets — inner categories, outer buildings. */
+  /** Stick pie targets - inner categories, outer buildings. */
   function stickTargets() {
     if (!open || placingPreviewType) return null;
     return {
@@ -2239,7 +2239,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   function hitAtRay(ray) {
     if (!open || !ray || placingPreviewType || !edgePickable()) return false;
     if (pickOptionAtRay(ray)) return true;
-    // Empty hub — gesture so box-select does not start on the agora.
+    // Empty hub - gesture so box-select does not start on the agora.
     if (hitHubHoleAtRay(ray)) return true;
     const hit = rayHitPlane(ray, centerX, centerY, centerZ, nx, ny, nz);
     if (!hit) return false;

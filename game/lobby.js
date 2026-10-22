@@ -3000,7 +3000,7 @@ const Lobby = {
               isNeutral = false;
             }
           } else if (playerSlot >= 5) {
-            // NPC/enemy slot — use a synthetic owner ID
+            // NPC/enemy slot - use a synthetic owner ID
             owner = `npc-${playerSlot}`;
             isNeutral = false;
           }
@@ -4072,7 +4072,7 @@ const Lobby = {
     window.player.buildings = [];
     window.player.selectedUnits = [];
     
-    // Parse spawn points from map — separate player and NPC spawns
+    // Parse spawn points from map - separate player and NPC spawns
     let spawnPositions = [];
     let npcSpawns = [];
     if (mapData.sp) {

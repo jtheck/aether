@@ -346,7 +346,7 @@ describe('touch camera chord latch', () => {
     const { touch, rotates } = makeHarness();
     touch.handlePointerDown(ptr({ pointerId: 1, clientX: 300, clientY: 300 }));
     touch.handlePointerDown(ptr({ pointerId: 2, clientX: 400, clientY: 300 }));
-    // ~0.12 rad around the centroid, then another ~0.12 — latch overshoot stays tiny.
+    // ~0.12 rad around the centroid, then another ~0.12 - latch overshoot stays tiny.
     touch.handlePointerMove(ptr({ pointerId: 2, type: 'pointermove', clientX: 399, clientY: 312 }));
     const first = Math.abs(rotates.reduce((s, d) => s + d, 0));
     rotates.length = 0;

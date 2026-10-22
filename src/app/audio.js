@@ -20,7 +20,7 @@ export function unlock() {
     }
     unlocked = true;
   } catch {
-    // ignore — playback will retry on next gesture
+    // ignore - playback will retry on next gesture
   }
 }
 
@@ -109,7 +109,7 @@ export function playThunder() {
   return play('thunder');
 }
 
-/** Stinger once lockstep leaves tick 0 — both sides hear it on the same commit. */
+/** Stinger once lockstep leaves tick 0 - both sides hear it on the same commit. */
 export function playMatchStart() {
   return play('match_start');
 }

@@ -3,7 +3,7 @@ cd /d "%~dp0"
 if not exist steampipe\config.json (
   if exist steampipe\config.example.json copy steampipe\config.example.json steampipe\config.json
   echo.
-  echo Edit steampipe\config.json — set appId, depots.win, and depots.linux.
+  echo Edit steampipe\config.json - set appId, depots.win, and depots.linux.
   echo Partner site: SteamPipe -^> Depots
   echo.
   notepad steampipe\config.json

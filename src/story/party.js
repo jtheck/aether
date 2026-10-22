@@ -1,5 +1,5 @@
 // Carry the living adventure party across a garden reset.
-// The first four garden units are heroes — dealt to the seated players.
+// The first four garden units are heroes - dealt to the seated players.
 
 import { normalizeSpeaker } from './cast.js';
 import { decodeGarden, patchGarden } from '../sim/garden.js';
@@ -183,7 +183,7 @@ export function stampUnitOwners(units, owner) {
   return (units || []).map((u) => ({ ...u, owner: id }));
 }
 
-/** Room seed + garden seed — same on every peer, different each chapter. */
+/** Room seed + garden seed - same on every peer, different each chapter. */
 export function adventureDealSeed(matchSeed, mapSeed) {
   return ((matchSeed >>> 0) + Math.imul((mapSeed >>> 0) || 1, 1664525) + 1013904223) >>> 0;
 }

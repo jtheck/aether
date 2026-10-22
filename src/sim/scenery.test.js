@@ -9,6 +9,7 @@ import {
   TREE_EDGE_SCATTER_TILES,
   applyRockOccupancyFromStock,
   applyAuthoredScenery,
+  clearSceneryCoveringTiles,
   clearSceneryOnWater,
   damageRock,
   defaultTreeStock,
@@ -154,6 +155,8 @@ edgeTreeFadeMatchesGrove();
 reservedPadsCanKeepTrees();
 offTableSceneryIsCleared();
 waterBrushClearsScenery();
+placementClearsCoveringResources();
+paintSkipsStructureTiles();
 console.log('scenery.test.js: ok (rock yield + stages + collision shrink + paint spacing + edge trees)');
 
 function blankLand() {
@@ -410,6 +413,44 @@ function waterBrushClearsScenery() {
   assert.equal(field.doodadType[10 * w + 12], 0);
   assert.equal(field.sceneryType[16 * w + 10], SCENERY.TREE);
   assert.equal(passAt(field, 14, 10), 1);
+}
+
+function paintSkipsStructureTiles() {
+  const field = blankLand();
+  field.structureClaim = new Uint8Array(field.width * field.height);
+  field.structureClaim[tileAt(field, 20, 20)] = 1;
+  field.structureClaim[tileAt(field, 21, 20)] = 1;
+  assert.equal(paintSceneryBrush(field, 20, 20, SCENERY.TREE, 0).length, 0, 'a tree does not stamp a building tile');
+  assert.equal(field.sceneryType[tileAt(field, 20, 20)], SCENERY.NONE);
+  assert.ok(paintSceneryBrush(field, 19, 20, SCENERY.TREE, 0).length > 0, 'the next tile is still open');
+  assert.equal(
+    paintSceneryBrush(field, 22, 20, SCENERY.ROCK_MOSS, 0, { tight: true }).length,
+    0,
+    'a rock disc that covers a building tile does not stamp',
+  );
+  assert.notEqual(field.sceneryType[tileAt(field, 22, 20)], SCENERY.ROCK_MOSS);
+  assert.ok(
+    paintSceneryBrush(field, 24, 20, SCENERY.ROCK_PLAIN, 0, { tight: true }).some((t) => t.x === 24 && t.z === 20),
+    'a rock whose disc misses the building still stamps',
+  );
+}
+
+function placementClearsCoveringResources() {
+  const field = blankLand();
+  assert.ok(paintSceneryBrush(field, 20, 20, SCENERY.TREE, 0).length > 0);
+  assert.ok(placeRockAt(field, 30, 30, SCENERY.ROCK_MOSS));
+  assert.ok(paintSceneryBrush(field, 8, 8, SCENERY.TREE, 0).length > 0);
+  const dirty = clearSceneryCoveringTiles(field, [
+    { tx: 20, tz: 20 },
+    { tx: 30, tz: 30 },
+  ]);
+  assert.ok(dirty.length > 0);
+  assert.equal(field.sceneryType[tileAt(field, 20, 20)], SCENERY.NONE);
+  assert.equal(field.treeStock[tileAt(field, 20, 20)], 0);
+  assert.equal(field.sceneryType[tileAt(field, 30, 30)], SCENERY.NONE);
+  assert.equal(field.rockStock[tileAt(field, 30, 30)], 0);
+  assert.equal(passAt(field, 30, 30), 1);
+  assert.equal(field.sceneryType[tileAt(field, 8, 8)], SCENERY.TREE);
 }
 
 function offTableSceneryIsCleared() {

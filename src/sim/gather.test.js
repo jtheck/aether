@@ -184,7 +184,7 @@ function campAutoAssignsIdleVillagers() {
   plantTreeAt(field, 4, 0, 30);
   w.buildings = [{ owner: 0, type: 'camp', x: 0, z: 0 }];
 
-  // No manual command — the camp should recruit the idle villager on its own.
+  // No manual command - the camp should recruit the idle villager on its own.
   for (let t = 0; t < 200; t++) step(w, field, []);
 
   assert.equal(w.order[vill], ORDER.GATHER, 'idle villager auto-assigned to the camp');
@@ -195,7 +195,7 @@ function engineerExtendsCampRadius() {
   const field = createField(1);
   field.pass.fill(1);
   const w = createWorld(25);
-  // Villager sits just outside the base camp reach — inside with an engineer.
+  // Villager sits just outside the base camp reach - inside with an engineer.
   const vill = spawn(w, { x: fx.fromFloat(38), y: 0, type: UNIT.VILLAGER, owner: 0 });
   plantTreeAt(field, 32, 0, 30);
   w.buildings = [{ owner: 0, type: 'camp', x: 0, z: 0 }];
@@ -253,7 +253,7 @@ function minesMossRockForStone() {
   const w = createWorld(27);
   const cx = worldToTile(0);
   const cz = worldToTile(0);
-  // Moss rock has a radius-1 footprint — the villager must mine from the rim.
+  // Moss rock has a radius-1 footprint - the villager must mine from the rim.
   const rockTile = plantRockAt(
     field, cx, cz, SCENERY.ROCK_MOSS,
     rockYield(SCENERY.ROCK_MOSS),
@@ -280,7 +280,7 @@ function minesMossRockFromFarAway() {
     rockYield(SCENERY.ROCK_MOSS),
     rockFootprintRadius(SCENERY.ROCK_MOSS),
   );
-  // Far enough that they must walk to a rim stand — the old Chebyshev-corner
+  // Far enough that they must walk to a rim stand - the old Chebyshev-corner
   // snap sat ~11.3 units out, past the 10-unit moss harvest reach.
   const vill = spawn(w, { x: fx.fromFloat(24), y: 0, type: UNIT.VILLAGER, owner: 0 });
   w.agoras = [{ owner: 0, x: fx.fromFloat(32), z: 0 }];
@@ -321,7 +321,7 @@ function farmsFoodInPlace() {
   const cz = worldToTile(0);
   const farmTile = cz * field.width + cx;
   field.foodNode[farmTile] = 1;
-  // The farm is its own drop-off — the worker banks food without hauling.
+  // The farm is its own drop-off - the worker banks food without hauling.
   w.buildings = [{ owner: 0, type: 'farm', x: fx.fromFloat(0), z: 0 }];
   const vill = spawn(w, { x: fx.fromFloat(2), y: 0, type: UNIT.VILLAGER, owner: 0 });
 
@@ -671,7 +671,7 @@ function attackMoveStartsDefensiveGather() {
   w.agoras = [{ owner: 0, x: fx.fromFloat(0), z: 0 }];
   const vill = spawn(w, { x: fx.fromFloat(-4), y: 0, type: UNIT.VILLAGER, owner: 0 });
 
-  // Left-click / attack-move onto the tree — the villager should mine on arrival.
+  // Left-click / attack-move onto the tree - the villager should mine on arrival.
   step(w, field, [
     { type: CMD.ATTACK_MOVE, entities: [vill], tx: [fx.fromFloat(6)], ty: [fx.fromFloat(0)] },
   ]);

@@ -1,13 +1,15 @@
-// P2P lockstep transport — GetFire match lobby + command/tick_confirm relay.
+// P2P lockstep transport - GetFire match lobby + command/tick_confirm relay.
 // Sim rules live in simSession.js; this file only moves frames between peers.
 
 import { animStressPerSideFromSearch, stressPerSideFromSearch } from '../sim/worldSetup.js';
+import { networkChannel } from '../network/namespace.js';
 
-const LOBBY = 'aether-v2-dev';
+const LOBBY = networkChannel('aether-v2');
 const MATCH_TIMEOUT_MS = 120_000;
 
-/** devMode on for http/localhost dev — signaling still uses wss://getfire.net. */
+/** devMode on for http/localhost dev - signaling still uses wss://getfire.net. */
 export function p2pDevModeFromLocation(loc = globalThis.location) {
+  if (!loc) return false;
   const params = new URLSearchParams(loc.search);
   if (params.get('dev') === '0') return false;
   if (params.has('dev')) return true;
@@ -47,7 +49,7 @@ export function createNetMatch(options = {}) {
   const onStatus = options.onStatus ?? (() => {});
 
   if (typeof globalThis.GETFIREP2P !== 'function') {
-    throw new Error('GETFIREP2P not loaded — include vendor/getfire-p2p.js in index.html');
+    throw new Error('GETFIREP2P not loaded - include vendor/getfire-p2p.js in index.html');
   }
 
   let p2p = null;
@@ -68,7 +70,7 @@ export function createNetMatch(options = {}) {
   });
 
   const matchTimeout = setTimeout(() => {
-    if (!matchDone) matchReject(new Error('Match timeout — open a second tab or use ?solo=1'));
+    if (!matchDone) matchReject(new Error('Match timeout - open a second tab or use ?solo=1'));
   }, MATCH_TIMEOUT_MS);
 
   function finishMatch(config) {
@@ -103,10 +105,10 @@ export function createNetMatch(options = {}) {
     if (!data?.type) return;
     if (data.type === 'player_join' || data.type === 'player_rejoin') {
       if (data.from === localUserId) {
-        onStatus('In lobby — open 2nd tab');
+        onStatus('In lobby - open 2nd tab');
         return;
       }
-      onStatus('Found peer — connecting…');
+      onStatus('Found peer - connecting…');
       setTimeout(() => tryMatchWithPeer(data.from), 300);
     }
   }
@@ -161,7 +163,7 @@ export function createNetMatch(options = {}) {
 
   function onPeerConnected(id) {
     peerId = id;
-    onStatus('P2P linked — starting…');
+    onStatus('P2P linked - starting…');
 
     if (!localUserId) localUserId = p2p.getUserId();
     isHost = localUserId < id;
@@ -176,7 +178,7 @@ export function createNetMatch(options = {}) {
         guestUserId: id,
       };
       sendReliable(p2p, startMsg, id);
-      // Data channel may not be open on guest yet — retry a few times.
+      // Data channel may not be open on guest yet - retry a few times.
       for (const delay of [250, 750, 1500]) {
         setTimeout(() => {
           if (!matchDone) sendReliable(p2p, startMsg, id);
@@ -184,7 +186,7 @@ export function createNetMatch(options = {}) {
       }
     }
 
-    // Both sides start here — don't wait for match_start (guest channel race).
+    // Both sides start here - don't wait for match_start (guest channel race).
     finishMatch({ localPlayerId, seed, peerId: id, isHost });
   }
 
@@ -196,7 +198,7 @@ export function createNetMatch(options = {}) {
   onStatus('Joining match lobby…');
 
   p2p = globalThis.GETFIREP2P({
-    roomType: 'aether-v2',
+    roomType: networkChannel('aether-v2'),
     devMode: p2pDevModeFromLocation(),
     onGameLobbyMessage,
     onDataChannelMessage: onDataMessage,

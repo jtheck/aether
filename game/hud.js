@@ -19,7 +19,7 @@
   let minimapContainer = null;
   /** 0–1 from camera zoom (smoothstep); used for HUD offset fade */
   let minimapZoomSmooth = 0;
-  /** 0–1, biased up when zoom is far — tier checks use this so “max zoom” stacks hardest */
+  /** 0–1, biased up when zoom is far - tier checks use this so “max zoom” stacks hardest */
   let minimapMergeT = 0;
   /** lower = merge sooner; PER_TYPE = one pile per unit type off-screen */
   const MINIMAP_MERGE_PER_TYPE = 0.34;
@@ -2012,7 +2012,7 @@
   const SEL_TYPE_ALIASES = {
     mycorrhizae: 'myco', grove: 'trees',
     architect: 'engineer', geomancer: 'wizard', druid: 'wizard', alchemist: 'wizard',
-    champion: 'brigand', ballister: 'brigand', paladin: 'warrior',
+    champion: 'brigand', marksman: 'brigand', paladin: 'warrior',
     valkyrie: 'monk', elemental: 'wizard',
     war_wagon: 'wagon', war_balloon: 'dirigible', tank: 'apc',
     frog_scout: 'frog', bird_messenger: 'birdy', mushroom_mage: 'myco',
@@ -2243,7 +2243,7 @@
       z = span > 1e-6 ? (cam.radius - cam.lowerRadiusLimit) / span : 0;
       z = Math.min(1, Math.max(0, z));
     }
-    minimapZoomSmooth = z * z * (3 - 2 * z); // smoothstep — stable HUD polish
+    minimapZoomSmooth = z * z * (3 - 2 * z); // smoothstep - stable HUD polish
     // Extra weight at high z so “especially far” collapses stacks; stays gentle when zoomed in
     minimapMergeT = Math.min(1, minimapZoomSmooth + Math.pow(z, 2.15) * 0.68);
 
@@ -2289,7 +2289,7 @@
           // Fully zoomed out: one edge marker per unit type (centroid picks the edge)
           corner = 'off';
         } else if (minimapMergeT >= MINIMAP_MERGE_COARSE) {
-          // Mid–zoom out: merge along whole edges / quadrants — no v/h micro-buckets
+          // Mid–zoom out: merge along whole edges / quadrants - no v/h micro-buckets
           corner = baseCorner;
         } else {
           // Zoomed in: keep positional spread, but still fewer buckets when partly zoomed

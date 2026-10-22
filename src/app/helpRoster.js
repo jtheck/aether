@@ -48,7 +48,9 @@ const BUILDING_NOTE = {
   village: 'Villagers gather here. Trains Engineers and Monks.',
   silo: 'Extra storage beside a camp, mine, or farm.',
   farm: 'Food.',
-  mine: 'Stone and mineral. Upgrades to a Well.',
+  mine: 'Stone and mineral. Upgrades to a Derrick.',
+  derrick: 'Temporary mineral rig on a Mine. Collapses into a Well.',
+  well: 'Mineral trickle after the Derrick collapses.',
   tower: 'Trains Wizards. Needs a Camp.',
   tavern: 'Trains Warlocks. Researches Patronage. Needs a Camp.',
   lab: 'Researches Artillery. Needs a Camp.',
@@ -71,12 +73,61 @@ const UPGRADE_NOTE = {
   stewardship: 'Researched at the Moon Well.',
 };
 
-function listedUnits() {
-  return UNIT_DEFS;
+/**
+ * Base unit beside its upgrade (v1 upgradeTo arcs). `null` upgrade = reserved slot.
+ * @type {readonly (readonly [number, number | null])[]}
+ */
+export const HELP_UNIT_ROWS = Object.freeze([
+  [UNIT.VILLAGER, UNIT.BRIGAND],
+  [UNIT.ENGINEER, null],
+  [UNIT.MONK, null],
+  [UNIT.WIZARD, null],
+  [UNIT.WARLOCK, null],
+  [UNIT.WARRIOR, UNIT.CHAMPION],
+  [UNIT.ARCHER, null],
+  [UNIT.WAGON, null],
+  [UNIT.DIRIGIBLE, null],
+  [UNIT.APC, null],
+  [UNIT.PRIEST, null],
+  [UNIT.MYCO, null],
+  [UNIT.SHAMAN, null],
+]);
+
+/** v1 upgradeTo display names for help placeholders (not in sim yet). */
+const HELP_UNIT_FUTURE_NAME = Object.freeze({
+  [UNIT.ENGINEER]: 'Architect',
+  [UNIT.MONK]: 'Paladin',
+  [UNIT.WIZARD]: 'Elemental',
+  [UNIT.WARLOCK]: 'Geomancer',
+  [UNIT.ARCHER]: 'Marksman',
+  [UNIT.WAGON]: 'War Wagon',
+  [UNIT.DIRIGIBLE]: 'War Balloon',
+  [UNIT.APC]: 'Tank',
+  [UNIT.PRIEST]: 'Valkyrie',
+  [UNIT.MYCO]: 'Alchemist',
+  [UNIT.SHAMAN]: 'Druid',
+});
+
+const UNIT_STAT_SHELL = Object.freeze([
+  { label: 'Health', pips: 0 },
+  { label: 'Speed', pips: 0 },
+  { label: 'Damage', pips: 0 },
+]);
+
+/** @returns {({ kind: 'unit', id: string } | { kind: 'gap' })[]} */
+export function helpUnitLayout() {
+  /** @type {({ kind: 'unit', id: string } | { kind: 'gap' })[]} */
+  const slots = [];
+  for (const [base, upgrade] of HELP_UNIT_ROWS) {
+    slots.push({ kind: 'unit', id: String(base) });
+    if (upgrade == null) slots.push({ kind: 'gap' });
+    else slots.push({ kind: 'unit', id: String(upgrade) });
+  }
+  return slots;
 }
 
 export function helpUnitCards() {
-  const units = listedUnits();
+  const units = UNIT_DEFS;
   const maxHp = Math.max(...units.map((d) => d.hp));
   const maxSpeed = Math.max(...units.map((d) => fx.toFloat(d.speed)));
   const maxDamage = Math.max(...units.map((d) => d.attackDamage));
@@ -92,17 +143,30 @@ export function helpUnitCards() {
   }));
 }
 
+/** Placeable pads plus structure-upgrade forms shown in help pairs. */
+const HELP_BUILDING_IDS = Object.freeze([
+  ...PLACEABLE_BUILDINGS.map((b) => b.id),
+  'derrick',
+  'well',
+]);
+
+export const HELP_BUILDING_ORDER = Object.freeze(
+  PLACEABLE_BUILDINGS.flatMap((b) => (b.id === 'mine' ? ['mine', 'derrick', 'well'] : [b.id])),
+);
+
+export const HELP_UPGRADE_ORDER = Object.freeze(Object.keys(UPGRADE_DEFS));
+
 export function helpBuildingCards() {
-  const list = PLACEABLE_BUILDINGS;
-  const maxHp = Math.max(...list.map((b) => BUILDING_HP[b.id] ?? 0));
-  const maxTime = Math.max(...list.map((b) => BUILD_TIME[b.id] ?? 0));
-  return list.map((b) => ({
-    id: b.id,
-    name: b.name,
-    note: BUILDING_NOTE[b.id] ?? '',
+  const ids = HELP_BUILDING_IDS;
+  const maxHp = Math.max(...ids.map((id) => BUILDING_HP[id] ?? 0));
+  const maxTime = Math.max(...ids.map((id) => BUILD_TIME[id] ?? 0));
+  return ids.map((id) => ({
+    id,
+    name: getBuildingDisplayName(id),
+    note: BUILDING_NOTE[id] ?? '',
     stats: [
-      { label: 'Health', pips: helpPips(BUILDING_HP[b.id] ?? 0, maxHp) },
-      { label: 'Time', pips: helpPips(BUILD_TIME[b.id] ?? 0, maxTime) },
+      { label: 'Health', pips: helpPips(BUILDING_HP[id] ?? 0, maxHp) },
+      { label: 'Time', pips: helpPips(BUILD_TIME[id] ?? 0, maxTime) },
     ],
   }));
 }
@@ -124,69 +188,133 @@ function upgradeHome(id) {
   return 'building menu';
 }
 
-function pipRow(stat) {
-  const row = document.createElement('div');
-  row.className = 'help-stat';
-  const label = document.createElement('span');
-  label.textContent = stat.label;
+function pipGroup(stat, pipClass = 'help-pip') {
   const pips = document.createElement('span');
   pips.className = 'help-pips';
   pips.setAttribute('aria-label', `${stat.label} ${stat.pips} of ${HELP_PIPS}`);
   for (let i = 0; i < HELP_PIPS; i++) {
     const pip = document.createElement('span');
-    pip.className = i < stat.pips ? 'help-pip is-on' : 'help-pip';
+    pip.className = i < stat.pips ? `${pipClass} is-on` : pipClass;
     pips.append(pip);
   }
-  row.append(label, pips);
+  return pips;
+}
+
+const UNIT_STAT_ABBR = { Health: 'Hp', Speed: 'Spd', Damage: 'Dmg' };
+const BUILDING_STAT_ABBR = { Health: 'Hp', Time: 'Time' };
+
+function unitTileFace(card, statAbbr, { empty = false } = {}) {
+  const face = document.createElement('div');
+  face.className = empty ? 'help-unit-tile help-unit-tile--empty' : 'help-unit-tile';
+  const name = document.createElement('span');
+  name.className = 'help-unit-tile-name';
+  name.textContent = card.name ?? '';
+  face.append(name);
+  const statList = card.stats?.length ? card.stats : [];
+  if (statList.length) {
+    const statsWrap = document.createElement('span');
+    statsWrap.className = 'help-unit-tile-stats';
+    for (const stat of statList) {
+      const row = document.createElement('span');
+      row.className = 'help-unit-mini-stat';
+      const label = document.createElement('span');
+      label.className = 'help-unit-mini-label';
+      label.textContent = statAbbr[stat.label] ?? stat.label;
+      row.append(label, pipGroup(stat, 'help-pip help-pip-mini'));
+      statsWrap.append(row);
+    }
+    face.append(statsWrap);
+  }
+  return face;
+}
+
+function rosterCell(card, statAbbr) {
+  const cell = document.createElement('div');
+  cell.className = 'help-unit-cell';
+  cell.append(unitTileFace(card, statAbbr));
+  if (card.note) {
+    const note = document.createElement('p');
+    note.className = 'help-unit-inline-note';
+    note.textContent = card.note;
+    cell.append(note);
+  }
+  return cell;
+}
+
+function rosterFutureSlot(baseUnitId, statAbbr) {
+  const placeholder = {
+    name: HELP_UNIT_FUTURE_NAME[baseUnitId] ?? '',
+    stats: UNIT_STAT_SHELL,
+  };
+  const cell = document.createElement('div');
+  cell.className = 'help-unit-cell';
+  cell.append(unitTileFace(placeholder, statAbbr, { empty: true }));
+  return cell;
+}
+
+/** @param {readonly (readonly [string, string | null])[]} rows */
+function fillPairRoster(host, rows, cards, statAbbr) {
+  const byId = new Map(cards.map((c) => [c.id, c]));
+  host.replaceChildren();
+  for (const [baseId, upgradeId] of rows) {
+    const pair = document.createElement('div');
+    pair.className = 'help-unit-pair';
+    const baseCard = byId.get(String(baseId));
+    if (baseCard) pair.append(rosterCell(baseCard, statAbbr));
+    if (upgradeId != null) {
+      const upCard = byId.get(String(upgradeId));
+      if (upCard) pair.append(rosterCell(upCard, statAbbr));
+    } else {
+      pair.append(rosterFutureSlot(baseId, statAbbr));
+    }
+    host.append(pair);
+  }
+}
+
+function entryStatsRow(card, statAbbr) {
+  const stats = document.createElement('span');
+  stats.className = 'help-entry-stats';
+  for (const stat of card.stats) {
+    const row = document.createElement('span');
+    row.className = 'help-unit-mini-stat';
+    const label = document.createElement('span');
+    label.className = 'help-unit-mini-label';
+    label.textContent = statAbbr[stat.label] ?? stat.label;
+    row.append(label, pipGroup(stat, 'help-pip help-pip-mini'));
+    stats.append(row);
+  }
+  return stats;
+}
+
+function entryRow(card, statAbbr) {
+  const row = document.createElement('div');
+  row.className = 'help-entry-row';
+  const head = document.createElement('div');
+  head.className = 'help-entry-head';
+  const name = document.createElement('span');
+  name.className = 'help-entry-name';
+  name.textContent = card.name;
+  head.append(name);
+  if (card.stats.length) head.append(entryStatsRow(card, statAbbr));
+  row.append(head);
+  if (card.note) {
+    const note = document.createElement('p');
+    note.className = 'help-entry-note';
+    note.textContent = card.note;
+    row.append(note);
+  }
   return row;
 }
 
-function renderDetail(card) {
-  const title = document.createElement('h4');
-  title.textContent = card.name;
-  const frag = document.createDocumentFragment();
-  frag.append(title);
-  for (const stat of card.stats) frag.append(pipRow(stat));
-  if (card.note) {
-    const note = document.createElement('p');
-    note.textContent = card.note;
-    frag.append(note);
-  }
-  return frag;
-}
-
-function fillRoster(host, detail, cards) {
+/** @param {readonly string[]} order */
+function fillEntryRoster(host, order, cards, statAbbr) {
+  const byId = new Map(cards.map((c) => [c.id, c]));
   host.replaceChildren();
-  for (const card of cards) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'help-tile';
-    btn.dataset.helpId = card.id;
-    btn.textContent = card.name;
-    btn.setAttribute('aria-pressed', 'false');
-    host.append(btn);
+  host.classList.add('help-entry-roster');
+  for (const id of order) {
+    const card = byId.get(id);
+    if (card) host.append(entryRow(card, statAbbr));
   }
-  host.addEventListener('click', (e) => {
-    const btn = e.target instanceof Element ? e.target.closest('button') : null;
-    if (!btn || !host.contains(btn)) return;
-    const already = btn.classList.contains('is-on');
-    for (const tile of host.querySelectorAll('button')) {
-      tile.classList.remove('is-on');
-      tile.setAttribute('aria-pressed', 'false');
-    }
-    if (already) {
-      detail.hidden = true;
-      detail.replaceChildren();
-      return;
-    }
-    btn.classList.add('is-on');
-    btn.setAttribute('aria-pressed', 'true');
-    const card = cards.find((c) => c.id === btn.dataset.helpId);
-    if (!card) return;
-    detail.replaceChildren(renderDetail(card));
-    detail.hidden = false;
-    requestAnimationFrame(() => detail.scrollIntoView({ block: 'start' }));
-  });
 }
 
 function syncSectionBodies(root) {
@@ -203,13 +331,17 @@ function syncSectionBodies(root) {
 export function mountHelpRoster(root) {
   if (!root?.querySelector) return;
   const units = root.querySelector('#help-units');
-  const unitDetail = root.querySelector('#help-units-detail');
   const buildings = root.querySelector('#help-buildings');
-  const buildingDetail = root.querySelector('#help-buildings-detail');
   const upgrades = root.querySelector('#help-upgrades');
-  const upgradeDetail = root.querySelector('#help-upgrades-detail');
-  if (units && unitDetail) fillRoster(units, unitDetail, helpUnitCards());
-  if (buildings && buildingDetail) fillRoster(buildings, buildingDetail, helpBuildingCards());
-  if (upgrades && upgradeDetail) fillRoster(upgrades, upgradeDetail, helpUpgradeCards());
+  if (units) {
+    fillPairRoster(
+      units,
+      HELP_UNIT_ROWS.map(([b, u]) => [String(b), u == null ? null : String(u)]),
+      helpUnitCards(),
+      UNIT_STAT_ABBR,
+    );
+  }
+  if (buildings) fillEntryRoster(buildings, HELP_BUILDING_ORDER, helpBuildingCards(), BUILDING_STAT_ABBR);
+  if (upgrades) fillEntryRoster(upgrades, HELP_UPGRADE_ORDER, helpUpgradeCards(), {});
   syncSectionBodies(root);
 }

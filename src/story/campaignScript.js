@@ -67,7 +67,7 @@ function cameraBeat(step) {
   const who = String(step.char || '').trim();
   const close = Number(step.radius) > 0 && Number(step.radius) < 100;
   if (who) return { kind: 'camera', text: `ANGLE ON ${who.toUpperCase()}.` };
-  if (close) return { kind: 'camera', text: 'The camera finds them — closer now.' };
+  if (close) return { kind: 'camera', text: 'The camera finds them - closer now.' };
   return { kind: 'camera', text: 'The camera takes the field. Wide.' };
 }
 
@@ -125,7 +125,7 @@ function chapterBeats(episodeName, episodeN, indexInEpisode, def) {
   const beats = [
     { kind: 'transition', text: 'FADE IN:' },
     { kind: 'scene', text: sceneHeading(def.theme, def.name) },
-    { kind: 'action', text: `EPISODE ${episodeN}: ${episodeName}. CHAPTER ${chapterNo} — ${def.name}.` },
+    { kind: 'action', text: `EPISODE ${episodeN}: ${episodeName}. CHAPTER ${chapterNo} - ${def.name}.` },
     ...stepBeats(def.intro),
   ];
   const play = playFromObjectives(def.objectives);
@@ -206,7 +206,7 @@ export function campaignScriptDocument(opts = {}) {
 
 function fountainPlay(beat) {
   const bits = (beat.items || []).map((item) => (
-    item.verb && item.note ? `${item.verb} — ${item.note}` : (item.verb || item.note)
+    item.verb && item.note ? `${item.verb} - ${item.note}` : (item.verb || item.note)
   ));
   const joined = bits.join(' ');
   if (joined.startsWith('REACH') || joined.startsWith('TAKE')) {
@@ -310,7 +310,7 @@ function htmlBeats(beats) {
       for (const item of beat.items || []) {
         const verb = item.verb ? `<b>${esc(item.verb)}</b>` : '';
         const note = item.note ? esc(item.note) : '';
-        out.push(`<li>${verb}${verb && note ? ' — ' : ''}${note}</li>`);
+        out.push(`<li>${verb}${verb && note ? ' - ' : ''}${note}</li>`);
       }
       out.push('</ul>');
       out.push('</div>');

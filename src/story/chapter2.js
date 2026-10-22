@@ -1,4 +1,4 @@
-// Tiny Chapter 2 — exists so Chapter 1 can test a map load.
+// Tiny Chapter 2 - exists so Chapter 1 can test a map load.
 
 import {
   CLIP_CAMERA,
@@ -36,9 +36,9 @@ export const CHAPTER2_SEED = 44117;
 export const CHAPTER2_WAVES = 3;
 /** Staging south of the party, then a mid-road hop toward the ridge. */
 export const CHAPTER2_WAVE_ROUTE = [[0.51, 0.70], [0.51, 0.38]];
-/** Watchtower garrison — purple seat, outside the 4-player ally table. */
+/** Watchtower garrison - purple seat, outside the 4-player ally table. */
 export const CHAPTER2_TOWER_OWNER = 4;
-/** Wave pack — fights the towers, not the party. */
+/** Wave pack - fights the towers, not the party. */
 export const CHAPTER2_WAVE_OWNER = 5;
 /** Player team 0 is neutral to both outsider teams. */
 export const CHAPTER2_NEUTRAL_TEAMS = [[0, CHAPTER2_TOWER_OWNER], [0, CHAPTER2_WAVE_OWNER]];

@@ -1,4 +1,4 @@
-// Table silhouette — 16-tile chunks with per-chunk corner radius.
+// Table silhouette - 16-tile chunks with per-chunk corner radius.
 // Play / Forge boards use an odd chunk count so the origin sits in a center chunk.
 // A chunk's radius fillets its outside corners (convex) or inside corners
 // (concave / punched hole). Radius 0 stays sharp with no plinth.
@@ -411,7 +411,7 @@ function tileCrossesBoundary(field, shape, tx, tz, corners) {
   return false;
 }
 
-/** @deprecated Use tileInTable — sharp cell membership without fillets. */
+/** @deprecated Use tileInTable - sharp cell membership without fillets. */
 export function tileInSharpTable(field, shape, tx, tz) {
   if (tx < 0 || tz < 0 || tx >= field.width || tz >= field.height) return false;
   const { cx, cz } = tileCellCoords(tx, tz, shape.cellSize);
@@ -503,7 +503,7 @@ export function tableCornerPlinths(field, shape = field.tableShape) {
     .map((c) => ({ x: c.x, z: c.z }));
 }
 
-/** Midpoints of outer table rails only — skips holes and internal cuts. */
+/** Midpoints of outer table rails only - skips holes and internal cuts. */
 export function tableEdgeMidpoints(field, shape = field.tableShape) {
   if (!field || !shape) return [];
   const bounds = enabledWorldBounds(field, shape);

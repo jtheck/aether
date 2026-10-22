@@ -329,7 +329,7 @@
         window.behaviorManager.setBehavior(villager, 'linger', {
           center: { x, z },
           radius: 30,
-          wanderDistance: 16, // 4 tiles — must be well above the moveToward stop threshold of 2.0
+          wanderDistance: 16, // 4 tiles - must be well above the moveToward stop threshold of 2.0
           wanderInterval: 4000 // Pick a new wander target every 4 seconds
         });
       }
@@ -523,7 +523,7 @@
   
   // Step physics for demo mode when game loop isn't running.
   // Runs 3 physics steps per call at dt=1/60 each, matching the real game's 60Hz physics
-  // within a 20Hz demo tick — so movement speeds look identical to a real match.
+  // within a 20Hz demo tick - so movement speeds look identical to a real match.
   function stepDemoPhysics() {
     const dt = 1 / 60; // Fixed 60Hz timestep per step
     

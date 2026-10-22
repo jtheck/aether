@@ -25,7 +25,7 @@ export const TREE_STAGE_MIN = 2;
 export const TREE_STAGE_MAX = 6;
 /** Grove-fed trees may keep growing past the natural canopy. */
 export const TREE_STAGE_GROVE_MAX = 12;
-/** Uint8 tile stock — grove giants still fit. */
+/** Uint8 tile stock - grove giants still fit. */
 export const TREE_STOCK_MAX = 255;
 export const TREE_STOCK_NATURAL_MAX = TREE_WOOD_PER_STAGE * TREE_STAGE_MAX;
 export const TREE_STOCK_GROVE_MAX = TREE_WOOD_PER_STAGE * TREE_STAGE_GROVE_MAX;
@@ -37,7 +37,7 @@ const TREE_STAGE_SCALES = [
   1.68, 1.92, 2.19, 2.49, 2.82, 3.18,
 ];
 
-/** Immediate chip on fireball splash — two visual stages, then the tree keeps burning. */
+/** Immediate chip on fireball splash - two visual stages, then the tree keeps burning. */
 export const TREE_IGNITE_DAMAGE = TREE_WOOD_PER_STAGE * 2;
 /** Ticks a tree stays lit after ignite / re-ignite (~45s at 20Hz). Uint16. */
 export const TREE_BURN_TICKS = 900;
@@ -92,7 +92,7 @@ export function treeSpreadHash(tileIndex, burn) {
   return h >>> 0;
 }
 
-/** Water tiles do not burn — shore trees and ground-fire both check this. */
+/** Water tiles do not burn - shore trees and ground-fire both check this. */
 export function tileIsWater(field, tileIndex) {
   return field?.terrainTypes?.[tileIndex] === TERRAIN.WATER;
 }
@@ -108,7 +108,7 @@ export function treeScaleForStage(stage) {
 export function ensureTreeArrays(field) {
   const n = field.width * field.height;
   if (field.treeStock?.length !== n) field.treeStock = new Uint8Array(n);
-  // Uint16 — Uint8 wrapped multi-second burn timers down to ~1s.
+  // Uint16 - Uint8 wrapped multi-second burn timers down to ~1s.
   if (!(field.treeBurn instanceof Uint16Array) || field.treeBurn.length !== n) {
     field.treeBurn = new Uint16Array(n);
   }
@@ -182,7 +182,7 @@ export function igniteTree(field, tileIndex) {
 
 /**
  * Empty grass/dirt tile that can accept a new tree (spore growth, etc.).
- * Spawn pads are cleared only at scenery populate — mid-game growth may fill them.
+ * Spawn pads are cleared only at scenery populate - mid-game growth may fill them.
  * @param {Set<number>|null} [pendingTiles] tile indices already queued to grow
  */
 export function canGrowTreeAt(field, tx, tz, pendingTiles = null) {

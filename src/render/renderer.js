@@ -1,4 +1,4 @@
-// render/ — Babylon Lite view layer.
+// render/ - Babylon Lite view layer.
 //
 // Units are thin-instanced GLB meshes (one draw call per type × owner in KOTH).
 // Skinned units with clips use Lite VAT on the same thin-instance path.
@@ -152,7 +152,7 @@ function setThinInstanceCount(mesh, count) {
   ti._version++;
   ti._dirtyMin = 0;
   ti._dirtyMax = count;
-  // Lite still records drawIndexed(..., 0) into render bundles — WebGPU warns.
+  // Lite still records drawIndexed(..., 0) into render bundles - WebGPU warns.
   mesh.visible = count > 0;
 }
 
@@ -236,7 +236,7 @@ function rayHitGround(ray) {
 }
 
 /**
- * Ray × heightfield. y=0 plane picks read "further away" on slopes — units and
+ * Ray × heightfield. y=0 plane picks read "further away" on slopes - units and
  * markers must share this hit or the ping won't sit under the cursor.
  * @param {(x: number, z: number) => number} heightAt
  */
@@ -311,7 +311,7 @@ function initThinInstances(mesh, activeCount, gpuCapacity) {
 /** Small clearance above sampled terrain (instance origin at ground + this). */
 const FOOT_CLEARANCE = 0.06;
 
-/** Yaw, then pitch (somersault), then roll (barrel) — comic air tumble. */
+/** Yaw, then pitch (somersault), then roll (barrel) - comic air tumble. */
 function writeUnitMatrix(matrices, slot, x, z, uniformScale, yaw, moving, groundY = 0, pitch = 0, roll = 0) {
   const o = slot * 16;
   if (uniformScale <= 0) {
@@ -411,14 +411,14 @@ function writeGroundSpinMarker(matrices, i, x, z, scale, spinYaw, yOffset, groun
   matrices[o + 15] = 1;
 }
 
-/** v1 collar.glb — uniform scale + Y spin at feet. */
+/** v1 collar.glb - uniform scale + Y spin at feet. */
 function writeSelectionCollar(matrices, i, x, z, scale, spinYaw, groundY = 0) {
   // Match game/units.js SELECTION_INDICATOR_Y_OFFSET * TILE (TILE≈4 → 0.14).
   writeGroundSpinMarker(matrices, i, x, z, scale, spinYaw, 0.14, groundY);
 }
 
 /**
- * Order / fallback washes. Collar idle bands are NOT this — each part keeps its
+ * Order / fallback washes. Collar idle bands are NOT this - each part keeps its
  * authored color in a per-part buffer (materials are whitened so instance color
  * can fully replace: multiply cannot bleach red/yellow albedo to gray).
  */
@@ -426,7 +426,7 @@ const RING_TINT = {
   white: [1, 1, 1, 1],
   cyan: [0.15, 1, 1, 1],
   red: [1, 0.12, 0.08, 1],
-  /** Force-move wash — same gray as target.glb move arrow. */
+  /** Force-move wash - same gray as target.glb move arrow. */
   yellow: [0.68, 0.68, 0.68, 1],
 };
 
@@ -448,7 +448,7 @@ function applyUnlitHudMaterial(mat) {
 }
 
 /**
- * collar.glb bakes solid band colors into 1×1 baseColor textures — setting
+ * collar.glb bakes solid band colors into 1×1 baseColor textures - setting
  * diffuseColor / baseColorFactor does not clear them. Read the authored RGB
  * (factor if present, else material name) before swapping to a white mat.
  */
@@ -480,9 +480,9 @@ function makeCollarTintMaterial() {
 const SELECTION_COLLAR_URL = '/assets/models/collar.glb';
 /** v1: max(0.12, TILE * 0.22) with TILE=4. */
 const SELECTION_COLLAR_SCALE = 0.88;
-/** Casters — 50% larger than the base infantry collar. */
+/** Casters - 50% larger than the base infantry collar. */
 const SELECTION_COLLAR_CASTER_SCALE = SELECTION_COLLAR_SCALE * 1.5;
-/** Vehicles / air — fixed large collar (10% under prior 3.4). */
+/** Vehicles / air - fixed large collar (10% under prior 3.4). */
 const SELECTION_COLLAR_VEHICLE_SCALE = 3.4 * 0.9;
 
 /** v1 click-command marker (`game/ui.js` createTargetMarker). */
@@ -497,7 +497,7 @@ const ORDER_POP_MS = 125;
 const ORDER_HOLD_MS = 250;
 const ORDER_FADE_MS = 200;
 const ORDER_TOTAL_MS = ORDER_POP_MS + ORDER_HOLD_MS + ORDER_FADE_MS;
-/** Radians of Y spin during pop (settles to camera-facing). Was 1.35π; punched to 2.4π — midpoint. */
+/** Radians of Y spin during pop (settles to camera-facing). Was 1.35π; punched to 2.4π - midpoint. */
 const ORDER_SPIN_RAD = Math.PI * 1.875;
 
 /** Boot / grow floor for type×owner unit batches. */
@@ -555,7 +555,7 @@ function resizeTypeBatch(batch, entityIds, opts = {}) {
     const cap = capacityFor(newSize, { initial: UNIT_BATCH_INITIAL });
     growTypeBatchCapacity(batch, cap);
   }
-  // Keep GPU draw count at capacity for KOTH — Lite fails when ti.count grows after boot
+  // Keep GPU draw count at capacity for KOTH - Lite fails when ti.count grows after boot
   // without a setThinInstances realloc. Shadow casters key off mappedSize; empty
   // prealloc batches stay at full ti.count but do not cast.
   const drawCount = prealloc ? Math.max(batch.gpuCapacity, 1) : newSize;
@@ -845,7 +845,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     return resolveBuildingModelUrl(typeId, packForOwnerBuilding(owner, typeId));
   }
   // Lite only honors 1 (off) vs 4 (4× MSAA); sample count is fixed on the
-  // swapchain at construction — the settings toggle persists and reloads.
+  // swapchain at construction - the settings toggle persists and reloads.
   const msaaSamples = opts.msaaSamples === 4 ? 4 : 1;
   const engine = await createEngine(canvas, { msaaSamples });
   bootLog('engine');
@@ -944,7 +944,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     xrFit._vpVer = -1;
     xrFit._projVer = -1;
   }
-  // Camera input is owned by cameraController (v1 mouse/keyboard). Do not attachControl —
+  // Camera input is owned by cameraController (v1 mouse/keyboard). Do not attachControl -
   // Lite would still register wheel/touch handlers that fight our hub.
   const cameraController = createCameraController(camera, canvas, {
     worldHalfF: cameraExt.x,
@@ -954,14 +954,14 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   const celestial = createCelestialRig(scene, { worldHalfF: Math.max(tableHalfF, tableHalfZF) });
   const sun = celestial.shadowLight;
   const sky = celestial.fillLight;
-  const skyBaseIntensity = celestial.fillBaseIntensity;
+  let skyBaseIntensity = celestial.fillBaseIntensity;
 
   // CSM: fits cascades from thin-instance world AABBs + camera (ESM only fits
   // mesh.world × local bounds, so board-scale TI units vanish or become ~2 texels).
-  // Keep worldSpaceBias tiny — unit height is ~1–2; 0.15+ eats character contact shadows.
+  // Keep worldSpaceBias tiny - unit height is ~1–2; 0.15+ eats character contact shadows.
   // Note: Lite keeps darkness / worldSpaceBias on an internal csmCfg, not sg._config.
   // Map size is fixed at construction (the depth texture is allocated here,
-  // with no dispose). Changing quality tiers needs a reload — see settings.
+  // with no dispose). Changing quality tiers needs a reload - see settings.
   // shadowMaxZ is not: syncShadowCoverage updates it when the board or zoom changes.
   const shadowQuality = opts.shadowQuality ?? {};
   const shadowOpts = {
@@ -977,7 +977,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     // caster bounds, which clips the cast shadow on the ground (build-lite).
     worldSpaceBias: 0.02,
     // 0 = black in shadow, 1 = no shadow (PCF mixes darkness→1 by lit factor).
-    // Sun term only — fill and grass emissive stay up, so this has to be low
+    // Sun term only - fill and grass emissive stay up, so this has to be low
     // or a sunny-side shadow disappears into the lawn.
     darkness: 0.05,
     frustumEdgeFalloff: 0.04,
@@ -993,7 +993,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   // (see markShadowReceivers before applyShadowState). Callers wanting shadows
   // off apply setShadowsEnabled(false) after start().
   let shadowsEnabled = true;
-  /** Socket fire / ground fire / particles / aura sparkles — settings slider + F key. */
+  /** Socket fire / ground fire / particles / aura sparkles - settings slider + F key. */
   const DEFAULT_FX_QUALITY = {
     hardMax: 65536,
     initial: 8192,
@@ -1030,9 +1030,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let socketFireElapsed = Math.random() * SOCKET_FX_CADENCE.fire;
   let socketSmokeElapsed = Math.random() * SOCKET_FX_CADENCE.smoke;
   let groundFireElapsed = 0;
-  /** VAT clock advance — A/B with V key. */
+  /** VAT clock advance - A/B with V key. */
   let vatEnabled = true;
-  /** Unit meshes + pose loop — A/B with U key. */
+  /** Unit meshes + pose loop - A/B with U key. */
   let unitsEnabled = true;
   /** When true, FX / trail / lightning clocks freeze (sim pause). */
   let fxPaused = false;
@@ -1067,7 +1067,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let tileGridVisible = false;
   /** Occupancy fills lag behind field while grid is hidden; refresh on show. */
   let tileGridOccupancyDirty = false;
-  /** O-key screenshot chrome — HUD / collars / grids off, world stays. */
+  /** O-key screenshot chrome - HUD / collars / grids off, world stays. */
   let screenshotHudHidden = false;
   /** @type {{ hide: () => void, showCanvasRect: Function, showCanvasPath?: Function }} */
   let selectionBoxOverlay = { hide() {}, showCanvasRect() {} };
@@ -1178,7 +1178,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     };
   }
 
-  // Must exist before `await createTerrainFromField` — cached tree/rock GLBs can
+  // Must exist before `await createTerrainFromField` - cached tree/rock GLBs can
   // fire onModelMesh as a microtask before the later shadow-setup consts run.
   /** Meshes already queued/deferred at least once (avoid re-defer on every place()). */
   const shadowCasterNoted = new WeakSet();
@@ -1188,7 +1188,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   function sceneryOpts() {
     return {
-      // 3D trees/rocks pop in after Phase A register — fold them into CSM.
+      // 3D trees/rocks pop in after Phase A register - fold them into CSM.
       onModelMesh(mesh) {
         if (!mesh) return;
         mesh.receiveShadows = shadowsEnabled && !isBackdropMesh(mesh) && !mesh._skipShadowReceive;
@@ -1201,7 +1201,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     return fieldSnap ? surfaceHeightAt(fieldSnap, x, z) : 0;
   }
 
-  /** Agora pads currently drawn — walk Y follows this list, not fog-hidden ones. */
+  /** Agora pads currently drawn - walk Y follows this list, not fog-hidden ones. */
   let agoraWalkPads = [];
 
   function syncAgoraWalk(list) {
@@ -1420,14 +1420,14 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     return chunks.length;
   }
 
-  /** After addToScene — soles sit near instance Y (VAT×mesh.world cancels armature). */
+  /** After addToScene - soles sit near instance Y (VAT×mesh.world cancels armature). */
   function refineVatFootLift(batch) {
     if (!batch?.vatParts?.length) return;
-    // Do NOT subtract mesh.worldY*scale — that double-counts and buries units.
+    // Do NOT subtract mesh.worldY*scale - that double-counts and buries units.
     batch.vatFootLift = 0.08;
   }
 
-  // Progressive boot: unit templates load in Phase B / on demand — not before first paint.
+  // Progressive boot: unit templates load in Phase B / on demand - not before first paint.
   bootLog('terrain ready');
 
   /** @type {Map<string, Promise<void>>} */
@@ -1502,7 +1502,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         opts.onAnimLoadProgress?.(typeBatches.size, typeBatches.size);
         if (lastMapTypes) {
           mapEntitySlots(lastMapCount, lastMapTypes, lastMapOwners, lastMapDrawable);
-          // New slots need a full pose rewrite — mark dirty + ask main to drop pose cache.
+          // New slots need a full pose rewrite - mark dirty + ask main to drop pose cache.
           for (const batch of typeBatches.values()) {
             for (const mesh of vatPartMeshes(batch)) {
               const n = mesh.thinInstances?.count ?? 0;
@@ -1559,7 +1559,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const champKey = batchKey(UNIT.CHAMPION, owner);
       if (!groups.has(champKey)) groups.set(champKey, []);
     }
-    // Start ensures only after scenery — building the job list must not call
+    // Start ensures only after scenery - building the job list must not call
     // ensureTypeOwnerBatch early (that raced past the gate).
     return sceneryModelsReady.then(async () => {
       for (const [key, entityIds] of groups) {
@@ -1620,7 +1620,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     collarBandColors = [];
   }
   let ringMatrices = new Float32Array(ringCap * 16);
-  /** One color buffer per part — idle needs different band colors per draw. */
+  /** One color buffer per part - idle needs different band colors per draw. */
   const ringColorBufs = selRingParts.map(() => new Float32Array(ringCap * 4));
 
   function ringTintForPart(partIndex, mode) {
@@ -1697,7 +1697,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     scene,
     Math.max(capacity, gpuCapacity, 1) + 64,
   );
-  // Packed overlay — not entity-indexed. Matching entity count made stress
+  // Packed overlay - not entity-indexed. Matching entity count made stress
   // draw tens of thousands of hidden spheres (Lite keeps ti.count at cap).
   // The mark is a camera-facing ring; the sphere only ever read as that circle.
   const holyShields = createPickHitboxRenderer(
@@ -1722,7 +1722,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     muted: !fxEnabled,
   });
   const unitAuras = createUnitAuras((init) => particles.emit(init), groundYAt, {
-    // Continuous FX distance is quality-tiered — not tied to scenery LOD_ENABLED.
+    // Continuous FX distance is quality-tiered - not tied to scenery LOD_ENABLED.
     maxSparkleDistSq: fxDistanceSq > 0 ? fxDistanceSq : 0,
     sparkleIntervalMs: fxQuality.sparkleIntervalMs,
     getEye: cameraEyePos,
@@ -1853,7 +1853,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   });
   const trailGenerations = new Uint32Array(MAX_PROJECTILES);
   const trailLastEmitMs = new Float64Array(MAX_PROJECTILES);
-  /** Generation last splashed — avoids double FX if a dead slot lingers. */
+  /** Generation last splashed - avoids double FX if a dead slot lingers. */
   const fireballSplashSeen = new Uint32Array(MAX_PROJECTILES);
   const holySlashSeen = new Uint32Array(MAX_PROJECTILES);
   let particleClockMs = 0;
@@ -1979,7 +1979,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
   }
 
-  /** Impact splash — white-hot punch from the rectangle-beam era. */
+  /** Impact splash - white-hot punch from the rectangle-beam era. */
   function emitLightningImpact(worldX, gy, worldZ, kind = LIGHTNING_HIT.GROUND) {
     // Nuclear contact flash.
     particles.emit({
@@ -2023,7 +2023,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       endSize: 20,
       drag: 0.06,
     });
-    // Short contact plasma only — a tall vertical ion column looked like
+    // Short contact plasma only - a tall vertical ion column looked like
     // glow beads ignoring the bolt path.
     for (let i = 0; i < 6; i++) {
       particles.emit({
@@ -2159,7 +2159,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   const lightningBolts = createLightningBolts(engine, scene, groundYAt, {
     emitImpact: emitLightningImpact,
     emitGlow(init) {
-      // Additive soft beads — blue halo without a covering tube shell.
+      // Additive soft beads - blue halo without a covering tube shell.
       particles.emit(init);
     },
     onFlash(amount) {
@@ -2173,7 +2173,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const aboveImpact = impactY + Math.max(90, radius * 0.2);
       const skyY = Math.max(aboveCam, aboveImpact);
       const boltLen = Math.max(90, skyY - impactY);
-      // Big lateral entry — scales with bolt height so zoomed-out strikes lean hard.
+      // Big lateral entry - scales with bolt height so zoomed-out strikes lean hard.
       const lateral = Math.max(55, boltLen * 0.38, radius * 0.12);
       const ang = ((seed & 0xffff) / 0xffff) * Math.PI * 2;
       return {
@@ -2591,7 +2591,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         return;
       }
       if (isShadow) {
-        // Purple star beads hug the bolt, then drop — short trail, not a long ink wake.
+        // Purple star beads hug the bolt, then drop - short trail, not a long ink wake.
         for (let n = 0; n < 2; n++) {
           const hang = 0.07 + Math.random() * 0.09;
           const drift = 0.42 + Math.random() * 0.22;
@@ -2707,7 +2707,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     const pushMesh = (mesh, { ignoreVisible = false } = {}) => {
       if (!isRenderableMesh(mesh)) return;
       if (shadowCasterDefer.has(mesh)) return;
-      // Units-off A/B hides meshes for the color pass but should still cast —
+      // Units-off A/B hides meshes for the color pass but should still cast -
       // otherwise U looks like a huge win that is really just shadows.
       if (!ignoreVisible && mesh.visible === false) return;
       const ti = mesh.thinInstances;
@@ -2715,7 +2715,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       casters.push(mesh);
     };
     for (const batch of typeBatches.values()) {
-      // KOTH keeps empty owner batches at full ti.count with zero matrices — skip those.
+      // KOTH keeps empty owner batches at full ti.count with zero matrices - skip those.
       if (!(batch.mappedSize > 0)) continue;
       for (const mesh of vatPartMeshes(batch)) {
         pushMesh(mesh, { ignoreVisible: !unitsEnabled });
@@ -2726,7 +2726,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
     if (terrain?.meshes) {
       for (const root of terrain.meshes) {
-        // GLB/bake scenery only — billboard impostors are flat cards and cast junk.
+        // GLB/bake scenery only - billboard impostors are flat cards and cast junk.
         const name = root.name || '';
         if (typeof name === 'string' && (name.startsWith('scenery-model-') || name.startsWith('wall-'))) {
           forEachMesh(root, pushMesh);
@@ -2819,7 +2819,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     shadowCasterList = list;
     setShadowTaskCasterMeshes(shadowGen, shadowCasterList);
     // The setter sets _preloadPending and the shadow pass skips until that
-    // promise resolves — after this frame's execute. Map loads change the
+    // promise resolves - after this frame's execute. Map loads change the
     // caster list in beforeRender, so the pass skips the frame that should
     // re-record and the new board keeps an empty map. Modules are already
     // loaded once a task exists.
@@ -2828,7 +2828,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
 
   function applyShadowState() {
-    // Never detach the generator or pass an empty caster list — both broke Lite
+    // Never detach the generator or pass an empty caster list - both broke Lite
     // CSM (billboard pipeline crash, or near-cascade dead / far still lit).
     // Off = dummy caster only (cheap map fill) + receivers cleared (fully lit).
     syncShadowCoverage();
@@ -3315,7 +3315,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     emitSocketFire(x, y, z, s, style === 'hex', opts);
   }
 
-  /** Wisps per fire tick — density is what separates a body of flame from a streamer. */
+  /** Wisps per fire tick - density is what separates a body of flame from a streamer. */
   const FIRE_WISPS_PER_TICK = 5;
   /**
    * Wide discs pooled at the socket. Wisps are born inside this pool rather
@@ -3325,7 +3325,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
    * population.
    */
   const FIRE_BASE_CHANCE = 0.7;
-  /** Ember rolls per fire tick — see the loop for the per-roll chance. */
+  /** Ember rolls per fire tick - see the loop for the per-roll chance. */
   const FIRE_EMBERS_PER_TICK = 2;
 
   /**
@@ -3415,7 +3415,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         ...puffSprite(),
         cullMin: SOCKET_FX_CULL_MIN,
         position: [x + cs * rad, y + Math.random() * 0.06 * s, z + sn * rad],
-        // Mostly tangential with a little outward drift — drag bleeds the
+        // Mostly tangential with a little outward drift - drag bleeds the
         // swirl off early, leaving a curved kick rather than an orbit.
         velocity: [
           cs * outward - sn * swirl,
@@ -3434,7 +3434,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       });
     }
     if (hex) emitStaffInkDrip(x, y, z, s, dens);
-    // Embers — small, drift sideways more than up. Rolled per tick rather than
+    // Embers - small, drift sideways more than up. Rolled per tick rather than
     // per wisp, so wisp density changes do not multiply the sparks. Two rolls
     // rather than a single higher chance: pairs read as a spit of sparks.
     if (opts?.embers === false) return;
@@ -3464,7 +3464,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   /**
    * Hex fire only: a bead of ink gathers under the flame, swells, then falls.
-   * Alpha blend is required — additive black draws nothing. Solid (no fadeOut)
+   * Alpha blend is required - additive black draws nothing. Solid (no fadeOut)
    * so the drop stays inky against the white flame right up to the ground,
    * where killY culls it. A shrunken cousin of the spore-bloom tree drips.
    */
@@ -3605,7 +3605,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
 
   // Lite only runs material-group builders during register. Phase B adds the first
-  // PBR meshes (units/buildings) after `_built` — without a primed PBR group,
+  // PBR meshes (units/buildings) after `_built` - without a primed PBR group,
   // render-task pending resolve throws (no group.r / _rebuildSingle).
   {
     const white = createTexture2DFromPixels(
@@ -3643,12 +3643,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   await registerSceneWithShadowSupport(scene);
   bootLog('scene registered (first paint ready)');
-  // GPU picker retained for USE_GPU_PICK / dumpPickBench — not created on the live CPU path.
+  // GPU picker retained for USE_GPU_PICK / dumpPickBench - not created on the live CPU path.
   const gpuPicker = USE_GPU_PICK ? createGpuPicker(scene) : null;
 
   /**
    * Lite's pick walks `scene.meshes` by captured length and reads `.pickable`
-   * without null-checks. Under load (async mesh churn) a hole throws — treat
+   * without null-checks. Under load (async mesh churn) a hole throws - treat
    * as miss instead of an uncaught rejection on click.
    */
   async function safePickAsync(x, y, opts) {
@@ -3764,7 +3764,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const u = elapsed / ORDER_POP_MS;
       const pop = easeOutBack(Math.min(1, u));
       animScale = 2.4 - 1.4 * pop;
-      // Ease-out spin into face — more turns + longer pop reads clearly.
+      // Ease-out spin into face - more turns + longer pop reads clearly.
       spinOffset = spinDir * (1 - easeOutCubic(u)) * ORDER_SPIN_RAD;
     } else if (elapsed < ORDER_POP_MS + ORDER_HOLD_MS) {
       animScale = 1;
@@ -3794,13 +3794,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     const tipX = eye.x + dx * inv * placeDist;
     const tipY = eye.y + dy * inv * placeDist;
     const tipZ = eye.z + dz * inv * placeDist;
-    // Origin so the tip vertex lands on the ray (Y spin only — tip is on local Y).
+    // Origin so the tip vertex lands on the ray (Y spin only - tip is on local Y).
     const ox = tipX;
     const oy = tipY - orderTipLocalY * scale;
     const oz = tipZ;
 
     if (useOrderTarget) {
-      // target.glb is flat on YZ (thin on X) — yaw so local +X faces the camera.
+      // target.glb is flat on YZ (thin on X) - yaw so local +X faces the camera.
       const faceYaw = Math.atan2(-(eye.z - oz), eye.x - ox);
       writeSpinAt(orderMatrices, ox, oy, oz, scale, faceYaw + spinOffset);
     } else {
@@ -3897,7 +3897,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     updateUnitPings();
     for (const batch of typeBatches.values()) {
       flushVatParams(batch);
-      // Unit matrices: markThinInstanceSlotDirty on write — do not flushThinInstances
+      // Unit matrices: markThinInstanceSlotDirty on write - do not flushThinInstances
       // (that API forces a full-buffer upload every call).
     }
     if (ringColorsDirty) {
@@ -3965,7 +3965,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (next !== selRingLiveCount) setSelRingCount(next);
   }
 
-  /** Hide every unit collar — table reset zeros CPU selection without a deselect edge. */
+  /** Hide every unit collar - table reset zeros CPU selection without a deselect edge. */
   function clearSelectionRings() {
     ringMatrices.fill(0);
     ringShown.fill(0);
@@ -4155,7 +4155,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     return getViewProjectionMatrix(camera, aspect);
   }
 
-  /** One rect + one VP — reuse across a box-select sweep. */
+  /** One rect + one VP - reuse across a box-select sweep. */
   function screenProjection(width, height) {
     let w = width;
     let h = height;
@@ -4326,7 +4326,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   let engineStarted = false;
 
-  /** Resolves when heavy boot assets are in — safe to unlock input. */
+  /** Resolves when heavy boot assets are in - safe to unlock input. */
   let resolveInteractive = /** @type {(v?: void) => void} */ (() => {});
   const interactiveReady = new Promise((resolve) => {
     resolveInteractive = resolve;
@@ -4334,7 +4334,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   /**
    * After the board is playable, decode remaining unit / building GLBs one
-   * asset per frame — no scene meshes. Instantiating them here would pin the
+   * asset per frame - no scene meshes. Instantiating them here would pin the
    * loading-screen 1v1 (hidden thin-instances still hit writeBuffer). A later
    * match place() / batch create hits the CPU cache and writes owner colors.
    */
@@ -4354,10 +4354,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
   }
 
-  // Phase B — background loads; do not gate start()/first paint.
+  // Phase B - background loads; do not gate start()/first paint.
   // World scenery (3D trees/rocks) finishes before unit templates so the board
   // reads as place-first. Interactive unlocks once agora/building systems exist
-  // and live units have started loading — remaining roster warms on the
+  // and live units have started loading - remaining roster warms on the
   // loading-screen match, one asset per frame.
   void (async () => {
     try {
@@ -4391,7 +4391,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         buildingProps = buildings;
         if (pendingAgoras) agoraProps.place(pendingAgoras);
         if (pendingRallyFlags) agoraProps.placeRallyFlags?.(pendingRallyFlags);
-        // Progressive place — do not await every type before unlocking.
+        // Progressive place - do not await every type before unlocking.
         if (pendingBuildings) {
           void buildingProps.place(pendingBuildings).then(() => {
             buildingProps.forEachShadowMesh?.(noteShadowMesh);
@@ -4497,7 +4497,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     clearSelectionRings,
 
     /**
-     * True when a late unit batch remapped slots — clear pose cache and rewrite instances.
+     * True when a late unit batch remapped slots - clear pose cache and rewrite instances.
      * @returns {boolean}
      */
     consumePoseResync() {
@@ -4543,7 +4543,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       if (shadowsEnabled) applyShadowState();
     },
 
-    /** Building selection collar(s) — fixed S/M/L world size (not the build menu). */
+    /** Building selection collar(s) - fixed S/M/L world size (not the build menu). */
     setBuildingSelectionHighlight(pos) {
       lastBuildingHighlight = pos ?? null;
       if (screenshotHudHidden) {
@@ -4646,7 +4646,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     /**
      * CPU ray vs the placed agora / building meshes. `allow` drops fogged,
      * dead, or collapsing instances before their triangles are tested.
-     * A hit past the ground is the buried part of the mesh — that click is ground.
+     * A hit past the ground is the buried part of the mesh - that click is ground.
      * @param {object | null} ray
      * @param {(hit: { kind: string, index: number }) => boolean} [allow]
      * @returns {{ kind: 'agora' | 'building', index: number } | null}
@@ -4678,7 +4678,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     /**
      * GPU mesh pick → own agora / placeable under the cursor, or null.
-     * Gated by USE_GPU_PICK — live path is pickStructureOnRay.
+     * Gated by USE_GPU_PICK - live path is pickStructureOnRay.
      * @param {number} clientX
      * @param {number} clientY
      * @returns {Promise<{ kind: 'agora' | 'building', index: number } | null>}
@@ -4829,7 +4829,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       buildingRadial.setCompact?.(typeId || null);
     },
 
-    /** Green/red hub placeholder — matches the world ghost while placing. */
+    /** Green/red hub placeholder - matches the world ghost while placing. */
     setBuildingRadialPlacingValid(valid) {
       buildingRadial.setPlacingValid?.(valid);
     },
@@ -4845,7 +4845,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /**
-     * Pick a radial option (CPU disc hit — pie / pad; agora pie only). Sync-friendly.
+     * Pick a radial option (CPU disc hit - pie / pad; agora pie only). Sync-friendly.
      * @param {number} clientX
      * @param {number} clientY
      * @returns {Promise<{ kind: 'building' | 'category' | 'unit' | 'upgrade' | 'pause' | 'cancel', id?: string } | null>}
@@ -4862,9 +4862,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /**
-     * Hover via CPU disc pick (full pad including hole). Sync — no GPU queue.
+     * Hover via CPU disc pick (full pad including hole). Sync - no GPU queue.
      * When switchCategory is true and the page is unlocked, pie hover flips pages.
-     * After a pie click (locked), hover only highlights — page stays put.
+     * After a pie click (locked), hover only highlights - page stays put.
      * @param {number} clientX
      * @param {number} clientY
      */
@@ -4935,7 +4935,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
      * Sync gesture test: over a visible option (pad disc) or ring chrome.
      * Action radials do not claim the empty yard inside the ring.
      * Must not await GPU (pointerdown latch).
-     * Always ray-test — a stale hover must not claim the whole screen.
+     * Always ray-test - a stale hover must not claim the whole screen.
      */
     hitBuildingRadial(clientX, clientY) {
       const ray = radialPickingRay(clientX, clientY);
@@ -4996,7 +4996,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const run = async () => {
         const prev = terrain;
         // Drop terrain from the update + CSM caster paths BEFORE destroying GPU
-        // buffers — otherwise shadow/submit keeps WriteBuffer'ing dead TI mats.
+        // buffers - otherwise shadow/submit keeps WriteBuffer'ing dead TI mats.
         terrain = null;
         fieldSnap = snap ?? null;
         const tableHalf = snap ? worldHalfFFromField(snap) : WORLD_HALF_F;
@@ -5379,6 +5379,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     /** Forge (and other clients) push a saved sun/fill rig. Spin stays local. */
     applyCelestial(state) {
       if (state) celestial.apply(state);
+      skyBaseIntensity = celestial.fillBaseIntensity;
       return celestial.getState();
     },
 
@@ -5646,7 +5647,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     /**
      * Authored rider empties for a transport type, once its mesh package is in.
-     * Empty until bake includes `spawn_anchor*` — callers fall back to generated seats.
+     * Empty until bake includes `spawn_anchor*` - callers fall back to generated seats.
      */
     transportSeats(typeId) {
       const want = typeId | 0;
@@ -5799,7 +5800,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
      * @param {{ kind?: 'default' | 'caster' | 'vehicle' }} [opts]
      */
     writeSelectionRing(i, x, z, unitSize, spinYaw = 0, tint = 'white', opts = {}) {
-      // Clear path: no terrain sample — callers only hit this on select→deselect edges.
+      // Clear path: no terrain sample - callers only hit this on select→deselect edges.
       if (!(unitSize > 0)) {
         if (useCollar) writeSelectionCollar(ringMatrices, i, 0, 0, 0, 0, 0);
         else writeFlatRing(ringMatrices, i, 0, 0, 0, RING_DIAM, RING_H, 0);
@@ -5828,7 +5829,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     /**
      * Drag-select marquee in client pixels. Null / omitted hides it.
-     * Latched for the next GPU frame — not a DOM overlay.
+     * Latched for the next GPU frame - not a DOM overlay.
      * @param {number | null} [x0]
      * @param {number} [y0]
      * @param {number} [x1]
@@ -5910,7 +5911,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     /**
      * Control-group pad under a client point → group id 0..5, or null.
-     * Id 0 is red — callers must use `!= null`, not truthiness.
+     * Id 0 is red - callers must use `!= null`, not truthiness.
      */
     pickControlGroupHud(clientX, clientY) {
       const cc = canvasCoords(clientX, clientY);
@@ -5983,7 +5984,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const attackBurst = [1, 0.22, 0.1, 1];
       const attackPulse = [1, 0.18, 0.08, 0.85];
 
-      // Double-tap force-move upgrades the pending attack-move arrow — don't restart.
+      // Double-tap force-move upgrades the pending attack-move arrow - don't restart.
       const upgrade =
         forceMove &&
         !!orderPing &&
@@ -6011,7 +6012,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
           startSize: 1.4 * zoom,
           endSize: 0.12 * zoom,
         });
-        // Attack-move ground ring — hot red flat wash (force-move gets cyan below).
+        // Attack-move ground ring - hot red flat wash (force-move gets cyan below).
         if (!forceMove) {
           particles.emitBurst({
             position: [x, gy + 0.18 * zoom, z],
@@ -6084,7 +6085,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
      * GPU mesh pick → sim entity id, or -1.
      * Uses rest-pose geometry for VAT units (instance matrix only).
      * Caller should filter alive / carried / owner.
-     * Gated by USE_GPU_PICK — live path is rayPickSpheres*.
+     * Gated by USE_GPU_PICK - live path is rayPickSpheres*.
      */
     async pickUnit(clientX, clientY) {
       if (!USE_GPU_PICK || !gpuPicker) return -1;
@@ -6134,7 +6135,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /**
-     * Every sphere the ray hits, nearest first — packed-tight units all come back
+     * Every sphere the ray hits, nearest first - packed-tight units all come back
      * instead of just the closest one, so callers can multi-select the whole clump.
      * Allocating form kept for dumpPickBench; prefer rayHitSpheresAllInto.
      */
@@ -6169,7 +6170,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         outTs[hitN] = t;
         hitN++;
       }
-      // Insertion sort — hitN is tiny (overlaps under cursor).
+      // Insertion sort - hitN is tiny (overlaps under cursor).
       for (let i = 1; i < hitN; i++) {
         const id = outIds[i];
         const t = outTs[i];

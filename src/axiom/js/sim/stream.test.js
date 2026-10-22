@@ -111,7 +111,7 @@ import { createWorld } from './world.js';
   const c0 = world.count;
   assert.ok(c0 > 0);
   world.setTargetCount(Math.max(1, c0 - 80));
-  assert.equal(world.count, c0, 'caps only — no instant dump');
+  assert.equal(world.count, c0, 'caps only - no instant dump');
   world.tick(1 / 60, pose);
   assert.ok(world.count < c0, 'ease should shed a little');
   assert.ok(world.count > c0 - 80, 'must not dump the whole bite in one frame');

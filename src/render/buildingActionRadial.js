@@ -1,4 +1,4 @@
-// Building action menu — tilted ring framing a selected placeable
+// Building action menu - tilted ring framing a selected placeable
 // (empty hub stays on the building). Thin outer chrome for units, upgrades,
 // building upgrades, and a fixed bottom Pause | Cancel pair; options pick
 // on pads/icons only.
@@ -65,7 +65,7 @@ function unitMenuModelUrl(typeId) {
 /** Layout at HUD scale = 1 (ring outer radius in world units). */
 const MENU_Y = 2.4;
 /**
- * Outer chrome ring — thin decorative band. Pads stay on the midpoint;
+ * Outer chrome ring - thin decorative band. Pads stay on the midpoint;
  * the ring itself is not a pick target for options.
  */
 const MENU_RING_OUTER = 16.3;
@@ -87,7 +87,7 @@ const ICON_LIFT = 0.85;
 const OPTION_SCALE = 1.8;
 /** Units stay at OPTION_SCALE; derrick-class meshes shrink to this box. */
 const ICON_FIT_EXTENT = PAD_OUTER * 1.55;
-/** Tight to the visible pad / unit — not a pie-slice halo into the yard. */
+/** Tight to the visible pad / unit - not a pie-slice halo into the yard. */
 const ICON_PICK_R = 5.2;
 /** Min arc for units/upgrades when sharing the usable band (~100°). */
 const MIN_ARC = (Math.PI * 2 * 100) / 360;
@@ -97,7 +97,7 @@ const PAUSE_SPAN = UTILITY_SPAN * 0.5;
 const CANCEL_SPAN = UTILITY_SPAN * 0.5;
 /**
  * Constant-width channels between arcs (world units at HUD scale 1).
- * Parallel-edge treatment — not an angular wedge cut.
+ * Parallel-edge treatment - not an angular wedge cut.
  */
 const ARC_GAP = 2.3;
 const MENU_TILT = 0.56;
@@ -148,7 +148,7 @@ const ARMED_EMISSIVE = [0.95, 0.28, 0.18];
 const DULL_ALPHA = 0.28;
 const DULL_COLOR = [0.35, 0.38, 0.42];
 const DULL_EMISSIVE = [0.08, 0.09, 0.1];
-/** Screen label colors — light when live, dark when disabled. */
+/** Screen label colors - light when live, dark when disabled. */
 const LABEL_TEXT_COLOR = [0.96, 0.94, 0.88, 1];
 const CANCEL_LABEL_TEXT_COLOR = [0.98, 0.85, 0.8, 1];
 const PAUSE_LABEL_TEXT_COLOR = [0.98, 0.92, 0.72, 1];
@@ -209,7 +209,7 @@ const CATEGORIES = /** @type {const} */ ({
   },
 });
 
-/** Slash on the cancel pad (🚫) — matches pad color. Unit pad = radius 1. */
+/** Slash on the cancel pad (🚫) - matches pad color. Unit pad = radius 1. */
 const CANCEL_SLASH_LEN = 1.55;
 const CANCEL_SLASH_WIDTH = 0.38;
 const CANCEL_SLASH_H = 0.12;
@@ -946,7 +946,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
 
   /** @type {{ mesh: object, mat: object, category: ActionCategoryId }[]} */
   const pads = [];
-  /** Progress overlays — recreated when quantized progress changes. */
+  /** Progress overlays - recreated when quantized progress changes. */
   /** @type {{ mesh: object | null, mat: object, q: number }[]} */
   const progressPads = [];
   for (let i = 0; i < MAX_OPTIONS; i++) {
@@ -2461,7 +2461,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     return open;
   }
 
-  /** Stick pie targets — one ring of units / upgrades / pause / cancel. */
+  /** Stick pie targets - one ring of units / upgrades / pause / cancel. */
   function stickTargets() {
     if (!open) return null;
     const outer = slots
@@ -2563,7 +2563,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   }
 
   /**
-   * Pads and icons only — the outer ring is decorative chrome, not an option.
+   * Pads and icons only - the outer ring is decorative chrome, not an option.
    * Dull Pause / Cancel do not pick so the world stays clickable under them.
    * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null | undefined} ray
    * @returns {{ kind: 'unit' | 'upgrade' | 'building' | 'pause' | 'cancel', id?: string } | null}

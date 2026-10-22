@@ -3,7 +3,7 @@
 // B / D-pad Left cast, D-pad U/R/D + Y/X/A control groups. Placement is the
 // same loop on every device: aim walks the ghost, 1^ stamps, drag yaws
 // (mouse click-drag / touch tap-drag / pad LB-RB + stick). A mouse tap that
-// never yawed also stamps — 1^ rides with the cursor. B / back / agora
+// never yawed also stamps - 1^ rides with the cursor. B / back / agora
 // leaves. After a stamp the type stays so you can plant more.
 
 import * as fx from '../../sim/fixed.js';
@@ -68,14 +68,14 @@ import {
 import { projectWorldToCanvas } from '../../render/screenProject.js';
 import { pickGatherNodeOnRay, rayHitYawBox, rayTToPoint } from './gatherPick.js';
 
-/** Footprint box height — tall enough for a tower, not a circumcircle. */
+/** Footprint box height - tall enough for a tower, not a circumcircle. */
 const BUILDING_PICK_HEIGHT = 10;
 /** Slight pad so a click on the eaves still counts. */
 const BUILDING_PICK_HALO = 0.35;
 /** Click volume for a planted rally flag. */
 const RALLY_FLAG_PICK_R = 2.8;
 const RALLY_FLAG_PICK_H = 5.2;
-/** Reused empty hit list — never mutate. */
+/** Reused empty hit list - never mutate. */
 const EMPTY_HITS = Object.freeze([]);
 
 /** v1 lasso drag threshold. */
@@ -86,7 +86,7 @@ const LASSO_SAMPLE_PX = 10;
 const LASSO_MAX_PTS = 80;
 /** Hold-drag past this while placing enters rotate mode. */
 const PLACE_ROTATE_THRESHOLD_PX = 18;
-/** Manual double-tap window — PointerEvent.detail is not a click count. */
+/** Manual double-tap window - PointerEvent.detail is not a click count. */
 const DOUBLE_MS = 350;
 const DOUBLE_PX = 14;
 /** Tap+hold on ground with selection → primary ability cast. */
@@ -105,7 +105,7 @@ export const ABILITY_HOLD_MS = 400;
  * @param {(x: number, z: number, y?: number, cmdType?: number, tile?: number, extra?: { arrow?: number }) => void} [opts.onOrder]
  * @param {(x: number, z: number, y?: number) => void} [opts.onAbilityHold]
  * @param {() => boolean} [opts.canInteract]
- * @param {() => boolean} [opts.canIssueCommands] — when false, select/inspect only (no order markers)
+ * @param {() => boolean} [opts.canIssueCommands] - when false, select/inspect only (no order markers)
  * @param {() => { owner: number, x: number, z: number }[]} [opts.getAgoras]
  * @param {() => { owner: number, type: string, x: number, z: number, yaw?: number }[]} [opts.getBuildings]
  * @param {(sel: { kind: 'agora' | 'building', index: number } | null, ptr?: { clientX: number, clientY: number }, all?: { kind: 'agora' | 'building', index: number }[]) => void} [opts.onBuildingSelected]
@@ -130,9 +130,9 @@ export const ABILITY_HOLD_MS = 400;
  * @param {(clientX: number, clientY: number) => void} [opts.onRadialHover]
  * @param {(clientX: number, clientY: number) => boolean} [opts.hitRadial]
  * @param {(clientX: number, clientY: number) => boolean} [opts.hitRadialHub]
- * @param {(i: number) => boolean} [opts.isUnitVisible] — skip fog-hidden hostiles
- * @param {(owner: number, x: number, z: number) => boolean} [opts.isStructureVisible] — skip fog-hidden hostiles
- * @param {(id: number) => void} [opts.onControlGroupJump] — second tap of the same group
+ * @param {(i: number) => boolean} [opts.isUnitVisible] - skip fog-hidden hostiles
+ * @param {(owner: number, x: number, z: number) => boolean} [opts.isStructureVisible] - skip fog-hidden hostiles
+ * @param {(id: number) => void} [opts.onControlGroupJump] - second tap of the same group
  */
 export function createGameInput(opts) {
   const {
@@ -185,7 +185,7 @@ export function createGameInput(opts) {
   let inputEnabled = true;
   const getWorld = typeof worldOrGetter === 'function' ? worldOrGetter : () => worldOrGetter;
 
-  /** Dense selection list — bitset stays for O(1) membership; list for O(sel) orders. */
+  /** Dense selection list - bitset stays for O(1) membership; list for O(sel) orders. */
   const selIds = new Int32Array(MAX_ENTITIES);
   const selSlot = new Int32Array(MAX_ENTITIES);
   selSlot.fill(-1);
@@ -265,11 +265,11 @@ export function createGameInput(opts) {
   let brushBoth = false;
   let dragPointerId = null;
   let lmbDownPos = null;
-  /** Latched once pointer exceeds DRAG_THRESHOLD_PX — keeps box updating inside the grace. */
+  /** Latched once pointer exceeds DRAG_THRESHOLD_PX - keeps box updating inside the grace. */
   let boxDragging = false;
-  /** Pointer-down started on the build radial — never box-select this gesture. */
+  /** Pointer-down started on the build radial - never box-select this gesture. */
   let radialGesture = false;
-  /** Pointer-down started on a bottom selection-strip chip — select that type on up. */
+  /** Pointer-down started on a bottom selection-strip chip - select that type on up. */
   let selHudGesture = false;
   /** Pad id (0..5) when pointer-down started on a control-group button. */
   let ctrlGroupGesture = null;
@@ -278,7 +278,7 @@ export function createGameInput(opts) {
   let ctrlGroupHoldFired = false;
   /** @type {{ units: number[], buildings: { kind: string, index: number }[] }[]} */
   let controlGroups = createEmptyControlGroups();
-  /** Last short tap on a pad / number key — second tap jumps the camera. */
+  /** Last short tap on a pad / number key - second tap jumps the camera. */
   let lastCtrlGroupTap = null;
   /** @type {{ x: number, z: number } | null} */
   let placeAnchor = null;
@@ -304,7 +304,7 @@ export function createGameInput(opts) {
   /**
    * Bumps when a newer LMB press/click supersedes an older one.
    * Under stress, click-1's GPU pick can finish after click-2's force-move and
-   * re-issue attack-move — epoch checks drop those stale completions.
+   * re-issue attack-move - epoch checks drop those stale completions.
    */
   let worldClickEpoch = 0;
 
@@ -370,7 +370,7 @@ export function createGameInput(opts) {
     onPlacementParked?.(false);
   }
 
-  /** In-flight press only — a sitting ghost survives cancelDrag / 2-finger camera. */
+  /** In-flight press only - a sitting ghost survives cancelDrag / 2-finger camera. */
   function resetPlaceGesture() {
     placeRotating = false;
     placeDownKind = null;
@@ -640,7 +640,7 @@ export function createGameInput(opts) {
     return renderer.pickSelectionHud?.(clientX, clientY) != null;
   }
 
-  /** Number-key hold (1-6) — separate from the pad pointer gesture. */
+  /** Number-key hold (1-6) - separate from the pad pointer gesture. */
   let ctrlGroupKeyId = null;
   let ctrlGroupKeyAssigned = false;
   /** @type {ReturnType<typeof setTimeout> | null} */
@@ -833,7 +833,7 @@ export function createGameInput(opts) {
 
   /**
    * GPU mesh pick → alive entity id, or -1.
-   * Kept for USE_GPU_PICK / dumpPickBench — not the live path.
+   * Kept for USE_GPU_PICK / dumpPickBench - not the live path.
    */
   async function pickUnitAtGpu(clientX, clientY) {
     if (!renderer.pickUnit) return -1;
@@ -929,7 +929,7 @@ export function createGameInput(opts) {
 
   /**
    * GPU mesh pick → visible agora / placeable under the cursor, or null.
-   * Kept for USE_GPU_PICK — not the live path.
+   * Kept for USE_GPU_PICK - not the live path.
    */
   async function pickBuildingAtGpu(clientX, clientY) {
     if (!renderer.pickBuilding) return null;
@@ -1219,7 +1219,7 @@ export function createGameInput(opts) {
   }
 
   /**
-   * Selection-strip chip — units and buildings use the same click-to-select-all.
+   * Selection-strip chip - units and buildings use the same click-to-select-all.
    * @param {{ kind?: string, typeId?: number, typeKey?: string, entityId?: number } | number | null} slot
    * @param {boolean} add
    */
@@ -1251,7 +1251,7 @@ export function createGameInput(opts) {
 
   /**
    * Orderable selection (alive, not carried). O(sel), not O(world).
-   * @param {Set<number>} [includeCarried] — unload handoff: keep these riders
+   * @param {Set<number>} [includeCarried] - unload handoff: keep these riders
    */
   function sameFollowUnits(ids) {
     if (ids.length !== selCount) return false;
@@ -1412,7 +1412,7 @@ export function createGameInput(opts) {
     return localPlayerId;
   }
 
-  /** Packed hits under one tap — keep one owner's units, never mix armies. */
+  /** Packed hits under one tap - keep one owner's units, never mix armies. */
   function applyUnitHits(hits, owner, add) {
     const world = getWorld();
     if (!add) clearUnitSelectionBits();
@@ -1682,7 +1682,7 @@ export function createGameInput(opts) {
   /**
    * Everyone goes to the click. Units already inside the group's soft gather
    * disk stay put; the rest path in. Standing soft-sep blooms piles after
-   * arrival — no parade grid, no centroid slide.
+   * arrival - no parade grid, no centroid slide.
    * @param {number[]} ids
    * @param {number} gx
    * @param {number} gz
@@ -1704,7 +1704,7 @@ export function createGameInput(opts) {
    * @param {OrderAim} aim
    * @param {number} cmdType
    * @param {number} [preHit] entity id from an earlier pick this click, or -1
-   * @param {number} [epoch] worldClickEpoch snapshot — drop if superseded
+   * @param {number} [epoch] worldClickEpoch snapshot - drop if superseded
    * @param {{ kind: 'agora' | 'building', index: number } | null} [preBld]
    */
   async function orderAt(aim, cmdType, preHit, epoch, preBld) {
@@ -1729,7 +1729,7 @@ export function createGameInput(opts) {
       return;
     }
 
-    // Shut door — attack-move breaks it open. Force-move still walks past the click.
+    // Shut door - attack-move breaks it open. Force-move still walks past the click.
     if (cmdType === CMD.ATTACK_MOVE && preBld?.kind === 'door') {
       const door = getDoors?.()?.[preBld.index];
       if (door && !door.open && (door.hp | 0) > 0) {
@@ -1755,7 +1755,7 @@ export function createGameInput(opts) {
       }
     }
 
-    // Hostile placeable — same hard attack + flash as a unit click.
+    // Hostile placeable - same hard attack + flash as a unit click.
     // Units that cannot hit buildings (priests) keep the ground attack-move.
     let moveIds = ids;
     if (cmdType === CMD.ATTACK_MOVE && preBld?.kind === 'building') {
@@ -1788,7 +1788,7 @@ export function createGameInput(opts) {
     }
 
     // Click a friendly transport → nearest selected riders embark (up to capacity).
-    // Includes engineers — repair falls through only when nobody can board (full / empty pick).
+    // Includes engineers - repair falls through only when nobody can board (full / empty pick).
     if (hit >= 0 && (cmdType === CMD.MOVE || cmdType === CMD.ATTACK_MOVE)) {
       const isOwnTransport =
         world.owner[hit] === localPlayerId &&
@@ -1845,7 +1845,7 @@ export function createGameInput(opts) {
       }
     }
 
-    // Friendly under cursor that wasn't embark/repair — don't smash a ground
+    // Friendly under cursor that wasn't embark/repair - don't smash a ground
     // order onto them (caller should have re-selected instead).
     if (hit >= 0 && world.owner[hit] === localPlayerId) return;
 
@@ -1861,7 +1861,7 @@ export function createGameInput(opts) {
     }
 
     // Attack-move onto a tree / rock: villagers gather (same volume pick as RMB).
-    // Soldiers never mine — leftover army still gets the ground order.
+    // Soldiers never mine - leftover army still gets the ground order.
     if (cmdType === CMD.ATTACK_MOVE) {
       const node = resolveGatherAim(aim);
       // Left-click starts the job immediately. An attack-move onto the pad
@@ -1876,7 +1876,7 @@ export function createGameInput(opts) {
 
     const { tx, ty } = moveDestinations(moveIds, g.x, g.z);
     enqueueCommand({ type: cmdType, entities: moveIds, tx, ty });
-    // Placeholder SFX — proves Howler works until real unit VO lands.
+    // Placeholder SFX - proves Howler works until real unit VO lands.
     playVillagerMove();
   }
 
@@ -1893,7 +1893,7 @@ export function createGameInput(opts) {
     onPlacementParked?.(false);
   }
 
-  /** Tap+hold — unload loaded transports, else cast primary ability. */
+  /** Tap+hold - unload loaded transports, else cast primary ability. */
   function castAbilityAt(clientX, clientY) {
     castAbilityWith(clientAim(clientX, clientY));
   }
@@ -1933,7 +1933,7 @@ export function createGameInput(opts) {
         deselectEntity(loadedTransports[k]);
       }
       for (let k = 0; k < spilled.length; k++) selectEntity(spilled[k]);
-      // selectedIds skips carried — include spilled even before sim unloads.
+      // selectedIds skips carried - include spilled even before sim unloads.
       syncSelectionSquad(spilledSet);
       onSelectionChanged?.();
       return;
@@ -1988,7 +1988,7 @@ export function createGameInput(opts) {
     // Raw touch is owned by touchAdapter (pointerHub). Synthetic touch objects
     // from the adapter are intentional and must be accepted here.
 
-    // Latch pointer state synchronously — never await before this or pointerup is lost.
+    // Latch pointer state synchronously - never await before this or pointerup is lost.
     boxStart = { x: e.clientX, y: e.clientY };
     resetLasso();
     lmbDownPos = { x: e.clientX, y: e.clientY };
@@ -2046,7 +2046,7 @@ export function createGameInput(opts) {
       return true;
     }
 
-    // Sync only — GPU picks here starve the picker and race pointerup.
+    // Sync only - GPU picks here starve the picker and race pointerup.
     // Touch: still-hold is one-finger pan; cast is double-tap on enemy/ground.
     radialGesture = Boolean(isRadialOpen?.() && hitRadial?.(e.clientX, e.clientY));
     if (!radialGesture && e.pointerType !== 'touch') void armAbilityHold(e.clientX, e.clientY);
@@ -2056,7 +2056,7 @@ export function createGameInput(opts) {
   function handlePointerMove(e) {
     if (!canUseInput()) return false;
 
-    // Chip / control-group press holds the gesture — no box-select.
+    // Chip / control-group press holds the gesture - no box-select.
     if (selHudGesture || ctrlGroupGesture != null) return true;
 
     if (isPlacing()) {
@@ -2078,7 +2078,7 @@ export function createGameInput(opts) {
         return true;
       }
 
-      // Keep 1^ hittable — walking toward the mark would slide it off the cursor.
+      // Keep 1^ hittable - walking toward the mark would slide it off the cursor.
       if (placeAnchor && hitSceneConfirm(e.clientX, e.clientY)) return true;
 
       if (placementHoverFollowsPointer({
@@ -2133,7 +2133,7 @@ export function createGameInput(opts) {
     const epoch = click.epoch ?? worldClickEpoch;
     if (!d || Math.hypot(e.clientX - d.x, e.clientY - d.y) > DRAG_THRESHOLD_PX) return;
     const world = getWorld();
-    // One unproject for unit + building miss — GPU path still goes through pickUnitsAt.
+    // One unproject for unit + building miss - GPU path still goes through pickUnitsAt.
     let hits;
     let bld = null;
     if (USE_GPU_PICK) {
@@ -2151,7 +2151,7 @@ export function createGameInput(opts) {
     if (hit >= 0 && world.owner[hit] === localPlayerId) {
       const selected = selectedIds();
       // Riders + room on transport → embark. Otherwise always re-select (never
-      // ground-move onto a friendly — full vehicles / random infantry included).
+      // ground-move onto a friendly - full vehicles / random infantry included).
       const canEmbark =
         !click.selectOnly &&
         !e.shiftKey &&
@@ -2261,10 +2261,10 @@ export function createGameInput(opts) {
       }
     }
 
-    // Hub frames the selected building — a miss must not rally / deselect.
+    // Hub frames the selected building - a miss must not rally / deselect.
     if (click.hubPassThrough) return;
 
-    // Bumper tap is select-only — do not a-move / rally / wipe on a miss.
+    // Bumper tap is select-only - do not a-move / rally / wipe on a miss.
     if (click.selectOnly) return;
 
     if (hasOrderableSelection() && canIssueOrders()) {
@@ -2310,7 +2310,7 @@ export function createGameInput(opts) {
     if (dragPointerId === null) return false;
     if (e.pointerId !== dragPointerId && e.type !== 'pointercancel') return false;
 
-    // Capture before any await — GPU picks under stress can take longer than DOUBLE_MS.
+    // Capture before any await - GPU picks under stress can take longer than DOUBLE_MS.
     const tapAt = performance.now();
     const d = lmbDownPos;
     lmbDownPos = null;
@@ -2431,7 +2431,7 @@ export function createGameInput(opts) {
             onRadialPick?.(picked);
             radialHandled = true;
           } else if (kind === 'hub') {
-            // Empty hole sits on the selected building — re-select / select-all.
+            // Empty hole sits on the selected building - re-select / select-all.
             const epoch = ++worldClickEpoch;
             await handleWorldClick(e, d, {
               tapAt,
@@ -2441,7 +2441,7 @@ export function createGameInput(opts) {
             });
             radialHandled = true;
           } else if (kind === 'chrome') {
-            // Ring / near-option gesture — keep menu, no world click.
+            // Ring / near-option gesture - keep menu, no world click.
             lastTap = null;
             radialHandled = true;
           }
@@ -2449,7 +2449,7 @@ export function createGameInput(opts) {
 
         if (!radialHandled) {
           if (holdCast) {
-            // Ability already issued on hold — swallow click so we don't also attack-move.
+            // Ability already issued on hold - swallow click so we don't also attack-move.
             lastTap = null;
           } else if (wasDragging && boxStart) {
             lastTap = null;
@@ -2516,7 +2516,7 @@ export function createGameInput(opts) {
   }
 
   /**
-   * Gamepad LB / RB — paint a brush lasso at the aim. Radius follows stroke
+   * Gamepad LB / RB - paint a brush lasso at the aim. Radius follows stroke
    * speed; both bumpers snap to double the single-bumper max.
    * @param {number} clientX
    * @param {number} clientY
@@ -2609,7 +2609,7 @@ export function createGameInput(opts) {
   }
 
   /**
-   * RMB tap (no pan) / touch 2-finger when no build UI — force MOVE to ground.
+   * RMB tap (no pan) / touch 2-finger when no build UI - force MOVE to ground.
    * No unit pick; ignores enemies. Camera latches pan + click on the same travel.
    */
   function forceMoveAt(clientX, clientY) {
@@ -2731,7 +2731,7 @@ export function createGameInput(opts) {
     const meshTile = renderer.pickGatherOnRay?.(ray, clip);
     if (typeof meshTile === 'number' && meshTile >= 0) tile = meshTile;
     if (tile < 0) tile = farmGatherTile(field, ray);
-    // Models not up yet — the shorter column is only a stand-in.
+    // Models not up yet - the shorter column is only a stand-in.
     if (tile < 0 && typeof meshTile !== 'number') {
       tile = pickGatherNodeOnRay(field, ray, { maxT: clip, heightAt });
     }
@@ -2904,14 +2904,14 @@ export function createGameInput(opts) {
 
   /**
    * Drag-yaw around the sitting ghost. Pad holds LB/RB and aims; pointer
-   * click-drags / tap-drags. No ghost yet — walk it first.
+   * click-drags / tap-drags. No ghost yet - walk it first.
    */
   function rotatePlacementAt(clientX, clientY) {
     if (!canUseInput() || !isPlacing() || isPlacingRally?.()) return false;
     if (!placeAnchor) return previewPlacementAt(clientX, clientY);
     const g = renderer.screenToGround?.(clientX, clientY);
     if (!g) return false;
-    // Pad has no tap-vs-drag — the aim starts on the ghost, so the pointer
+    // Pad has no tap-vs-drag - the aim starts on the ghost, so the pointer
     // rotate gate would swallow the whole bumper hold.
     if (!placeRotateFrom) {
       placeRotateFrom = { x: clientX, y: clientY };
@@ -2939,7 +2939,7 @@ export function createGameInput(opts) {
   }
 
   /**
-   * Gamepad A / LT / RT — stamp at the aim (or last preview).
+   * Gamepad A / LT / RT - stamp at the aim (or last preview).
    */
   function confirmPlacementAt(clientX, clientY) {
     if (!canIssueOrders() || !isPlacing()) return false;
@@ -2982,7 +2982,7 @@ export function createGameInput(opts) {
     return true;
   }
 
-  /** Esc while placing — cancel ghost and return to the agora radial. */
+  /** Esc while placing - cancel ghost and return to the agora radial. */
   function cancelPlacement() {
     if (!isPlacing()) return false;
     clearPlacementPark();
@@ -3026,7 +3026,7 @@ export function createGameInput(opts) {
   }
 
   /**
-   * Touch 2-finger tap — leave placement and building selection (including
+   * Touch 2-finger tap - leave placement and building selection (including
    * rally). Unlike dismissMenus, this does not spare production buildings
    * for a force-move rally.
    */

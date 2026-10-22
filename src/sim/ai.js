@@ -1,4 +1,4 @@
-// Match / stress AI — roster helpers plus army-stance commands.
+// Match / stress AI - roster helpers plus army-stance commands.
 //
 // Economy and spend paths live in aiEconomy.js. This file only issues army
 // orders (hold / defend yard / opt-in attack). Unit sim does the rest.
@@ -34,7 +34,7 @@ export {
   resolveAiStrategy,
 } from './aiStrategy.js';
 
-/** 1vAI pool — strategy labels, not a-move cadences. */
+/** 1vAI pool - strategy labels, not a-move cadences. */
 export const MATCH_AI_TEMPERAMENTS = ['passive', 'cautious', 'steady', 'aggressive', 'reckless'];
 
 /** Stress FFA still pushes (no eco). Match AI does not inherit this. */
@@ -51,7 +51,7 @@ export function pickMatchAiTemperament(u32 = 0) {
   return MATCH_AI_TEMPERAMENTS[i];
 }
 
-/** Fog overlay only — combat stays FFA. Skip the turtle so its base stays dark. */
+/** Fog overlay only - combat stays FFA. Skip the turtle so its base stays dark. */
 export function stressShareVisionOwners() {
   const out = [];
   for (let i = 0; i < STRESS_AI_PROFILES.length; i++) {
@@ -104,7 +104,7 @@ export function resolveSessionAiPlayers(cfg = {}, current = []) {
 /**
  * @param {object} world
  * @param {number | { owner: number, temperament?: string, stance?: string }} aiConfig
- * @param {number | { temperament?: string }} [opts] — legacy 3rd arg was playerOwner (ignored)
+ * @param {number | { temperament?: string }} [opts] - legacy 3rd arg was playerOwner (ignored)
  * @returns {import('./commands.js').Command[]}
  */
 export function generateAiCommands(world, aiConfig, opts = {}) {
@@ -252,7 +252,7 @@ function hostileCentroid(world, aiOwner, origin, rangeF) {
 }
 
 /**
- * Aim point for an offensive cast — current combat target only.
+ * Aim point for an offensive cast - current combat target only.
  * Skipping the FFA enemy centroid avoids every caster dumping on map-middle.
  * @returns {{ x: number, y: number } | null}
  */

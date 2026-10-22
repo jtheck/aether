@@ -1,4 +1,4 @@
-// CPU gather pick — ray vs tree/rock volumes, not GPU mesh pick.
+// CPU gather pick - ray vs tree/rock volumes, not GPU mesh pick.
 // GPU pick is off for units (~1000× slower on mobile); marching a few dozen
 // tiles along the click ray is cheap and lets canopy / boulder clicks work.
 
@@ -171,7 +171,7 @@ export function pickGatherNodeOnRay(field, ray, opts = {}) {
 }
 
 /**
- * Ray vs a yawed XZ box (world Y unrotated). Used for building footprints —
+ * Ray vs a yawed XZ box (world Y unrotated). Used for building footprints -
  * there are too few to need the unit sphere path.
  * @returns {number | null} enter t, or null
  */

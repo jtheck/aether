@@ -266,7 +266,7 @@ function createMenuButton(id, icon, label, menuPath = [], depth = 0) {
       return;
     }
     
-    // Leaf node — no submenu
+    // Leaf node - no submenu
     const path = JSON.parse(button.dataset.menuPath);
     const [category, ...itemPath] = path;
 

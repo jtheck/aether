@@ -25,7 +25,7 @@
         var bridge = process.mainModule.exports.steamBridge;
         if (bridge) return bridge;
       }
-    } catch (_err) { /* isolated page — no Node */ }
+    } catch (_err) { /* isolated page - no Node */ }
     return null;
   }
 
@@ -199,7 +199,7 @@
           win.leaveFullscreen();
           return Promise.resolve(true);
         }
-      } catch (_err) { /* isolated page — fall through to the HTTP bridge */ }
+      } catch (_err) { /* isolated page - fall through to the HTTP bridge */ }
       return postJson('/window/leave-fullscreen', {}).then(function (data) {
         return !!(data && data.ok);
       });
@@ -212,7 +212,7 @@
           if (!(win.isFullscreen || win.fullscreen)) win.enterFullscreen();
           return Promise.resolve(true);
         }
-      } catch (_err) { /* isolated page — fall through to the HTTP bridge */ }
+      } catch (_err) { /* isolated page - fall through to the HTTP bridge */ }
       return postJson('/window/enter-fullscreen', {}).then(function (data) {
         return !!(data && data.ok);
       });

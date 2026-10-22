@@ -1,4 +1,4 @@
-// A ranked report. The season is not in the body — the function stamps SEASON.
+// A ranked report. The season is not in the body - the function stamps SEASON.
 // 1v1: exactly two humans, each their own side (team is the seat).
 // Teams: two to four humans on exactly two sides. One agreeing report from each side settles it.
 

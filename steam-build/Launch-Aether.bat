@@ -1,5 +1,5 @@
 @echo off
-REM Local testing outside Steam library — keeps Steam API without relaunch exit.
+REM Local testing outside Steam library - keeps Steam API without relaunch exit.
 set AETHER_STEAM_SKIP_RESTART=1
 cd /d "%~dp0dist-win"
 if not exist Aether.exe (

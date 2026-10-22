@@ -1,6 +1,6 @@
 'use strict';
 
-// GameOverlayActivated_t — k_iSteamFriendsCallbacks (300) + 31
+// GameOverlayActivated_t - k_iSteamFriendsCallbacks (300) + 31
 const K_I_GAME_OVERLAY_ACTIVATED = 331;
 const CALLBACK_SIZE_BYTES = 8;
 

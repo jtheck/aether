@@ -140,7 +140,7 @@ describe('shouldRevealOsCursor', () => {
 });
 
 describe('shouldYieldPadToPointer', () => {
-  it('yields on mouse motion, click, or wheel — not touch', () => {
+  it('yields on mouse motion, click, or wheel - not touch', () => {
     assert.equal(shouldYieldPadToPointer({ pointerType: 'mouse', movementX: 2, movementY: 0 }), true);
     assert.equal(shouldYieldPadToPointer({ pointerType: 'mouse', type: 'pointerdown', movementX: 0, movementY: 0 }), true);
     assert.equal(shouldYieldPadToPointer({ type: 'wheel' }), true);

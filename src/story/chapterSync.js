@@ -1,4 +1,4 @@
-// Adventure chapter handoff — every seated player must vote before anyone resets.
+// Adventure chapter handoff - every seated player must vote before anyone resets.
 
 export const CHAPTER_FLUSH_MS = 500;
 

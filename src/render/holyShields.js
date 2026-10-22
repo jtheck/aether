@@ -150,7 +150,7 @@ export function createHolyShieldMaterial() {
   });
 }
 
-/** Fireball core — filled camera-facing disc, hot center, bright ember rim. */
+/** Fireball core - filled camera-facing disc, hot center, bright ember rim. */
 export function createFireballCoreMaterial() {
   const span = (FIREBALL_ORB_OUTER - FIREBALL_ORB_INNER).toFixed(2);
   return createShaderMaterial({

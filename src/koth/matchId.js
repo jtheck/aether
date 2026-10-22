@@ -1,4 +1,4 @@
-// Match ID persistence — quick reconnect after refresh / brief disconnect.
+// Match ID persistence - quick reconnect after refresh / brief disconnect.
 
 const STORAGE_KEY = 'aether-koth-match-v2';
 const SESSION_STORAGE_KEY = 'aether-koth-tab-match-v2';

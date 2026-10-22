@@ -10,7 +10,7 @@ import {
 export class SimClient {
   constructor() {
     if (typeof SharedArrayBuffer === 'undefined') {
-      throw new Error('SharedArrayBuffer unavailable — serve with COOP/COEP (node serve.mjs).');
+      throw new Error('SharedArrayBuffer unavailable - serve with COOP/COEP (node serve.mjs).');
     }
     this.sab = new SharedArrayBuffer(simSharedByteSize());
     this.views = mapSharedState(this.sab);
@@ -76,7 +76,7 @@ export class SimClient {
       const timeout = setTimeout(() => {
         finish(() => reject(new Error(`commitTick ${tick} timeout`)));
       }, 30_000);
-      // Waiter is resolved from _onMessage — do not replace _stepDoneHandler.
+      // Waiter is resolved from _onMessage - do not replace _stepDoneHandler.
       // Rebinding the session handler mid-replay used to swallow stepDone and
       // surface as `commitTick N timeout` after 30s.
       this._tickWait = {

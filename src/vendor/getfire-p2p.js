@@ -1,6 +1,6 @@
 
 ////////////////////////////////
-// GetFire.net P2P API v0.0.1 (aether v2 — signaling: wss://getfire.net/ws/cable)
+// GetFire.net P2P API v0.0.1 (aether v2 - signaling: wss://getfire.net/ws/cable)
 ////////////////////////////////
   //
   // Usage:
@@ -86,7 +86,7 @@
     // Map of lobbyName -> { channel, autoMatch }. A client may be subscribed to
     // several game lobbies at once (e.g. a discovery-only matchmaking lobby plus
     // a per-match lobby). `autoMatch:false` lobbies relay messages for discovery
-    // but never set up WebRTC — RTC only happens in real match lobbies. P2P
+    // but never set up WebRTC - RTC only happens in real match lobbies. P2P
     // connections are deduped globally via `peers`.
     let gameLobbyChannels = new Map();
     let p2pSignalingChannels = new Map();
@@ -96,10 +96,10 @@
     let currentGameLobby = null;
     /** @type {Map<string, boolean>} lobbyName -> subscribed and ready */
     const lobbyReady = new Map();
-    /** peerId keys we sent match_request to — only these become WebRTC initiator */
+    /** peerId keys we sent match_request to - only these become WebRTC initiator */
     const outboundMatchRequests = new Set();
 
-    // Development mode — force signaling init on http://localhost (still uses getfire.net unless localRails)
+    // Development mode - force signaling init on http://localhost (still uses getfire.net unless localRails)
     if (config.devMode === true) {
       ssl = true;
       env = "development";
@@ -108,7 +108,7 @@
       }
     }
 
-    // Quiet by default — `?debug=p2p` or config.debug for signaling/lobby chatter.
+    // Quiet by default - `?debug=p2p` or config.debug for signaling/lobby chatter.
     const p2pDebug =
       config.debug === true ||
       (typeof location !== 'undefined' &&
@@ -326,7 +326,7 @@
       const channel = entry.channel;
 
       // RTC initiation is owned by kothShard (spectators dial in; live players
-      // dial each other). No auto-dial here — avoids glare with app-layer logic.
+      // dial each other). No auto-dial here - avoids glare with app-layer logic.
       if (data.type === 'match_request') {
         if (userIdsMatch(data.to, localUserId)) {
           p2pLog('match_request accept', { from: data.from?.slice(-8), lobby: lobbyName?.slice(-24) });
@@ -336,7 +336,7 @@
         p2pLog('match_accepted', { from: data.from?.slice(-8) });
         const key = peerRequestKey(data.from);
         if (!outboundMatchRequests.has(key)) {
-          p2pLog('match_accepted ignored — we are answerer', { from: data.from?.slice(-8) });
+          p2pLog('match_accepted ignored - we are answerer', { from: data.from?.slice(-8) });
           return;
         }
         outboundMatchRequests.delete(key);
@@ -365,11 +365,11 @@
       const key = peerRequestKey(peerId);
       if (outboundMatchRequests.has(key)) {
         if (localUserId > peerId) {
-          p2pLog('match_request ignored — glare, we initiate', { peer: peerId?.slice(-8) });
+          p2pLog('match_request ignored - glare, we initiate', { peer: peerId?.slice(-8) });
           return;
         }
         outboundMatchRequests.delete(key);
-        p2pLog('match_request — glare, we yield', { peer: peerId?.slice(-8) });
+        p2pLog('match_request - glare, we yield', { peer: peerId?.slice(-8) });
       }
       const [, existing] = findPeerEntry(peerId);
       const state = existing?.state;
@@ -444,7 +444,7 @@
         if (ice === 'connected' || ice === 'completed') {
           peerData.markConnected();
         } else if (ice === 'failed') {
-          p2pLog('ICE failed — possible network restrictions', peerId?.slice(-8));
+          p2pLog('ICE failed - possible network restrictions', peerId?.slice(-8));
           onPeerLinkFailed(peerId);
         }
       };
@@ -456,7 +456,7 @@
             ice: peerConnection.iceConnectionState,
             conn: peerConnection.connectionState,
           });
-          p2pLog('connect timeout — possible network restrictions', peerId?.slice(-8));
+          p2pLog('connect timeout - possible network restrictions', peerId?.slice(-8));
           onPeerLinkFailed(peerId);
         }
       }, ICE_CONNECT_TIMEOUT_MS);
@@ -615,7 +615,7 @@
         .catch((error) => console.error('Error handling answer:', error));
     }
 
-    // Handle ICE candidate — buffer until remote description is set.
+    // Handle ICE candidate - buffer until remote description is set.
     function handleIceCandidate(data) {
       const [, peerData] = findPeerEntry(data.from);
       if (!peerData) return;
@@ -695,7 +695,7 @@
       sendBroadcast(data, channelName);
     };
     
-    // P2P matching lobbies (auto-connects peers). Additive — does not leave
+    // P2P matching lobbies (auto-connects peers). Additive - does not leave
     // other joined lobbies. Pass { autoMatch:false } for a discovery-only lobby
     // that relays messages but never establishes WebRTC.
     GETFIREP2P.joinMatchLobby = function(lobbyName, options) {
@@ -755,7 +755,7 @@
     };
 
     // Send an app message on a joined match lobby's socket room (server-relayed
-    // to every subscriber — players AND spectators — no WebRTC required). The
+    // to every subscriber - players AND spectators - no WebRTC required). The
     // payload is spread into a `speak` so it arrives via onGameLobbyMessage.
     GETFIREP2P.sendLobbyMessage = function(lobbyName, payload) {
       const entry = gameLobbyChannels.get(lobbyName);

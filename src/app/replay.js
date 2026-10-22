@@ -105,7 +105,7 @@ function copyOwnerColors(colors) {
 }
 
 /**
- * Serializable match header — enough to rebuild the worker table.
+ * Serializable match header - enough to rebuild the worker table.
  * Drops the garden blob; chapter / gardenUrl reload the map on playback.
  * @param {object | null | undefined} cfg
  */

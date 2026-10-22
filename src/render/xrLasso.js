@@ -1,5 +1,5 @@
 // Headset select: a tapered beam from the controller to the field, and the
-// lasso loop draped on the terrain. World-space so both eyes agree — the
+// lasso loop draped on the terrain. World-space so both eyes agree - the
 // desktop marquee (selectionBox.js) draws in clip space and cannot be reused.
 
 import {

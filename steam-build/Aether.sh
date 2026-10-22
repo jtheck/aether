@@ -20,7 +20,7 @@ fi
 export LD_LIBRARY_PATH
 export CHROME_DEVEL_SANDBOX=""
 
-# X11 + Vulkan ANGLE — Chromium WebGPU on Linux is off without these.
+# X11 + Vulkan ANGLE - Chromium WebGPU on Linux is off without these.
 exec "$HERE/Aether" \
   --ozone-platform=x11 \
   --no-sandbox \

@@ -330,7 +330,7 @@
   fx.init = function(gameScene) {
     scene = gameScene;
     // console.log('FX system initialized');
-    // Particle/explosion keyboard shortcuts (X/B/P, 1–9) disabled in normal play — call fx.setupParticleTesting() from console if needed.
+    // Particle/explosion keyboard shortcuts (X/B/P, 1–9) disabled in normal play - call fx.setupParticleTesting() from console if needed.
   };
   
   // Get particle system stats for diagnostics

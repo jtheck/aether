@@ -1,10 +1,10 @@
 // Deterministic reinforcement waves for the adventure campaign.
 //
 // Two roles, one code path:
-//   • Enemy waves — from any objective with params.waves. Hostile owner-4
+//   • Enemy waves - from any objective with params.waves. Hostile owner-4
 //     attackers that muster near the point (ring) or march an authored route,
 //     escalating in size, drawn from a per-era roster.
-//   • Allied waves — from any objective's `params.allies`. Friendly team-0
+//   • Allied waves - from any objective's `params.allies`. Friendly team-0
 //     reinforcements that spawn on your side and attack-rally across the map.
 //
 // Everything reads only world.tick and world.rng, so all lockstep clients spawn
@@ -21,9 +21,9 @@ import { UNIT } from './unitTypes.js';
 export const WAVE_ENEMY_OWNER = 4;
 /** Team-0 slot used for scripted allied reinforcements (visible + friendly). */
 export const WAVE_ALLY_OWNER = 2;
-/** Grace before the first wave (ticks @ 20 Hz) — clears the intro cinematic. */
+/** Grace before the first wave (ticks @ 20 Hz) - clears the intro cinematic. */
 export const WAVE_FIRST_DELAY_TICKS = 160;
-/** Cadence between waves (ticks @ 20 Hz) — matches the client hold-out timer (12s). */
+/** Cadence between waves (ticks @ 20 Hz) - matches the client hold-out timer (12s). */
 export const WAVE_INTERVAL_TICKS = 240;
 export const WAVE_BASE_COUNT = 3;
 export const WAVE_MAX_COUNT = 8;
@@ -48,7 +48,7 @@ function rosterForEra(era) {
   return ROSTERS[era | 0] || DEFAULT_ROSTER;
 }
 
-/** Eight compass approach vectors — no trig, so positions stay engine-stable. */
+/** Eight compass approach vectors - no trig, so positions stay engine-stable. */
 const DIRS = [
   [1, 0], [0.7071, 0.7071], [0, 1], [-0.7071, 0.7071],
   [-1, 0], [-0.7071, -0.7071], [0, -1], [0.7071, -0.7071],
@@ -101,7 +101,7 @@ export function setupWaveSpawners(world, field, objectives) {
   const spawners = [];
   for (const obj of objectives || []) {
     const p = obj?.params || {};
-    // Enemy waves — tied to the objective's location (escape, defend, …).
+    // Enemy waves - tied to the objective's location (escape, defend, …).
     const waves = p.waves | 0;
     if (waves > 0) {
       const { cx, cz } = objectiveCenterF(obj, field);
@@ -121,7 +121,7 @@ export function setupWaveSpawners(world, field, objectives) {
         roster: rosterForEra(p.era),
       });
     }
-    // Allied reinforcements — spawn on our side, attack-rally across the map.
+    // Allied reinforcements - spawn on our side, attack-rally across the map.
     for (const ally of Array.isArray(p.allies) ? p.allies : []) {
       if (!Array.isArray(ally?.from) || !Array.isArray(ally?.to)) continue;
       const target = worldFromFrac(ally.to[0], ally.to[1], field);

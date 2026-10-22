@@ -2,7 +2,7 @@
   "name": "steam-build",
   "version": "0.1.0",
   "private": true,
-  "description": "Æther NW.js desktop shell — Steam build tooling",
+  "description": "Æther NW.js desktop shell - Steam build tooling",
   "scripts": {
     "prestart": "node ensure-sdk.mjs && node ensure-steam-sdk.mjs && node ensure-node-steam.mjs win && npm install --prefix app && node strip-parent-link.mjs",
     "start": "nw app --flavor sdk",

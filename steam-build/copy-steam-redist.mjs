@@ -15,12 +15,12 @@ if (fs.existsSync(appIdFile)) {
   }
   console.log('[steam-build] Copied steam_appid.txt →', distRoot);
 } else {
-  console.warn('[steam-build] app/steam_appid.txt missing — copy steam_appid.txt.example and set your App ID');
+  console.warn('[steam-build] app/steam_appid.txt missing - copy steam_appid.txt.example and set your App ID');
 }
 
 if (!sdkRoot) {
   console.warn(
-    '[steam-build] STEAMWORKS_SDK not set — skip copying steam_api redistributables. ' +
+    '[steam-build] STEAMWORKS_SDK not set - skip copying steam_api redistributables. ' +
       'Set to your SDK root (contains redistributable_bin/) before dist for Steam builds.'
   );
   process.exit(0);

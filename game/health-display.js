@@ -1,4 +1,4 @@
-// Five flat quads + shared soft radial alpha (DynamicTexture) — reads as soft circles, one row billboard.
+// Five flat quads + shared soft radial alpha (DynamicTexture) - reads as soft circles, one row billboard.
 (function() {
   'use strict';
 

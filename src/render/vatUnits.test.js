@@ -151,7 +151,7 @@ function brigandKeepsVillagerBakeAndATorch() {
   assert.equal(def.idleClip, vill.idleClip);
   assert.equal(def.walkClip, vill.walkClip);
   assert.deepEqual(def.extraSockets, [BRIGAND_TORCH_SOCKET]);
-  // Idle Arm.R tip — not bind T-pose, not a guessed hip offset.
+  // Idle Arm.R tip - not bind T-pose, not a guessed hip offset.
   assert.ok(BRIGAND_TORCH_SOCKET.x > 0.4);
   assert.ok(BRIGAND_TORCH_SOCKET.y > 1.1);
   assert.ok(BRIGAND_TORCH_SOCKET.y < 1.3);

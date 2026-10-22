@@ -1,5 +1,5 @@
 // Lightweight combat statuses: warlock DoT + wizard frost slow + locust chew.
-// Not a full buff framework — mirror holy armor / fire-zone patterns.
+// Not a full buff framework - mirror holy armor / fire-zone patterns.
 
 import * as fx from './fixed.js';
 import { applyDamage } from './damage.js';

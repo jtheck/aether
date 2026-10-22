@@ -354,7 +354,7 @@ function workshopTagsForGarden(garden) {
   return tags;
 }
 
-/** Partner checklist tags — extra labels often make SubmitItemUpdate return false. */
+/** Partner checklist tags - extra labels often make SubmitItemUpdate return false. */
 const WORKSHOP_SAFE_TAGS = ['Map', 'Special'];
 
 function submitAccepted(submitted) {
@@ -437,7 +437,7 @@ function writePreviewJpeg(dir, raw, io) {
 
 /**
  * Create a Workshop item, write map.garden to a temp folder, submit.
- * Preview is optional — Steam Cloud often denies setItemPreview.
+ * Preview is optional - Steam Cloud often denies setItemPreview.
  */
 async function publishWorkshopItem(workshop, garden, opts) {
   opts = opts || {};

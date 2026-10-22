@@ -1,4 +1,4 @@
-// Villager gathering — harvest a resource node, haul the load to the nearest
+// Villager gathering - harvest a resource node, haul the load to the nearest
 // owned drop-off (agora / camp / mine / attached silo), deposit into the
 // owner's bank, repeat. Farms are the exception: food is banked in place while
 // the villager wanders the plot (no haul, no carry visual). Wood/rock harvest
@@ -27,7 +27,7 @@ import { BUILDING_FOOTPRINTS, buildingIsFinished } from './buildings.js';
 const WOOD_CODE = RESOURCE_INDEX.wood + 1;
 const FOOD_CODE = RESOURCE_INDEX.food + 1;
 
-/** Node "class" a drop-off recruits for — keeps mines on rock and camps on wood. */
+/** Node "class" a drop-off recruits for - keeps mines on rock and camps on wood. */
 const NODE_WOOD = 0;
 const NODE_ROCK = 1;
 const NODE_FOOD = 2;
@@ -43,7 +43,7 @@ function nodeClass(node) {
 /**
  * Which node class a drop-off building recruits villagers for. Camps work wood,
  * mines work stone/mineral, farms work their own food node. Anything else (agora)
- * recruits nothing — it's only a deposit point.
+ * recruits nothing - it's only a deposit point.
  */
 function dropOffNodeClass(type) {
   if (type === 'camp') return NODE_WOOD;
@@ -77,7 +77,7 @@ function nodeAt(field, tile) {
     };
   }
   if (field.foodNode && field.foodNode[tile]) {
-    // Never depletes — output is bounded by how many villagers work it.
+    // Never depletes - output is bounded by how many villagers work it.
     return { stock: GATHER_CARRY_CAP, code: FOOD_CODE, foot: 0, tree: false, food: true };
   }
   return null;
@@ -115,7 +115,7 @@ export const FARM_PASSIVE_INTERVAL = (FARM_BITE_PERIOD * 10) / GATHER_BITE;
 export const GATHER_CARRY_CAP = 10;
 
 const NODE_RANGE = fx.fromFloat(6);
-/** Must reach the building itself — ~1 tile from center, on a camp/mine footprint. */
+/** Must reach the building itself - ~1 tile from center, on a camp/mine footprint. */
 const DROP_RANGE = fx.fromFloat(4.5);
 const DROP_RANGE_SQ = fx.mul(DROP_RANGE, DROP_RANGE);
 
@@ -128,7 +128,7 @@ const FARM_ARRIVE = fx.fromFloat(1.6);
 const FARM_ARRIVE_SQ = fx.mul(FARM_ARRIVE, FARM_ARRIVE);
 /** Ticks to stand after arriving before picking the next stroll dest. */
 const FARM_PAUSE_TICKS = 36;
-/** Cap while pottering on the plot — a walk, not the gather run. */
+/** Cap while pottering on the plot - a walk, not the gather run. */
 export const FARM_STROLL_SPEED = fx.fromFloat(0.80);
 
 /** Buildings that recruit gatherers (and show a work-radius ring). Farms work
@@ -167,7 +167,7 @@ export const CREW_RADIUS_BONUS_F = 8;
 export const CREW_RADIUS_TIER_CAP = 2;
 /** Max villagers a single camp/mine will pull to work. */
 export const CAMP_MAX_WORKERS = 8;
-/** One farmer per plot — extra villagers pile up and the yield does not scale. */
+/** One farmer per plot - extra villagers pile up and the yield does not scale. */
 export const FARM_MAX_WORKERS = 1;
 
 /** Per-type worker cap so farms stay tiny while camps/mines field a full crew. */
@@ -522,7 +522,7 @@ export function nearestDropOff(w, owner, px, py) {
 }
 
 /**
- * Per-tick gather driver — one phase in step(), after repair, before movement.
+ * Per-tick gather driver - one phase in step(), after repair, before movement.
  * @param {object} w
  * @param {object} field
  */
@@ -597,7 +597,7 @@ export function gatherSystem(w, field) {
         ? { x: w.tx[i], y: w.ty[i] }
         : nearestDropOff(w, w.owner[i], w.px[i], w.py[i]);
       if (!drop) {
-        // Nowhere to deposit — idle holding the load until re-tasked.
+        // Nowhere to deposit - idle holding the load until re-tasked.
         w.order[i] = ORDER.IDLE;
         w.gatherTile[i] = -1;
         w.vx[i] = 0;
@@ -626,7 +626,7 @@ export function gatherSystem(w, field) {
       continue;
     }
 
-    // Harvest phase — hold within reach of the node and take bites on cadence.
+    // Harvest phase - hold within reach of the node and take bites on cadence.
     const tx = tile % width;
     const tz = (tile / width) | 0;
     const cx = tileCenterX(tx);
@@ -641,7 +641,7 @@ export function gatherSystem(w, field) {
       } else {
         const want = Math.min(GATHER_BITE, GATHER_CARRY_CAP - carrying);
         const removed = node.food
-          ? want // farm food is infinite — no field stock to decrement
+          ? want // farm food is infinite - no field stock to decrement
           : (node.tree ? damageTree(field, tile, want) : damageRock(field, tile, want)) | 0;
         if (removed > 0) {
           w.carriedAmt[i] = carrying + removed;
@@ -650,7 +650,7 @@ export function gatherSystem(w, field) {
         w.gatherCd[i] = GATHER_INTERVAL;
       }
     } else {
-      // Rock centers are blocked — stand on a near-side passable rim tile.
+      // Rock centers are blocked - stand on a near-side passable rim tile.
       setGatherAct(w, i, GATHER_ACT.NONE);
       const snapped = node.tree
         ? null
@@ -849,7 +849,7 @@ export function refreshEngineerAssists(w) {
 }
 
 /**
- * Effective work radius of a drop-off — farm plots stay tight; camps/mines add
+ * Effective work radius of a drop-off - farm plots stay tight; camps/mines add
  * engineer assist plus a crew-size bonus (4 / 8 villagers standing in the circle).
  * HUD draws a slightly smaller ring via workRadiusRingWorld.
  * @returns {number} fixed-point radius
@@ -890,7 +890,7 @@ export function siloWorkRadiusWorld(sourceRadius) {
   return r > 0 ? r : 0;
 }
 
-/** HUD / ghost ring radius — slightly inside the live gather circle. */
+/** HUD / ghost ring radius - slightly inside the live gather circle. */
 export function workRadiusRingWorld(actual) {
   const r = actual - WORK_RADIUS_RING_INSET_F;
   return r > 0 ? r : 0;
@@ -1017,14 +1017,14 @@ export function withinDropOffWorkReach(w, field, b, px, py) {
 
 /**
  * True when a finished camp / mine / farm still has crew room and a matching
- * node inside its work circle — i.e. campAutoAssignSystem would recruit for it.
+ * node inside its work circle - i.e. campAutoAssignSystem would recruit for it.
  */
 export function dropOffCanRecruit(w, field, b) {
   if (!dropOffHasNodes(w, field, b)) return false;
   return countAssignedCrew(w, field, b) < maxWorkersFor(b.type);
 }
 
-/** Matching node inside the drop-off's circle nearest (fromX, fromY), or -1 — ignores the crew cap. */
+/** Matching node inside the drop-off's circle nearest (fromX, fromY), or -1 - ignores the crew cap. */
 export function dropOffNodeNear(w, field, b, fromX, fromY) {
   if (!field || !buildingIsFinished(b)) return -1;
   if (b.hp != null && (b.hp | 0) <= 0) return -1;
@@ -1181,7 +1181,7 @@ function staffFarms(w, field) {
  * Camps and mines then pull nearby idle villagers onto nodes in reach. Runs
  * on a fixed cadence. A villager still under a player order is skipped, and
  * so is one a move / attack / stop parked (manualHold) until it has idled out
- * the hold — arriving at a click must not walk them straight back onto the
+ * the hold - arriving at a click must not walk them straight back onto the
  * node. Idle carriers are sent home first (including to an agora-only base),
  * unless that same park is holding them.
  * @param {object} w
@@ -1207,7 +1207,7 @@ export function campAutoAssignSystem(w, field) {
     const cap = maxWorkersFor(b.type);
 
     // Crew is per-building (farm tile / nearest camp or mine), not "anyone
-    // gathering this class inside the ring" — two farms no longer share a cap.
+    // gathering this class inside the ring" - two farms no longer share a cap.
     let workers = countAssignedCrew(w, field, b);
     if (workers >= cap) continue;
 
@@ -1218,7 +1218,7 @@ export function campAutoAssignSystem(w, field) {
       if ((w.carriedAmt[i] | 0) > 0) continue; // sendIdleCarriersHome owns these
       if (!inDropOffReach(w.buildings, b, w.px[i], w.py[i], radius)) continue;
       const tile = nearestNodeForDropOff(field, w.buildings, b, radius, w.px[i], w.py[i], wantClass);
-      if (tile < 0) break; // no matching nodes in reach — nothing to recruit for
+      if (tile < 0) break; // no matching nodes in reach - nothing to recruit for
       beginGather(w, field, i, tile);
       workers++;
     }
@@ -1280,7 +1280,7 @@ function nearestHostile(w, i, rangeSq) {
 }
 
 /**
- * Defensive farming — villagers that reached a node via attack-move hold their
+ * Defensive farming - villagers that reached a node via attack-move hold their
  * ground: if a hostile closes in they drop the tool, swing, then return to work.
  * Runs before combat so the retaliation resolves the same tick; runs before the
  * gather phase so a resumed order is driven immediately. Deterministic (phased on
@@ -1307,7 +1307,7 @@ export function gatherDefenseSystem(w, field) {
         queuePath(w, i, w.px[foe], w.py[foe]);
       }
     } else if (order === ORDER.IDLE) {
-      // Combat ended (endAttack -> IDLE) — resume the plot if it still stands,
+      // Combat ended (endAttack -> IDLE) - resume the plot if it still stands,
       // otherwise drop the defensive tag so the villager truly idles.
       const tile = w.gatherTile[i];
       if (tile >= 0 && nodeAt(field, tile)) {
@@ -1317,7 +1317,7 @@ export function gatherDefenseSystem(w, field) {
         w.gatherTile[i] = -1;
       }
     } else if (order === ORDER.ATTACK) {
-      // Hostile left the plot ring — drop the swing and resume the node now,
+      // Hostile left the plot ring - drop the swing and resume the node now,
       // before combat keeps pathing after them.
       const foe = w.targetEntity[i];
       if (foe < 0 || !w.alive[foe] || (w.carriedBy?.[foe] >= 0)) continue;

@@ -1,5 +1,5 @@
 // Deterministic PRNG (Mulberry32). The simulation's ONLY source of randomness.
-// Math.random() is banned inside sim/ — it is non-deterministic and would desync
+// Math.random() is banned inside sim/ - it is non-deterministic and would desync
 // lockstep instantly.
 //
 // State is a single uint32 held on the returned object as `.s`, so it can be

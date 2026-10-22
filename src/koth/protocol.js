@@ -1,8 +1,11 @@
-// King of the Hill — wire protocol + deterministic negotiation helpers.
+// King of the Hill - wire protocol + deterministic negotiation helpers.
 
-export const LOBBY = 'aether-koth';
-export const BROADCAST = 'aether-koth';
+import { networkChannel } from '../network/namespace.js';
+
+export const LOBBY = networkChannel('aether-koth');
+export const BROADCAST = LOBBY;
 export const MAX_SLOTS = 5;
+export const MIN_LIVE_PLAYERS = 3;
 export const LAG_TIMEOUT_MS = 45_000;
 export const SHARD_ANNOUNCE_MS = 4000;
 export const CATCHUP_LEDGER_KEEP = 600;

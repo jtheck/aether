@@ -2,7 +2,7 @@
 //
 // Each living unit accrues 1 toward a bite every tick; a bite costs 1 food
 // every FOOD_UPKEEP_PERIOD ticks (three times that in KOTH). Three opening
-// villagers take ~20s to eat one food each — a slow drip, not a second
+// villagers take ~20s to eat one food each - a slow drip, not a second
 // economy. A hundred mouths still only ask for a couple of farmers.
 //
 // Empty banks do not go into debt: the remainder parks just shy of a bite

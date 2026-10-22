@@ -1,4 +1,4 @@
-// .garden v4 — table + terrain + optional scenery / doodads / backdrops / placements.
+// .garden v4 - table + terrain + optional scenery / doodads / backdrops / placements.
 // Optional `mt` is the map type (onevsone, teams, koth, adventure). Missing means
 // the old generator, which dries every 1v1 and team start.
 // v3 files still decode (no scenery / doodads / backdrops / placements).
@@ -387,7 +387,7 @@ function encodeStartingResources(raw) {
 
 /**
  * The region heightmap is purely seed-derived (no editor touches it), so when it
- * matches what the seed reconstructs we skip storing it — it rebuilds for free on
+ * matches what the seed reconstructs we skip storing it - it rebuilds for free on
  * load. This is ~90% of a generated map's bytes. Compared at quantization
  * granularity so a re-saved (already-quantized) map still counts as a match.
  */

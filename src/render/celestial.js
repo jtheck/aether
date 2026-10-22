@@ -1,6 +1,6 @@
 // Two celestial lights. Grade stays in olive / umber so TeamColor owns
 // the rest of the spectrum. Opposite fill keeps camera yaw from going black.
-// Not in lockstep — client lighting only.
+// Not in lockstep - client lighting only.
 
 import {
   addToScene,
@@ -16,7 +16,7 @@ export const BODY = {
   EMIT: 'emit',
 };
 
-/** Daylight on forest dirt — no amber/rose from the pathing overlay. */
+/** Daylight on forest dirt - no amber/rose from the pathing overlay. */
 const KIND_LOOK = {
   // Warm key vs. cool-neutral fill gives faces a lit/shadow split (form shading)
   // instead of a flat wash. Stays in olive/umber so TeamColor owns the spectrum.
@@ -82,7 +82,7 @@ export function defaultCelestialState() {
       // Key stays directional; fill is only a floor so yaw does not go black.
       // Fill is unshadowed, so a high value lifts the grass inside the sun
       // shadow and the cast shape vanishes on the sunny side.
-      // Exposure is the all-angle lift — do not balance by pushing the key.
+      // Exposure is the all-angle lift - do not balance by pushing the key.
       { kind: BODY.SUN, azimuth: 56, elevation: 36, intensity: 1.85 },
       { kind: BODY.HEMI, azimuth: 236, elevation: 68, intensity: 0.34 },
     ],
@@ -264,8 +264,8 @@ export function createCelestialRig(scene, opts = {}) {
   ];
   for (const light of [...dirs, ...hemis]) addToScene(scene, light);
 
-  // Demo spin: sweeps azimuth (and arcs elevation) so all lighting angles —
-  // low-angle rim light + long shadows through overhead — are visible in one
+  // Demo spin: sweeps azimuth (and arcs elevation) so all lighting angles -
+  // low-angle rim light + long shadows through overhead - are visible in one
   // pass. Client-only; never touches the sim. Off by default.
   const spin = { enabled: false, azDegPerSec: 45, arcElevation: true };
   let spinPhaseSec = 0;
@@ -291,6 +291,11 @@ export function createCelestialRig(scene, opts = {}) {
       writeColor(dirs[i], look.diffuse);
       writeColor(hemis[i], look.diffuse);
       writeGround(hemis[i], look.ground);
+      // Intensity and colour are plain fields. The lights UBO only rewrites
+      // when direction/position dirty _lightVersion, so a brightness-only
+      // edit would stay on the GPU as the previous rig.
+      dirs[i]._bumpLightVersion?.();
+      hemis[i]._bumpLightVersion?.();
     }
     writeAngles(state);
     if (scene.clearColor) {

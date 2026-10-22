@@ -231,7 +231,7 @@ function stampGrass(field, tx0, tz0, tx1, tz1) {
 
 function emptyGroundStillCasts() {
   const field = createField(1);
-  // Open grass around aim — no trees; outward-arc seeds should still land.
+  // Open grass around aim - no trees; outward-arc seeds should still land.
   stampGrass(field, 40, 40, 59, 59);
   const aim = tileWorld(50, 50);
   const w = createWorld(92);

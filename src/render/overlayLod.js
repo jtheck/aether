@@ -6,7 +6,7 @@ export const OVERLAY_MAX_BARS = 3072;
 /** Selected + own damaged buildings sit on top of the unit budget. */
 export const OVERLAY_MAX_BUILDING_BARS = 128;
 /**
- * Billboard slot pool. Must stay overlay-sized — never entity / KOTH / stress
+ * Billboard slot pool. Must stay overlay-sized - never entity / KOTH / stress
  * count. Each slot is HP chips + lead + underline + under dots + rings.
  */
 export const HEALTH_BAR_CAPACITY = OVERLAY_MAX_BARS + OVERLAY_MAX_BUILDING_BARS;

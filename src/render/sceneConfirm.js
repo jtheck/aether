@@ -1,4 +1,4 @@
-// In-scene confirm mark — a camera-facing "1^" that hovers at a world point.
+// In-scene confirm mark - a camera-facing "1^" that hovers at a world point.
 // Shown whenever a building ghost is on the board. Hit test is screen-space
 // so a finger or cursor can still land it.
 

@@ -1,5 +1,5 @@
 // Curtain walls as polylines snapped to tile corners.
-// The mesh is extruded in render/wallGeom.js — castle ashlar or dungeon brick.
+// The mesh is extruded in render/wallGeom.js - castle ashlar or dungeon brick.
 // A run blocks every tile its centerline crosses. An open door (one tile) and an
 // open gate (two) leave that span open. A shut door or shut gate stays blocked.
 // fieldFromGarden stamps that into field.pass, and the match draws the same runs.
@@ -695,7 +695,7 @@ function canRelease(field, i) {
 
 /**
  * Stamp wall runs into field.pass. Tiles a centerline crosses become blocked.
- * An open door or open gate clears every tile that span covers — including a
+ * An open door or open gate clears every tile that span covers - including a
  * corner tile the return wall also touches. A shut door or shut gate stays blocked.
  * Previous wall tiles are released unless water, the table rim, or a rock still
  * owns them.

@@ -30,6 +30,11 @@ describe('dlcCatalog', () => {
       [DLC_FIRST_RESPONDER],
     );
     assert.deepEqual(packsOwnedFromSteamDlc([{ appId: DLC_FIRST_RESPONDER_APP_ID, owned: false }]), []);
+    assert.deepEqual(
+      packsOwnedFromSteamDlc([{ appId: DLC_FIRST_RESPONDER_APP_ID, owned: false, available: true }]),
+      [],
+      'Steam store visibility is not ownership',
+    );
   });
 
   it('honors ?dlc= only on localhost', () => {

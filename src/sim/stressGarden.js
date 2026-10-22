@@ -1,4 +1,4 @@
-// Stressful Situation garden — 31-chunk table, pie-ring FFA, authored camera corral.
+// Stressful Situation garden - 31-chunk table, pie-ring FFA, authored camera corral.
 // Write with: node --input-type=module -e "import { writeFileSync } from 'fs'; import { buildStressGarden } from './sim/stressGarden.js'; writeFileSync('../maps/dev/stress.garden', JSON.stringify(buildStressGarden()));"
 
 import { STRESS_GARDEN_URL } from '../houseMaps.js';

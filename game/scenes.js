@@ -23,7 +23,7 @@
       return this.playScene(scene);
     }
 
-    // Called from processTick — checks if any scene should fire
+    // Called from processTick - checks if any scene should fire
     checkTriggers() {
       if (this.playing || !this.match) return;
 
@@ -113,7 +113,7 @@
       this._drifting = true;
       const camera = window.gfx?.camera;
       if (!camera) return;
-      const driftSpeed = 0.0003; // radians per frame — very subtle
+      const driftSpeed = 0.0003; // radians per frame - very subtle
       const tick = () => {
         if (!this._drifting) return;
         if (!this._cameraStepActive && camera) {
@@ -189,7 +189,7 @@
       return this.stepWait({ duration: duration / 1000 });
     }
 
-    // Bottom-screen subtitle bar — non-blocking, auto-fades. Supports optional speaker name.
+    // Bottom-screen subtitle bar - non-blocking, auto-fades. Supports optional speaker name.
     _stepNarration(step) {
       const existing = document.getElementById('scene-narration-bar');
       if (existing) existing.remove();

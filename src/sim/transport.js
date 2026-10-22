@@ -1,4 +1,4 @@
-// Transport load / unload — SoA port of v1 embark/disembark.
+// Transport load / unload - SoA port of v1 embark/disembark.
 // Passengers are discovered by scanning carriedBy[i] === transportId.
 
 import * as fx from './fixed.js';
@@ -23,7 +23,7 @@ export function transportCapacityOf(typeId) {
   return getUnitDef(typeId).transportCapacity ?? 0;
 }
 
-/** Monks walk — stick work doesn't belong in a wagon. */
+/** Monks walk - stick work doesn't belong in a wagon. */
 export function canRideTransport(typeId) {
   if (typeId === UNIT.MONK) return false;
   if (isTransport(typeId)) return false;
@@ -173,7 +173,7 @@ export function transportAutoLoadSystem(w) {
     const d2 = fx.dist2(w.px[i], w.py[i], w.px[t], w.py[t]);
     if (d2 <= TRANSPORT_LOAD_RANGE_SQ) {
       if (loadUnit(w, i, t)) continue;
-      // Full — keep seeking in case a slot frees.
+      // Full - keep seeking in case a slot frees.
     }
     // Chase the moving transport; repath when dest drifts or path is empty.
     w.order[i] = ORDER.MOVE;
@@ -200,7 +200,7 @@ export function syncCarriedPositions(w) {
     const t = w.carriedBy[i];
     if (t < 0) continue;
     if (t >= w.count || !w.alive[t]) {
-      // Transport gone without spill — free the rider in place.
+      // Transport gone without spill - free the rider in place.
       w.carriedBy[i] = -1;
       continue;
     }

@@ -1,4 +1,4 @@
-// Wizard lightning — instant sky strike + render-only FX publish.
+// Wizard lightning - instant sky strike + render-only FX publish.
 
 import * as fx from './fixed.js';
 import {
@@ -19,7 +19,7 @@ import { buildingIsFinished, isBuildingAlive } from './buildings.js';
 /** Strike picks a random hostile inside this radius of the aim point. */
 export const LIGHTNING_STRIKE_RADIUS = fx.fromFloat(26);
 /**
- * Bolt lands randomly inside this radius of the resolved target/aim —
+ * Bolt lands randomly inside this radius of the resolved target/aim -
  * keeps the strike from looking laser-precise on a unit's feet.
  */
 export const LIGHTNING_IMPACT_SCATTER = fx.fromFloat(10);

@@ -1,4 +1,4 @@
-// Plague of Frogs — shaman ability hoppers.
+// Plague of Frogs - shaman ability hoppers.
 // Organic cluster swarm: frogs hop independently in the cast's general
 // direction, linger, wander, occasionally split, and stick around for many
 // hops. Publish only on state changes; renderer lerps hop plans locally.
@@ -24,7 +24,7 @@ import { capacityFor } from './capacity.js';
 
 /** Initial pool / thin-instance size; grows by powers of two. */
 export const FROG_INITIAL_CAPACITY = 256;
-/** @deprecated Prefer FROG_INITIAL_CAPACITY — alias kept for older call sites. */
+/** @deprecated Prefer FROG_INITIAL_CAPACITY - alias kept for older call sites. */
 export const MAX_FROGS = FROG_INITIAL_CAPACITY;
 
 export const FROG_PHASE = {
@@ -61,7 +61,7 @@ export const FROG_HOPS_MAX = 11;
 export const FROG_SPLIT_CHANCE_Q8 = 72;
 
 const HOP_SPEED = fx.fromFloat(1.05);
-/** Escape hops are quick but short — many of them, not one mega-leap. */
+/** Escape hops are quick but short - many of them, not one mega-leap. */
 const ESCAPE_HOP_SPEED = fx.fromFloat(5.2);
 const ESCAPE_HOP_DIST_MIN = fx.fromFloat(10.125);
 const ESCAPE_HOP_DIST_MAX = fx.fromFloat(16.875);
@@ -244,7 +244,7 @@ export function findNearestWater(field, wx, wy, maxTiles = ESCAPE_SEEK_TILES) {
     return { x: tileCenterX(tx0), y: tileCenterY(tz0) };
   }
 
-  // Expanding Chebyshev rings — deterministic scan order.
+  // Expanding Chebyshev rings - deterministic scan order.
   for (let r = 1; r <= maxTiles; r++) {
     for (let dz = -r; dz <= r; dz++) {
       for (let dx = -r; dx <= r; dx++) {
@@ -386,7 +386,7 @@ function planWanderHop(w, store, slot) {
   setHop(store, slot, ox, oy, dx, dy);
 }
 
-/** Break combat focus — units gawk at the frogs instead of fighting. */
+/** Break combat focus - units gawk at the frogs instead of fighting. */
 export function applyDistract(w, i, ticks = FROG_DISTRACT_TICKS) {
   if (i < 0 || i >= w.count || !w.alive[i]) return;
   if (!w.distractCd) return;
@@ -721,12 +721,12 @@ export function frogSystem(w, field = null) {
       if (store.hopsLeft[slot] > 0) tryBirthChild(w, store, slot);
 
       if (store.hopsLeft[slot] <= 0) {
-        // CC sit finished — nearby water or the table edge, otherwise vanish.
+        // CC sit finished - nearby water or the table edge, otherwise vanish.
         beginEscapeToWater(w, field, store, slot);
         continue;
       }
 
-      // Own next hop — wander with cast-biased heading.
+      // Own next hop - wander with cast-biased heading.
       planWanderHop(w, store, slot);
       store.phase[slot] = FROG_PHASE.WAIT;
       store.waitTicks[slot] = rngRange(w.rng, 0, 6);

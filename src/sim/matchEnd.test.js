@@ -56,7 +56,7 @@ describe('match wipe (0 pop)', () => {
     assert.equal(w.matchWinner, -1);
   });
 
-  it('needs two seats — a lone agora is not a match', () => {
+  it('needs two seats - a lone agora is not a match', () => {
     const w = seatWorld([0], []);
     matchWipeStep(w);
     assert.equal(w.kothMatchOver, 0);

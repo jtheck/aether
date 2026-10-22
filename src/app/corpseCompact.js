@@ -1,6 +1,6 @@
 /**
  * Faded corpses stay in the thin-instance batches until a compact. The gate is a
- * fraction of units still fading or alive — not of everyone who ever spawned.
+ * fraction of units still fading or alive - not of everyone who ever spawned.
  * A wiped stress army used to sit just under 8% of the original count and keep
  * those zero-scale VAT slots in the color pass and every shadow cascade.
  *

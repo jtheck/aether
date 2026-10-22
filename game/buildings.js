@@ -91,7 +91,7 @@ function addBuildingParticleEffects(building) {
 
 // Derive billboard scale and Y offset from a building's world-space bounding box
 // so the LOD sprite matches the 3D model's visual footprint.
-// Returns { scale, yOffset } — yOffset anchors the billboard bottom to the model's ground.
+// Returns { scale, yOffset } - yOffset anchors the billboard bottom to the model's ground.
 function computeBuildingBillboardScale(building) {
   const BILLBOARD_BASE_HEIGHT = 3.0; // master billboard plane is 3 units tall
   const FIT_FACTOR = 0.75; // shrink slightly so billboard doesn't overshoot the 3D model
@@ -294,7 +294,7 @@ const BuildingTypes = {
     healAmount: 2,
     healInterval: 3000,
     spawnsUnits: ["mycorrhizae"],
-    description: "💧 Moon well — heals allies nearby and trains Myco / Alchemists"
+    description: "💧 Moon well - heals allies nearby and trains Myco / Alchemists"
   },
 
   barracks: {
@@ -1204,7 +1204,7 @@ function findIdleVillagersNearBuilding(building) {
     }
     
     // CRITICAL: Don't auto-assign units that recently received a player command.
-    // EXCEPTION: Skip grace period for under-construction buildings — if the player
+    // EXCEPTION: Skip grace period for under-construction buildings - if the player
     // moved a villager to a build site, they want it to build.
     const currentTick = window.currentMatch?.tick || 0;
     const nearConstruction = building.workType === 'build' && !building.completionProcessed;
@@ -2926,7 +2926,7 @@ const buildingSystem = {
       }
       
       try {
-        // Get world position from mouse (canvas-local — client coords skew the ray when canvas is offset)
+        // Get world position from mouse (canvas-local - client coords skew the ray when canvas is offset)
         const { x: pickX, y: pickY } = canvasPickCoordsFromClient(e.clientX, e.clientY);
         const pickResult = window.gfx.scene.pick(pickX, pickY);
         if (pickResult.hit && pickResult.pickedMesh && pickResult.pickedMesh.name && pickResult.pickedMesh.name.includes('Mesh')) {

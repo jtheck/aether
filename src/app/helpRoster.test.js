@@ -1,7 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { UNIT } from '../sim/unitTypes.js';
-import { helpBuildingCards, helpPips, helpUnitCards, HELP_PIPS } from './helpRoster.js';
+import {
+  helpBuildingCards,
+  helpPips,
+  helpUnitCards,
+  helpUnitLayout,
+  HELP_PIPS,
+  HELP_UNIT_ROWS,
+} from './helpRoster.js';
 
 describe('helpPips', () => {
   it('stays empty at zero and full at the maximum', () => {
@@ -30,6 +37,17 @@ describe('help roster cards', () => {
     const brigand = cards.find((c) => c.id === String(UNIT.BRIGAND));
     assert.ok(brigand);
     assert.match(brigand.note, /Temporary/i);
+  });
+
+  it('pairs bases with upgrades and leaves a gap for missing upgrades', () => {
+    const layout = helpUnitLayout();
+    assert.equal(layout.length, HELP_UNIT_ROWS.length * 2);
+    const villagerIdx = layout.findIndex((s) => s.kind === 'unit' && s.id === String(UNIT.VILLAGER));
+    assert.deepEqual(layout[villagerIdx + 1], { kind: 'unit', id: String(UNIT.BRIGAND) });
+    const engineerIdx = layout.findIndex((s) => s.kind === 'unit' && s.id === String(UNIT.ENGINEER));
+    assert.deepEqual(layout[engineerIdx + 1], { kind: 'gap' });
+    const warriorIdx = layout.findIndex((s) => s.kind === 'unit' && s.id === String(UNIT.WARRIOR));
+    assert.deepEqual(layout[warriorIdx + 1], { kind: 'unit', id: String(UNIT.CHAMPION) });
   });
 
   it('rates the factory as the toughest, longest building', () => {

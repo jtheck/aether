@@ -3,7 +3,7 @@
 // This is the inversion v1 lacked: input (mouse, AI, network) never mutates
 // entity state directly. It produces commands, the command list is fed to
 // step(), and step() applies them at a known tick. That makes the sim a pure
-// function of (state, commands) — which is exactly what lockstep multiplayer
+// function of (state, commands) - which is exactly what lockstep multiplayer
 // needs, and it is true from the very first unit.
 //
 // A command is plain, serializable data (no object references), so the same
@@ -63,7 +63,7 @@ export const CMD = {
   SELECT: 8,
   /** Spill passengers from selected transports; optional walk target. */
   UNLOAD: 9,
-  /** Place a building at world xz (stub — no cost / build time). */
+  /** Place a building at world xz (stub - no cost / build time). */
   PLACE_BUILDING: 10,
   /** Queue a unit on a building production track. */
   QUEUE_TRAIN: 11,
@@ -203,7 +203,7 @@ function applySelect(world, playerId, entities) {
 }
 
 /**
- * Soft gather scatter for group moves — deterministic per-entity jitter so a
+ * Soft gather scatter for group moves - deterministic per-entity jitter so a
  * shared click does not path everyone onto one pixel. Box scatter from an
  * integer hash (no trig / no formation grid). Single-unit moves stay exact.
  * Amplitude scales with √movers so hundreds don't all path into a tiny box.
@@ -293,7 +293,7 @@ function applyMove(world, field, ids, tx, ty, order) {
     clearAttackFocus(world, i);
     clearEngagement(world, i);
 
-    // Already inside the soft gather disk around the click — stay put.
+    // Already inside the soft gather disk around the click - stay put.
     // Measure vs the shared click (not jittered dest) so a scaled scatter
     // doesn't yank edge units out of a settled pack.
     // Busy / mid-order units only cancel within FINAL_ARRIVE so a huge √n disk

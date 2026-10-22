@@ -4,7 +4,7 @@
 export const MAX_TECH_OWNERS = 16;
 
 /**
- * Research cost per upgrade id (v1 template — mineral-heavy on the power techs).
+ * Research cost per upgrade id (v1 template - mineral-heavy on the power techs).
  * Charged on queue, refunded on cancel.
  * @type {Readonly<Record<string, Record<string, number>>>}
  */

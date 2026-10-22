@@ -20,7 +20,7 @@ import { damageDoorsInRadius } from './doorCombat.js';
 import { isHostile } from './teams.js';
 import { noteBuildingLost, noteOwnerRaze } from './ownerStats.js';
 
-/** Gather / storage buildings — smash these last, and don't peel off a march for them. */
+/** Gather / storage buildings - smash these last, and don't peel off a march for them. */
 const ECONOMY_BUILDING_TYPES = new Set(['camp', 'mine', 'farm', 'silo']);
 
 export function isEconomyCombatBuilding(typeId) {
@@ -86,9 +86,9 @@ export function ruinBuilding(w, field, bi) {
   w.buildingsDirty = 1;
 }
 
-/** world.ORDER.BUILD — numeric to stay off the world → path → buildingCombat cycle. */
+/** world.ORDER.BUILD - numeric to stay off the world → path → buildingCombat cycle. */
 const ORDER_BUILD = 6;
-/** Same slack as construction.js BUILD_MARGIN_F — on-site workers harden a foundation. */
+/** Same slack as construction.js BUILD_MARGIN_F - on-site workers harden a foundation. */
 const BUILD_SITE_MARGIN_F = 6;
 
 /** True when a villager/engineer is in reach on a BUILD order for this site. */
@@ -117,7 +117,7 @@ function creditRaze(w, b, attackerOwner) {
 export function applyDamageBuilding(w, field, bi, amount, attackerOwner = -1) {
   const b = w.buildings?.[bi];
   if (!isBuildingAlive(b) || amount <= 0) return 0;
-  // Empty foundations are paper — any hit ruins them. On-site builders harden.
+  // Empty foundations are paper - any hit ruins them. On-site builders harden.
   if (b.built === 0 && !constructionSiteHasWorkers(w, bi)) {
     const dealt = Math.max(1, b.hp | 0);
     ruinBuilding(w, field, bi);
@@ -134,7 +134,7 @@ export function applyDamageBuilding(w, field, bi, amount, attackerOwner = -1) {
   return dealt;
 }
 
-/** Crops rot, burn, and get eaten — farms take extra from spore, fire, and locusts. */
+/** Crops rot, burn, and get eaten - farms take extra from spore, fire, and locusts. */
 export const FARM_SPORE_DAMAGE_MUL = 5;
 export const FARM_FIRE_DAMAGE_MUL = 5;
 export const FARM_LOCUST_DAMAGE_MUL = 5;
@@ -224,7 +224,7 @@ export function tickBuildingFires(w, field) {
   }
 }
 
-/** Ground-fire pulses — farms cook faster than other buildings. */
+/** Ground-fire pulses - farms cook faster than other buildings. */
 export function pulseFireZoneBuildings(w, field) {
   if (!field) return;
   const store = w.fireZones;

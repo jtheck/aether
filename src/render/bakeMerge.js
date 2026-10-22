@@ -1,7 +1,7 @@
 // Offline + runtime mesh-package collapse.
 // Prebake writes version 3 (one part per visual material). Runtime still
 // merges older v2 dumps so a stale bake folder gets the same GPU mesh count.
-// Texture atlas merge is reserved for later — current roster bakes are
+// Texture atlas merge is reserved for later - current roster bakes are
 // factor-only (no images), so packing albedos would be a no-op.
 
 export const BAKE_MESH_VERSION = 3;

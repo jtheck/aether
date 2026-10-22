@@ -1,6 +1,6 @@
 /**
  * Babylon Lite (WebGPU) render backend for axiom.
- * Same port as babylon-backend / three-backend — sim stays engine-agnostic.
+ * Same port as babylon-backend / three-backend - sim stays engine-agnostic.
  */
 import {
   addToScene,
@@ -63,7 +63,7 @@ function makeTriangleData(size) {
   return { positions, normals, indices };
 }
 
-/** Identity-indexed point cloud (one vertex per particle — same path as Three). */
+/** Identity-indexed point cloud (one vertex per particle - same path as Three). */
 function makePointCloudData(capacity) {
   const cap = Math.max(1, capacity | 0);
   const positions = new Float32Array(cap * 3);
@@ -390,7 +390,7 @@ export function createLiteBackend() {
       syncWaveEmitters();
 
       createTetraField();
-      // Opacity is opt-in in Lite 1.23 — register the ext before the first build
+      // Opacity is opt-in in Lite 1.23 - register the ext before the first build
       // so later hard-circle species (added after registerScene) pick it up.
       {
         const boot = createStandardMaterial();
@@ -488,7 +488,7 @@ export function createLiteBackend() {
         if (count > 0) updateMeshPositions(engine, mesh, upload.positions, 0, count);
         if (mesh._gpu.indexCount !== count) {
           mesh._gpu.indexCount = count;
-          // Opaque draws are recorded into a render bundle — refresh when the
+          // Opaque draws are recorded into a render bundle - refresh when the
           // live count changes (Three's setDrawRange equivalent).
           invalidateRenderBundles(engine);
         }
@@ -589,7 +589,7 @@ export function createLiteBackend() {
         x: camera.position.x,
         y: camera.position.y,
         z: camera.position.z,
-        // Lite is LH / look +Z — same basis as applyGamepadFly.
+        // Lite is LH / look +Z - same basis as applyGamepadFly.
         forward: { x: sy * cp, y: sp, z: cy * cp },
         fov: 60,
         aspect,

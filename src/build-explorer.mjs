@@ -23,4 +23,4 @@ copyFileSync(
   'vendor/lite-explorer/explorer.css',
 );
 
-console.log('vendor/lite-explorer/ — explorer.js + explorer.css');
+console.log('vendor/lite-explorer/ - explorer.js + explorer.css');

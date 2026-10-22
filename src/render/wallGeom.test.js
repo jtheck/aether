@@ -202,6 +202,22 @@ describe('curtain wall mesh', () => {
     }
     assert.ok(low > 2.5, `doorway should stop at the lintel, lowest y ${low}`);
 
+    let jamb = 0;
+    const ip = stone(geom).indices;
+    const sp = stone(geom).positions;
+    for (let t = 0; t < ip.length; t += 3) {
+      const ia = ip[t] * 3;
+      const ib = ip[t + 1] * 3;
+      const ic = ip[t + 2] * 3;
+      const cx = (sp[ia] + sp[ib] + sp[ic]) / 3;
+      const cy = (sp[ia + 1] + sp[ib + 1] + sp[ic + 1]) / 3;
+      const cz = (sp[ia + 2] + sp[ib + 2] + sp[ic + 2]) / 3;
+      if (Math.abs(cx - 4) > 0.08 || cy < 1 || cy > 3 || Math.abs(cz) > 0.3) continue;
+      const n = triNormal(sp, ia, ib, ic);
+      if (Math.abs(n[0]) > Math.abs(n[1]) && Math.abs(n[0]) > Math.abs(n[2])) jamb += 1;
+    }
+    assert.ok(jamb > 0, 'door cut should close the wall thickness');
+
     const brick = buildWallGeometry(
       [{ kind: 'dungeon', closed: false, points: [{ x: 0, z: 0 }, { x: 8, z: 0 }] }],
       style,

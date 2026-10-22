@@ -1,4 +1,4 @@
-// Axiom fly — one intent for keys, pointer, wheel, stick.
+// Axiom fly - one intent for keys, pointer, wheel, stick.
 // Backends only apply (same pipe as gamepad.js → applyGamepadFly).
 
 export const IDLE_FLY = {

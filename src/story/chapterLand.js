@@ -1,4 +1,4 @@
-// Chapter landscape — clumped woods, leftover seeded terrain, hostile camps.
+// Chapter landscape - clumped woods, leftover seeded terrain, hostile camps.
 
 import { paintRegionLift, TABLE_CHUNK_TILES, TERRAIN } from '../sim/field.js';
 import {
@@ -27,7 +27,7 @@ function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 
-/** Soft value noise from the scenery hash — clumps, not a lattice. */
+/** Soft value noise from the scenery hash - clumps, not a lattice. */
 function patchNoise(tx, tz, seed, scale) {
   const gx = tx / scale;
   const gz = tz / scale;

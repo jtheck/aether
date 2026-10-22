@@ -58,7 +58,7 @@ function trainingChargesGatesAndRefunds() {
   w.buildings[0].built = 1;
   w.buildings[0].buildProgress = w.buildings[0].buildTime | 0;
 
-  // Villagers trickle from the village — they are not a train option.
+  // Villagers trickle from the village - they are not a train option.
   addResource(w, 0, 'food', 100);
   applyCommands(w, field, [
     { type: CMD.QUEUE_TRAIN, playerId: 0, buildingIndex: 0, unitKey: 'villager' },

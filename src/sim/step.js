@@ -4,14 +4,14 @@
 //   1) apply commands (the only external input)
 //   2) combat acquire + attacks
 //   3) movement (path follow)
-//   4) soft separation (standing units + light moving avoidance — never fights path follow)
+//   4) soft separation (standing units + light moving avoidance - never fights path follow)
 //   5) advance the tick counter
 //
 // Determinism rules (enforced by discipline + the partition): no Date.now /
 // performance.now in gameplay, no Math.random (rng.js only), no DOM / Babylon,
 // all math in fixed-point via fixed.js.
 // Exception: when world.profileSim is set, performance.now() fills metrics.timing
-// only — never read back into decisions or checksum.
+// only - never read back into decisions or checksum.
 
 import * as fx from './fixed.js';
 import { applyCommands } from './commands.js';
@@ -73,7 +73,7 @@ import { brigandIdleSystem } from './brigand.js';
 
 /** Extra slow while gawking at frogs (stacks with terrain slow). */
 const DISTRACT_MOVE_MUL = fx.fromFloat(0.55);
-// Soft personal space — enough that meshes don't occupy the same pixel,
+// Soft personal space - enough that meshes don't occupy the same pixel,
 // not a parade grid. Old code multiplied by an extra 2.5× factor, so idle
 // post-combat piles kept drifting out to ~6+ (endless turning/inching).
 //
@@ -82,20 +82,20 @@ const DISTRACT_MOVE_MUL = fx.fromFloat(0.55);
 //
 // Knob table (values + gather jitter / arrive disk): docs/unit-separation.md
 const SEP_PUSH = fx.fromFloat(0.42);
-/** Soft shoulder-check while pathing — weak so routes still win. */
+/** Soft shoulder-check while pathing - weak so routes still win. */
 const MOVE_AVOID_PUSH = fx.fromFloat(0.22);
-/** Near-pixel glue mid-march — stronger shove without restoring idle parade radius. */
+/** Near-pixel glue mid-march - stronger shove without restoring idle parade radius. */
 const MOVE_AVOID_HARD = fx.fromFloat(0.38);
 /** dist2 below this fraction of minDist² counts as hard overlap. */
 const MOVE_AVOID_HARD_FRAC = fx.fromFloat(0.36);
 const SEP_MAX_STEP = fx.fromFloat(0.30);
 /** Hard mid-march unstack can step a bit farther per tick than idle sep. */
 const MOVE_AVOID_HARD_MAX = fx.fromFloat(0.40);
-/** Idle deep-pile bloom — peel stacked arrivals fast; rim still uses SEP_SLACK. */
+/** Idle deep-pile bloom - peel stacked arrivals fast; rim still uses SEP_SLACK. */
 const SEP_BLOOM_PUSH = fx.fromFloat(0.50);
 const SEP_BLOOM_MAX = fx.fromFloat(0.45);
 const SEP_BLOOM_FRAC = fx.fromFloat(0.40);
-/** Stop separating once within this of minDist — kills overpack wave chatter. */
+/** Stop separating once within this of minDist - kills overpack wave chatter. */
 const SEP_SLACK = fx.fromFloat(0.28);
 /**
  * Per-type heading blend (0–1), accel, and decel (world units / tick).
@@ -117,7 +117,7 @@ const STEER_MIN_PREV = fx.fromFloat(0.02);
  */
 const TURN_PLACE_DOT = fx.fromFloat(0.57);
 const GRID_SEP_THRESHOLD = 400;
-// Visit every source cell over N deterministic ticks. Was 8 — dense arrivals
+// Visit every source cell over N deterministic ticks. Was 8 - dense arrivals
 // rippled as a slow wave; 2 keeps cost bounded without the grotesque pulse.
 const SEP_PHASES = 2;
 const SEP_NEIGHBORS = [[0, 1], [1, -1], [1, 0], [1, 1]];
@@ -145,7 +145,7 @@ export function step(world, field, commands) {
   world.metrics.projectileMisses = 0;
   world.metrics.projectileOverflow = 0;
 
-  // Diagnostic only — never read timing back into gameplay / checksum.
+  // Diagnostic only - never read timing back into gameplay / checksum.
   const profile = !!world.profileSim;
   const timing = profile ? {} : null;
   if (profile) world.metrics.timing = timing;
@@ -225,7 +225,7 @@ function movementSystem(w, field) {
       continue;
     }
 
-    // Mid-air from a monk stick-bonk — flight owns position this tick.
+    // Mid-air from a monk stick-bonk - flight owns position this tick.
     if (isLobbing(w, i)) {
       w.vx[i] = 0;
       w.vy[i] = 0;
@@ -234,19 +234,19 @@ function movementSystem(w, field) {
 
     const order = w.order[i];
     if (order === ORDER.IDLE) {
-      // Bleed leftover momentum (blimps etc.) — never hard-zero a floaty coast.
+      // Bleed leftover momentum (blimps etc.) - never hard-zero a floaty coast.
       coastBrake(w, field, i);
       continue;
     }
 
-    // In attack range — hold and strike; combat cleared the path.
+    // In attack range - hold and strike; combat cleared the path.
     if (order === ORDER.ATTACK && attackInRange(w, i)) {
       w.vx[i] = 0;
       w.vy[i] = 0;
       continue;
     }
 
-    // Engineer holding repair range — repairSystem owns cadence.
+    // Engineer holding repair range - repairSystem owns cadence.
     if (order === ORDER.REPAIR) {
       // Still allow movement toward target when out of range (path active).
       if (w.navWpCount[i] === 0 && !w.pathRequest[i]) {
@@ -256,7 +256,7 @@ function movementSystem(w, field) {
       }
     }
 
-    // Villager holding at a node / drop-off — gatherSystem owns cadence.
+    // Villager holding at a node / drop-off - gatherSystem owns cadence.
     if (order === ORDER.GATHER) {
       if (w.navWpCount[i] === 0 && !w.pathRequest[i]) {
         w.vx[i] = 0;
@@ -265,7 +265,7 @@ function movementSystem(w, field) {
       }
     }
 
-    // Builder holding at a construction site — constructionSystem owns cadence.
+    // Builder holding at a construction site - constructionSystem owns cadence.
     if (order === ORDER.BUILD) {
       if (w.navWpCount[i] === 0 && !w.pathRequest[i]) {
         w.vx[i] = 0;
@@ -274,13 +274,13 @@ function movementSystem(w, field) {
       }
     }
 
-    // Final destination reached — settle the order (v1 arrivalRadius).
+    // Final destination reached - settle the order (v1 arrivalRadius).
     if (
       (order === ORDER.MOVE || order === ORDER.WANDER || order === ORDER.ATTACK_MOVE) &&
       w.hasTarget[i] &&
       atFinalDest(w, i)
     ) {
-      // Attack-moved a villager onto a resource? Put it to work — defensively, so
+      // Attack-moved a villager onto a resource? Put it to work - defensively, so
       // it fends off anything that wanders in and then goes back to the node.
       if (continueRallyHop(w, field, i)) continue;
       if (
@@ -302,7 +302,7 @@ function movementSystem(w, field) {
     }
 
     checkStuck(w, field, i);
-    // Stuck may have cleared the path for A* — keep sliding toward dest, or
+    // Stuck may have cleared the path for A* - keep sliding toward dest, or
     // refresh the active waypoint if one remains.
     if (w.navWpCount[i] > 0) {
       const base = wpBase(i) + w.navWpIndex[i];
@@ -316,7 +316,7 @@ function movementSystem(w, field) {
         const base = wpBase(i) + w.navWpIndex[i];
         goal = { x: w.navWx[base], y: w.navWy[base] };
       } else {
-        // Path exhausted — repath or seek final dest (do not go IDLE early).
+        // Path exhausted - repath or seek final dest (do not go IDLE early).
         onPathExhausted(w, field, i);
         if (atFinalDest(w, i)) {
           if (continueRallyHop(w, field, i)) continue;
@@ -331,7 +331,7 @@ function movementSystem(w, field) {
           continue;
         }
         if (w.navWpCount[i] === 0) {
-          // Gave up after max repaths — stop cleanly.
+          // Gave up after max repaths - stop cleanly.
           if (w.repathCount[i] >= MAX_REPATHS && w.pathRequest[i] === 0) {
             if (continueRallyHop(w, field, i)) continue;
             if (
@@ -344,7 +344,7 @@ function movementSystem(w, field) {
             finishMove(w, i);
             continue;
           }
-          // Repath pending — keep sliding toward dest (no hard stop / stutter).
+          // Repath pending - keep sliding toward dest (no hard stop / stutter).
           if (w.pathRequest[i]) {
             goal = { x: w.navDestX[i], y: w.navDestY[i] };
           } else {
@@ -424,7 +424,7 @@ function movementSystem(w, field) {
     }
 
     // Ground vehicles: pivot + coast when badly aimed (no reverse rocket).
-    // Flyers: never lock — keep drifting on the steered nose (wide floaty arcs).
+    // Flyers: never lock - keep drifting on the steered nose (wide floaty arcs).
     // Old flyer lock coasted on *old* vx while face turned, then snapped.
     if (!isFlyer(typeId) && align < TURN_PLACE_DOT) {
       coastBrake(w, field, i);
@@ -434,7 +434,7 @@ function movementSystem(w, field) {
     let targetSpeed;
     if (isFlyer(typeId)) {
       // align −1..1 → 0..1; floor so a 180° order still banks instead of stalling.
-      // (Fixed add is plain + — there is no fx.add.)
+      // (Fixed add is plain + - there is no fx.add.)
       let alignSpeed = fx.mul(align + fx.ONE, fx.HALF);
       if (alignSpeed < fx.fromFloat(0.30)) alignSpeed = fx.fromFloat(0.30);
       targetSpeed = fx.mul(speed, alignSpeed);
@@ -485,7 +485,7 @@ function finishMove(w, i) {
   w.navWpCount[i] = 0;
   w.navWpIndex[i] = 0;
   w.pathRequest[i] = 0;
-  // Keep vx/vy — IDLE coastBrake bleeds them. Hard-zero felt like a dime stop
+  // Keep vx/vy - IDLE coastBrake bleeds them. Hard-zero felt like a dime stop
   // on dirigibles after an otherwise soft approach.
   w.hasTarget[i] = 0;
   // IDLE still auto-acquires; keeps render facing from treating sep nudges as walks.
@@ -510,7 +510,7 @@ function coastBrake(w, field, i) {
   applyMoveWithSlide(w, field, i, mx, my);
 }
 
-/** Axis-by-axis wall slide — enter blocked tiles only when escaping them. */
+/** Axis-by-axis wall slide - enter blocked tiles only when escaping them. */
 function applyMoveWithSlide(w, field, i, mx, my) {
   const oldX = w.px[i];
   const oldY = w.py[i];
@@ -579,7 +579,7 @@ function isMovingUnit(w, i) {
   return w.vx[i] !== 0 || w.vy[i] !== 0;
 }
 
-/** Same-owner crowding candidate — movers and standers both count. */
+/** Same-owner crowding candidate - movers and standers both count. */
 function isAvoidanceUnit(w, i) {
   if (!w.alive[i] || isCarried(w, i) || isLobbing(w, i)) return false;
   return true;
@@ -591,7 +591,7 @@ function movingAvoidanceSystem(w, field) {
       if (!isAvoidanceUnit(w, i)) continue;
       for (let j = i + 1; j < w.count; j++) {
         if (!isAvoidanceUnit(w, j) || w.owner[i] !== w.owner[j]) continue;
-        // Need at least one mover — pure standers are separationSystem's job.
+        // Need at least one mover - pure standers are separationSystem's job.
         if (!isMovingUnit(w, i) && !isMovingUnit(w, j)) continue;
         w.metrics.movingAvoidancePairs++;
         applyMovingAvoidance(w, field, i, j);
@@ -648,7 +648,7 @@ function applyMovingAvoidance(w, field, i, j) {
   }
 }
 
-// Soft separation for units that aren't pathing — never fights an active route.
+// Soft separation for units that aren't pathing - never fights an active route.
 function separationSystem(w, field) {
   if (w.count >= GRID_SEP_THRESHOLD) {
     gridSeparation(w, field);
@@ -705,7 +705,7 @@ function gridSeparation(w, field) {
 
 /**
  * Soft personal space while standing. Path follow owns position while navigating
- * (nav waypoints or pending plan) — right-click ATTACK_MOVE holders used to stay
+ * (nav waypoints or pending plan) - right-click ATTACK_MOVE holders used to stay
  * stacked forever because this required ORDER.IDLE.
  */
 function canSeparate(w, i) {
@@ -714,7 +714,7 @@ function canSeparate(w, i) {
   return true;
 }
 
-/** Air and ground don't shove each other — dirigibles aren't in the infantry pile. */
+/** Air and ground don't shove each other - dirigibles aren't in the infantry pile. */
 function sameSepLayer(w, i, j) {
   return isFlyer(w.type[i]) === isFlyer(w.type[j]);
 }
@@ -757,7 +757,7 @@ function applyPairPush(w, field, i, j, strength, asymmetric, slack = SEP_SLACK, 
     else { dx = 0; dy = -fx.ONE; }
     dist2 = fx.ONE;
   } else if (fx.abs(dy) < fx.fromFloat(0.08) && dist2 < SEP_MIN_DIST_SQ[typePair]) {
-    // March columns are nearly collinear — add a stable lateral bias so the
+    // March columns are nearly collinear - add a stable lateral bias so the
     // pack can bloom into 2D instead of accordioning on one axis.
     dy = ((i * 31 + j * 17) & 1) ? fx.ONE : -fx.ONE;
     dist2 = fx.mul(dx, dx) + fx.mul(dy, dy);
@@ -765,7 +765,7 @@ function applyPairPush(w, field, i, j, strength, asymmetric, slack = SEP_SLACK, 
   const dist = fx.sqrt(dist2);
   const overlap = minDist - dist;
   if (overlap <= slack) return;
-  // Only the hard overlap past slack — linear so stacks break, tiny near the edge.
+  // Only the hard overlap past slack - linear so stacks break, tiny near the edge.
   const hard = overlap - slack;
   let mag = fx.mul(strength, hard);
   if (mag > maxStep) mag = maxStep;
@@ -773,7 +773,7 @@ function applyPairPush(w, field, i, j, strength, asymmetric, slack = SEP_SLACK, 
   const ux = fx.div(dx, dist);
   const uy = fx.div(dy, dist);
   if (asymmetric) {
-    // Higher id yields — same relative close-rate as mutual ±mag/2 each.
+    // Higher id yields - same relative close-rate as mutual ±mag/2 each.
     const step = mag;
     if (i > j) {
       w.px[i] -= fx.mul(ux, step);

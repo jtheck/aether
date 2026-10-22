@@ -1,4 +1,4 @@
-// app/ — SimSession (lockstep) + Lite renderer + input.
+// app/ - SimSession (lockstep) + Lite renderer + input.
 
 import { livingByOwner, ORDER, MAX_ENTITIES } from '../sim/world.js';
 import { matchStatOwners, matchStatRows } from './matchStats.js';
@@ -234,6 +234,11 @@ function loadGardenJson(url) {
   });
 }
 
+function applyGardenLighting(renderer, garden) {
+  const lit = decodeCelestial(garden?.lt);
+  if (lit) renderer?.applyCelestial?.(lit);
+}
+
 function storyCastFromGarden(garden) {
   if (!garden) return [];
   try {
@@ -337,7 +342,7 @@ function rebuildRendererEntities(renderer, session, hideUnit, drawable) {
     gatherAct: world.gatherAct,
     hideUnit,
   });
-  // Progressive boot leaves units unmapped until templates arrive — don't warn.
+  // Progressive boot leaves units unmapped until templates arrive - don't warn.
   if (!(unmapped.length || stillUnmapped) && livingByOwner(world, 1) > 0) {
     const dbg = renderer.debugBatches?.(count, world.type, world.owner);
     const tiMismatch = dbg?.batches && Object.values(dbg.batches).some(
@@ -419,7 +424,7 @@ async function main() {
 
   if (typeof SharedArrayBuffer === 'undefined') {
     showFallback(
-      'SharedArrayBuffer unavailable — need Cross-Origin-Opener-Policy: same-origin and '
+      'SharedArrayBuffer unavailable - need Cross-Origin-Opener-Policy: same-origin and '
       + 'Cross-Origin-Embedder-Policy: require-corp (local: npm run serve; prod: set on CloudFront). '
       + 'crossOriginIsolated must be true.',
     );
@@ -524,7 +529,7 @@ async function main() {
     };
   }
 
-  // ?stress= — FFA combat, but stamp the three attacking AIs onto our fog.
+  // ?stress= - FFA combat, but stamp the three attacking AIs onto our fog.
   // The cautious/passive seat stays veiled so we can still see fog work.
   if (stress > 0) {
     bootCfg = {
@@ -544,8 +549,10 @@ async function main() {
   if (pendingLiveCfg) {
     const cfg = pendingLiveCfg;
     pendingLiveCfg = null;
-    adoptLiveNetworkConfig(cfg, ctx);
-    await applyLiveConfig(ctx, cfg, kothShard);
+    if (!shouldIgnoreLiveConfig({ cfg, localSoloHold: !!ctx.localSoloHold })) {
+      adoptLiveNetworkConfig(cfg, ctx);
+      await applyLiveConfig(ctx, cfg, kothShard);
+    }
   }
   if (pendingPresentationCfg) {
     const cfg = pendingPresentationCfg;
@@ -556,7 +563,7 @@ async function main() {
 
 /**
  * True for the plain default cold boot (KOTH staging lobby, local player, no
- * authored map) — the case we replace with the small 1v1 loading-screen match.
+ * authored map) - the case we replace with the small 1v1 loading-screen match.
  * Live joins, spectators, ?garden= maps, and ?tester=1 (unit-tester) opt out.
  */
 function shouldBootLoadingScreenMatch(bootCfg) {
@@ -729,14 +736,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     onAnimLoadProgress: animStress > 0
       ? (done, total) => setStatusText(
         done >= total
-          ? `VAT ready — ${count} villagers`
+          ? `VAT ready - ${count} villagers`
           : `VAT shards ${done}/${total} for ${count} villagers…`,
       )
       : undefined,
   });
   renderer.setCount(count);
-  const lit = decodeCelestial(garden?.lt);
-  if (lit) renderer.applyCelestial(lit);
+  applyGardenLighting(renderer, garden);
   const fog = createFogOfWar();
   /**
    * Set by dumpFrameProfile. Fog used to run on worker onCommit (outside rAF),
@@ -768,7 +774,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.placeAgoras?.(shownA);
     renderer.placeBuildings?.(shownB);
   }
-  // First paint ASAP — props/units/radials continue loading in the background.
+  // First paint ASAP - props/units/radials continue loading in the background.
   await renderer.start();
   rebuildRendererEntities(renderer, session, hideUnitForSync);
   setStatusText('');
@@ -817,7 +823,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     const ema = session.simTimingEma;
     const last = session.simTimingLast ?? session.simMetrics?.timing;
     if (!ema && !last) {
-      console.warn('[dumpSimProfile] no timing yet — stress, ?profileSim=1, or setProfileSim(true)');
+      console.warn('[dumpSimProfile] no timing yet - stress, ?profileSim=1, or setProfileSim(true)');
       return null;
     }
     const keys = new Set([
@@ -874,7 +880,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   };
   window.setProfileSim = (enabled = true) => {
     session.client?.setProfileSim?.(enabled);
-    console.log('[setProfileSim]', enabled ? 'on' : 'off', '— dumpSimProfile() after a few ticks');
+    console.log('[setProfileSim]', enabled ? 'on' : 'off', '- dumpSimProfile() after a few ticks');
   };
   function profAdd(phase, ms) {
     if (!frameProf || !Number.isFinite(ms)) return;
@@ -913,7 +919,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   /**
    * GPU pixel-perfect pick (renderer.pickUnit) vs CPU ray-vs-sphere (renderer.rayPickSpheres)
    * latency + accuracy, sampled against currently on-screen units. Aim the camera at your
-   * army first — needs live units in view to build sample points.
+   * army first - needs live units in view to build sample points.
    * Flip USE_GPU_PICK in render/pickMode.js and hard-refresh before GPU samples.
    */
   window.dumpPickBench = async (trials = 60) => {
@@ -939,7 +945,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       candidates.push({ id: i, clientX: rect.left + p.x, clientY: rect.top + p.y });
     }
     if (candidates.length === 0) {
-      console.warn('[dumpPickBench] no on-screen units — aim the camera at your army first');
+      console.warn('[dumpPickBench] no on-screen units - aim the camera at your army first');
       return null;
     }
 
@@ -960,7 +966,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       };
     }
 
-    // Sequential (not pipelined) — isolates each round trip's true latency.
+    // Sequential (not pipelined) - isolates each round trip's true latency.
     const gpuTimes = [];
     let gpuHits = 0;
     for (const s of samples) {
@@ -1037,10 +1043,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   });
   let renderEntityCount = rebuildRendererEntities(renderer, session, hideUnitForSync);
 
-  // Match sim SoA: fixed MAX_ENTITIES. Never realloc on spawn — selection/pose
+  // Match sim SoA: fixed MAX_ENTITIES. Never realloc on spawn - selection/pose
   // state stays stable for the whole match; only live `count` moves.
   const CAP = MAX_ENTITIES;
-  /** Mutable render buffers — frame loop reads this object, not closed-over copies. */
+  /** Mutable render buffers - frame loop reads this object, not closed-over copies. */
   const bufs = {
     selected: new Uint8Array(CAP),
     wasSelected: new Uint8Array(CAP),
@@ -1049,7 +1055,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     facingYaw: new Float32Array(CAP),
     selSpinYaw: new Float32Array(CAP),
     selSpinVel: new Float32Array(CAP),
-    /** Last collar write — skip GPU dirty once spin settles and pose/tint hold. */
+    /** Last collar write - skip GPU dirty once spin settles and pose/tint hold. */
     ringX: new Float32Array(CAP),
     ringZ: new Float32Array(CAP),
     ringSize: new Float32Array(CAP),
@@ -1058,7 +1064,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderX: new Float32Array(CAP),
     renderY: new Float32Array(CAP),
     renderZ: new Float32Array(CAP),
-    /** Last matrix write — skip rewrite when pose is unchanged. */
+    /** Last matrix write - skip rewrite when pose is unchanged. */
     poseX: new Float32Array(CAP),
     poseZ: new Float32Array(CAP),
     poseYaw: new Float32Array(CAP),
@@ -1100,7 +1106,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     /** Type last assigned to a GPU batch. A promotion must remap, not just rescale. */
     drawnType: new Uint8Array(CAP),
   };
-  /** Reused holy-shield slots — one object per pool entry, not per frame. */
+  /** Reused holy-shield slots - one object per pool entry, not per frame. */
   const shieldSlots = Array.from({ length: OVERLAY_MAX_SHIELDS }, () => ({
     x: 0, y: 0, z: 0, r: 0,
   }));
@@ -1123,10 +1129,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   let matchOverShown = false;
   let lastRenderDebugAt = 0;
 
-  // Scenario override — loading-screen / unit-tester share vision with the AI.
+  // Scenario override - loading-screen / unit-tester share vision with the AI.
   // `fog: false` / ?fog=0 still disables the overlay entirely.
   let fogUserEnabled = bootCfg.fog !== false;
-  /** Cinematic 'all' reveal — covers every campaign owner slot (party + hostiles). */
+  /** Cinematic 'all' reveal - covers every campaign owner slot (party + hostiles). */
   const REVEAL_ALL_OWNERS = [0, 1, 2, 3, 4, 5, 6, 7];
   /** Owners shared by config (teammates / spectate). Cinematics layer on top. */
   let baseShareVisionWith = shareVisionOwnersFromCfg(bootCfg);
@@ -1222,7 +1228,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     if (entering || leaving) refreshFoggedProps();
     const t1 = frameProf ? performance.now() : 0;
-    // Recolor trees/rocks before syncOverlay — that upload clears the dirty list
+    // Recolor trees/rocks before syncOverlay - that upload clears the dirty list
     // and marks the overlay painted.
     const on = fog.isEnabled();
     if (on !== sceneryFogOn || (on && fog.overlayNeedsFullPaint?.())) {
@@ -1254,7 +1260,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   /**
    * Sim entity ids are never recycled, so a corpse holds its slot for the rest of the
-   * match. Once its fade is done it is drawn as a zero-scale instance — invisible, but
+   * match. Once its fade is done it is drawn as a zero-scale instance - invisible, but
    * still vertex work in the color pass and again in every shadow cascade.
    *
    * Must stay a function of `alive` alone (which never flips back on within a match):
@@ -1361,9 +1367,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   function resetTableClient() {
     matchOverShown = false;
-    const overEl = document.getElementById('match-over');
-    if (overEl) overEl.hidden = true;
-    if (!session.watchingReplay) hideReplaySave();
+    clearMatchScore({ keepReplay: session.watchingReplay });
     releaseSpaceFollow();
     applyPlacingType(null);
     endRallyPlacement();
@@ -1405,7 +1409,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   session.onWorldRebuilt = async (entityCount) => {
     if (session._pendingWorldGen != null && session._pendingWorldGen !== liveConfigGeneration) return;
-    // Map dims may change across a rebuild (skirmish ↔ koth) — mirror them before
+    // Map dims may change across a rebuild (skirmish ↔ koth) - mirror them before
     // any main-thread tile math (fog, snap, pathability) runs.
     if (session.field) setActiveMapSize(session.field.width, session.field.height);
     renderer.setCount(entityCount);
@@ -1413,7 +1417,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.clearParticles?.();
     resetTableClient();
     fog.reset(session.field);
-    // Stamp only after setField rebuilds the overlay — uploading a 208-tile
+    // Stamp only after setField rebuilds the overlay - uploading a 208-tile
     // 1v1 veil into the outgoing stress texture is what made the swap look insane.
     if (session.field) await renderer.setField?.(session.field);
     stampFog({ force: true });
@@ -1853,7 +1857,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     renderer.cameraController?.stopFollow?.();
   }
-  /** Ghost A* cache — repath only when the cursor enters a new tile. */
+  /** Ghost A* cache - repath only when the cursor enters a new tile. */
   let ghostPathTileKey = -1;
   /** @type {{ x: number, z: number }[] | null} */
   let ghostPathPoints = null;
@@ -1936,7 +1940,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       ghostPathTileKey = key;
       ghostPathPoints = rallyPathWorldPoints(session.field, b, x, z, pathOpts);
     } else {
-      // Same tile — keep the A* spine, pin the tip to the live cursor.
+      // Same tile - keep the A* spine, pin the tip to the live cursor.
       const pts = ghostPathPoints.slice();
       if (pts.length) pts[pts.length - 1] = { x, z };
       else pts.push({ x, z });
@@ -2006,7 +2010,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.setRallyGhost?.(null);
     syncRallyFlagMarkers();
   }
-  /** Radians — kept across multi-place until cancel / type switch. */
+  /** Radians - kept across multi-place until cancel / type switch. */
   let placingYaw = 0;
   /** Keep agora selected after placing so radial can reopen. */
   let lastAgoraIndex = -1;
@@ -2070,7 +2074,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     return fallback;
   }
 
-  /** Last B / ~ tap — second press in the control-group window jumps the camera. */
+  /** Last B / ~ tap - second press in the control-group window jumps the camera. */
   let lastAgoraHotkeyTap = null;
 
   /** Headset stick-click jumps: where to fly, or null to stay put. */
@@ -2127,7 +2131,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   /** Placeable group the open action radial represents (may be mixed types). */
   /** @type {number[]} */
   let actionBuildingIndices = [];
-  /** Sorted type set for the open action radial — used to rebuild when it changes. */
+  /** Sorted type set for the open action radial - used to rebuild when it changes. */
   let actionMenuKey = '';
 
   function typesForActionGroup(indices, list = session.buildings) {
@@ -2158,7 +2162,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   function menuForActionGroup(indices, list = session.buildings) {
     const menu = mergeBuildingMenus(typesForActionGroup(indices, list));
-    // Villages auto-trickle villagers (no train button) — surface a display-only
+    // Villages auto-trickle villagers (no train button) - surface a display-only
     // villager pad so the player can watch that production's progress. Shown
     // while the site is still rising; the ring stays empty until it completes.
     if (firstVillageIndex(indices, list) >= 0) {
@@ -2422,7 +2426,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     syncSceneConfirm();
   }
 
-  // Locked until boot/match ready — camera + commands stay quiet together.
+  // Locked until boot/match ready - camera + commands stay quiet together.
   let bootInteractive = false;
   let menuUnlocked = false;
   const setInteractive = (on) => {
@@ -2631,8 +2635,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     partySeen = false;
     chapterAdvanceBusy = false;
     pendingChapterUrl = null;
-    const overEl = document.getElementById('match-over');
-    if (overEl) overEl.hidden = true;
+    clearMatchScore();
     chapterVotes.clear();
     chapterVoteUrl = '';
     chapterProposeSent = false;
@@ -2709,7 +2712,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     return out;
   }
 
-  /** Adventure enemy owner — hostile camps / destroy targets sit outside the ally table. */
+  /** Adventure enemy owner - hostile camps / destroy targets sit outside the ally table. */
   const CAMPAIGN_ENEMY_OWNER = 4;
 
   /** Deterministic context for campaign triggers (target death, hold-out timers). */
@@ -2811,7 +2814,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       setStatusText(just[0].message);
     }
     if (!result.chapterWin) {
-      // Lose conditions: a chapter's critical objective fails, or — the default —
+      // Lose conditions: a chapter's critical objective fails, or - the default -
       // the whole party is dead. Latch partySeen so we never lose pre-spawn.
       if (triggerCtx.partyAlive()) partySeen = true;
       const failReason = chapterFailReason(adventureObjectives);
@@ -2868,7 +2871,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   }
 
   /**
-   * Reason this chapter is lost independent of party death — a critical objective
+   * Reason this chapter is lost independent of party death - a critical objective
    * that failed (e.g. a protect/escort target died). Trigger logic sets `_failed`
    * with an optional `failMessage`. Returns '' when no critical objective failed.
    */
@@ -2896,7 +2899,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (chapterLost) return;
     chapterLost = true;
     endAdventureMatch('Defeat', reason);
-    setStatusText(`Defeat — ${reason}`);
+    setStatusText(`Defeat - ${reason}`);
   }
 
   if (garden?.story || gardenObjectivesOf(garden).length) beginAdventure(garden);
@@ -2973,7 +2976,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     onAbilityHold: null,
     canInteract: () => playerCanInspect(),
     // Gestures + arrows + menus stay up while paused / story; submit still drops.
-    // Spectators / replay inspect only — no order arrows.
+    // Spectators / replay inspect only - no order arrows.
     canIssueCommands: () => !isObservingBoard() && playerCanInspect(),
     getAgoras: () => session.agoras ?? [],
     getBuildings: () => session.buildings ?? [],
@@ -3098,7 +3101,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         ...(comboIds ? { entities: comboIds } : {}),
       });
       // Multi-place: keep type + yaw; ghost follows on next move.
-      // Agora found is a one-shot combo — close placement after the stamp.
+      // Agora found is a one-shot combo - close placement after the stamp.
       renderer.setBuildingGhost?.(null);
       placingGhostX = null;
       placingGhostZ = null;
@@ -3161,7 +3164,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         if (actionBuildingIndex < 0 || localPlayerId < 0) return;
         const techId = picked.id;
         if (!techId) return;
-        // Already owned — pad is dull; ignore re-queue.
+        // Already owned - pad is dull; ignore re-queue.
         if (researchedUpgradeIdsFor(localPlayerId).includes(techId)) return;
         const group = liveActionIndices();
         if (groupHasUpgradeQueued(group, session.buildings, techId)) return;
@@ -3534,12 +3537,15 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       subscribePeerDisconnected: (fn) => kothShard.subscribePeerDisconnected(fn),
       subscribeMatchLobbyConnected: (fn) => kothShard.subscribeMatchLobbyConnected(fn),
       onChange: () => {
+        // A room that has not played yet must not inherit the menu or 1v1 AI score.
+        if (matchLobby.isActive() && !matchLobby.hasPlayed()) clearMatchScore();
         lobbyUi.refresh();
         kothLobbyUi.refresh();
         ladderUi.refresh();
       },
       onRankedLeave: (userId) => noteLadderDisconnect(userId, rememberLadderId()),
       onChat: () => chatHud.refresh(),
+      onActiveChange: (active) => kothShard.setLobbyMatchHold?.(active),
       onStartMatch: (snap) => startLobbyMatch(ctxRef.current, snap, kothShard, matchLobby, sideMenu),
       onChapter: (msg) => ctxRef.current?.onChapterVote?.(msg),
       onLeaveMatch: () => {
@@ -3735,7 +3741,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     for (let i = 0; i < world.count; i++) {
       if (!world.alive[i]) continue;
       entities.push(i);
-      // Swap sides — two blocks march through each other.
+      // Swap sides - two blocks march through each other.
       const destX = world.owner[i] === PLAYER ? 240 : -240;
       tx.push(fx.fromFloat(destX));
       ty.push(world.py[i]);
@@ -3751,7 +3757,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     const live = ctxRef.current;
     if (live?.pendingMatchStartCue && !session.replayingCatchUp && !session.watchingReplay) {
       live.pendingMatchStartCue = false;
-      // Fresh table only — late-join catch-up lands on a high tick.
+      // Fresh table only - late-join catch-up lands on a high tick.
       if ((tick | 0) <= 2) playMatchStart();
     }
     // Reverse playback rewinds alive flags. Arming a death fade from that
@@ -3778,13 +3784,19 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       && !session.replayingCatchUp
     ) {
       matchOverShown = true;
-      showMatchOver(session);
+      // A room that has not played yet must not pick up this table's score.
+      // With no room open, the menu skirmish and 1v1 AI still show their card.
+      const freshRoom = observerLobby?.isActive?.() && !observerLobby.hasPlayed?.();
+      if (freshRoom) clearMatchScore();
+      else {
+        showMatchOver(session);
+        if (!observerLobby?.getState?.()?.ranked) observerLobby?.returnToWaiting?.();
+        armReplaySave(session, namesFromLobbySeats(observerLobby?.getState?.()?.seats));
+      }
       const shareWith = enterPostGameObserve(session);
       renderer.setFxPaused?.(true);
       inputApi?.setRole?.('spectator');
       setShareVisionWith(shareWith);
-      if (!observerLobby?.getState?.()?.ranked) observerLobby?.returnToWaiting?.();
-      armReplaySave(session, namesFromLobbySeats(observerLobby?.getState?.()?.seats));
       lobbyUi.refresh();
       paintResources();
     }
@@ -3805,7 +3817,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   let lastCorpseCompact = 0;
   // Compact / unmapped rebuild reassigns thin-instance slots and does not move
   // matrices with them. Doing that after the pose write draws one frame from the
-  // old slot — flyers drop to a zeroed corpse matrix, everyone else hitches.
+  // old slot - flyers drop to a zeroed corpse matrix, everyone else hitches.
   // Arm it here and run it at the start of the next frame, before poses.
   let remapBeforePose = false;
   let lastUnitZoomS = 1;
@@ -4069,7 +4081,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
 
     const hideDrawnUnit = (i) => {
-      // Always rewrite — rebuild/sync can stomp GPU slots while pose still says hidden.
+      // Always rewrite - rebuild/sync can stomp GPU slots while pose still says hidden.
       if (!renderer.writeInstance(i, world.type[i], world.owner[i], 0, 0, 0)) drawStats.unmapped++;
       commitPose(i, 0, 0, 0, 0, 0, 0);
       if (wasSelected[i]) {
@@ -4188,7 +4200,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         if (wasSelected[i] || selected[i]) {
           renderer.writeSelectionRing(i, 0, 0, 0);
         }
-        // Don't clear selected[] — unload stamps riders before the sim spills them,
+        // Don't clear selected[] - unload stamps riders before the sim spills them,
         // and wiping here dropped that handoff every frame they were still carried.
         wasSelected[i] = 0;
         continue;
@@ -4205,13 +4217,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
       const dx = cur.x[i] - prev.x[i];
       const dz = cur.z[i] - prev.z[i];
-      // Soft-separation nudges positions without an order — don't spin facing / walk.
+      // Soft-separation nudges positions without an order - don't spin facing / walk.
       // MOVE/ATTACK_MOVE keep walk/rings even while path is pending (zero dx).
       const ord = world.order?.[i] ?? ORDER.IDLE;
       const orderedMove = ord !== ORDER.IDLE;
       const orderedMarch = ord === ORDER.MOVE || ord === ORDER.WANDER || ord === ORDER.ATTACK_MOVE;
       const displacing = dx * dx + dz * dz > 0.0004;
-      // Interpolated sim face — shows turn-in-place (XZ snapshots alone looked frozen).
+      // Interpolated sim face - shows turn-in-place (XZ snapshots alone looked frozen).
       let faceDx = dx;
       let faceDz = dz;
       if (cur.faceX && prev.faceX) {
@@ -4272,7 +4284,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
             selSpinVel[i] = SEL_SPIN_START;
             ringX[i] = NaN;
           } else if (selSpinVel[i] < SEL_SPIN_EPS) {
-            // Re-entered range — ease back to idle spin without another burst.
+            // Re-entered range - ease back to idle spin without another burst.
             selSpinVel[i] = SEL_SPIN_STEADY;
           }
           const blend = Math.min(1, SEL_SPIN_SETTLE * dt);
@@ -4288,7 +4300,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         }
         const spinning = spinOk && selSpinVel[i] > SEL_SPIN_EPS;
         // Authored colors when standing. Red/yellow only while en route (ATTACK_MOVE
-        // stays set after arrival for acquire — don't leave the collar stuck red).
+        // stays set after arrival for acquire - don't leave the collar stuck red).
         // Hard ATTACK while engaged stays red even if not translating.
         let tintName = 'white';
         let tintCode = RING_TINT_WHITE;
@@ -4889,9 +4901,9 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
       teamByOwner: cfg.teamByOwner ?? null,
       laneBases: !!cfg.laneBases,
     });
-    // Same turn as reset return — solo (delay 0) can commit during whenFieldReady.
+    // Same turn as reset return - solo (delay 0) can commit during whenFieldReady.
     ctx.pendingMatchStartCue = wantsMatchStartCue(cfg);
-    // Terrain is enough to unlock — 3D scenery/building GLBs finish in the
+    // Terrain is enough to unlock - 3D scenery/building GLBs finish in the
     // background. Waiting on modelsReady here was a ~12s tab stall.
     await Promise.race([
       ctx.renderer.whenFieldReady?.() ?? Promise.resolve(),
@@ -4923,7 +4935,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
     if (DEBUG_KOTH) console.info('[KOTH] stale live config ignored after reset', { gen, current: liveConfigGeneration });
     // A newer applyLiveConfig owns the splash / input gate / stinger.
     // A leftover 3-villager backdrop that finished after spectator attach
-    // already reset the worker — pull the host world again.
+    // already reset the worker - pull the host world again.
     if (shouldBlockBackdropApply({
       cfg,
       liveSpectating: kothShard?.isLiveSpectating?.(),
@@ -4933,6 +4945,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
     return;
   }
   ctx.session._pendingWorldGen = null;
+  applyGardenLighting(ctx.renderer, cfg.garden);
   ctx.session.setHumanPlayers(humanPlayers);
   ctx.session.replayConfig = replayConfigFromLive(cfg);
   ctx.session.replayGarden = cfg.garden ?? null;
@@ -4957,7 +4970,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
 
   // The live world is rebuilt and confirmedTick is back at 0 for this match;
   // seed the lockstep confirm handshake so the sim can leave tick 0.
-  // Local 1v1 AI runs offline (delay 0) — no shard handshake.
+  // Local 1v1 AI runs offline (delay 0) - no shard handshake.
   if (cfg.mode === 'koth' && !localSolo) kothShard?.notifyLiveSessionReady?.();
 
   ctx.setInteractive?.(true);
@@ -4986,7 +4999,7 @@ const MATCH_INTRO_LOOK_BIAS = 0.16;
 /** Gentle push-in from the reset radius as the view swings around. */
 const MATCH_INTRO_ZOOM = 0.92;
 
-/** A fresh competitive table (koth / 1v1 / teams) — not skirmish backdrop, replay, or a story map. */
+/** A fresh competitive table (koth / 1v1 / teams) - not skirmish backdrop, replay, or a story map. */
 function wantsMatchIntroSweep(cfg) {
   if (!cfg || !cfg.reset || cfg.skipSplash || cfg.watchingReplay) return false;
   if (!wantsMatchStartCue(cfg)) return false;
@@ -4999,7 +5012,7 @@ function wantsMatchIntroSweep(cfg) {
 /**
  * Match intro: swing from the neutral overview to behind the local spawn
  * (home agora, or the KOTH pad under the army), looking across midfield.
- * No-op for spectators / empty seats — the neutral pose stays put.
+ * No-op for spectators / empty seats - the neutral pose stays put.
  */
 function sweepCameraToArmy(ctx, cfg) {
   const controller = ctx?.renderer?.cameraController;
@@ -5028,7 +5041,7 @@ function sweepCameraToArmy(ctx, cfg) {
   );
 }
 
-/** Stinger on the first lockstep commit of a real match — not lobby / replay / sandbox. */
+/** Stinger on the first lockstep commit of a real match - not lobby / replay / sandbox. */
 function wantsMatchStartCue(cfg) {
   if (!cfg || cfg.watchingReplay) return false;
   if (cfg.mode === 'staging' || cfg.mode === 'sandbox' || cfg.mode === 'legacy') return false;
@@ -5047,7 +5060,7 @@ function soloAiStatusLabel(temperament, difficulty) {
 }
 
 /**
- * Offline 1v1 vs AI — two home agoras, the usual army camped around them.
+ * Offline 1v1 vs AI - two home agoras, the usual army camped around them.
  * Exercises the hardened match teardown/rebuild path from the menu.
  * @param {object | null} ctx
  * @param {{ temperament?: string, difficulty?: number | string, fog?: boolean, sharedVision?: boolean, shareVisionWith?: number[], statusLabel?: string, garden?: object, mode?: string, armyPerSide?: number }} [opts]
@@ -5130,7 +5143,7 @@ async function startUnitTesterMatch(ctx) {
 }
 
 /**
- * Offline 5-way FFA stress test — pie-ring armies, same AI mix as `?stress=N`.
+ * Offline 5-way FFA stress test - pie-ring armies, same AI mix as `?stress=N`.
  */
 async function startStressfulSituation(ctx) {
   if (!ctx?.session || !ctx.renderer) return;
@@ -5189,19 +5202,15 @@ function syncPresentation(ctx, cfg, options = {}) {
     ? 0
     : (cfg.inputDelayTicks ?? (cfg.mode === 'koth' || isLobbyPlayMode(cfg.mode) ? 1 : 0));
   // New table: drop selection / groups so stress entity ids cannot pick 1v1 units.
-  // Camera snap only on a real match reset — join/role used to yank the view.
+  // Camera snap only on a real match reset - join/role used to yank the view.
   if (cfg.reset || (cfg.role ?? 'player') !== 'player') ctx.inputApi?.clearSelection?.();
   if (cfg.reset) ctx.inputApi?.clearControlGroups?.();
   if (cfg.reset && (cfg.mode === 'koth' || cfg.localSolo || isLobbyPlayMode(cfg.mode)) && !cfg.skipSplash && !cfg.watchingReplay) {
     ctx.renderer.resetCamera?.();
   }
 
-  const overEl = document.getElementById('match-over');
-  if (overEl) overEl.hidden = true;
-  if (!cfg.watchingReplay) {
-    hideReplaySave();
-    ctx.matchOverShown = false;
-  }
+  clearMatchScore({ keepReplay: Boolean(cfg.watchingReplay) });
+  if (!cfg.watchingReplay) ctx.matchOverShown = false;
 
   ctx.updateColors();
   ctx.paintStatus?.();
@@ -5252,6 +5261,24 @@ function matchEndedByAgora(session) {
   return false;
 }
 
+/** Drop the score card so a menu or 1v1 AI result cannot ride into another room. */
+function clearMatchScore(opts = {}) {
+  const el = document.getElementById('match-over');
+  if (!opts.keepReplay) {
+    const titleEl = document.getElementById('match-over-title');
+    const subEl = document.getElementById('match-over-sub');
+    const table = document.getElementById('match-stats');
+    if (titleEl) titleEl.textContent = '';
+    if (subEl) subEl.textContent = '';
+    if (table) {
+      table.replaceChildren();
+      table.hidden = true;
+    }
+    hideReplaySave();
+  }
+  if (el) el.hidden = true;
+}
+
 /** Set the shared match-over banner (title + subtitle) and reveal it. */
 function showAdventureResult(title, sub) {
   const el = document.getElementById('match-over');
@@ -5259,7 +5286,7 @@ function showAdventureResult(title, sub) {
   const titleEl = document.getElementById('match-over-title');
   const subEl = document.getElementById('match-over-sub');
   if (titleEl) titleEl.textContent = title;
-  else el.textContent = sub ? `${title} — ${sub}` : title;
+  else el.textContent = sub ? `${title} - ${sub}` : title;
   if (subEl) subEl.textContent = sub || '';
   paintMatchStats(session);
   el.hidden = false;
@@ -5364,7 +5391,7 @@ function showMatchOver(session) {
     sub = `Player ${formatGameNumber(best)} wins (${formatGameNumber(bestScore)} pts)`;
   }
   if (titleEl) titleEl.textContent = title;
-  else el.textContent = sub ? `${title} — ${sub}` : title;
+  else el.textContent = sub ? `${title} - ${sub}` : title;
   if (subEl) subEl.textContent = sub;
   paintMatchStats(session);
   el.hidden = false;
@@ -5435,7 +5462,7 @@ let paintHudStatus = null;
 function statusHintIsHudOwned(text) {
   if (!text) return false;
   if (/J to claim/.test(text)) return true;
-  if (/^Live — /.test(text)) return true;
+  if (/^Live - /.test(text)) return true;
   return false;
 }
 
@@ -5473,7 +5500,7 @@ async function waitForGetFireP2p(timeoutMs = 5000) {
   return typeof globalThis.GETFIREP2P === 'function';
 }
 
-/** Soft landing for Lite (WebGPU-only) — src/axiom/ is packaged at /axiom/. */
+/** Soft landing for Lite (WebGPU-only) - src/axiom/ is packaged at /axiom/. */
 function goAxiom() {
   showFallback('WebGPU support not detected, going elsewhere...');
   // Slow / no-WebGPU boxes often miss a 1-frame notice. Wait for a real paint,
@@ -5612,7 +5639,7 @@ async function loadAdventureGardenUrl(ctx, url, kothShard, extras = {}) {
     if (extras.epoch != null) matchLobby?.setLockstepEpoch?.(extras.epoch | 0);
     matchLobby?.attachSession?.(ctx.session);
   }
-  setStatusText('Adventure — match on');
+  setStatusText('Adventure - match on');
 }
 
 async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
@@ -5620,7 +5647,7 @@ async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
   const cfg = liveConfigFromLobby(snapshot, kothShard?.getUserId?.() ?? null);
   const spectating = cfg.localPlayerId < 0;
   if (spectating && !lobbyAllowsSpectators(snapshot.mode, snapshot.settings)) {
-    setStatusText('Not seated — cannot start');
+    setStatusText('Not seated - cannot start');
     return;
   }
   let garden = null;
@@ -5680,7 +5707,7 @@ async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
         : snapshot.mode === 'koth'
           ? 'King of the Hill'
           : '1v1';
-    setStatusText(`${label} — match on`);
+    setStatusText(`${label} - match on`);
   } catch (err) {
     ctx.localSoloHold = heldSolo;
     kothShard?.setLobbyMatchHold?.(false);
@@ -5689,7 +5716,7 @@ async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
   }
 }
 
-/** Graffiti logo is lobby/loading chrome — hide it once a real match is up. */
+/** Graffiti logo is lobby/loading chrome - hide it once a real match is up. */
 function isLobbyGraffitiScene(mode) {
   return mode === 'skirmish' || mode === 'staging';
 }

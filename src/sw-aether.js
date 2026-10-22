@@ -92,7 +92,7 @@ self.addEventListener("fetch", (event) => {
   // CacheStorage only supports HTTP(S). They are outside the app's ownership.
   const url = new URL(event.request.url);
   if (!/^https?:$/.test(url.protocol) || url.origin !== self.location.origin) return;
-  // Never intercept the worker script — no respondWith, no cache.put.
+  // Never intercept the worker script - no respondWith, no cache.put.
   if (isWorkerScript(event.request.url)) return;
   if (!isAppHtmlJsCss(event.request) && !isAdventureCampaign(event.request)) return;
 

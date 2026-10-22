@@ -93,7 +93,7 @@ export function attackInRange(w, i) {
   return false;
 }
 
-/** Stand just inside attack range of a target — avoids dog-piling on its center. */
+/** Stand just inside attack range of a target - avoids dog-piling on its center. */
 export function attackStandPoint(w, i, target) {
   return engagementPoint(w, i, target);
 }
@@ -158,7 +158,7 @@ export function planPath(w, field, i, destX, destY, forceAstar = false) {
   w.navDestX[i] = destX;
   w.navDestY[i] = destY;
   const style = pathStyleOf(w, i);
-  // Air units fly straight — never A* around ground blockers.
+  // Air units fly straight - never A* around ground blockers.
   if (isFlyer(w.type[i])) {
     setSingleWaypoint(w, i, destX, destY);
     w.stuckTicks[i] = 0;
@@ -188,7 +188,7 @@ export function planPath(w, field, i, destX, destY, forceAstar = false) {
     w.pathRequest[i] = PATH_REQUEST.NONE;
     return;
   }
-  // No path — hold. Never aim straight through water/blocked tiles.
+  // No path - hold. Never aim straight through water/blocked tiles.
   clearPath(w, i);
 }
 
@@ -209,7 +209,7 @@ function countPathRequests(w, requestType) {
  */
 export function planPathBudget(w, field, opts = {}) {
   const pendingLos = opts.losLimit == null ? countPathRequests(w, PATH_REQUEST.LOS) : 0;
-  // Flat cap — do not decay with pending/2. That dribbled the last half of a
+  // Flat cap - do not decay with pending/2. That dribbled the last half of a
   // mass order over extra ticks and read as stop-and-go on the stress ring.
   const losLimit = opts.losLimit ?? Math.min(LOS_PATH_BUDGET_MAX, pendingLos);
   const pendingAstar = opts.astarLimit == null ? countPathRequests(w, PATH_REQUEST.ASTAR) : 0;
@@ -315,7 +315,7 @@ export function waypointReached(w, i) {
   return fx.dist2(w.px[i], w.py[i], wx, wy) <= WAYPOINT_RADIUS_SQ;
 }
 
-/** When waypoints are done but still far from click — repath (never charge through water). */
+/** When waypoints are done but still far from click - repath (never charge through water). */
 export function onPathExhausted(w, field, i) {
   const remaining2 = fx.dist2(w.px[i], w.py[i], w.navDestX[i], w.navDestY[i]);
   if (remaining2 <= FINAL_ARRIVE_SQ) {
@@ -328,11 +328,11 @@ export function onPathExhausted(w, field, i) {
     w.pathRequest[i] = PATH_REQUEST.ASTAR;
     return;
   }
-  // Out of repaths and no LOS — stop. Better than walking into water.
+  // Out of repaths and no LOS - stop. Better than walking into water.
   clearPath(w, i);
 }
 
-/** Refresh path if empty — prefer full plan over LOS-only. */
+/** Refresh path if empty - prefer full plan over LOS-only. */
 export function ensurePath(w, field, i) {
   if (
     (w.navWpCount[i] === 0 || w.navWpIndex[i] >= w.navWpCount[i]) &&
@@ -350,7 +350,7 @@ function nextPathRequest(w, i) {
   return PATH_REQUEST.LOS;
 }
 
-/** Current movement goal — waypoint or final destination. Returns { x, y } fixed. */
+/** Current movement goal - waypoint or final destination. Returns { x, y } fixed. */
 export function movementGoal(w, field, i) {
   if (w.order[i] === ORDER.ATTACK && w.targetEntity[i] >= 0) {
     const t = w.targetEntity[i];
@@ -398,7 +398,7 @@ export function movementGoal(w, field, i) {
     ensurePath(w, field, i);
   }
   if (w.navWpCount[i] === 0) {
-    // Path pending — keep marching toward dest so orders don't freeze / stutter
+    // Path pending - keep marching toward dest so orders don't freeze / stutter
     // while LOS→A* drains. Wall-slide blocks water/walls; A* corrects the route
     // when it lands. (LOS-only provisional used to zero vel on blocked clicks.)
     if (w.pathRequest[i] !== PATH_REQUEST.NONE && needsPath(w, i)) {
@@ -421,7 +421,7 @@ export function advanceWaypoint(w, i) {
   return false;
 }
 
-/** Stuck detection — same-tick forced A* repath (v1: 30 ticks, cap 5). */
+/** Stuck detection - same-tick forced A* repath (v1: 30 ticks, cap 5). */
 export function checkStuck(w, field, i) {
   const dx = w.px[i] - w.lastPx[i];
   const dy = w.py[i] - w.lastPy[i];

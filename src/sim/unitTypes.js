@@ -1,4 +1,4 @@
-// Unit type definitions — single source of truth for sim stats.
+// Unit type definitions - single source of truth for sim stats.
 // Render reads size + color from here; gameplay systems read hp/speed/combat.
 
 import * as fx from './fixed.js';
@@ -18,7 +18,7 @@ export const UNIT = {
   WAGON: 10,
   DIRIGIBLE: 11,
   APC: 12,
-  /** Villager combat form — pointed CMD.ATTACK only. */
+  /** Villager combat form - pointed CMD.ATTACK only. */
   BRIGAND: 13,
   /** Warrior who has wounded five enemies that then fell. */
   CHAMPION: 14,
@@ -250,9 +250,9 @@ export const UNIT_DEFS = [
     hp: 60,
     speed: fx.fromFloat(2.5),
     size: 9.0,
-    /** Soft-sep radius (not mesh half-extent) — keep modest so they don't bully infantry. */
+    /** Soft-sep radius (not mesh half-extent) - keep modest so they don't bully infantry. */
     footprint: 2.6,
-    /** Slow wagon swing — turn in place, then pull away gently. */
+    /** Slow wagon swing - turn in place, then pull away gently. */
     steer: 0.20,
     accel: 0.28,
     decel: 0.34,
@@ -281,7 +281,7 @@ export const UNIT_DEFS = [
     size: 12.0,
     /** Soft-sep among flyers only (air/ground layers are split). */
     footprint: 3.2,
-    /** Airship — slow yaw while still drifting (wide floaty arcs, no pivot-lock). */
+    /** Airship - slow yaw while still drifting (wide floaty arcs, no pivot-lock). */
     steer: 0.18,
     accel: 0.10,
     decel: 0.07,
@@ -308,9 +308,9 @@ export const UNIT_DEFS = [
     hp: 90,
     speed: fx.fromFloat(2.8),
     size: 10.0,
-    /** Soft-sep radius — old 7.0 cleared a huge bubble around the APC. */
+    /** Soft-sep radius - old 7.0 cleared a huge bubble around the APC. */
     footprint: 3.0,
-    /** Armored haul — pivot then roll; brakes harder than spool, not a slam. */
+    /** Armored haul - pivot then roll; brakes harder than spool, not a slam. */
     steer: 0.18,
     accel: 0.26,
     decel: 0.36,
@@ -318,7 +318,7 @@ export const UNIT_DEFS = [
     pickHeight: 1.25,
     color: [0.48, 0.42, 0.28],
     attackDamage: 8,
-    /** Short bumper — hull size already adds melee clearance. */
+    /** Short bumper - hull size already adds melee clearance. */
     attackRange: fx.fromFloat(1.0),
     attackCooldown: 30,
     // Combat transport: fights on order / retaliation, does not idle-hunt.
@@ -346,7 +346,7 @@ export const UNIT_DEFS = [
     attackDamage: 6,
     attackRange: fx.fromFloat(2.5),
     attackCooldown: 30,
-    /** ~6 tiles — skirmish radius (v1 brigand). */
+    /** ~6 tiles - skirmish radius (v1 brigand). */
     aggroRange: fx.fromFloat(24),
     attackDelivery: ATTACK_DELIVERY.MELEE,
     projectileType: -1,
@@ -387,7 +387,7 @@ export function getUnitDef(typeId) {
  * Training cost per unit (wood/stone/mineral/food). Charged on queue, refunded
  * on cancel (see buildings.js). Village trickle spends the villager cost the
  * same way (unaffordable intervals are skipped). Values follow the v1 template
- * — food-heavy for living units, wood/stone for mechanical, with a mineral
+ * - food-heavy for living units, wood/stone for mechanical, with a mineral
  * touch on the flyer.
  * @type {Readonly<Record<number, Record<string, number>>>}
  */
@@ -470,7 +470,7 @@ export function isMilitary(typeId) {
   return getUnitDef(typeId).category === 'military';
 }
 
-/** Villager only — brigands are temporary military, not gather/work line. */
+/** Villager only - brigands are temporary military, not gather/work line. */
 export function isVillagerLine(typeId) {
   return (typeId | 0) === UNIT.VILLAGER;
 }

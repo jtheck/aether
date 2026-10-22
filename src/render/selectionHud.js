@@ -1,4 +1,4 @@
-// Selection HUD — a camera-locked row of chips across the top of the screen
+// Selection HUD - a camera-locked row of chips across the top of the screen
 // (v1's 3D selection panel, reimagined for Lite/WebGPU). Each distinct selected
 // unit or building type shows a small 3D model icon plus a native-text name
 // with the count on the line above. The icons are real scene meshes placed on
@@ -39,7 +39,7 @@ const MAX_SLOTS = 14;
 const ICON_DEPTH = 0.8;
 /**
  * Every icon is normalized so its largest dimension maps to this world size at
- * ICON_DEPTH, then centered on its slot — so chips read as evenly sized buttons
+ * ICON_DEPTH, then centered on its slot - so chips read as evenly sized buttons
  * regardless of the source model's proportions. Paired with ICON_DEPTH so
  * on-screen size matches the original 1.55-at-28 look.
  */

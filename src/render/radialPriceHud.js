@@ -1,4 +1,4 @@
-// Screen-space menu prices: amount + per-kind resource icon. No pop — every
+// Screen-space menu prices: amount + per-kind resource icon. No pop - every
 // train is 1 pop, so it is not worth listing.
 
 import { formatGameNumber } from '../sim/formatGameNumber.js';
@@ -48,7 +48,7 @@ export function ensureRadialPriceHud() {
 
 /**
  * worldToScreen is canvas CSS px. The price overlay is viewport-fixed, so add
- * the canvas rect. Never multiply by devicePixelRatio — that is GPU-text space.
+ * the canvas rect. Never multiply by devicePixelRatio - that is GPU-text space.
  * @param {number} canvasX
  * @param {number} canvasY
  * @param {HTMLElement | null | undefined} [canvas]

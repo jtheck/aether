@@ -1,4 +1,4 @@
-// Lite terrain — atlas tile quads from a sim field snapshot.
+// Lite terrain - atlas tile quads from a sim field snapshot.
 // Sim owns generation; this module only builds meshes.
 
 import {
@@ -48,7 +48,7 @@ import * as fx from '../sim/fixed.js';
 const UV_SCALE = 1 / ATLAS_GRID;
 /** Only keeps the shader's cell lookup off the border. atlasGrid stops the bleed. */
 const UV_INSET = 1e-4;
-/** Same upsample + bilinear as fog — spec fades across tile borders. */
+/** Same upsample + bilinear as fog - spec fades across tile borders. */
 const SPEC_TEX_SCALE = 2;
 const SPEC_TEXEL_ALIGN = 64;
 const SPEC_OVERLAY_LIFT = 0.14;
@@ -207,7 +207,7 @@ function createTerrainChunkLod(engine, scene, field, chunkSize, atlasByChunk) {
 
   function buildFloor() {
     // Seat the table just under the lowest tile. Tile Y is heightMap * amplitude,
-    // so a hardcoded Y leaves a deep gap when the board sits above zero — that gap
+    // so a hardcoded Y leaves a deep gap when the board sits above zero - that gap
     // is what reads as "looking under the table" where chunks are hidden.
     const y = tableFloorYForField(field);
     const positions = new Float32Array([
@@ -234,7 +234,7 @@ function createTerrainChunkLod(engine, scene, field, chunkSize, atlasByChunk) {
     mesh.material = mat;
     mesh.pickable = false;
     mesh.receiveShadows = false;
-    // One big plane spanning the whole board — never frustum-cull it, it has to
+    // One big plane spanning the whole board - never frustum-cull it, it has to
     // back every hidden chunk no matter where the camera looks.
     mesh.boundMin = [-halfX, y - 1, -halfZ];
     mesh.boundMax = [halfX, y + 1, halfZ];
@@ -1283,7 +1283,7 @@ function buildSilhouetteFrameMeshes(engine, field) {
       endgrain,
     );
   }
-  // Follow the sim's decision — field.tableCenter is set when a plinth was
+  // Follow the sim's decision - field.tableCenter is set when a plinth was
   // stamped and null when the board has none or a scenario suppressed it
   // (e.g. the skirmish table). Fall back to recompute only when unset (older
   // snapshots / raw fields that never ran stampTableBlocks).
@@ -2230,7 +2230,7 @@ function pushTileQuad(bucket, tx, tz, atlasCell, field, _worldHalfF, specUv) {
   const y01 = tileHeightWorld(field, tx, tz + 1);
 
   const base = bucket.positions.length / 3;
-  // BL, BR, TR, TL — CW from +Y (Lite left-handed front faces).
+  // BL, BR, TR, TL - CW from +Y (Lite left-handed front faces).
   bucket.positions.push(x1, y00, z1, x2, y10, z1, x2, y11, z2, x1, y01, z2);
   bucket.uvs.push(u1, vBot, u2, vBot, u2, vTop, u1, vTop);
   const su0 = tx * SPEC_TEX_SCALE * (specUv?.invW ?? 0);
@@ -2275,6 +2275,8 @@ const SLOW_LIFT = 0.05;
 const CLEAR_LIFT = 0.045;
 const GRID_HALF = 0.05;
 const BLOCK_INSET = 0.15;
+/** After buildings (120), before HUD rings (175). */
+const OVER_MODEL_ORDER = 160;
 
 /** Debug-only. Neon on purpose so it never reads as part of the world grade. */
 const GRID_INK = {
@@ -2288,6 +2290,7 @@ const GRID_INK = {
 /**
  * Dev overlay: teal edges, rose blocked, ochre structure-slow, gold tree/shore slow.
  * Edges are static; occupancy fills refresh from live pass/slow/structureSlow masks.
+ * `overModels` draws the fills after buildings, trees, and rocks so a covered tile stays readable.
  * @returns {{
  *   setVisible: (on: boolean) => void,
  *   refreshOccupancy: (field: object) => void,
@@ -2297,6 +2300,7 @@ const GRID_INK = {
 export function createTileGridOverlay(engine, scene, field, opts = {}) {
   const { width, height } = field;
   const showEdges = opts.edges !== false;
+  const overModels = opts.overModels === true;
   const edgePos = [];
   const edgeIdx = [];
   let ev = 0;
@@ -2442,30 +2446,33 @@ export function createTileGridOverlay(engine, scene, field, opts = {}) {
         blockPos,
         blockIdx,
         GRID_INK.blocked,
+        overModels,
       );
       addToScene(scene, blockMesh);
       setSubtreeVisible(blockMesh, visible);
     }
     if (uv > 0) {
-      // Ochre — farm / agora / slow buildings (blocks placement).
+      // Ochre - farm / agora / slow buildings (blocks placement).
       structureSlowMesh = makeDevMesh(
         engine,
         'tile-structure-slow',
         structPos,
         structIdx,
         GRID_INK.structure,
+        overModels,
       );
       addToScene(scene, structureSlowMesh);
       setSubtreeVisible(structureSlowMesh, visible);
     }
     if (sv > 0) {
-      // Gold — trees / shore / rock border (pathing slow, placement OK).
+      // Gold - trees / shore / rock border (pathing slow, placement OK).
       slowMesh = makeDevMesh(
         engine,
         'tile-slow',
         slowPos,
         slowIdx,
         GRID_INK.slow,
+        overModels,
       );
       addToScene(scene, slowMesh);
       setSubtreeVisible(slowMesh, visible);
@@ -2714,20 +2721,58 @@ export function createPlacementGridOverlay(engine, scene) {
   };
 }
 
-function makeDevMesh(engine, name, positions, indices, ink) {
+function makeOverModelMaterial(name, ink) {
+  const alpha = Math.max(ink.alpha ?? 1, 0.18);
+  return createShaderMaterial({
+    name: `${name}-over`,
+    attributes: ['position', 'normal'],
+    uniforms: [
+      'world',
+      'viewProjection',
+      { name: 'ink', type: 'vec4<f32>', defaultValue: [ink.diffuse[0], ink.diffuse[1], ink.diffuse[2], alpha] },
+    ],
+    needAlphaBlending: true,
+    blendMode: 'alpha',
+    depthWrite: false,
+    depthCompare: 'always',
+    backFaceCulling: false,
+    vertexSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+};
+@vertex fn mainVertex(input: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  let wp = shaderSystem.world * vec4<f32>(input.position, 1.0);
+  out.position = shaderSystem.viewProjection * wp;
+  return out;
+}`,
+    fragmentSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+};
+@fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
+  return shaderUniforms.ink;
+}`,
+  });
+}
+
+function makeDevMesh(engine, name, positions, indices, ink, overModels = false) {
   const pos = new Float32Array(positions);
   const idx = new Uint32Array(indices);
   const normals = flatUpNormals(pos.length / 3);
   const mesh = createMeshFromData(engine, name, pos, normals, idx);
-  const mat = createStandardMaterial();
-  mat.diffuseColor = ink.diffuse;
-  mat.emissiveColor = ink.emissive;
-  mat.ambientColor = ink.emissive;
-  mat.specularColor = [0, 0, 0];
-  mat.disableLighting = true;
-  mat.alpha = ink.alpha ?? 1;
-  mat.backFaceCulling = false;
-  mesh.material = mat;
+  if (overModels) {
+    mesh.material = makeOverModelMaterial(name, ink);
+    mesh.renderOrder = OVER_MODEL_ORDER;
+  } else {
+    const mat = createStandardMaterial();
+    mat.diffuseColor = ink.diffuse;
+    mat.emissiveColor = ink.emissive;
+    mat.ambientColor = ink.emissive;
+    mat.specularColor = [0, 0, 0];
+    mat.disableLighting = true;
+    mat.alpha = ink.alpha ?? 1;
+    mat.backFaceCulling = false;
+    mesh.material = mat;
+  }
   mesh.pickable = false;
   return mesh;
 }

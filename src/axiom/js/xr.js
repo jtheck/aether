@@ -1,4 +1,4 @@
-// Immersive VR — Babylon 9 helper or Three WebXRManager. Same button / Escape.
+// Immersive VR - Babylon 9 helper or Three WebXRManager. Same button / Escape.
 
 export const XR_MODE = 'immersive-vr';
 

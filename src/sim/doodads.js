@@ -12,7 +12,7 @@ export const DOODAD = {
   WAGON: 2,
 };
 
-/** First wood past a natural canopy — grove overgrowth, not populate/paint. */
+/** First wood past a natural canopy - grove overgrowth, not populate/paint. */
 export const MUSHROOM_HOST_STOCK = TREE_STOCK_NATURAL_MAX;
 /** Chebyshev tiles around a host that count toward "the stand is mature". */
 export const MUSHROOM_AREA_RADIUS = 4;
@@ -339,7 +339,7 @@ function clearanceAlongRay(hx, hz, dx, dz, tStart, circles, tMax) {
  * Deterministic forest-floor cluster around one tile center.
  * On a living tree each cap sits just outside that skirt, walked out
  * along the shortest open ray so it is not left inside a neighbor.
- * A cap with no open ground nearby is omitted. World XZ only — render fills Y.
+ * A cap with no open ground nearby is omitted. World XZ only - render fills Y.
  * @param {object} field
  * @param {number} tileIndex
  */

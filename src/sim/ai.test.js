@@ -1,4 +1,4 @@
-// AI roster helpers — leftover loading-screen AI must never puppet a human slot.
+// AI roster helpers - leftover loading-screen AI must never puppet a human slot.
 
 import assert from 'node:assert/strict';
 import {
@@ -15,7 +15,7 @@ function dropsHumanSlots() {
   assert.deepEqual(
     excludeHumanAiPlayers(loadingScreenAi, [0, 1]),
     [],
-    'first KOTH joiner is owner 1 — same id as the loading-screen AI',
+    'first KOTH joiner is owner 1 - same id as the loading-screen AI',
   );
   assert.deepEqual(
     excludeHumanAiPlayers([0, { owner: 1 }, { owner: 2 }], [0, 1]),

@@ -1,4 +1,4 @@
-// Authored resource SVG — Inkscape folder labels (kind) and slot labels (1–c).
+// Authored resource SVG - Inkscape folder labels (kind) and slot labels (1–c).
 // Inkscape "Invert" filters rasterize the sheet at viewBox size (100×20);
 // strip them on load so the HUD strokes stay vectors.
 

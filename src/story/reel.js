@@ -1,4 +1,4 @@
-// Shared reel authoring — turn a compact list of beat steps into a seekable reel.
+// Shared reel authoring - turn a compact list of beat steps into a seekable reel.
 // Same envelope the hand-written chapter1/2/3 reels use, centralized so the
 // campaign manifest can broad-stroke intros/wins without repeating the loop.
 

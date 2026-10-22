@@ -1,4 +1,4 @@
-/** Particle behavior steps — pure SoA math, no engine imports. */
+/** Particle behavior steps - pure SoA math, no engine imports. */
 
 import { nanotubeCorners } from './nanotube.js';
 
@@ -93,7 +93,7 @@ export function behaviorNeighborStub(store, spatial, queryScratch) {
   void queryScratch;
 }
 
-/** Must match bakeCompressionWaveRest — change both together. */
+/** Must match bakeCompressionWaveRest - change both together. */
 export const COMPRESSION_WAVELENGTH = 10;
 export const COMPRESSION_SPEED = 6;
 export const COMPRESSION_AMPLITUDE = 1.1;
@@ -121,7 +121,7 @@ export const WAVE_PRESET_RING = wavePresetRing();
 export const WAVE_PRESET_TUBE_CORNERS = nanotubeCorners();
 export const WAVE_PRESET_TUBE = WAVE_PRESET_TUBE_CORNERS;
 
-/** Sources along the tube axis — the step before the full lattice. */
+/** Sources along the tube axis - the step before the full lattice. */
 export const WAVE_LINE_COUNT = 12;
 
 export function wavePresetLine(count = WAVE_LINE_COUNT) {
@@ -147,7 +147,7 @@ export function wavePresetLine(count = WAVE_LINE_COUNT) {
 
 export const WAVE_PRESET_LINE = wavePresetLine();
 
-/** Pair, ring, line, tube — spawn collapses each; toggle only picks a baked bank. */
+/** Pair, ring, line, tube - spawn collapses each; toggle only picks a baked bank. */
 export const WAVE_PRESETS = [WAVE_PRESET_PAIR, WAVE_PRESET_RING, WAVE_PRESET_LINE, WAVE_PRESET_TUBE];
 export const WAVE_PRESET_CAP = WAVE_PRESETS.length;
 /** Interleaved [Bx,By,Bz,Cx,Cy,Cz] per preset per particle. */
@@ -213,7 +213,7 @@ export function waveEmitterKeepR(chunkSize) {
   return Math.max(8, chunkSize * STREAM_EMITTER_KEEP_CHUNKS);
 }
 
-/** Min distance² from an AABB to any live emitter — 0 if a source sits inside. */
+/** Min distance² from an AABB to any live emitter - 0 if a source sits inside. */
 export function waveChunkEmitDist2(bounds) {
   const { minX, minY, minZ, size } = bounds;
   const maxX = minX + size;
@@ -242,7 +242,7 @@ export function waveChunkNearEmitter(bounds, keepR) {
   return waveChunkEmitDist2(bounds) <= r * r;
 }
 
-/** ~5 ms of collapse — pair/ring are cheap, a line is in between, tube is not. */
+/** ~5 ms of collapse - pair/ring are cheap, a line is in between, tube is not. */
 export function waveBakeParticleBudget() {
   const s = WAVE_PRESETS[presetIndex].length;
   if (s <= 6) return 10000;
@@ -299,7 +299,7 @@ let presetId = 'pair';
 let presetIndex = 0;
 
 /**
- * Live wave sources (and ico-spheres). Mutate via `toggleWavePreset` — do not rebind.
+ * Live wave sources (and ico-spheres). Mutate via `toggleWavePreset` - do not rebind.
  */
 export const WAVE_SOURCES = WAVE_PRESET_PAIR.map((s) => ({ ...s }));
 
@@ -346,7 +346,7 @@ export function stepWavePreset(dir) {
  * Phase-locked spherical sources are linear in (cos ωt, sin ωt):
  *   r̂ sin(kr − ωt) = r̂ sin(kr) cos(ωt) − r̂ cos(kr) sin(ωt)
  * Any emitter set collapses to two vectors (B, C) plus scalar (uS, uC).
- * Exact — not an LOD. Displacement = B cos(ωt) − C sin(ωt).
+ * Exact - not an LOD. Displacement = B cos(ωt) − C sin(ωt).
  *
  * @param {number} x
  * @param {number} y
@@ -404,7 +404,7 @@ export function collapseWaveEmitters(x, y, z, sources, A, out) {
 const _collapse = { bx: 0, by: 0, bz: 0, cx: 0, cy: 0, cz: 0, uS: 0, uC: 0 };
 
 /**
- * Packed xyz sibling of `collapseWaveEmitters` — same sum, fewer object hits.
+ * Packed xyz sibling of `collapseWaveEmitters` - same sum, fewer object hits.
  * @param {number} x
  * @param {number} y
  * @param {number} z
@@ -489,7 +489,7 @@ export function bakeCompressionWaveRest(store, i) {
 
 /**
  * Spin each particle's baked 3×3 about world Y through its own center
- * (orientation only — position unchanged). Slight per-particle rate via windInfluence.
+ * (orientation only - position unchanged). Slight per-particle rate via windInfluence.
  * @param {object} store
  * @param {number} dt seconds
  * @param {number} [radiansPerSec=1.4]
@@ -552,7 +552,7 @@ export function behaviorOrbitCluster(store, time, center, radiansPerSec, tilt = 
 }
 
 /**
- * Spherical longitudinal compression waves — write displaced xyz into `dest`.
+ * Spherical longitudinal compression waves - write displaced xyz into `dest`.
  * Emitters are collapsed at bake to B,C; per frame only shared sin/cos(ωt).
  *   p = rest + B cos(ωt) − C sin(ωt)
  *     = rest + Σ r̂_s * A * sin(k·r_s − ωt)  (sources phase-locked)
@@ -606,7 +606,7 @@ export function writeCompressionWavePositions(store, dest, destOffset, time, opt
 }
 
 /**
- * One monopole at the emitter centroid — cheap live motion until the exact bank bakes.
+ * One monopole at the emitter centroid - cheap live motion until the exact bank bakes.
  * @param {number} x
  * @param {number} y
  * @param {number} z
@@ -637,7 +637,7 @@ export function writeLiveMonopole(x, y, z, dest, p, origin, A, ct, st) {
 }
 
 /**
- * Live field at any point — same sum the dots bake at rest.
+ * Live field at any point - same sum the dots bake at rest.
  * `u` is the scalar sine sum; `dx,dy,dz` is the radial displacement.
  * @param {number} x
  * @param {number} y
@@ -661,7 +661,7 @@ export function sampleCompressionWave(x, y, z, time, opts = {}) {
 
 /**
  * Instant scope at a fixed point: `dest[i] = u(x,y,z, t)` over one period ending at `time`.
- * Position is frozen — moving the probe replaces the whole curve, no travel smear.
+ * Position is frozen - moving the probe replaces the whole curve, no travel smear.
  * @param {number} x
  * @param {number} y
  * @param {number} z

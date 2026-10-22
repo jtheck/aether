@@ -2,7 +2,7 @@
 // into the view, with no panel behind the lines. Sends on the persistent lobby
 // socket. Works in the waiting room and during a live match; players and
 // spectators share the room. Story lines (adventure speech) are painted into
-// the same log locally — they are not sent on the socket.
+// the same log locally - they are not sent on the socket.
 // Send appends locally so a line shows in the log without waiting for the
 // socket echo.
 //
@@ -407,7 +407,7 @@ export function setupChatHud({ resolveChat, getUserId } = {}) {
     }
   });
 
-  // Press Enter anywhere (when not already typing) to jump into chat — desktop
+  // Press Enter anywhere (when not already typing) to jump into chat - desktop
   // shortcut that complements the on-screen button used on touch devices.
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || root.hidden || root.classList.contains('chat-local')) return;

@@ -1,4 +1,4 @@
-// Gamepad field cursor — relative roam (stick moves, release parks), then
+// Gamepad field cursor - relative roam (stick moves, release parks), then
 // ease-pan toward the screen edges.
 
 /**
@@ -64,7 +64,7 @@ export function shouldRevealOsCursor(e) {
 }
 
 /**
- * Mouse click, wheel, or motion — hide the field mark. Touch / pen leave it.
+ * Mouse click, wheel, or motion - hide the field mark. Touch / pen leave it.
  * @param {{ pointerType?: string, type?: string, movementX?: number, movementY?: number } | null | undefined} e
  */
 export function shouldYieldPadToPointer(e) {
@@ -86,7 +86,7 @@ export const CURSOR_PAN_EDGE_FRAC = 0.52;
 export const CURSOR_LEASH_MIN = 72;
 /** Canvas px per full-stick frame. */
 export const CURSOR_GAIN = 20;
-/** Remain each settle frame — used only if something explicitly homes the leash. */
+/** Remain each settle frame - used only if something explicitly homes the leash. */
 export const CURSOR_SETTLE = 0.72;
 export const CURSOR_SETTLE_EPS = 1.5;
 

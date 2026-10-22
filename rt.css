@@ -1099,7 +1099,7 @@ a:after{
   z-index: 1001;
 }
 
-/* Touch: drag finger across arc while pressed — mirror :hover for labels/tooltips */
+/* Touch: drag finger across arc while pressed - mirror :hover for labels/tooltips */
 .radial-menu-button.touch-hover {
   background: rgba(0, 255, 255, 0.2);
   border-color: aqua;

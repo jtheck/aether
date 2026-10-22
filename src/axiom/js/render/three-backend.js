@@ -1,6 +1,6 @@
 /**
  * Three.js render backend for axiom (ES module vendor).
- * Same de-facto port as babylon-backend — sim stays engine-agnostic.
+ * Same de-facto port as babylon-backend - sim stays engine-agnostic.
  */
 import * as THREE from '../../vendor/three.module.min.js';
 import { WAVE_BALL_CAP, WAVE_EMITTER_BALLS, wavePresetId } from '../sim/behaviors.js';
@@ -539,7 +539,7 @@ export function createThreeBackend() {
           if (rafId) cancelAnimationFrame(rafId);
           rafId = 0;
         },
-        // unused — keeps parity for callers poking engine
+        // unused - keeps parity for callers poking engine
         getDeltaTime: () => (self._lastDt ?? 0) * 1000,
       };
     },

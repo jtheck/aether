@@ -1,4 +1,4 @@
-// Seekable cinematic reel — clips on a timeline. sample(t) is the source of truth.
+// Seekable cinematic reel - clips on a timeline. sample(t) is the source of truth.
 
 export const CLIP_CAMERA = 'camera';
 export const CLIP_LINE = 'line';
@@ -247,7 +247,7 @@ export function coveringLines(reel, time) {
   return out;
 }
 
-/** Lines whose window overlaps `[a, b]` — used so a skip step cannot miss a beat. */
+/** Lines whose window overlaps `[a, b]` - used so a skip step cannot miss a beat. */
 export function linesOverlappingRange(reel, a, b) {
   const lo = Math.min(Number(a) || 0, Number(b) || 0);
   const hi = Math.max(Number(a) || 0, Number(b) || 0);
@@ -261,7 +261,7 @@ export function linesOverlappingRange(reel, a, b) {
 
 /**
  * Reconstruct camera + line at time `time` (seconds). Seeking through this
- * never depends on what last played — only on the reel and t.
+ * never depends on what last played - only on the reel and t.
  */
 export function sample(reel, time) {
   const r = reel?.clips ? normalizeReel(reel) : normalizeReel({ clips: [] });
@@ -296,7 +296,7 @@ export function sample(reel, time) {
   return { t, duration, camera, line, lines };
 }
 
-/** Latest clip start at or before `time` — a dialogue / camera beat. */
+/** Latest clip start at or before `time` - a dialogue / camera beat. */
 export function clipBeatTime(reel, time) {
   const t = Number(time) || 0;
   let beat = 0;

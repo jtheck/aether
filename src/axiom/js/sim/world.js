@@ -48,7 +48,7 @@ import {
 } from './behaviors.js';
 
 /**
- * Default mix — equal weight per kind so each cube gets the same recipe.
+ * Default mix - equal weight per kind so each cube gets the same recipe.
  * Colors: cyan points, yellow tris, white circles, magenta tetras.
  */
 export const DEFAULT_FLOCKS = [
@@ -59,7 +59,7 @@ export const DEFAULT_FLOCKS = [
   { id: 'tetras', meshKind: KIND_TETRA, tint: { r: 1, g: 0.25, b: 0.55 }, weight: 1, baseScale: 1 },
 ];
 
-/** Per-chunk accent counts — circles/tetras spawn as a tight cluster. */
+/** Per-chunk accent counts - circles/tetras spawn as a tight cluster. */
 function accentCountFor(def) {
   if (def.meshKind === KIND_PLANE || def.meshKind === KIND_TETRA) return 8;
   if (def.meshKind === KIND_TRIANGLE) return 1;
@@ -122,7 +122,7 @@ export function createWorld(opts = {}) {
   const chunkSize = opts.chunkSize ?? 16;
   /** High-water Chebyshev radius in chunks (staging / store caps sized for this). */
   const radiusMax = opts.chunkRadius ?? 5;
-  /** Live stream radius — FPS throttle may grow/shrink this. */
+  /** Live stream radius - FPS throttle may grow/shrink this. */
   let chunkRadius = Math.max(1, Math.min(radiusMax, opts.startRadius ?? radiusMax));
   const maxChunks = maxChunksForRadius(radiusMax);
   const fillAtMax = Math.max(1, estimateHotChunks(radiusMax));
@@ -327,7 +327,7 @@ export function createWorld(opts = {}) {
     }
   }
 
-  /** Sphere moved — refresh cached overlap only. Ease drips the count change. */
+  /** Sphere moved - refresh cached overlap only. Ease drips the count change. */
   function refreshFracs() {
     if (!Number.isFinite(lastChunk.cx)) return;
     const sphere = volumeSphere();
@@ -746,7 +746,7 @@ export function createWorld(opts = {}) {
 
     /**
      * Shrink/grow streamed Chebyshev radius, then re-apply target so `n` stays
-     * about the live count (denser when smaller — until storeCap).
+     * about the live count (denser when smaller - until storeCap).
      * @param {number} r
      * @param {{ x: number, y: number, z: number }} [at] focus position (default: last focus)
      * @param {number} [targetN] live target after the change (default: current targetTotal)

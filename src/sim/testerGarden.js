@@ -1,4 +1,4 @@
-// Unit-tester garden — 2-player mirror with one of every unit and building.
+// Unit-tester garden - 2-player mirror with one of every unit and building.
 // Write with: node --input-type=module -e "import { writeFileSync } from 'fs'; import { buildTesterGarden } from './sim/testerGarden.js'; writeFileSync('../maps/dev/tester.garden', JSON.stringify(buildTesterGarden()));"
 
 import { TESTER_GARDEN_URL } from '../houseMaps.js';

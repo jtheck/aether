@@ -1,6 +1,6 @@
 /**
  * Three short scopes at left / here / right.
- * Each frame the curve is the live field at that site over one period — not a travel history.
+ * Each frame the curve is the live field at that site over one period - not a travel history.
  */
 
 import { sampleCompressionWaveTrace } from './sim/behaviors.js';

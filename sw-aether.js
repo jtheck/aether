@@ -73,7 +73,7 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
-  // Never intercept the worker script — no respondWith, no cache.put.
+  // Never intercept the worker script - no respondWith, no cache.put.
   if (isWorkerScript(event.request.url)) return;
   if (!isAppHtmlJsCss(event.request)) return;
 

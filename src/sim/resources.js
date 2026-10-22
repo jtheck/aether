@@ -3,7 +3,7 @@ import { noteSpent } from './ownerStats.js';
 
 // Per-owner resource banks (wood / stone / mineral / food).
 //
-// Deterministic sim state — mirrors tech.js: fixed-size per-owner storage,
+// Deterministic sim state - mirrors tech.js: fixed-size per-owner storage,
 // included in the checksum and checkpoint so lockstep peers stay in sync.
 // No costs are enforced yet; this is the stockpile layer the economy builds on.
 
@@ -15,7 +15,7 @@ export const RESOURCE_KINDS = /** @type {const} */ (['wood', 'stone', 'mineral',
 export const RESOURCE_COUNT = RESOURCE_KINDS.length;
 
 /**
- * Resource amounts on a cost (skips pop — every train is 1 pop).
+ * Resource amounts on a cost (skips pop - every train is 1 pop).
  * @param {Record<string, number> | null | undefined} cost
  * @returns {{ kind: string, amount: number }[]}
  */

@@ -34,4 +34,4 @@ foreach ($id in @('E16NES5CQO1ZJ8', 'E14MZ80C43O782')) {
   Write-Host "CloudFront invalidation /* on $id"
 }
 
-Write-Host "Done — bundles: $main, $worker, $forge"
+Write-Host "Done - bundles: $main, $worker, $forge"

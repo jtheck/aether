@@ -34,7 +34,7 @@
       // Two-finger pinch session can start at any span ≥ this (px). 0 = as soon as both contacts exist and separate.
       initialPinchMinSpanPx: 0,
       buildPlaceMinHoldMs: 150,
-      // Zone-based camera control (edge-started: rotate in rim; past rim = zoom; tiny linear handoff — set 0 for hard cut)
+      // Zone-based camera control (edge-started: rotate in rim; past rim = zoom; tiny linear handoff - set 0 for hard cut)
       edgeZoneWidthPx: 50,
       edgeInwardZoomBlendPx: 12,
       edgeRotateSign: 1,
@@ -112,9 +112,9 @@
     let gesturePrimaryFingerIds = null; // Lock the two finger IDs for the entire gesture
     let gestureEngaged = { pinch: false, rotate: false }; // Track which gestures have engaged
     let gestureStableFrames = 0; // Count consecutive clean frames before allowing engagement
-    /** Snapshot of first two contacts when exactly two pointers are down — avoids starting pinch on motionless 2-finger tap. Null if not in that state. */
+    /** Snapshot of first two contacts when exactly two pointers are down - avoids starting pinch on motionless 2-finger tap. Null if not in that state. */
     let twoFingerLanding = null;
-    /** True only while both contacts are a simultaneous chord (see twoFingerChordMaxStaggerMs); unified pinch/pan runs only then — never upgrading a solo 1-finger action. */
+    /** True only while both contacts are a simultaneous chord (see twoFingerChordMaxStaggerMs); unified pinch/pan runs only then - never upgrading a solo 1-finger action. */
     let twoFingerChordSession = false;
     
     // Momentum/inertia state
@@ -259,7 +259,7 @@
       const t = now();
       const dt = t - ps.velLastT;
       if (dt <= 0) return;
-      // Ignore coalesced micro-intervals — they inflate px/ms and falsely arm lasso.
+      // Ignore coalesced micro-intervals - they inflate px/ms and falsely arm lasso.
       if (dt < 12) return;
       const dx = ps.x - ps.velLastX;
       const dy = ps.y - ps.velLastY;
@@ -347,7 +347,7 @@
         const a = activePointers.get(gesturePrimaryFingerIds[0]);
         const b = activePointers.get(gesturePrimaryFingerIds[1]);
         if (!a || !b) return null; // One of the locked fingers was lifted
-        // Use last-known positions for the quiet finger — do not drop the pair when one contact
+        // Use last-known positions for the quiet finger - do not drop the pair when one contact
         // has no fresh pointermove (common on desktop touch). Staleness caused null → endGesture /
         // or parallel lasso from 1-finger move handling with stale startX/Y.
         return [a, b];
@@ -1132,7 +1132,7 @@
         momentumActive = false;
         gestureVelocity = { pan: { x: 0, z: 0 }, rotate: 0, pinch: 0 };
         
-        // LOCK the two chord pointerIds for the whole session — extra contacts are ignored for pinch/pan/rotate until a primary lifts.
+        // LOCK the two chord pointerIds for the whole session - extra contacts are ignored for pinch/pan/rotate until a primary lifts.
         gesturePrimaryFingerIds = [a.id, b.id];
         
         // Store initial and last frame state
@@ -1184,7 +1184,7 @@
           window.cameraAutoFollowEnabled = window._prevCameraAutoFollow;
           delete window._prevCameraAutoFollow;
         }
-        // Was only re-anchoring when exactly one finger remained — with 2+ survivors (e.g. 3rd finger
+        // Was only re-anchoring when exactly one finger remained - with 2+ survivors (e.g. 3rd finger
         // broke pinch) stale startX/Y caused instant lasso from original downs for every contact.
         reanchorAllActiveTouchesAfterMultiBreak();
         twoFingerLanding = null;
@@ -1629,7 +1629,7 @@
         return; // Let popup buttons handle the event
       }
 
-      // 3D radial menu uses canvas picks — not battlefield touch (prevents false double-tap / action menu / stuck fingers).
+      // 3D radial menu uses canvas picks - not battlefield touch (prevents false double-tap / action menu / stuck fingers).
       if (window.USE_3D_HUD && window.hud && typeof window.hud.isTouchOverOpenRadialMenu === 'function' &&
           window.hud.isRadialMenuVisible && window.hud.isRadialMenuVisible() &&
           window.hud.isTouchOverOpenRadialMenu(e.clientX, e.clientY)) {
@@ -1651,7 +1651,7 @@
         activePointers.set(e.pointerId, ps);
         pointerOrder.push(e.pointerId);
         
-        // Do not stop camera momentum on pointer down — quick taps (selection, etc.) should not kill inertia.
+        // Do not stop camera momentum on pointer down - quick taps (selection, etc.) should not kill inertia.
         // Momentum clears when we actually engage camera control (pan, edge, pinch, lasso drag) on pointermove.
         
         const currentTime = now();
@@ -1701,7 +1701,7 @@
                 otherCenterPanChain = true;
                 break;
               }
-              // Another finger is doing edge rotate/zoom — still give this center finger pan-hold vs lasso.
+              // Another finger is doing edge rotate/zoom - still give this center finger pan-hold vs lasso.
               if (p.startedInEdge || p.isEdgeFinger) {
                 otherCenterPanChain = true;
                 break;
@@ -1745,7 +1745,7 @@
     function onPointerMove(e) {
       if (!isTouchLike(e)) return;
       
-      // Ignore moves over UI only when this touch is not tracked on the canvas — otherwise
+      // Ignore moves over UI only when this touch is not tracked on the canvas - otherwise
       // we strand pointers in activePointers (same class of bug as pointerup over UI).
       if (isUIElement(e) && !activePointers.has(e.pointerId)) return;
 
@@ -1846,7 +1846,7 @@
           applyTwoFingerGesture();
           return;
         }
-        // fall through — extra finger while gesture is active
+        // fall through - extra finger while gesture is active
       }
 
       // 1-finger: same rules for the moving pointer only (one contact or several non-chord contacts).
@@ -1995,7 +1995,7 @@
       }
 
       // Detect two-finger tap/double-tap BEFORE processing other gestures
-      // Require at least one lift while a second finger was still down — two sequential
+      // Require at least one lift while a second finger was still down - two sequential
       // one-finger taps both see only one pointer and must not open the menu.
       if (recentQuickUps.length >= 2) {
         const a = recentQuickUps[recentQuickUps.length - 1];
@@ -2072,7 +2072,7 @@
       // End gesture if needed
       endGestureIfNeeded();
 
-      // Chord arming without unified pinch: endGesture is a no-op — survivor still had old startX/Y.
+      // Chord arming without unified pinch: endGesture is a no-op - survivor still had old startX/Y.
       if (contactCountBeforeLift >= 2 && activePointers.size >= 1 && !unifiedGestureWasActive) {
         reanchorAllActiveTouchesAfterMultiBreak();
       }

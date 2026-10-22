@@ -255,7 +255,7 @@ export async function createFrogRenderer(engine, scene, groundYAt, onLand) {
 
   function applyUpdates(updatesList) {
     if (!updatesList?.length) return;
-    // Under load, land FX is more expensive than the frogs — throttle hard.
+    // Under load, land FX is more expensive than the frogs - throttle hard.
     const landFxBudget = active.size > 400 ? 2 : active.size > 150 ? 6 : 24;
     let landFxLeft = landFxBudget;
     for (let u = 0; u < updatesList.length; u++) {

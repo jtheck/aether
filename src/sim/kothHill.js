@@ -1,4 +1,4 @@
-// Hill zone — units within center radius (visual hill at origin).
+// Hill zone - units within center radius (visual hill at origin).
 
 import * as fx from './fixed.js';
 

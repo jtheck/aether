@@ -79,8 +79,8 @@ export async function materialFromBakeDesc(engine, glbUrl, matDesc, images) {
   const emissiveTexture = (await loadImg(matDesc.emissiveImage, srgbOpts)) || undefined;
   const ef = matDesc.emissiveFactor ?? [0, 0, 0];
 
-  // Must use createPbrMaterial so `_buildGroup` is set — plain objects never draw.
-  // When ORM is a factor 1×1 (no MR image), omit metallic/roughness factors —
+  // Must use createPbrMaterial so `_buildGroup` is set - plain objects never draw.
+  // When ORM is a factor 1×1 (no MR image), omit metallic/roughness factors -
   // shader does orm.channel * factor, and UBO defaults factor to 1.
   const mat = createPbrMaterial({
     name: matDesc.name || '',

@@ -26,7 +26,7 @@ export const LOCKSTEP_CATCHUP_DONE_TICKS = 2;
 /**
  * A fresh joiner or spectator resumes at whatever tick the host had when its
  * world was cut, which is already seconds stale by the time the transfer and
- * replay finish. `simAcc` is clamped to real time, so that gap is permanent —
+ * replay finish. `simAcc` is clamped to real time, so that gap is permanent -
  * and it compounds down the observer fan-out, because an L2 pulls from an L1
  * that is itself behind. Drain the backlog explicitly instead.
  *
@@ -45,7 +45,7 @@ export { TICK_HZ, TICK_MS };
  * `displayTickF` is continuous sim-ticks (10.3 = 30% from snapshot 10 toward 11).
  * It follows wall time at the smoothed snapshot rate and never restarts when a
  * snapshot lands, so an early tick cannot yank units forward.
- * More than one tick behind the drawable tip is dropped — replaying a hitch is the surge.
+ * More than one tick behind the drawable tip is dropped - replaying a hitch is the surge.
  * @param {number} displayTickF
  * @param {number} dtMs
  * @param {number} blendMs smoothed ms per sim tick
@@ -93,7 +93,7 @@ export function formatMatchTime(totalSec) {
   return `${h}:${String(rm).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
 }
 
-/** Top-bar clock — grows `S` → `M:SS` → `H:MM:SS`. */
+/** Top-bar clock - grows `S` → `M:SS` → `H:MM:SS`. */
 export function formatHudMatchClock(totalSec) {
   const s = Math.max(0, Math.floor(totalSec));
   if (s < 60) return `${s}`;
@@ -135,8 +135,8 @@ export class SimSession {
   /**
    * @param {object} options
    * @param {number} options.localPlayerId
-   * @param {number[]} options.humanPlayers — peers required before advancing a tick
-   * @param {Array<number | { owner: number, temperament?: string, difficulty?: number | string }>} [options.aiPlayers] — deterministic AI generated in worker
+   * @param {number[]} options.humanPlayers - peers required before advancing a tick
+   * @param {Array<number | { owner: number, temperament?: string, difficulty?: number | string }>} [options.aiPlayers] - deterministic AI generated in worker
    * @param {number} [options.inputDelayTicks]
    */
   constructor(options) {
@@ -188,7 +188,7 @@ export class SimSession {
     this._commandSeq = 0;
     this._seenFrameIds = new Set();
     this.lastSnapshotAt = 0;
-    /** EMA of wall time between snapshots — display clock rate, not a per-tick restart. */
+    /** EMA of wall time between snapshots - display clock rate, not a per-tick restart. */
     this._displayBlendMs = TICK_MS;
     /** False until the first real inter-snapshot gap is adopted. */
     this._displayBlendLive = false;
@@ -197,7 +197,7 @@ export class SimSession {
     this._displaySample = { tick: 0, alpha: 1 };
     /** Set while a replay walks stored poses backward. Display follows this, not the worker. */
     this._replayPoseSample = null;
-    /** Last alpha / display tick actually drawn — pause freezes to these (not live clock). */
+    /** Last alpha / display tick actually drawn - pause freezes to these (not live clock). */
     this._lastDisplayAlpha = 1;
     this._lastDisplayTick = 0;
     /** Frozen render blend while pauseLockstep (null when running). */
@@ -340,7 +340,7 @@ export class SimSession {
     return frame;
   }
 
-  /** Incoming P2P frame — late frames are dropped, never applied retroactively. */
+  /** Incoming P2P frame - late frames are dropped, never applied retroactively. */
   bufferRemoteFrame(frame) {
     if (frame?.commandId) {
       if (this._seenFrameIds.has(frame.commandId)) return true;
@@ -368,7 +368,7 @@ export class SimSession {
     // Bound clock debt: slow ticks (stress) must not accumulate a catch-up storm.
     if (this.simAcc > TICK_MS * 3) this.simAcc = TICK_MS * 3;
     // One advance per frame, before any pose read. A second read must not cross
-    // into the next snapshot with the previous alpha — that was a full-step surge.
+    // into the next snapshot with the previous alpha - that was a full-step surge.
     if (!this.pauseLockstep && !this.resetting) {
       this._displayTickF = stepDisplayTick(
         this._displayTickF,
@@ -406,7 +406,7 @@ export class SimSession {
     }, TICK_MS);
   }
 
-  /** Ephemeral strike FX — skip while the tab is background-pumped. */
+  /** Ephemeral strike FX - skip while the tab is background-pumped. */
   queueLightningUpdates(patch) {
     if (!patch || this._bgPumpTimer != null) return;
     if (!this.pendingLightningUpdates) this.pendingLightningUpdates = [];
@@ -414,7 +414,7 @@ export class SimSession {
   }
 
   /**
-   * Highest tick every other required player has confirmed — the ceiling we are
+   * Highest tick every other required player has confirmed - the ceiling we are
    * allowed to commit to. Also our best local estimate of the live tip.
    */
   liveTickCeiling() {
@@ -440,7 +440,7 @@ export class SimSession {
   _drainPendingCommits() {
     if (this.pauseLockstep || this.resetting || this.replayingCatchUp || this.watchingReplay) return;
     // Only one commit can be in flight, so this chains through the commit
-    // callback rather than looping here — worker speed is the real limit.
+    // callback rather than looping here - worker speed is the real limit.
     while (!this.waitingForWorker) {
       this._draining = shouldFastForwardLockstep({
         lagTicks: this.lagBehindLiveTicks(),
@@ -617,7 +617,7 @@ export class SimSession {
     return frame;
   }
 
-  /** Full ledger for catch-up export (not the save tape — this one is pruned). */
+  /** Full ledger for catch-up export (not the save tape - this one is pruned). */
   exportFullLedger() {
     return this.committedLedgerFrames
       .map((frame) => ({ ...frame, commands: frame.commands?.map((cmd) => ({ ...cmd })) ?? [] }))
@@ -868,7 +868,7 @@ export class SimSession {
       // A committed tick means lockstep is advancing, so disarm the stall clock.
       // The stall card should only appear when confirmedTick is truly frozen for
       // LOCKSTEP_STALL_UI_MS. `_lockstepBlockedAt` is armed lazily by
-      // lockstepBlockedMs() whenever a sample sees a non-empty waiter set — and a
+      // lockstepBlockedMs() whenever a sample sees a non-empty waiter set - and a
       // client rendering ahead of a 20 Hz sim almost always has the next tick's
       // confirm outstanding at sample time, so without this reset the timer
       // accumulates during perfectly healthy play and pops the lag card at ~1-2ms.
@@ -961,7 +961,7 @@ export class SimSession {
       this._recordCommittedTick(tick, committedFrames);
       this._captureSnapshot(tick);
       const now = performance.now();
-      // Don't advance the render blend clock while paused — display is frozen to
+      // Don't advance the render blend clock while paused - display is frozen to
       // the last drawn tick/alpha (an in-flight commit may still land).
       if (!this.pauseLockstep) {
         if (this.lastSnapshotAt > 0) {

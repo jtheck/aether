@@ -1,4 +1,4 @@
-// Tick-indexed command frames — the wire format for lockstep P2P and SimSession.
+// Tick-indexed command frames - the wire format for lockstep P2P and SimSession.
 
 /** @typedef {{ type: number, entities: number[], tx?: number[], ty?: number[], target?: number }} SimCommand */
 /** @typedef {{ tick: number, playerId: number, commands: SimCommand[], commandId?: string, playerCommandSeq?: number }} CommandFrame */

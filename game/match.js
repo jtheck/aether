@@ -2641,7 +2641,7 @@
         unit.animationGroups = null;
       }
 
-      // Dispose old mesh hierarchy only — do NOT dispose materials/textures (second arg false).
+      // Dispose old mesh hierarchy only - do NOT dispose materials/textures (second arg false).
       // Unit clones from getModel often share GLB materials; dispose(..., true) would invalidate
       // textures on every other instance still using them (e.g. all villagers turn white).
       if (oldMesh) {
@@ -3202,7 +3202,7 @@
                   o.completed = true;
                 }
                 objectivesCompleted = objectives.length;
-                console.log(`🎯 Chapter advance (shortcut) at (${obj.x}, ${obj.y}) — skipping to next chapter`);
+                console.log(`🎯 Chapter advance (shortcut) at (${obj.x}, ${obj.y}) - skipping to next chapter`);
                 if (obj.message && window.UnitSpeech && window.UnitSpeech.showSpeech) {
                   window.UnitSpeech.showSpeech(unit, obj.message, 4000);
                   if (window.isMultiplayer && window.net && window.net.p2p) {
@@ -3250,7 +3250,7 @@
         }
         
         // For escape objectives: at least one party unit per owner group must be in the zone.
-        // (Older logic required every unit in the group — in solo all heroes share one owner, so
+        // (Older logic required every unit in the group - in solo all heroes share one owner, so
         // one group had 4 heroes and nothing fired unless all four stood in the circle.)
         if (obj.type === 'escape' && !obj.completed) {
           const escapeGroups = getAdventureEscapeGroups();
@@ -3275,7 +3275,7 @@
           if (allGroupsRepresented && unitsInZone.length > 0) {
             obj.completed = true;
             objectivesCompleted++;
-            console.log(`🎯 Escape objective ${obj.id + 1} completed at (${obj.x}, ${obj.y}) — ${unitsInZone.length} unit(s) in zone across ${escapeGroups.length} group(s)`);
+            console.log(`🎯 Escape objective ${obj.id + 1} completed at (${obj.x}, ${obj.y}) - ${unitsInZone.length} unit(s) in zone across ${escapeGroups.length} group(s)`);
 
             if (obj.message && window.UnitSpeech && window.UnitSpeech.showSpeech) {
               const speaker = unitsInZone[0];
@@ -3301,11 +3301,11 @@
       // Log progress periodically so incomplete objectives are visible in console
       if (objectivesCompleted > 0 && objectivesCompleted < objectives.length && this.tick % 200 === 0) {
         const incomplete = objectives.filter(o => !o.completed).map(o => `#${o.id+1} ${o.type}@(${o.x},${o.y})`);
-        console.log(`🎯 Objectives: ${objectivesCompleted}/${objectives.length} — incomplete: ${incomplete.join(', ')}`);
+        console.log(`🎯 Objectives: ${objectivesCompleted}/${objectives.length} - incomplete: ${incomplete.join(', ')}`);
       }
 
       // Chapter complete when:
-      // - Any terminal objective (`escape` or `advance`) is done — reach checkpoints are optional flavor, or
+      // - Any terminal objective (`escape` or `advance`) is done - reach checkpoints are optional flavor, or
       // - Maps with no escape/advance: every objective must still be completed (reach-only chapters).
       const hasTerminalObjective = objectives.some(o => o.type === 'escape' || o.type === 'advance');
       const terminalComplete = objectives.some(o =>
@@ -3338,7 +3338,7 @@
     checkAdventureDefeat() {
       if (this.state === MatchState.VICTORY || this.state === MatchState.DEFEAT) return;
       if (this._adventureVictoryHandled) return;
-      // Grace period — don't check during the first 5 seconds
+      // Grace period - don't check during the first 5 seconds
       if (this.tick < 100) return;
 
       // In multiplayer, only the host decides defeat (same as objectives)
@@ -3362,7 +3362,7 @@
 
       if (livingPlayerUnits.length > 0) return;
 
-      console.log('💀 Adventure defeat — all player units are dead');
+      console.log('💀 Adventure defeat - all player units are dead');
       this.isPaused = true;
       this.state = MatchState.DEFEAT;
       this.replay = this.replay || {};
@@ -3718,7 +3718,7 @@
         } else if (playerIndex >= teamSize) {
           return this.players.slice(teamSize).map(p => p.id || p);
         }
-        // Player not found in list — fall through to FFA
+        // Player not found in list - fall through to FFA
       }
       // Free-for-all: each player is their own team
       return [playerId];

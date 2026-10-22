@@ -30,7 +30,7 @@ function removeDistUserData() {
   const userData = path.join(distRoot, '.nw-user-data');
   if (!fs.existsSync(userData)) return;
   fs.rmSync(userData, { recursive: true, force: true });
-  console.log('[steam-build] Removed dist/.nw-user-data (local profile — do not ship)');
+  console.log('[steam-build] Removed dist/.nw-user-data (local profile - do not ship)');
 }
 
 // Ship builds: strip --remote-debugging-port from package.nw/package.json before upload.

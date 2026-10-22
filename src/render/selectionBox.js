@@ -1,4 +1,4 @@
-// Drag-select marquee — clip-space overlay in the game pass (not DOM).
+// Drag-select marquee - clip-space overlay in the game pass (not DOM).
 // Rubber-band is a 10-quad rect (hatch rims + edges + plus). A scenic loop
 // uses the same X hatch on the outer perimeter ribbon. Deep interior is not drawn.
 

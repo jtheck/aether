@@ -53,7 +53,7 @@ function passiveBonkLobsOneUnit() {
   const hpFoe = w.hp[foe];
   const hpAlly = w.hp[ally];
 
-  // Walk into stick range — passive bonk, not a cast.
+  // Walk into stick range - passive bonk, not a cast.
   step(w, field, [moveMonkToward(w, monk, fx.fromInt(20), 0)]);
 
   let launched = isLobbing(w, foe) || isLobbing(w, ally);
@@ -102,7 +102,7 @@ function monksAreImmune() {
     type: UNIT.MONK,
     owner: 1,
   });
-  // Even idle — monks don't bonk other monks.
+  // Even idle - monks don't bonk other monks.
   for (let t = 0; t < 10; t++) step(w, field, []);
   assert.equal(w.abilityCd[monk], 0);
   assert.ok(!isLobbing(w, 0) && !isLobbing(w, 1));
@@ -182,7 +182,7 @@ function flightPublishesProgress() {
     flying = isLobbing(w, foe);
   }
   assert.ok(flying);
-  // Still airborne — no land puff yet.
+  // Still airborne - no land puff yet.
   const mid = takeMonkKickUpdates(w);
   assert.ok(mid.count >= 1);
   assert.equal(mid.landCount, 0);

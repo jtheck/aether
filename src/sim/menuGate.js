@@ -1,5 +1,5 @@
 // Radial / HUD gate: requirements first (locked), then bank (unafford).
-// Matches v1 menu styling — grey/black when locked, red when broke.
+// Matches v1 menu styling - grey/black when locked, red when broke.
 
 import { canAffordBank } from './resources.js';
 

@@ -1,4 +1,4 @@
-// Catch-up replay — rebuild sim from match config + command ledger, verify checksum.
+// Catch-up replay - rebuild sim from match config + command ledger, verify checksum.
 // Prefer mid-match world checkpoint + ledger delta when available.
 
 import { collectFramesForTick } from '../sim/commandFrame.js';
@@ -7,7 +7,7 @@ import { catchupReplayPlayerIds, sameCatchupChecksum } from './spectatorAttach.j
 
 /** Sim ticks committed per display frame during visible catch-up.
  *  Higher = faster catch-up (less rAF overhead). Large armies still pay per-tick
- *  worker cost — late joiners can treadmill if the live match outruns replay. */
+ *  worker cost - late joiners can treadmill if the live match outruns replay. */
 export const CATCHUP_TICKS_PER_FRAME = 80;
 
 /** Live tuning knob: `?catchup=N` overrides ticks-per-frame (N > 0). Higher is
@@ -27,7 +27,7 @@ export const CATCHUP_MAX_REPLAY_TICKS = 240;
  * Solo kings are in a public sandbox until the first challenger resets the
  * match. Spectators should attach to the live tip, not replay that sandbox.
  * Multi-army matches also need a checkpoint whenever the cached one is missing
- * or too far behind — full ledger replay from tick 0 is what times out
+ * or too far behind - full ledger replay from tick 0 is what times out
  * (`commitTick N timeout`) around ~100s of match time.
  */
 export function shouldExportFreshCatchupCheckpoint({
@@ -46,7 +46,7 @@ export { formatMatchTime, matchSecondsFromTick };
 
 /**
  * @param {import('./simSession.js').SimSession} session
- * @param {object} matchConfig — seed, mode, activeSlots, humanPlayers
+ * @param {object} matchConfig - seed, mode, activeSlots, humanPlayers
  * @param {import('../sim/commandFrame.js').CommandFrame[]} ledgerFrames
  * @param {number} targetTick
  * @param {number} [expectedChecksum]
@@ -130,7 +130,7 @@ export async function replayCatchUp(session, matchConfig, ledgerFrames, targetTi
 }
 
 /**
- * @param {import('./simSession.js').SimSession} session — must already be reset/started for this match
+ * @param {import('./simSession.js').SimSession} session - must already be reset/started for this match
  * @param {object} matchConfig
  * @param {import('../sim/commandFrame.js').CommandFrame[]} ledgerFrames
  * @param {number} targetTick

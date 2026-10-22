@@ -41,7 +41,7 @@ export function heatForWound(wound) {
   return 0.38 + t * 0.55;
 }
 
-/** Little torch — well under authored socket fire (inherent × 3). */
+/** Little torch - well under authored socket fire (inherent × 3). */
 export function flameScale(intensity) {
   const a = Math.max(0, Math.min(1, intensity));
   return 0.30 + a * 0.40;
@@ -225,7 +225,7 @@ export function createBuildingFire(opts = {}) {
 
   /**
    * Record latest HP / pose and roll sparks for HP drops under the gate.
-   * First sight never sparks — only later hits do.
+   * First sight never sparks - only later hits do.
    * @param {Array<{ hp?: number, maxHp?: number, built?: number, type?: string, x?: number, z?: number, yaw?: number }|null|undefined>|null|undefined} buildings
    * @param {{ hidden?: (b: object, index: number) => boolean }} [flags]
    */

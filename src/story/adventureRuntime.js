@@ -1,6 +1,6 @@
 /**
  * Campaign runtime that lives in the bootGame closures.
- * World reset does not clear this — callers must wipe it when leaving adventure.
+ * World reset does not clear this - callers must wipe it when leaving adventure.
  */
 
 /** @param {{ mode?: string } | null | undefined} cfg */

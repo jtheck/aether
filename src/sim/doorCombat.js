@@ -13,7 +13,7 @@ const DOOR_STAND_F = TILE_SIZE_F * 1.25;
 const DOOR_REACH_F = TILE_SIZE_F * 1.6;
 /** Attack-move click this close to a shut door breaks it instead of walking. */
 export const DOOR_CLICK_REACH_F = 7;
-/** Pressed against a shut door on the way somewhere — stop and bash. */
+/** Pressed against a shut door on the way somewhere - stop and bash. */
 export const DOOR_BASH_REACH_F = 8;
 
 export function isDoorAlive(door) {

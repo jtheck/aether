@@ -1,4 +1,4 @@
-// Overhead haul props — v1's comically large log / rock on the villager's head.
+// Overhead haul props - v1's comically large log / rock on the villager's head.
 // Units are thin-instanced, so these are a matching overlay (not parented).
 
 import {
@@ -16,7 +16,7 @@ const WOOD = RESOURCE_INDEX.wood + 1;
 const STONE = RESOURCE_INDEX.stone + 1;
 const MINERAL = RESOURCE_INDEX.mineral + 1;
 
-/** Above the crown — renderY is chest (pickHeight). */
+/** Above the crown - renderY is chest (pickHeight). */
 const HEAD_LIFT = 1.62;
 const INITIAL_CAP = 256;
 
@@ -219,7 +219,7 @@ export function createCarryLoads(engine, scene) {
       if ((amt[i] | 0) <= 0) continue;
       if (alive && !alive[i]) continue;
       if (skip && skip[i]) continue;
-      // Props only on the haul home — chop with a partial load stays empty-handed.
+      // Props only on the haul home - chop with a partial load stays empty-handed.
       if (opts.act && (opts.act[i] | 0) !== GATHER_ACT.HAUL) continue;
       const code = kind ? (kind[i] | 0) : WOOD;
       const batch = batchForKind(code) ?? batches.wood;

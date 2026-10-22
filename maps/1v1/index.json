@@ -1,13 +1,13 @@
 {
   "maps": [
     {
-      "file": "island.garden",
-      "name": "Paradise Island",
+      "file": "ford.garden",
+      "name": "The Ford",
       "mapType": "onevsone"
     },
     {
-      "file": "arena.garden",
-      "name": "The Arena",
+      "file": "bowl.garden",
+      "name": "The Bowl",
       "mapType": "onevsone"
     }
   ]

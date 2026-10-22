@@ -180,7 +180,7 @@ function dirigibleCapacitySix() {
 function nearestRidersFillCapacity() {
   const w = createWorld(20);
   const wagon = spawn(w, { x: 0, y: 0, type: UNIT.WAGON, owner: 0 });
-  // Wagon cap 4. Far crowd + two close units — close ones must win seats.
+  // Wagon cap 4. Far crowd + two close units - close ones must win seats.
   const nearA = spawn(w, { x: fx.fromFloat(2), y: 0, type: UNIT.WARRIOR, owner: 0 });
   const nearB = spawn(w, { x: fx.fromFloat(3), y: 0, type: UNIT.WARRIOR, owner: 0 });
   const far = [];
@@ -239,7 +239,7 @@ function clickEmbarkLoadsNearest() {
     if (isCarried(w, near)) break;
   }
   assert.equal(isCarried(w, near), true);
-  assert.equal(isCarried(w, far), false, 'far rider not assigned — stays out');
+  assert.equal(isCarried(w, far), false, 'far rider not assigned - stays out');
 }
 
 loadRespectsCapacity();

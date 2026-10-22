@@ -14,7 +14,7 @@ describe('displayPoseSample', () => {
 
 describe('stepDisplayTick', () => {
   it('keeps walking through an early snapshot instead of restarting', () => {
-    // 144Hz frames. Tick gaps alternate around one sim step — the old clock
+    // 144Hz frames. Tick gaps alternate around one sim step - the old clock
     // restarted alpha on each snapshot and popped forward on the short ones.
     const frame = 1000 / 144;
     let t = 0;

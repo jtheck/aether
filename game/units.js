@@ -351,13 +351,13 @@ const UnitTypes = {
     prerequisites: {
       buildings: ["barracks"]
     },
-    upgradeTo: "ballister",
+    upgradeTo: "marksman",
     description: "Ranged unit effective against light units",
     notes: "DEFEAT: Bow snaps comically, runs away embarrassed"
   },
 
-  ballister: {
-    name: "Ballister",
+  marksman: {
+    name: "Marksman",
     category: "military",
     model: "assets/models/brigand.glb", // TODO: unique model
     scale: 0.5,
@@ -1494,7 +1494,7 @@ function spawnUnitModels(scene) {
 const SELECTION_COLLAR_MODEL = 'assets/models/collar.glb';
 // World Y lift above unit mesh origin (feet). Lower = closer to ground / less “floating”.
 const SELECTION_INDICATOR_Y_OFFSET = 0.035;
-// Group 0: same pass as world geometry — normal depth test and occlusion.
+// Group 0: same pass as world geometry - normal depth test and occlusion.
 const SELECTION_INDICATOR_RENDERING_GROUP = 0;
 // Spin in rad/s (frame-rate independent). Steady rate ≈ old 0.006 rad/frame @ 60fps.
 const SELECTION_SPIN_STEADY_RAD_PER_SEC = 0.006 * 60;
@@ -3003,7 +3003,7 @@ function updateUnitMeshes() {
         }
     });
 
-    // After mesh/billboard positions — selection rings follow world space (uses engine Δt; no param on this fn)
+    // After mesh/billboard positions - selection rings follow world space (uses engine Δt; no param on this fn)
     let selectionDt = 1 / 60;
     if (window.gfx && window.gfx.engine && typeof window.gfx.engine.getDeltaTime === 'function') {
         const ms = window.gfx.engine.getDeltaTime();

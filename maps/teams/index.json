@@ -1,8 +1,13 @@
 {
   "maps": [
     {
-      "file": "arena.garden",
-      "name": "The Arena",
+      "file": "divide.garden",
+      "name": "The Divide",
+      "mapType": "teams"
+    },
+    {
+      "file": "corners.garden",
+      "name": "Four Corners",
       "mapType": "teams"
     }
   ]

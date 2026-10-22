@@ -68,7 +68,7 @@ function overlayChildFollowsWalkedParent() {
     1, 0, 0, 0,
     0, 2, 0, 1,
   ], 0);
-  // Frozen carry-world child sitting at rest +X — what a skin-matrix stamp leaves.
+  // Frozen carry-world child sitting at rest +X - what a skin-matrix stamp leaves.
   world.set([
     1, 0, 0, 0,
     0, 1, 0, 0,

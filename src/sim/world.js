@@ -42,7 +42,7 @@ export const ORDER = {
   GATHER: 5,
   /** Villager or engineer raising a building under construction (see construction.js). */
   BUILD: 6,
-  /** Idle amble — path-follows like MOVE, but at stroll speed. */
+  /** Idle amble - path-follows like MOVE, but at stroll speed. */
   WANDER: 7,
 };
 
@@ -104,7 +104,7 @@ export function createWorld(seed) {
       projectileMisses: 0,
       projectileOverflow: 0,
       projectileActive: 0,
-      /** Diagnostic ms per phase — never feeds sim decisions. */
+      /** Diagnostic ms per phase - never feeds sim decisions. */
       timing: null,
     },
     /** When true, step() fills metrics.timing via performance.now (diag only). */
@@ -115,7 +115,7 @@ export function createWorld(seed) {
     py: new Int32Array(MAX_ENTITIES),
     vx: new Int32Array(MAX_ENTITIES),
     vy: new Int32Array(MAX_ENTITIES),
-    /** Persisted facing (unit vector) — steer blends from this even when idle vx=0. */
+    /** Persisted facing (unit vector) - steer blends from this even when idle vx=0. */
     faceX: new Int32Array(MAX_ENTITIES),
     faceY: new Int32Array(MAX_ENTITIES),
 
@@ -134,7 +134,7 @@ export function createWorld(seed) {
     targetDoor: new Int32Array(MAX_ENTITIES).fill(-1),
     doors: [],
     doorsDirty: 0,
-    /** 1 = CMD.ATTACK focus — acquireTargets must not rebalance off this target. */
+    /** 1 = CMD.ATTACK focus - acquireTargets must not rebalance off this target. */
     attackFocus: new Uint8Array(MAX_ENTITIES),
     /** 1 = this attack is roped to leashX/leashY (self-started fights only). */
     leashActive: new Uint8Array(MAX_ENTITIES),
@@ -149,7 +149,7 @@ export function createWorld(seed) {
     engagementMask: new Uint16Array(MAX_ENTITIES),
     targetLoad: new Uint16Array(MAX_ENTITIES),
 
-    // villager gathering (see gather.js) — tile being harvested + carried load
+    // villager gathering (see gather.js) - tile being harvested + carried load
     gatherTile,
     /** 0 = empty; otherwise (resource kind index + 1), see resources.js RESOURCE_KINDS. */
     carriedKind: new Uint8Array(MAX_ENTITIES),
@@ -204,7 +204,7 @@ export function createWorld(seed) {
     tech: new Uint32Array(16),
     /** Set when tech bits change; worker publishes then clears. */
     techDirty: 0,
-    /** Per-owner resource banks — wood/stone/mineral/food (see resources.js). */
+    /** Per-owner resource banks - wood/stone/mineral/food (see resources.js). */
     resources: new Int32Array(MAX_RESOURCE_OWNERS * RESOURCE_COUNT),
     /** Fractional food-upkeep remainder per owner (see foodUpkeep.js). */
     foodUpkeepAcc: new Int32Array(MAX_RESOURCE_OWNERS),
@@ -258,7 +258,7 @@ export function createWorld(seed) {
     squadId: new Int32Array(MAX_ENTITIES),
     nextSquadId: 1,
 
-    // transport — carriedBy / transportTarget are −1 when unset
+    // transport - carriedBy / transportTarget are −1 when unset
     carriedBy: new Int32Array(MAX_ENTITIES).fill(-1),
     transportTarget: new Int32Array(MAX_ENTITIES).fill(-1),
 

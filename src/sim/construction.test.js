@@ -1,4 +1,4 @@
-// Building construction — placed buildings start as inert sites that villagers
+// Building construction - placed buildings start as inert sites that villagers
 // and engineers raise. Verifies: placement makes a site, nearby workers auto-build
 // it (up to two, faster with two), engineers take a slot at half speed, it pulls
 // a gatherer when no idle hand is free, finishing turns on the building's
@@ -180,7 +180,7 @@ function pullsAGathererWhenNoIdle() {
   for (let t = 0; t < 30; t++) step(w, field, []);
   assert.equal(w.order[vill], ORDER.GATHER, 'the lone villager is busy gathering');
 
-  // Now a site appears with no idle hand free — construction must pull the gatherer.
+  // Now a site appears with no idle hand free - construction must pull the gatherer.
   w.buildings.push(siteBuilding('village', 8, 8));
   let pulled = false;
   for (let t = 0; t < 220; t++) {

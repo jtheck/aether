@@ -1,6 +1,7 @@
-// Play handoff for a Forge map. Small gardens stay in sessionStorage so the
-// opened tab inherits them. Anything over the quota goes to IndexedDB, which
-// the match reads on the same origin.
+// Play handoff for a Forge map. The opened tab does not inherit sessionStorage
+// (COOP same-origin gives it a fresh one), so the garden is also written to
+// localStorage when it fits and always to IndexedDB. The match reads the first
+// copy it can see.
 
 import { GARDEN_SESSION_KEY } from '../sim/garden.js';
 
@@ -13,6 +14,9 @@ export const GARDEN_OVERFLOW_MARK = 'idb';
 
 /** Campaign bundle (index + gardens) for web play. Always stored in IndexedDB. */
 export const CAMPAIGN_PACK_KEY = 'aeg.campaign';
+
+/** Tiny localStorage stamp so a new tab can tell a fresh IndexedDB write from a stale one. */
+const GARDEN_GEN_KEY = 'aeg.garden.gen';
 
 export function isQuotaError(err) {
   return err?.name === 'QuotaExceededError'
@@ -66,8 +70,71 @@ function openDb() {
   });
 }
 
-export async function writeSessionGarden(json) {
+/**
+ * localStorage is shared with the new tab immediately. sessionStorage is not.
+ * Returns a generation stamp, or null when localStorage itself is unavailable.
+ * The garden body is removed again when it does not fit, so a stale map cannot
+ * win over the IndexedDB copy that is about to be written.
+ * @param {string} json
+ * @returns {string | null}
+ */
+export function stageLocalGarden(json) {
+  if (typeof localStorage === 'undefined') return null;
+  let gen = null;
+  try {
+    gen = String(Date.now());
+    localStorage.setItem(GARDEN_GEN_KEY, gen);
+  } catch {
+    return null;
+  }
+  try {
+    localStorage.setItem(GARDEN_SESSION_KEY, json);
+  } catch {
+    try { localStorage.removeItem(GARDEN_SESSION_KEY); } catch { /* quota */ }
+  }
+  return gen;
+}
+
+/** @returns {string | null} */
+export function readLocalGarden() {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const stored = localStorage.getItem(GARDEN_SESSION_KEY);
+    if (!stored || isGardenOverflowMark(stored)) return null;
+    return stored;
+  } catch {
+    return null;
+  }
+}
+
+function readLocalGen() {
+  if (typeof localStorage === 'undefined') return null;
+  try { return localStorage.getItem(GARDEN_GEN_KEY); } catch { return null; }
+}
+
+/**
+ * IndexedDB copy of the garden. When a generation stamp is set, wait until the
+ * write from this play lands so a previous map is not what the match boots.
+ * @param {string} [gen]
+ */
+export async function writeSessionGarden(json, gen) {
   await writeStoreValue(GARDEN_SESSION_KEY, json);
+  if (gen) await writeStoreValue(GARDEN_GEN_KEY, String(gen));
+}
+
+/** IndexedDB garden that matches the latest local generation stamp, if any. */
+export async function readMatchingSessionGarden() {
+  const gen = readLocalGen();
+  const deadline = Date.now() + 1000;
+  let stored = null;
+  for (;;) {
+    stored = await readSessionGarden();
+    if (!gen) return stored;
+    const got = await readStoreValue(GARDEN_GEN_KEY);
+    if (stored && got === gen) return stored;
+    if (Date.now() >= deadline) return stored;
+    await new Promise((r) => setTimeout(r, 40));
+  }
 }
 
 export async function readSessionGarden() {

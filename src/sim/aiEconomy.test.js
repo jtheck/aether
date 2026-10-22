@@ -1,4 +1,4 @@
-// Economic AI — a passive, rule-bound player that gathers, expands drop-offs,
+// Economic AI - a passive, rule-bound player that gathers, expands drop-offs,
 // and farms (villagers trickle from the village). Verified headless +
 // deterministic (two runs must land on the same checksum).
 
@@ -338,11 +338,11 @@ function replacesDepletedCamp() {
   const { w, field } = makeScenario(58);
   w.buildings.push(createBuilding({ owner: AI, type: 'village', x: -12, z: 0 }));
   w.buildings.push(createBuilding({ owner: AI, type: 'farm', x: 12, z: -20 }));
-  // Camp with no trees anywhere in reach — its grove is gone.
+  // Camp with no trees anywhere in reach - its grove is gone.
   w.buildings.push(createBuilding({ owner: AI, type: 'camp', x: -100, z: -100 }));
   const cmds = firstEcoCmds(w, field, { owner: AI, temperament: 'passive' });
   const place = cmds.find((c) => c.type === CMD.PLACE_BUILDING);
-  assert.ok(place && place.buildingType === 'camp', `a dry camp does not count — place a new one (got ${JSON.stringify(cmds)})`);
+  assert.ok(place && place.buildingType === 'camp', `a dry camp does not count - place a new one (got ${JSON.stringify(cmds)})`);
   assert.ok(fx.toFloat(place.tx) > 20, 'new camp goes to the live grove (east), not beside the dry one');
 }
 

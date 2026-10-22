@@ -1,4 +1,4 @@
-// Spectator attach — keep the loading-screen 3-villager stub from counting
+// Spectator attach - keep the loading-screen 3-villager stub from counting
 // as the live KOTH world. Catch-up may only skip after the host sim is applied.
 
 /**
@@ -18,7 +18,7 @@ export function canSkipCatchupRequest({
  * Tick to put on SNAPSHOT_REQUEST.
  * The loading-screen stub's confirmedTick must not be used as the live clock.
  * Before attach, only a host-authored `requestedTick` (snapshot) or presence
- * `hostTick` is valid — never `sessionTick`.
+ * `hostTick` is valid - never `sessionTick`.
  */
 export function catchupRequestTick({
   requestedTick = 0,
@@ -36,14 +36,14 @@ export function soloLiveOfferHasWorld(msg) {
   return Boolean(msg?.checkpoint);
 }
 
-/** Tick 0 is a real world — a solo king that just went live sits there. */
+/** Tick 0 is a real world - a solo king that just went live sits there. */
 export function canUseCatchupCheckpoint({ cached = null, tipTick = 0 } = {}) {
   return Boolean(cached?.checkpoint) && (cached.tick | 0) <= (tipTick | 0);
 }
 
 /**
  * When the offer tick is the checkpoint tick, the tip leftover hash from a
- * previous board must not be sent — that is the 5abf113 vs d9b73327 failure.
+ * previous board must not be sent - that is the 5abf113 vs d9b73327 failure.
  */
 export function catchupOfferChecksum({
   offerTick = 0,
@@ -65,7 +65,7 @@ export function sameCatchupChecksum(got, expected) {
 }
 
 /** Wait for an advertised checkpoint, including tick 0 after a match reset.
- *  Legacy offers used checkpointTick: 0 to mean "none" — those omit checksum. */
+ *  Legacy offers used checkpointTick: 0 to mean "none" - those omit checksum. */
 export function needsCatchupCheckpoint(msg, checkpoint) {
   if (checkpoint) return false;
   if (msg?.checkpointTick == null) return false;
@@ -101,7 +101,7 @@ export function isLiveNetworkConfig(cfg) {
 
 /**
  * localSoloHold blocks leftover staging stomps. Auto-follow onto a live
- * shard must still apply — P3 never clicks a lobby row, so onLeaveSolo
+ * shard must still apply - P3 never clicks a lobby row, so onLeaveSolo
  * never runs and they stay on the placeholder 1v1.
  */
 export function shouldIgnoreLiveConfig({ cfg, localSoloHold = false } = {}) {

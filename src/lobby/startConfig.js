@@ -21,7 +21,7 @@ export function teamByOwnerForMode(modeId, ownerCount, seats) {
     }
     return out;
   }
-  // Adventure — everyone allied.
+  // Adventure - everyone allied.
   out.fill(0);
   return out;
 }

@@ -25,7 +25,7 @@ export const PARTICLE_HARD_MAX = 262144;
 /**
  * Camera-distance cull on XZ (orbit eye height must not eat ground flame range).
  * Closest play zoom is radius 50 on the pivot; full FX tier distance matches MAX.
- * Past that the sprites are specks — drop them instead of filling the billboard pool.
+ * Past that the sprites are specks - drop them instead of filling the billboard pool.
  * Size still stretches tiny sparks up toward MAX; nothing outlives the cap.
  * FX tier `distance` in settings.js should stay ≤ this cap.
  */
@@ -36,7 +36,7 @@ export const PARTICLE_CULL_SIZE_K = 660;
 export const SOCKET_FX_CULL_MIN = PARTICLE_CULL_MAX_RANGE;
 
 /**
- * XZ distance² from the camera eye — orbit pitch should not shrink ground FX range.
+ * XZ distance² from the camera eye - orbit pitch should not shrink ground FX range.
  * @param {{ x: number, y: number, z: number }} eye
  */
 export function particleEyeDistSq(eye, x, y, z) {
@@ -214,7 +214,7 @@ async function atlasFromPuffSprite(engine) {
 /**
  * Camera distance at which a particle is dropped.
  * Size stretches tiny sparks from MIN up to MAX. `minRange` is a floor for
- * effects that are the readable body (fireball trail) — it also lifts the cap,
+ * effects that are the readable body (fireball trail) - it also lifts the cap,
  * so a 2-unit puff is not stuck at MAX while the camera sits further out.
  * @param {number} size
  * @param {number} [scale] quality-tier multiplier

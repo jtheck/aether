@@ -210,13 +210,13 @@ export function getNanotubeLattice() {
   return cachedLattice;
 }
 
-/** Every carbon corner — ico-spheres / lattice joints. */
+/** Every carbon corner - ico-spheres / lattice joints. */
 export function nanotubeCorners() {
   return getNanotubeLattice().vertices.map((v) => ({ x: v.x, y: v.y, z: v.z }));
 }
 
 /**
- * LOD subsample: well-spaced carbons (not the live sum — that uses every corner).
+ * LOD subsample: well-spaced carbons (not the live sum - that uses every corner).
  * Default: two rings of six along the tube.
  */
 export function nanotubeWaveSources(count = 12) {

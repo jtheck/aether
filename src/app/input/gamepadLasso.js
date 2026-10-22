@@ -1,7 +1,7 @@
 // Drawn-lasso hatch follows the outer hull, not the raw stroke.
 // Gamepad paints that hull with a circular brush (speed-sized; both bumpers = 2× max).
 
-/** Single-bumper floor — still a real stamp, not a hairline. */
+/** Single-bumper floor - still a real stamp, not a hairline. */
 export const BRUSH_RADIUS_MIN = 36;
 /** Single-bumper ceiling. Both bumpers use 2× this. */
 export const BRUSH_RADIUS_MAX = 72;
@@ -103,7 +103,7 @@ export function stepBrushSpeed(prev, instant) {
 
 /**
  * Commit stamps along the stroke so a fast swipe does not leave gaps.
- * The live tip is not stored here — fold it in with `brushViewStamps`.
+ * The live tip is not stored here - fold it in with `brushViewStamps`.
  * @param {{ x: number, y: number, r: number }[]} stamps
  * @param {number} x
  * @param {number} y
@@ -187,7 +187,7 @@ export function brushStampHullPts(stamps, out = []) {
 }
 
 /**
- * Outer hatch of the painted stroke — Minkowski sum of the stamps with a disk.
+ * Outer hatch of the painted stroke - Minkowski sum of the stamps with a disk.
  * @param {{ x: number, y: number, r: number }[]} stamps
  * @param {{ x: number, y: number }[]} [scratch]
  */

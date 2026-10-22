@@ -10,7 +10,7 @@
 // cancels, LB / RB + stick drag yaws (not bumper taps). Play reports onAim
 // so a field cursor can roam the view
 // (stick moves, release parks), then camera at the edges. Mouse / pointer
-// use yields that mark until a new button or a fresh stick throw — a held
+// use yields that mark until a new button or a fresh stick throw - a held
 // stick or worn rest must not steal the camera back. LT / RT issue orders
 // at that aim (A-move / force-move) unless a menu, radial, or place overlay
 // owns them. LB / RB paint-select (brush lasso; both bumpers double the
@@ -46,7 +46,7 @@ export const PAD = {
 export const STICK_DEADZONE = 0.18;
 /** After a live throw, stay “held” down to this mag so a worn rest does not recenter. */
 export const STICK_DEADZONE_LEAVE = 0.1;
-/** Remapped |axis| — about a half throw after the look deadzone. */
+/** Remapped |axis| - about a half throw after the look deadzone. */
 export const STICK_SPLIT_HALF = 0.28;
 /** Speed at the half gate; late throw opens up (squared). */
 export const STICK_SPLIT_MIN = 0.32;
@@ -189,13 +189,13 @@ export function playOrderIntent(edges) {
   };
 }
 
-/** Tabbed / minimized. Do not use hasFocus — a pad cannot steal the document back. */
+/** Tabbed / minimized. Do not use hasFocus - a pad cannot steal the document back. */
 export function padShouldYield(doc) {
   return !!doc?.hidden;
 }
 
 /**
- * Stick throw, trigger pull, or a fresh button press — not a connected idle pad.
+ * Stick throw, trigger pull, or a fresh button press - not a connected idle pad.
  * @param {{ lx?: number, ly?: number, rx?: number, ry?: number, lt?: number, rt?: number } | null | undefined} read
  * @param {boolean[] | null | undefined} edges
  */
@@ -213,7 +213,7 @@ export const STICK_RECLAIM = 0.4;
 
 /**
  * Button press always takes the pad back. A stick / trigger only does after
- * the throw has recentered — the hold that was live when the mouse moved
+ * the throw has recentered - the hold that was live when the mouse moved
  * must not keep driving the camera.
  * @param {{ lx?: number, ly?: number, rx?: number, ry?: number, lt?: number, rt?: number } | null | undefined} read
  * @param {boolean[] | null | undefined} edges
@@ -230,7 +230,7 @@ export function padCanReclaimFromPointer(read, edges, stickArmed) {
 
 /**
  * Left HUD stack (red / green / black) then right (blue / yellow / white).
- * U/R/D skip D-pad Left; Y/X/A skip B — those two leftover buttons cast.
+ * U/R/D skip D-pad Left; Y/X/A skip B - those two leftover buttons cast.
  */
 export const PAD_CONTROL_GROUP_BUTTONS = [
   [PAD.UP, 0],
@@ -250,7 +250,7 @@ export function controlGroupIdFromPad(button) {
   return null;
 }
 
-/** Falling edges — hold-to-assign control groups need the release. */
+/** Falling edges - hold-to-assign control groups need the release. */
 export function buttonReleased(cur, prev) {
   const up = [];
   const n = Math.max(cur?.length ?? 0, prev?.length ?? 0);
@@ -274,12 +274,12 @@ export function playControlGroupIntent(downEdges, upEdges) {
   return { downs, ups };
 }
 
-/** B or D-pad Left — cast primary ability at the aim. */
+/** B or D-pad Left - cast primary ability at the aim. */
 export function playCastIntent(edges) {
   return !!(edges?.[PAD.B] || edges?.[PAD.LEFT]);
 }
 
-/** A / LT / RT — activate a menu button, radial slice, or place stamp. */
+/** A / LT / RT - activate a menu button, radial slice, or place stamp. */
 export function playConfirmIntent(edges) {
   return !!(edges?.[PAD.A] || edges?.[PAD.LT] || edges?.[PAD.RT]);
 }
@@ -295,12 +295,12 @@ export function placePadIntent(edges) {
   };
 }
 
-/** Either bumper held — paint-select at the aim. */
+/** Either bumper held - paint-select at the aim. */
 export function playSelectHeld(buttons) {
   return !!(buttons?.[PAD.LB] || buttons?.[PAD.RB]);
 }
 
-/** Both bumpers — brush jumps to double the single-bumper max. */
+/** Both bumpers - brush jumps to double the single-bumper max. */
 export function playSelectBoth(buttons) {
   return !!(buttons?.[PAD.LB] && buttons?.[PAD.RB]);
 }
@@ -601,7 +601,7 @@ function applyLookRotateZoom(camera, camLx, camLy, rx, ry, splitYaw, splitZoom) 
   if (!camera) return;
   if (camLx || camLy) camera.nudgeLookPan?.(-camLx || 0, -camLy || 0);
   if (rx) camera.nudgeRotate?.(-rx * ROT_SENS);
-  // Immediate — a “little” nudge dies under the camera rotate/zoom floors.
+  // Immediate - a “little” nudge dies under the camera rotate/zoom floors.
   if (splitYaw) {
     const yaw = -splitYaw * STICK_SPLIT_YAW;
     if (typeof camera.rotateBy === 'function') camera.rotateBy(yaw);
@@ -647,38 +647,38 @@ function showMenuMain(doc) {
  * @param {(fn: FrameRequestCallback) => number} [opts.raf]
  * @param {(id: number) => void} [opts.caf]
  * @param {boolean} [opts.autoStart]
- * @param {(read: object) => void} [opts.applyPlay] — default RTS nudge* camera
+ * @param {(read: object) => void} [opts.applyPlay] - default RTS nudge* camera
  * @param {() => void} [opts.onIdle]
- * @param {(on: boolean) => void} [opts.onAim] — field cursor: true while a pad can play and has not yielded to the mouse
- * @param {() => void} [opts.onActivity] — stick / trigger / button press (hide OS cursor)
- * @param {(el: Element) => void} [opts.onTextEdit] — A on a text field (in-game keyboard)
- * @param {(ox: number, oy: number) => void} [opts.onCursor] — leash offset from view center
+ * @param {(on: boolean) => void} [opts.onAim] - field cursor: true while a pad can play and has not yielded to the mouse
+ * @param {() => void} [opts.onActivity] - stick / trigger / button press (hide OS cursor)
+ * @param {(el: Element) => void} [opts.onTextEdit] - A on a text field (in-game keyboard)
+ * @param {(ox: number, oy: number) => void} [opts.onCursor] - leash offset from view center
  * @param {() => { width?: number, height?: number } | null} [opts.getViewport]
- * @param {() => void} [opts.onAttackMove] — LT press
- * @param {() => void} [opts.onForceMove] — RT press
- * @param {() => void} [opts.onCast] — B / D-pad Left press
- * @param {(id: number) => void} [opts.onControlGroupDown] — U/R/D / Y/X/A press
- * @param {(id: number) => void} [opts.onControlGroupUp] — matching release
- * @param {() => void} [opts.onControlGroupCancel] — menu / idle / disconnect mid-hold
- * @param {(chord?: { both: boolean }) => void} [opts.onSelectStart] — LB / RB press
- * @param {(chord?: { both: boolean }) => void} [opts.onSelectHold] — LB / RB held (after sticks this frame)
- * @param {(chord?: { both: boolean }) => void} [opts.onSelectEnd] — LB / RB release
- * @param {() => void} [opts.onSelectCancel] — menu / idle / disconnect mid-drag
+ * @param {() => void} [opts.onAttackMove] - LT press
+ * @param {() => void} [opts.onForceMove] - RT press
+ * @param {() => void} [opts.onCast] - B / D-pad Left press
+ * @param {(id: number) => void} [opts.onControlGroupDown] - U/R/D / Y/X/A press
+ * @param {(id: number) => void} [opts.onControlGroupUp] - matching release
+ * @param {() => void} [opts.onControlGroupCancel] - menu / idle / disconnect mid-hold
+ * @param {(chord?: { both: boolean }) => void} [opts.onSelectStart] - LB / RB press
+ * @param {(chord?: { both: boolean }) => void} [opts.onSelectHold] - LB / RB held (after sticks this frame)
+ * @param {(chord?: { both: boolean }) => void} [opts.onSelectEnd] - LB / RB release
+ * @param {() => void} [opts.onSelectCancel] - menu / idle / disconnect mid-drag
  * @param {(doc: Document) => Element | null} [opts.menuRoot]
  * @param {(root: Element | null) => Element[]} [opts.listFocusables]
- * @param {boolean} [opts.menuExclusive] — when true (default), play orders stop while a menu is open; camera gestures still apply
- * @param {boolean} [opts.stickMenuNav] — a lone stick tabs (default true)
- * @param {boolean | (() => boolean)} [opts.radialOpen] — world pie menu (agora / action)
+ * @param {boolean} [opts.menuExclusive] - when true (default), play orders stop while a menu is open; camera gestures still apply
+ * @param {boolean} [opts.stickMenuNav] - a lone stick tabs (default true)
+ * @param {boolean | (() => boolean)} [opts.radialOpen] - world pie menu (agora / action)
  * @param {() => { inner?: object[], outer?: object[] } | null} [opts.getRadialTargets]
  * @param {(pick: object | null) => void} [opts.onRadialHover]
  * @param {(pick: object) => void} [opts.onRadialConfirm]
  * @param {() => void} [opts.onRadialCancel]
- * @param {() => boolean} [opts.yieldPad] — extra park (page hidden is already covered)
- * @param {boolean | (() => boolean)} [opts.placing] — ghost / rally place overlay
- * @param {() => void} [opts.onPlaceAim] — after sticks, walk the ghost to the aim
- * @param {() => void} [opts.onPlaceConfirm] — A / LT / RT
- * @param {() => void} [opts.onPlaceCancel] — B
- * @param {() => void} [opts.onPlaceRotateDrag] — LB/RB held, aim yaws the ghost
+ * @param {() => boolean} [opts.yieldPad] - extra park (page hidden is already covered)
+ * @param {boolean | (() => boolean)} [opts.placing] - ghost / rally place overlay
+ * @param {() => void} [opts.onPlaceAim] - after sticks, walk the ghost to the aim
+ * @param {() => void} [opts.onPlaceConfirm] - A / LT / RT
+ * @param {() => void} [opts.onPlaceCancel] - B
+ * @param {() => void} [opts.onPlaceRotateDrag] - LB/RB held, aim yaws the ghost
  * @param {(el: Element | null) => boolean} [opts.isTyping]
  */
 export function createGamepadAdapter(opts = {}) {
@@ -969,7 +969,7 @@ export function createGamepadAdapter(opts = {}) {
     const placingNow = typeof opts.placing === 'function' ? !!opts.placing() : !!opts.placing;
     if (pointerYielded) {
       if (!padHasActivity(read, [])) stickReclaimArmed = true;
-      // Ghost-place keeps the pad — a mouse pick of the building type used
+      // Ghost-place keeps the pad - a mouse pick of the building type used
       // to swallow aim / bumper-yaw / A until a full stick recenter.
       if (!placingNow && !padCanReclaimFromPointer(read, edges, stickReclaimArmed)) {
         const t = now();

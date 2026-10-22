@@ -1,7 +1,7 @@
 // Menu icon shade. Baked building/unit meshes are clockwise on the outside
 // (world materials are double-sided, so the board still looks right). A
 // culled StandardMaterial keeps the counterclockwise inside and throws the
-// outside away — the farm ground's top is one of those discarded faces, so
+// outside away - the farm ground's top is one of those discarded faces, so
 // the wheat reads as sitting behind it.
 //
 // Standard materials also drop depth writes while alpha < 1, and these icons
@@ -32,7 +32,7 @@ function previewColorFromMaterial(mat) {
 /**
  * Lit icon material. Callers keep writing diffuseColor / emissiveColor / alpha;
  * {@link syncRadialIconShade} copies those into the shader.
- * The mesh must be thin-instanced — the vertex stage reads instance world.
+ * The mesh must be thin-instanced - the vertex stage reads instance world.
  * @param {object | null | undefined} source
  */
 export function createRadialIconMaterial(source) {

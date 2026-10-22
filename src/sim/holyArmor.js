@@ -1,4 +1,4 @@
-// Holy Armor — priest AoE absorb shields + cast FX publish.
+// Holy Armor - priest AoE absorb shields + cast FX publish.
 
 import * as fx from './fixed.js';
 import { TILE_SIZE_F } from './field.js';
@@ -54,7 +54,7 @@ export function pushHolyArmorFx(w, x, y, radius) {
 
 /**
  * Publish a cast ring unless one already covers this caster.
- * Render-only — shield HP is applied separately and stays per unit.
+ * Render-only - shield HP is applied separately and stays per unit.
  * @returns {boolean} true when a new ring was stored
  */
 export function pushSeparatedHolyArmorFx(w, x, y, radius) {

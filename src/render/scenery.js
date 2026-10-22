@@ -45,7 +45,7 @@ const LOD_MOVE_THRESHOLD_SQ = 16;
 const SCENERY_INITIAL = 32;
 /** Grow-in from sapling (spore / revive). */
 const TREE_GROW_IN_MS = 1600;
-/** Stage-to-stage shrink (fire / chip) — bump, undershoot, settle. */
+/** Stage-to-stage shrink (fire / chip) - bump, undershoot, settle. */
 const TREE_SHRINK_MS = SCALE_BOUNCE_MS;
 /** Full fell → vanish (after drip beat). */
 const TREE_FELL_MS = 1400;
@@ -55,13 +55,13 @@ const TREE_FELL_DELAY_MS = 850;
 const TREE_BURN_SINK_MS = 1200;
 /** Extra bury past the crown so the tip clears the surface. */
 const TREE_BURN_SINK_MARGIN = 0.35;
-/** Never-seen trees/rocks — match the heavier shroud. */
+/** Never-seen trees/rocks - match the heavier shroud. */
 const FOG_DIM = 0.16;
-/** Visited trees/rocks — mid step, darker than sight, lighter than wilderness. */
+/** Visited trees/rocks - mid step, darker than sight, lighter than wilderness. */
 const VISITED_DIM = 0.50;
 /** Matches fogOfWar VISITED_ALPHA / 255 so the mid step lands on explored tiles. */
 const VISITED_FOG_T = 110 / 255;
-/** Current sight matches unfogged albedo — the overlay hole is already clear. */
+/** Current sight matches unfogged albedo - the overlay hole is already clear. */
 const SIGHT_LIFT = 1;
 /** How long a gather-click flash lasts on the targeted tree / rock. */
 const HARVEST_PING_MS = 280;
@@ -91,7 +91,7 @@ function fogChroma(t) {
 }
 
 /**
- * Dark (never-seen) tiles still read leafy — gray instance color × green albedo.
+ * Dark (never-seen) tiles still read leafy - gray instance color × green albedo.
  * Mid/visited stays as-is; peak the green-kill on the shroud.
  */
 function unseenGreenKill(t) {
@@ -124,11 +124,11 @@ const BILLBOARD_EDGE_BAND = 0.14;
 const BILLBOARD_EDGE_SCALE = 0.62;
 /** Dull sheen. A wide highlight on seen ground and the vision edge reads as chrome. */
 const TREE_SPEC_SIGHT = { color: [0.03, 0.032, 0.035], power: 48 };
-/** Sapling — brighter leaf green. Same multiply range as TREE_ALBEDO_DIM. */
+/** Sapling - brighter leaf green. Same multiply range as TREE_ALBEDO_DIM. */
 const TREE_TINT_SMALL = [0.26, 0.48, 0.16];
-/** Mature canopy — same green, much darker. */
+/** Mature canopy - same green, much darker. */
 const TREE_TINT_BIG = [0.07, 0.12, 0.045];
-/** Grove / table-rim giants — deeper pine past the natural cap. */
+/** Grove / table-rim giants - deeper pine past the natural cap. */
 const TREE_TINT_GROVE = [0.042, 0.078, 0.052];
 /** Same-stage trees scatter this far along the size→tint axis (0–1). */
 const TREE_TINT_JITTER = 0.55;
@@ -336,7 +336,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
   // Beyond this XZ radius from the look-at point, resources are hidden outright
   // (mesh and billboard). Terrain passes its keep ring here so trees/rocks drop
   // with the tiles under them instead of floating over the bare table.
-  // Infinity (default) keeps every resource — the right call when terrain is one
+  // Infinity (default) keeps every resource - the right call when terrain is one
   // full draw (normal maps).
   const resourceDropSq = Number.isFinite(opts.resourceDrop) && opts.resourceDrop > 0
     ? opts.resourceDrop * opts.resourceDrop
@@ -411,7 +411,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
             for (let i = 0; i < cap; i++) {
               if ((batch.instances[i].stockScale ?? 0) <= 0) writeHiddenMatrix(part.matrices, i);
             }
-            // terrain.meshes is a snapshot unless it listens — notify so CSM can catch up.
+            // terrain.meshes is a snapshot unless it listens - notify so CSM can catch up.
             opts.onModelMesh?.(part.mesh);
           }
           batch.pickParts = pickPartsFromMeshes(batch.modelParts.map((part) => part.mesh));
@@ -447,7 +447,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       writeHiddenMatrix(billboardMatrices, i);
     }
     // Slots are claimed with pop(), and the draw count is the highest occupied
-    // slot — so hand out the lowest index first to keep the range compact.
+    // slot - so hand out the lowest index first to keep the range compact.
     for (let i = capacity - 1; i >= live.length; i--) {
       freeSlots.push(i);
     }
@@ -504,7 +504,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     createBatch(variant, live);
   }
 
-  // After 3D models land, force a LOD rewrite — the boot pass (LOD off) hides
+  // After 3D models land, force a LOD rewrite - the boot pass (LOD off) hides
   // billboards immediately, so without this a field rebuild can stay empty until
   // something else dirties the batch.
   const modelsReady = Promise.all(modelJobs).then(() => {
@@ -790,7 +790,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
   let lastCameraZ = Infinity;
 
   function beginScaleAnim(p, nextTarget, durationMs, mode = 'lerp') {
-    // Compare against visible scale — targetScale may already be set during fell delay.
+    // Compare against visible scale - targetScale may already be set during fell delay.
     if (Math.abs((p.stockScale ?? 0) - nextTarget) < 0.001 && !p.scaling) {
       p.targetScale = nextTarget;
       p.scaleMode = mode;
@@ -1216,7 +1216,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     if (disposed) return;
     disposed = true;
     const scene = opts.scene;
-    // Soft-detach only — Lite's removeFromScene disposables can destroy shared
+    // Soft-detach only - Lite's removeFromScene disposables can destroy shared
     // atlas/material GPU state still used by the next field's scenery.
     for (const mesh of meshes) softDetachMesh(scene, mesh);
     meshes.length = 0;
@@ -1335,7 +1335,7 @@ async function loadModelParts(engine, variant) {
   let promise = cache.get(variant.modelUrl);
   if (!promise) {
     promise = (async () => {
-      // Prefer offline bake (geo + mats) — skips GLB parse on cold boot.
+      // Prefer offline bake (geo + mats) - skips GLB parse on cold boot.
       if (await hasBakedMesh(variant.modelUrl)) {
         const meshes = await loadBakedUnitMeshParts(engine, variant.modelUrl);
         return meshes.map((mesh, index) => {
@@ -1645,7 +1645,7 @@ function updateBatchLod(batch, cameraPos, lookXZ, dropSq = Infinity, meshSq = In
   } = batch;
   const lodDistanceSq = variant.lodDistance * variant.lodDistance;
   // Highest slot each bucket actually occupies. Batches are allocated at full
-  // capacity with headroom, and with LOD off the billboard bucket stays empty —
+  // capacity with headroom, and with LOD off the billboard bucket stays empty -
   // drawing/flushing all of it every update is pure waste.
   let lastModelSlot = -1;
   let lastBillboardSlot = -1;
@@ -1731,7 +1731,7 @@ function updateBatchLod(batch, cameraPos, lookXZ, dropSq = Infinity, meshSq = In
   if (edgeChanged && variant.kind === SCENERY.TREE) uploadBillboardColors(batch);
 }
 
-/** Ground point the camera looks at (XZ) — matches terrain's chunk-cull ref. */
+/** Ground point the camera looks at (XZ) - matches terrain's chunk-cull ref. */
 function cameraLookAt(camera) {
   const t = camera?.target;
   if (t && Number.isFinite(t.x) && Number.isFinite(t.z)) return { x: t.x, z: t.z };
@@ -1792,7 +1792,7 @@ function albedoDimFor(kind) {
 
 /** Sight and seen share one gray. Cards on the mesh ring are pulled down so
  *  they don't pop brighter than the model they just replaced. Rim giants stay
- *  below the mature card — the old curve floored them next to it. */
+ *  below the mature card - the old curve floored them next to it. */
 export function billboardTreeGray(luma, edgeDim) {
   let base;
   if (luma >= BILLBOARD_LUMA_PIVOT) {
@@ -1906,7 +1906,7 @@ function writeInstanceMatrix(matrices, slot, x, y, z, yaw, scale, lean = 0) {
   const s = Math.sin(yaw);
   const cl = Math.cos(lean);
   const sl = Math.sin(lean);
-  // Ry(yaw) * Rz(lean) * scale — lean is a local tip, yaw scatters fall direction.
+  // Ry(yaw) * Rz(lean) * scale - lean is a local tip, yaw scatters fall direction.
   matrices[o] = c * cl * scale;
   matrices[o + 1] = sl * scale;
   matrices[o + 2] = -s * cl * scale;

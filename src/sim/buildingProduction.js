@@ -1,4 +1,4 @@
-// Building production tick — kept separate from buildings.js so importing
+// Building production tick - kept separate from buildings.js so importing
 // spawn() from world.js cannot circular-init footprint tables.
 
 import * as fx from './fixed.js';

@@ -11,7 +11,7 @@ if (fs.existsSync(ffiMain)) {
   process.exit(0);
 }
 
-console.warn('[steam-build] steamworks-ffi-node dist missing — reinstalling app dependencies…');
+console.warn('[steam-build] steamworks-ffi-node dist missing - reinstalling app dependencies…');
 const pkgDir = path.join(appRoot, 'node_modules', 'steamworks-ffi-node');
 if (fs.existsSync(pkgDir)) {
   fs.rmSync(pkgDir, { recursive: true, force: true });

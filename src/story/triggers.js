@@ -1,22 +1,22 @@
-// Campaign objective triggers — real, deterministic completion logic.
+// Campaign objective triggers - real, deterministic completion logic.
 //
 // All kinds beyond reach/escape/advance are evaluated here from deterministic
 // sim state (entity/building death, positions, sim tick), so every lockstep
 // client resolves them identically. The host supplies a context object; this
 // module imports only pure helpers so it stays easy to unit test.
 //
-//   destroy    — every hostile target captured in the zone is dead
-//   survive    — hold out for a duration (party still alive)
-//   defend     — hold out for a duration (party still alive)
-//   hold       — keep a party unit in the zone for a duration
-//   control    — hold the zone uncontested (resets while an enemy stands on it)
-//   gather     — remain in the zone (harvest) for a duration
-//   build      — remain in the zone (raise) for a duration
-//   capture    — stand in the zone with no enemy left on it
-//   infiltrate — reach the zone with no enemy within the detection radius
-//   choice     — reach either branch zone (records the pick)
-//   race       — reach the zone; FAILS the chapter if the clock runs out
-//   escort     — get the named escort unit to the zone; FAILS if it dies
+//   destroy    - every hostile target captured in the zone is dead
+//   survive    - hold out for a duration (party still alive)
+//   defend     - hold out for a duration (party still alive)
+//   hold       - keep a party unit in the zone for a duration
+//   control    - hold the zone uncontested (resets while an enemy stands on it)
+//   gather     - remain in the zone (harvest) for a duration
+//   build      - remain in the zone (raise) for a duration
+//   capture    - stand in the zone with no enemy left on it
+//   infiltrate - reach the zone with no enemy within the detection radius
+//   choice     - reach either branch zone (records the pick)
+//   race       - reach the zone; FAILS the chapter if the clock runs out
+//   escort     - get the named escort unit to the zone; FAILS if it dies
 
 import {
   OBJ_BUILD,
@@ -200,8 +200,8 @@ export function describeCampaignObjective(obj, ctx) {
   const base = obj.label || obj.message || obj.kind;
   const status = campaignTriggerStatus(obj, ctx);
   if (!status) return base;
-  if (status.remaining != null) return `${base} — ${status.remaining}s`;
-  if (status.targetsTotal != null) return `${base} — ${status.targetsLeft}/${status.targetsTotal} left`;
-  if (status.hint) return `${base} — ${status.hint}`;
+  if (status.remaining != null) return `${base} - ${status.remaining}s`;
+  if (status.targetsTotal != null) return `${base} - ${status.targetsLeft}/${status.targetsTotal} left`;
+  if (status.hint) return `${base} - ${status.hint}`;
   return base;
 }

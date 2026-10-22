@@ -3,7 +3,7 @@
 // PACKAGE_OBFUSCATE=1 npm run package
 // assets (incl. baked), PWA bits, index derived from src/index.html.
 // Also copies src/axiom/ raw. Forge is an esbuild entry (forge-*.js + forge/index.html).
-// Does NOT rebuild vendor lite/howler — uses whatever is already in vendor/.
+// Does NOT rebuild vendor lite/howler - uses whatever is already in vendor/.
 
 import esbuild from 'esbuild';
 import JavaScriptObfuscator from 'javascript-obfuscator';
@@ -28,7 +28,7 @@ const BAKED = join(REPO, 'assets', 'baked');
 
 function mustExist(rel, hint) {
   const p = join(ROOT, rel);
-  if (!existsSync(p)) throw new Error(`Missing ${rel}${hint ? ` — ${hint}` : ''}`);
+  if (!existsSync(p)) throw new Error(`Missing ${rel}${hint ? ` - ${hint}` : ''}`);
 }
 
 mustExist('vendor/lite/liteVendor.js', 'run: npm run build:lite');
@@ -37,7 +37,7 @@ mustExist('vendor/getfire-p2p.js');
 mustExist('vendor/getfire.js');
 
 if (!existsSync(BAKED) || !existsSync(join(BAKED, 'sockets.json'))) {
-  console.warn('⚠️  assets/baked/ incomplete — run: npm run prebake');
+  console.warn('⚠️  assets/baked/ incomplete - run: npm run prebake');
   console.warn('   Packaging anyway (runtime will fall back to live bake).');
 }
 
@@ -117,7 +117,7 @@ const mainHash = mainFile.replace(/^main-/, '').replace(/\.js$/, '');
 // Off by default. Opt in: PACKAGE_OBFUSCATE=1 npm run package
 // Safe because splitting:false fully inlines them (no import/export left for
 // the obfuscator to put a preamble in front of). Never run this on the worker
-// — stringArray + base64 turned 11ms ticks into 150–500ms.
+// - stringArray + base64 turned 11ms ticks into 150–500ms.
 const obfEnv = (process.env.PACKAGE_OBFUSCATE ?? '0').toLowerCase();
 const doObfuscate = obfEnv === '1' || obfEnv === 'true' || obfEnv === 'on' || obfEnv === 'yes';
 if (doObfuscate) {
@@ -141,7 +141,7 @@ if (doObfuscate) {
     const src = readFileSync(path, 'utf8');
     if (/(?:^|[;\n])\s*import\s*[\*{'"']|(?:^|[;\n])\s*export\s/.test(src)) {
       throw new Error(
-        `${name} still has import/export — obfuscation would break module loading; fix the bundle first`,
+        `${name} still has import/export - obfuscation would break module loading; fix the bundle first`,
       );
     }
     const obfuscated = JavaScriptObfuscator.obfuscate(src, obfuscateOpts).getObfuscatedCode();
@@ -203,11 +203,11 @@ if (existsSync(join(ROOT, 'vendor', 'lite-explorer'))) {
 }
 cpSync(join(ROOT, 'manifest.json'), join(DEPLOY, 'manifest.json'));
 
-// Legacy extras (under src/) — copy raw, no minify/obfuscate.
+// Legacy extras (under src/) - copy raw, no minify/obfuscate.
 function copyRawDir(name, { required = false, note = '' } = {}) {
   const src = join(ROOT, name);
   if (!existsSync(src)) {
-    const msg = `⚠️  ${name}/ missing${note ? ` — ${note}` : ''}`;
+    const msg = `⚠️  ${name}/ missing${note ? ` - ${note}` : ''}`;
     if (required) throw new Error(msg);
     console.warn(msg);
     return;
@@ -256,6 +256,6 @@ for (const name of readdirSync(DEPLOY)) {
   totalGz += gzipSync(buf).length;
 }
 
-console.log(`\nDEPLOY/ ready — main=${mainFile}`);
+console.log(`\nDEPLOY/ ready - main=${mainFile}`);
 console.log(`JS ${(total / 1024).toFixed(1)} KB raw  (~${(totalGz / 1024).toFixed(1)} KB gzip)`);
 console.log(`Upload the contents of ${DEPLOY} to the S3 bucket root.`);

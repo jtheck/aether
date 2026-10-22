@@ -45,7 +45,7 @@ describe('clearSessionTableState', () => {
     assert.equal(session.pendingHolyArmorUpdates, null);
     assert.equal(session.pendingSporeBloomUpdates, null);
     assert.equal(session.pendingMonkKickUpdates, null);
-    // Live table data is replaced by start() — don't wipe it here.
+    // Live table data is replaced by start() - don't wipe it here.
     assert.equal(session.buildings.length, 1);
     assert.equal(session.field.width, 208);
   });

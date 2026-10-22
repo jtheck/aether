@@ -1,4 +1,4 @@
-// Rule-based economic AI — the foundation of match AI.
+// Rule-based economic AI - the foundation of match AI.
 //
 // Baseline (path `eco`) is the opening-skirmish partner: village, farm rings
 // around the agora, camps / mines / silos. Gathering is facility-driven:
@@ -60,7 +60,7 @@ const DECIDE_INTERVAL = 30;
 const CREW_PER_SITE = 6;
 /** Food bank below which the AI treats food as urgent. */
 const FOOD_LOW = 40;
-/** Desired standing stock per resource — drives demand-based worker routing. */
+/** Desired standing stock per resource - drives demand-based worker routing. */
 const STOCK_TARGET = { wood: 160, food: 150, stone: 90, mineral: 40 };
 /** Node search window around a villager / base (tiles). */
 const SCAN_TILES = 44;
@@ -81,7 +81,7 @@ const CAMP_WORK_RADIUS_SQ = fx.mul(CAMP_WORK_RADIUS, CAMP_WORK_RADIUS);
 /** A new camp / mine sits this close to its target node (a tile inside reach). */
 const GATHER_SITE_REACH = fx.fromFloat(CAMP_WORK_RADIUS_F - TILE_SIZE_F);
 const GATHER_SITE_REACH_SQ = fx.mul(GATHER_SITE_REACH, GATHER_SITE_REACH);
-/** Half-width (tiles) of the box scored around a candidate site — a tile inside reach. */
+/** Half-width (tiles) of the box scored around a candidate site - a tile inside reach. */
 const DENSE_REACH_TILES = Math.floor(CAMP_WORK_RADIUS_F / TILE_SIZE_F) - 1;
 /** Distance discount: score = stock * D / (D + tilesFromBase). */
 const DENSE_DIST_DEN = 24;
@@ -129,7 +129,7 @@ export function generateEconomyCommands(w, field, entry) {
   /** @type {import('./commands.js').Command[]} */
   const cmds = [];
 
-  // Capture ringing — hotter seats cut the farm queue and train first.
+  // Capture ringing - hotter seats cut the farm queue and train first.
   if (capture.urgent && strategy.heat >= 2) {
     const train = chooseTrain(w, owner, bank, strategy, capture, pressure);
     if (train) {
@@ -147,7 +147,7 @@ export function generateEconomyCommands(w, field, entry) {
     order.unshift('stone');
   }
 
-  // ── Step 1: idle hands — new-facility rally, else camp/mine, else gather direct
+  // ── Step 1: idle hands - new-facility rally, else camp/mine, else gather direct
   const rallied = new Set();
   const room = new Map();
   rallyOpenGatherFacilities(w, field, owner, villagers.idle, cmds, rallied, room);
@@ -267,7 +267,7 @@ function collectVillagers(w, owner) {
 
 /** Camp / mine that recruits for each hauled kind. Food is farm-only (one farmer per plot). */
 const GATHER_FACILITY = { wood: 'camp', stone: 'mine', mineral: 'mine' };
-/** Idle villagers given an order per decision — one command each. */
+/** Idle villagers given an order per decision - one command each. */
 const MAX_ASSIGN_PER_TICK = 4;
 
 function moveOne(i, x, z) {
@@ -314,7 +314,7 @@ function firstEconomyTickAtOrAfter(afterTick, owner) {
 
 /**
  * Villagers already headed for (MOVE ending inside) or idling inside the
- * facility's circle — crew it will recruit without another order.
+ * facility's circle - crew it will recruit without another order.
  */
 function pendingCrew(w, field, owner, bd) {
   let n = 0;
@@ -342,7 +342,7 @@ function facilityRoom(w, field, owner, bd, room) {
 
 /**
  * When a gather facility just finished, walk the nearest idle villagers not
- * already in its circle over — one MOVE each, up to its open crew (once, on
+ * already in its circle over - one MOVE each, up to its open crew (once, on
  * the next economy tick). The facility recruits them on arrival.
  * @param {Set<number>} rallied entity ids already given an order this decision
  * @param {Map<object, number>} room open crew per facility this decision
@@ -438,7 +438,7 @@ function nearestFacilityNode(w, field, owner, kind, fromX, fromY) {
  * Idle villagers outside any recruiting work circle: first one farmer to each
  * unstaffed farm (unless food is the least-needed kind), then up to
  * MAX_ASSIGN_PER_TICK individual orders from each villager's own spot,
- * alternating the two neediest hauled kinds — walk to a camp / mine with open
+ * alternating the two neediest hauled kinds - walk to a camp / mine with open
  * crew (preferred), else gather the nearest node of that kind by hand.
  */
 function routeIdleVillagers(w, field, owner, idleIds, order, cmds, rallied, room) {
@@ -545,7 +545,7 @@ function pullHandToStone(w, field, owner, base, cmds, rallied) {
 }
 
 /**
- * An idle, empty-handed villager already stands in the farm's circle — the
+ * An idle, empty-handed villager already stands in the farm's circle - the
  * farm will recruit it once any move park wears off.
  */
 function farmHandWaiting(w, field, owner, bd) {
@@ -674,7 +674,7 @@ function nearestNode(field, kind, px, py) {
 /**
  * When a bank is at its unlocked cap, plant a silo beside an unpaired source
  * so the next three icons unlock. Pending sites already next to that source
- * wait — no spam.
+ * wait - no spam.
  */
 function chooseSiloAnchor(w, owner, bank, order) {
   if (!affordable(bank, getBuildingCost('silo'))) return null;
@@ -781,7 +781,7 @@ function gatherSiteState(w, field, owner, base, order) {
     const y = tileCenterY((tile / field.width) | 0);
     if (!nodeCovered(sites, type, x, y)) hand[type]++;
   }
-  // One site of a type at a time — wait for it before planning the next.
+  // One site of a type at a time - wait for it before planning the next.
   let campTile = -1;
   if (pending.camp === 0) campTile = nearestUncoveredNode(field, 'wood', base.x, base.y, sites, 'camp');
   let mineTile = -1;
@@ -958,7 +958,7 @@ function chooseBuild(w, owner, bank, inv, villagerCount, order, strategy, captur
   const need = order[0];
   const dump = !!pressure?.dump;
   const full = kindSet(pressure?.overflowing);
-  // 1) A village first — the population engine.
+  // 1) A village first - the population engine.
   if (inv.village === 0 && affordable(bank, getBuildingCost('village'))) return 'village';
   // Eco path: a second village once the first one has grown the pop.
   if (
@@ -973,7 +973,7 @@ function chooseBuild(w, owner, bank, inv, villagerCount, order, strategy, captur
   const live = gather.live;
   const canCamp = gather.campTile >= 0;
   const canMine = gather.mineTile >= 0;
-  // 2) A working camp — preferred over hand-gathering. Save for it unless food
+  // 2) A working camp - preferred over hand-gathering. Save for it unless food
   // is failing. Hand-gathered wood fills the small opening cap fast, so a full
   // bank only skips this once a camp has ever stood.
   const firstCamp = inv.camp === 0;
@@ -996,7 +996,7 @@ function chooseBuild(w, owner, bank, inv, villagerCount, order, strategy, captur
   // Neediest kind first; a missing mine is placed even when stone isn't top.
   const rockNeed = order.indexOf('stone') < 2 || order.indexOf('mineral') < 2;
   // Another camp / mine only once every working one is full (or dry) and the
-  // crew could staff it — or as soon as hands are already gathering that
+  // crew could staff it - or as soon as hands are already gathering that
   // kind out in the open, so they get a facility instead of lumberjacking on.
   const open = gather.open;
   const hand = gather.hand;
@@ -1025,12 +1025,12 @@ function chooseBuild(w, owner, bank, inv, villagerCount, order, strategy, captur
     if (type === 'mine' && !wantMine) continue;
     if (affordable(bank, getBuildingCost(type))) return type;
   }
-  // 6) Path spend — only after the farm-ring partner has a village + a farm.
+  // 6) Path spend - only after the farm-ring partner has a village + a farm.
   if (ecoBaselineReady(inv) && strategy.path !== AI_PATH.ECO) {
     const next = choosePathBuilding(w, owner, bank, inv, strategy.path);
     if (next) return next;
   }
-  // Full bank, no silo pair left — another source so a silo can attach.
+  // Full bank, no silo pair left - another source so a silo can attach.
   if (dump) {
     const relief = chooseCapRelief(w, owner, inv, full, bank, gather);
     if (relief) return relief;
@@ -1053,8 +1053,8 @@ function chooseBuild(w, owner, bank, inv, villagerCount, order, strategy, captur
 }
 
 /**
- * Spare wood → another farm. No ceiling — the ring keeps growing out along
- * the compass spokes — but only a couple of plots may stand unstaffed at once.
+ * Spare wood → another farm. No ceiling - the ring keeps growing out along
+ * the compass spokes - but only a couple of plots may stand unstaffed at once.
  */
 function surplusFarmOk(bank, inv, gather) {
   return gather.open.farm + inv.farmSites < FARM_UNSTAFFED_MAX
@@ -1066,7 +1066,7 @@ function canUnlockKind(w, owner, kind) {
   return ownerSlotCount(w.buildings, owner, kind, 'fixed', w) < MAX_RESOURCE_SLOTS;
 }
 
-/** A new source for a silo pair — only when every existing one is already paired. */
+/** A new source for a silo pair - only when every existing one is already paired. */
 function chooseCapRelief(w, owner, inv, full, bank, gather) {
   if (
     full.wood
@@ -1135,7 +1135,7 @@ function buildAnchor(field, type, base, gather) {
   return { x: base.x, y: base.y };
 }
 
-/** Keep army / tech halls off the farm ring — forward or beside the agora. */
+/** Keep army / tech halls off the farm ring - forward or beside the agora. */
 function pathBuildAnchor(base, type) {
   const bx = fx.toFloat(base.x);
   const bz = fx.toFloat(base.y);

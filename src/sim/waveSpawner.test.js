@@ -11,7 +11,7 @@ import {
   waveSpawnerSystem,
 } from './waveSpawner.js';
 
-// Minimal field stub — field=null path in the system skips snap/queuePath, which
+// Minimal field stub - field=null path in the system skips snap/queuePath, which
 // keeps the unit test focused on schedule + determinism (no pathing dependency).
 const FIELD = { width: 112, height: 112, worldHalfF: 224 };
 const MILITARY = new Set([UNIT.WARRIOR, UNIT.ARCHER, UNIT.WARLOCK]);
@@ -88,7 +88,7 @@ describe('wave spawner schedule', () => {
     }
   });
 
-  it('is deterministic — same seed reproduces counts, types, and positions', () => {
+  it('is deterministic - same seed reproduces counts, types, and positions', () => {
     const total = WAVE_FIRST_DELAY_TICKS + WAVE_INTERVAL_TICKS * 3;
     const a = runSchedule(9876, objectives, total).world;
     const b = runSchedule(9876, objectives, total).world;

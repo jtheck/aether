@@ -1,4 +1,4 @@
-// Agora capture — contest from the right while the pad is owned, then unlock
+// Agora capture - contest from the right while the pad is owned, then unlock
 // a neutral tug anyone can fight (about a third of the clock). Positions are
 // Q16.16 world xz. Deterministic; included in checksum.
 
@@ -14,20 +14,20 @@ export const AGORA_CAPTURE_TICKS = 180;
 /** Neutral fight is about a third of the clock (~4.5s). */
 export const AGORA_TUG_TICKS = 90;
 
-/** Locked home — contest walks in from the right. */
+/** Locked home - contest walks in from the right. */
 export const AGORA_PHASE_LOCK = 0;
-/** Unlocked / technically neutral — anyone can gain from the left. */
+/** Unlocked / technically neutral - anyone can gain from the left. */
 export const AGORA_PHASE_TUG = 1;
 
 export const AGORA_RITE_NONE = 0;
-/** Halfway beat — melt the lock row, then seed-build the tug row. */
+/** Halfway beat - melt the lock row, then seed-build the tug row. */
 export const AGORA_RITE_UNLOCK = 1;
 /** Last pip + all-dot wishes before occupy / retake / victory. */
 export const AGORA_RITE_FINALE = 2;
 
-/** ~1.7s at 20 Hz — covers the unlock line trick. */
+/** ~1.7s at 20 Hz - covers the unlock line trick. */
 export const AGORA_UNLOCK_HOLD_TICKS = 34;
-/** ~1.3s at 20 Hz — last pip, then compiled wishes. */
+/** ~1.3s at 20 Hz - last pip, then compiled wishes. */
 export const AGORA_FINALE_HOLD_TICKS = 26;
 
 /**
@@ -82,7 +82,7 @@ export function agoraCaptureScore(a) {
   return (a.progress | 0) / AGORA_CAPTURE_TICKS;
 }
 
-/** Home pad — current owner or original founder. */
+/** Home pad - current owner or original founder. */
 export function agoraForOwner(agoras, owner) {
   if (!agoras) return null;
   const o = owner | 0;

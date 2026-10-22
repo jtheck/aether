@@ -56,7 +56,7 @@ import { grantTech } from './tech.js';
 import { planPathBudget } from './path.js';
 import { step } from './step.js';
 
-// Placement/training now charge resources — fund every test world generously so
+// Placement/training now charge resources - fund every test world generously so
 // these mechanics tests stay about footprints/production, not affordability.
 function createWorld(seed) {
   const w = _createWorld(seed);

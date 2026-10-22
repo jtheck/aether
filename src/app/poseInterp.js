@@ -1,7 +1,7 @@
 /**
  * Display-only chase for units under Space-follow.
  * Sim stays 20Hz; the camera already eases, so a locked view makes each tick
- * read as a skipped step. A couple of floats per selected unit — not a second sim.
+ * read as a skipped step. A couple of floats per selected unit - not a second sim.
  */
 
 /** Tight enough to stay glued, slow enough to soak a 50ms pose corner. */

@@ -1,10 +1,10 @@
-// Building construction — placed buildings start as inert sites (built = 0) and
+// Building construction - placed buildings start as inert sites (built = 0) and
 // are raised by villagers and engineers. Mirrors the gather loop: a per-tick
 // driver walks builders to the site and holds them in reach; progress accrues
 // from on-site workers (capped at MAX_BUILDERS slots). A villager is one
 // builder-tick; an engineer is half. Unattended villages still trickle at
 // IDLE_VILLAGE_DEN (0.1× one villager) so a site can finish with no hands.
-// A separate assign pass fills those slots — nearest first, idle preferred,
+// A separate assign pass fills those slots - nearest first, idle preferred,
 // pulling gatherers / repairing engineers when no idle hand is free. All
 // state lives on the building object / SoA.
 
@@ -137,7 +137,7 @@ function seekTo(w, i, tx, ty) {
 }
 
 /**
- * Per-tick construction driver — one phase in step(), alongside gather. Walks
+ * Per-tick construction driver - one phase in step(), alongside gather. Walks
  * builders to their site, holds them in reach, and advances build progress.
  * @param {object} w
  * @param {object} field
@@ -213,7 +213,7 @@ export function constructionSystem(w, field) {
       constructionVisualStage(prevProg, time) !==
       constructionVisualStage(b.buildProgress, time)
     ) {
-      // Renderer grows the mesh on stage crossings — not every work tick.
+      // Renderer grows the mesh on stage crossings - not every work tick.
       w.buildingsDirty = 1;
     }
   }
@@ -221,7 +221,7 @@ export function constructionSystem(w, field) {
 
 /**
  * Lower is taken first. Idle, then wood/rock gatherers and repairing
- * engineers. A farmer is last, and only when the site has nobody else —
+ * engineers. A farmer is last, and only when the site has nobody else -
  * filling a second slot must not empty a farm.
  */
 function candidateRank(w, field, i) {
@@ -268,7 +268,7 @@ export function constructionAssignSystem(w, field) {
 
     for (let slot = builders; slot < MAX_BUILDERS; slot++) {
       // Idle, then other workers, nearest within a rank. Farmers only if the
-      // site still has nobody — a second slot must not strip the farm.
+      // site still has nobody - a second slot must not strip the farm.
       let best = -1;
       let bestRank = 3;
       let bestD = 0x7fffffffffff;

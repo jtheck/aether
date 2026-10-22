@@ -59,7 +59,7 @@ const RALLY_ARROW_LEN = 0.95;
 const RALLY_ARROW_PERIOD = 6.4;
 /** Hover above ground samples so segments don't clip into hills. */
 const RALLY_LINE_Y = 1.15;
-/** World-units per ms — dashes crawl building → flag. */
+/** World-units per ms - dashes crawl building → flag. */
 const RALLY_FLOW_SPEED = 0.0045;
 /** Big ants run ahead of the dashed stroke. */
 const RALLY_ARROW_FLOW_SPEED = 0.011;
@@ -77,7 +77,7 @@ function setThinInstanceCount(mesh, count) {
   mesh.visible = count > 0;
 }
 
-/** Attack-move small ants / flag — same red as unit a-move pings. */
+/** Attack-move small ants / flag - same red as unit a-move pings. */
 const ATTACK_MOVE_TINT = [0.95, 0.22, 0.18];
 
 function writeRallyColor(colors, slot, owner, alpha, attackMove) {
@@ -321,7 +321,7 @@ export function emitAgoraFlagDisintegrate(emit, x, y, z, rgb, scale = 2.2, wind,
 }
 
 /** Dust and grit when the new banner pounds the deck. */
-/** Flat dust ring shoved out along the deck — not a fountain. */
+/** Flat dust ring shoved out along the deck - not a fountain. */
 export function emitAgoraFlagSlam(emit, _emitBurst, x, y, z, dist = 0) {
   if (!emit) return 0;
   const grow = agoraFxSizeMul(dist);
@@ -678,7 +678,7 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
   /**
    * Flowing dashed polyline (dashes + arrowheads) along world XZ points.
    * Dashes and chevrons share the polyline but march at different speeds
-   * (big ants run ahead) — both crawl building → flag.
+   * (big ants run ahead) - both crawl building → flag.
    * Small ants are white (move) or red (a-move); big ants are TeamColor only.
    * @returns {number} next free slot
    */
@@ -748,7 +748,7 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
       if (slot >= maxSlot) return;
       emit(a, b, RALLY_LINE_RADIUS, 0.82, false);
     });
-    // Chevrons are a second, faster march — reset the segment cursor.
+    // Chevrons are a second, faster march - reset the segment cursor.
     segI = 0;
     forEachRallyDash(total, arrowPhase, RALLY_ARROW_LEN, RALLY_ARROW_PERIOD, (a, b) => {
       if (slot >= maxSlot) return;

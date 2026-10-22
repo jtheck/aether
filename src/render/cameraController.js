@@ -41,21 +41,21 @@ const CLOSE_BETA = 1.2;
 /** Normalized zoom where the look-down trough bottoms (0 = closest). */
 export const CAMERA_CLOSE_SPAN = 0.32;
 const CLOSE_SPAN = CAMERA_CLOSE_SPAN;
-/** Lite / Babylon default — farthest zoom sits here. */
+/** Lite / Babylon default - farthest zoom sits here. */
 export const CAMERA_BASE_FOV = 0.8;
 /** Widest vertical FOV at min radius (~66°). */
 export const CAMERA_CLOSE_FOV = 1.15;
 /** Close-in slice that still holds most of the FOV punch. */
 export const CAMERA_CLOSE_FOV_SPAN = 0.08;
 const CLOSE_FOV_SPAN = CAMERA_CLOSE_FOV_SPAN;
-/** Closest slice sits on max FOV — no ease-off / bounce at the zoom floor. */
+/** Closest slice sits on max FOV - no ease-off / bounce at the zoom floor. */
 export const CAMERA_CLOSE_FOV_HOLD = 0.02;
 const CLOSE_FOV_HOLD = CAMERA_CLOSE_FOV_HOLD;
 /** FOV delta already in when that close slice begins. The long zoom only creeps. */
 export const CAMERA_FOV_LEAD = 0.22;
 const FOV_SPAN_T = 1 - (CLOSE_FOV_SPAN - CLOSE_FOV_HOLD) / (1 - CLOSE_FOV_HOLD);
 const FOV_POWER = Math.log(CAMERA_FOV_LEAD) / Math.log(Math.max(1e-6, FOV_SPAN_T));
-/** FOV tracks the zoom-derived target — tight enough to ride the close slice. */
+/** FOV tracks the zoom-derived target - tight enough to ride the close slice. */
 export const FOV_CHASE_RATE = 12;
 /** Catch-up cap (rad/s). Stops a slam from sprinting the last 20°. */
 export const FOV_MAX_SPEED = 1.2;
@@ -70,9 +70,9 @@ export const ZOOM_TEND_IDLE_MS = 100;
 export const ZOOM_TEND_HOME = 0.05;
 /** Normalized: already-there, or a tiny overshoot we may settle. Beyond this, fly-through. */
 export const ZOOM_TEND_NEAR = 0.045;
-/** Exponential settle once we are on the dest — slower than follow-zip. */
+/** Exponential settle once we are on the dest - slower than follow-zip. */
 export const ZOOM_TEND_RATE = 4;
-/** Gentle, centered bowl — small mid/edge gap so the whole range feels even. */
+/** Gentle, centered bowl - small mid/edge gap so the whole range feels even. */
 const ZOOM_MID_SPEED = 0.72;
 const ZOOM_EDGE_SPEED = 1.06;
 
@@ -92,9 +92,9 @@ export function cameraZoomNormalized(radius, minR, maxR) {
  * ease-out growth to the cap; holds that size through the far vista.
  */
 export const UNIT_ZOOM_SCALE_MAX = 2.28;
-/** Wagons / APC / air — same curve, much less growth. */
+/** Wagons / APC / air - same curve, much less growth. */
 export const VEHICLE_ZOOM_SCALE_MAX = 1.48;
-/** Closest zoom stays at base — first 14% of the radius range. */
+/** Closest zoom stays at base - first 14% of the radius range. */
 export const UNIT_ZOOM_SCALE_HOLD = 0.14;
 /** Normalized zoom where the mul hits the cap (0 = closest, 1 = farthest). */
 export const UNIT_ZOOM_SCALE_CAP = 0.55;
@@ -179,12 +179,12 @@ function zoomSpeedForNormalized(normalized) {
   return ZOOM_MID_SPEED + t * (ZOOM_EDGE_SPEED - ZOOM_MID_SPEED);
 }
 
-/** Exponential chase while Space is held — rushes in from far, then sticks. */
+/** Exponential chase while Space is held - rushes in from far, then sticks. */
 export const FOLLOW_ZIP_RATE = 18;
 
 /**
  * Look-target shift that keeps `aim` under the cursor while zooming in.
- * Zooming out leaves the look-at where it is — pushing away from the cursor
+ * Zooming out leaves the look-at where it is - pushing away from the cursor
  * makes the view flee the pointer.
  * @param {number} targetX
  * @param {number} targetZ
@@ -215,7 +215,7 @@ export function chaseToward(x, z, tx, tz, dtSec, rate = FOLLOW_ZIP_RATE) {
   return { x: x + (tx - x) * u, z: z + (tz - z) * u };
 }
 
-/** Soft story nudge — slower than Space-follow so the player can still steer. */
+/** Soft story nudge - slower than Space-follow so the player can still steer. */
 export const STORY_EASE_RATE = 5;
 export const STORY_EASE_MS = 900;
 
@@ -266,7 +266,7 @@ export function createCameraController(camera, canvas, opts = {}) {
   // Zoom follows the longer axis so a rectangle still fits. Pan clamps per axis.
   let DEFAULT_RADIUS = Math.max(worldHalfF, worldHalfZF) * 1.55;
   let RESET_RADIUS = Math.max(worldHalfF, worldHalfZF) * 1.8;
-  /** Max zoom-out — keep the look-up view near the table, not a wide pullback. */
+  /** Max zoom-out - keep the look-up view near the table, not a wide pullback. */
   let UPPER_RADIUS = Math.max(worldHalfF, worldHalfZF) * 2.15;
   const velocity = { alpha: 0, radius: 0, panX: 0, panZ: 0 };
   const keyStates = Object.create(null);
@@ -275,13 +275,13 @@ export function createCameraController(camera, canvas, opts = {}) {
   let zoomInputThisTick = false;
   let lastZoomSign = 0;
   let zoomTend = false;
-  /** Player pan/zoom/rotate — distinct from a followed pose we applied. */
+  /** Player pan/zoom/rotate - distinct from a followed pose we applied. */
   let userAimed = false;
-  /** Hit min radius — stay there until a zoom-out. Stops the wall bounce. */
+  /** Hit min radius - stay there until a zoom-out. Stops the wall bounce. */
   let zoomFloored = false;
   let zoomOutThisTick = false;
   let fovVel = 0;
-  /** Ground under the pointer — zoom-in drifts the look target toward it. */
+  /** Ground under the pointer - zoom-in drifts the look target toward it. */
   /** @type {{ x: number, z: number } | null} */
   let zoomFocus = null;
   let followActive = false;
@@ -316,7 +316,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     camera.upperRadiusLimit = UPPER_RADIUS;
   }
 
-  /** Live board swap (skirmish → stress, etc.) — pan + zoom limits follow the table. */
+  /** Live board swap (skirmish → stress, etc.) - pan + zoom limits follow the table. */
   function setWorldHalfF(next, nextZ) {
     applyWorldHalf(next, nextZ);
     const { minR, maxR } = radiusLimits();
@@ -356,7 +356,7 @@ export function createCameraController(camera, canvas, opts = {}) {
   /**
    * Lite target is an observable vec3 (`set` / property setters call markLocalDirty).
    * Replacing `camera.target` or calling a missing `setTarget` leaves the view matrix
-   * stale until the next alpha/radius write — pan looks broken until you zoom.
+   * stale until the next alpha/radius write - pan looks broken until you zoom.
    */
   function setTargetXZ(x, z) {
     const t = camera.target;
@@ -788,14 +788,14 @@ export function createCameraController(camera, canvas, opts = {}) {
     applyRotateInput(deltaAlpha);
   }
 
-  /** Immediate yaw — rim drag tracks the finger. Does not bank coast velocity. */
+  /** Immediate yaw - rim drag tracks the finger. Does not bank coast velocity. */
   function rotateBy(deltaAlpha) {
     if (!deltaAlpha) return;
     noteUserAim();
     camera.alpha += deltaAlpha;
   }
 
-  /** Immediate radius — rim drag tracks the finger. Does not bank coast velocity. */
+  /** Immediate radius - rim drag tracks the finger. Does not bank coast velocity. */
   function zoomBy(delta) {
     if (!delta) return;
     noteUserAim();
@@ -874,7 +874,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     return Math.min(1.0, Math.pow(60 / effectiveR, 1.5));
   }
 
-  /** Shared by RMB drag and touch centroid-pan — same feel, one formula. */
+  /** Shared by RMB drag and touch centroid-pan - same feel, one formula. */
   function panByScreenDelta(screenDx, screenDy, sensBase) {
     if (!screenDx && !screenDy) return;
     noteUserAim();
@@ -890,7 +890,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     return Math.hypot(clientX - rmbDownScreen.x, clientY - rmbDownScreen.y);
   }
 
-  /** Apply pan only after the click-vs-drag latch, from the latch — not pointer-down. */
+  /** Apply pan only after the click-vs-drag latch, from the latch - not pointer-down. */
   function applyRmbPanTo(clientX, clientY) {
     const travel = rmbTravelPx(clientX, clientY);
     if (!rmbDidPan) {
@@ -924,7 +924,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     if (rmbPointerId != null && e.pointerId !== rmbPointerId && e.type !== 'pointercancel') {
       return false;
     }
-    // Last sample — a flick can skip moves and land past the latch only on up.
+    // Last sample - a flick can skip moves and land past the latch only on up.
     if (e.type !== 'pointercancel' && e.clientX != null && e.clientY != null) {
       applyRmbPanTo(e.clientX, e.clientY);
     }
@@ -962,7 +962,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     // Let browser shortcuts through (e.g. Ctrl+Shift+R hard reload).
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const active = typeof document !== 'undefined' ? document.activeElement : null;
-    // BUTTON stays eligible — HUD clicks leave buttons focused and used to
+    // BUTTON stays eligible - HUD clicks leave buttons focused and used to
     // freeze pan until the canvas was clicked.
     if (active && ['INPUT', 'SELECT', 'TEXTAREA'].includes(active.tagName)) return;
     const key = e.key.toLowerCase();

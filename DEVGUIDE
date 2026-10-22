@@ -9,9 +9,9 @@ cd src
 npm install
 npm run serve
 ```
-Open http://localhost:5173 — edit app/ sim/ render/, refresh. No rebuild.
+Open http://localhost:5173 - edit app/ sim/ render/, refresh. No rebuild.
 
-Optional vendor rebuilds (only when those deps change — not every edit):
+Optional vendor rebuilds (only when those deps change - not every edit):
 ```
 npm run build:lite
 npm run build:explorer
@@ -47,8 +47,8 @@ Package upload folder:
 npm run package
 ```
 Fills ../DEPLOY/ (index at root, hashed+minified JS, assets incl. baked, PWA).
-JS is two bundles (main + worker) — not hundreds of Lite chunks.
-Obfuscation off by default; opt-in: PACKAGE_OBFUSCATE=1 (main + sim worker — both are fully bundled).
+JS is two bundles (main + worker) - not hundreds of Lite chunks.
+Obfuscation off by default; opt-in: PACKAGE_OBFUSCATE=1 (main + sim worker - both are fully bundled).
 Do not open index.html from disk (file:// / CORS / SAB).
 
 To deploy (this is the only ship path):
@@ -62,8 +62,8 @@ To deploy (this is the only ship path):
      Cross-Origin-Opener-Policy: same-origin
      Cross-Origin-Embedder-Policy: require-corp
    (Response headers policy on the distribution. Without them SharedArrayBuffer is undefined
-   and crossOriginIsolated is false — check console: window.crossOriginIsolated)
- - Cache-Control (S3 metadata or CF response headers) — origin currently sends none, which sticks old HTML/assets on phones:
+   and crossOriginIsolated is false - check console: window.crossOriginIsolated)
+ - Cache-Control (S3 metadata or CF response headers) - origin currently sends none, which sticks old HTML/assets on phones:
      index.html, sw-aether.js, manifest.json → Cache-Control: no-cache
      main-*.js / sim.worker-*.js → Cache-Control: public, max-age=31536000, immutable
      /assets/* → Cache-Control: no-cache   (unhashed bake/GLB paths; or short max-age)

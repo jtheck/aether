@@ -18,7 +18,7 @@ import {
 import { MAX_PROJECTILES } from '../sim/projectiles.js';
 import { createFireballCoreMaterial, createFireballMesh } from './holyShields.js';
 
-// Kept modest — was 5 while debugging visibility and arrows looked gigantic.
+// Kept modest - was 5 while debugging visibility and arrows looked gigantic.
 const PROJECTILE_VISIBILITY_SCALE = 5 / 3;
 
 /** Peak loft scales with throw range so long shots stay arched, not flat skims. */
@@ -36,7 +36,7 @@ function projectileWorldY(def, groundY, originGroundY, progress, loftPeak) {
     const impact = def.impactHeight ?? 1;
     const clearance = def.launchHeight + (impact - def.launchHeight) * progress;
     const loft = 4 * progress * (1 - progress) * loftPeak;
-    // Only meet local ground in the last slice — earlier blend made long shots swim.
+    // Only meet local ground in the last slice - earlier blend made long shots swim.
     const landT = progress < 0.9 ? 0 : (progress - 0.9) / 0.1;
     const base = originGroundY + (groundY - originGroundY) * landT * landT;
     return base + clearance + loft;
@@ -197,7 +197,7 @@ function writeFacingOrb(matrices, slot, x, y, z, scale, eye) {
 
 /**
  * Draw only the live slots. Pools are allocated at full renderCapacity, and
- * `flushThinInstances` marks 0..ti.count dirty — leaving count at capacity
+ * `flushThinInstances` marks 0..ti.count dirty - leaving count at capacity
  * re-uploads and re-draws the whole pool every frame for a handful of shots.
  */
 function setPoolDrawCount(mesh, count) {

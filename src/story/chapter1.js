@@ -36,7 +36,7 @@ export const CHAPTER1_GARDEN_URL = '/maps/chapter1.garden';
 export const CHAPTER1_NEXT_URL = '/maps/chapter2.garden';
 export const CHAPTER1_SEED = 22049;
 
-/** Surround disc — native mesh is ~9 units across; scale 80 wraps the tiny table. */
+/** Surround disc - native mesh is ~9 units across; scale 80 wraps the tiny table. */
 export const CHAPTER1_DISC_SCALE = 80;
 export function chapter1Backdrops() {
   return [{
@@ -125,7 +125,7 @@ export function chapter1IntroReel() {
   ]);
 }
 
-/** Victory take. Two looks — the party, then the road north. */
+/** Victory take. Two looks - the party, then the road north. */
 export function chapter1WinReel() {
   return reelFromSteps('ending', 'win', [
     { kind: CLIP_CAMERA, tx: 30, tz: 40, radius: 100, alpha: 0.3, dur: 1.2 },

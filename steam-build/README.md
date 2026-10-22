@@ -101,9 +101,9 @@ if (window.aetherDesktop?.steam?.isAvailable()) {
 
 Game code uses `window.aetherSteam` (`src/app/steam.js`). No-ops in the browser.
 
-Workshop maps are subscribed items that contain `.garden` files (`map.garden`, or `maps/*.garden` for a campaign pack). The worker reads the Steam install folder and returns JSON over this bridge — the page cannot see the disk. `?garden=workshop:<id>` / `workshop:<id>/maps/02.garden` loads in the game and Forge. Forge can publish the current map. Adventure lobbies list subscribed items; the host embeds the garden JSON on START / CHAPTER so web guests can play without Steam. Campaign `next` can be a relative file in the same pack (`maps/02.garden`). Enable Workshop for app **5043860** on the partner site before items can be published.
+Workshop maps are subscribed items that contain `.garden` files (`map.garden`, or `maps/*.garden` for a campaign pack). The worker reads the Steam install folder and returns JSON over this bridge - the page cannot see the disk. `?garden=workshop:<id>` / `workshop:<id>/maps/02.garden` loads in the game and Forge. Forge can publish the current map. Adventure lobbies list subscribed items; the host embeds the garden JSON on START / CHAPTER so web guests can play without Steam. Campaign `next` can be a relative file in the same pack (`maps/02.garden`). Enable Workshop for app **5043860** on the partner site before items can be published.
 
-DLC ownership is on `getInfo().dlc` (`{ appId, owned }`). First Responder is App ID **5217980**. The game maps that to pack `first_responder` via `aetherSteam.ownedPacks()`. Local art iteration (loopback only): `http://127.0.0.1:5173/?dlc=first_responder`. Ignored on aether.garden.
+DLC ownership is on `getInfo().dlc` (`{ appId, owned }`), from `BIsSubscribedApp` (not `BGetDLCDataByIndex` “available”, which is store visibility). First Responder is App ID **5217980**. The game maps that to pack `first_responder` via `aetherSteam.ownedPacks()`. Local art iteration (loopback only): `http://127.0.0.1:5173/?dlc=first_responder`. Ignored on aether.garden.
 
 | API name | When |
 |---|---|

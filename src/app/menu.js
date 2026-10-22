@@ -1,4 +1,4 @@
-// Side menu wiring — markup + styles live in index.html.
+// Side menu wiring - markup + styles live in index.html.
 
 import {
   FX_LABELS,
@@ -70,7 +70,7 @@ export function setupMenu({
 }) {
   // Shadow dimensions are locked in at renderer construction, so anything other
   // than the tier we booted with only takes effect on reload. MSAA sample count
-  // is the same — Lite allocates the swapchain at createEngine.
+  // is the same - Lite allocates the swapchain at createEngine.
   const bootMode = resolveShadowMode();
   const bootTier = shadowTier(bootMode);
   const bootAaEnabled = resolveAaEnabled();

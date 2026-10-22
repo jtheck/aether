@@ -544,7 +544,7 @@ export function populateScenery(field, world = null, reservedWorldPoints = [], o
 
   // Partial-water slow only (after trees so fill(0) above does not wipe it).
   applyTerrainSlow(field);
-  // Table-edge yellow/red — populate wipes slowMask, so re-OR the rim.
+  // Table-edge yellow/red - populate wipes slowMask, so re-OR the rim.
   applyTableEdgeOccupancy(field);
 
   return field;
@@ -563,9 +563,21 @@ function seedOccupiedFromScenery(field, occupied) {
   }
 }
 
+function structureClaims(field, tx, tz) {
+  const mask = field.structureClaim;
+  if (!mask || tx < 0 || tz < 0 || tx >= field.width || tz >= field.height) return false;
+  return mask[tz * field.width + tx] === 1;
+}
+
+function structureClaimsIndex(field, i) {
+  const mask = field.structureClaim;
+  return !!mask && mask[i] === 1;
+}
+
 function isEligible(field, i, reserved, applyReserved = true) {
   if (field.activeMask && field.activeMask[i] === 0) return false;
   if (field.pass[i] === 0) return false;
+  if (structureClaimsIndex(field, i)) return false;
   if (applyReserved && reserved[i]) return false;
   return true;
 }
@@ -608,6 +620,7 @@ function footprintAvailable(field, occupied, reserved, cx, cz, radius) {
       if (occupied[i] || reserved[i]) return false;
       if (field.activeMask && field.activeMask[i] === 0) return false;
       if (field.pass[i] === 0) return false;
+      if (structureClaimsIndex(field, i)) return false;
     }
   }
   return true;
@@ -709,6 +722,7 @@ function canPaintTreeLand(field, tx, tz) {
   const i = tz * width + tx;
   if (field.activeMask?.[i] === 0) return false;
   if (field.tableEdge?.[i]) return false;
+  if (structureClaims(field, tx, tz)) return false;
   return isPaintLand(field, i);
 }
 
@@ -791,6 +805,7 @@ function rockFootprintOpen(field, cx, cz, kind, { requireLand = false, pad = 0, 
       const i = tz * width + tx;
       if (field.activeMask?.[i] === 0) return false;
       if (field.tableEdge?.[i]) return false;
+      if (structureClaims(field, tx, tz)) return false;
       if (requireLand && !isPaintLand(field, i)) return false;
       if (ignoreOtherScenery) continue;
       if (field.sceneryType[i] !== SCENERY.NONE) return false;
@@ -846,11 +861,14 @@ function stampClear(field, tx, tz) {
     changed = true;
   }
   if (kind >= SCENERY.ROCK_PLAIN) {
+    ensureRockArrays(field);
+    const stock = field.rockStock[i] | 0;
+    const prevR = stock > 0 ? rockFootprintRadiusForStock(kind, stock) : rockFootprintRadius(kind);
     field.sceneryType[i] = SCENERY.NONE;
-    if (field.rockStock) {
-      field.rockStock[i] = 0;
-      field.rockStockHash = mixRockHash(field.rockStockHash | 0, i, 0);
-    }
+    field.rockStock[i] = 0;
+    field.rockStockHash = mixRockHash(field.rockStockHash | 0, i, 0);
+    if (prevR >= 0) shrinkRockFootprint(field, i, prevR, -1);
+    refreshRockSlow(field);
     changed = true;
   }
   return changed;
@@ -882,6 +900,17 @@ function clearSceneryCovering(field, tx, tz, dirty) {
     }
   }
   return changed;
+}
+
+/** Drop every tree and rock whose mesh covers these tiles. */
+export function clearSceneryCoveringTiles(field, tiles) {
+  if (!field?.sceneryType || !tiles?.length) return [];
+  ensureSceneryArrays(field);
+  const dirty = [];
+  for (let i = 0; i < tiles.length; i++) {
+    clearSceneryCovering(field, tiles[i].tx, tiles[i].tz, dirty);
+  }
+  return dirty;
 }
 
 /** Plant a rock center and refresh occupancy. */

@@ -1,4 +1,4 @@
-// Render-only jagged sky bolts — continuous Lite tubes (no segment joints).
+// Render-only jagged sky bolts - continuous Lite tubes (no segment joints).
 
 import {
   addToScene,
@@ -9,10 +9,10 @@ import {
 } from '../vendor/lite/liteVendor.js';
 import { LIGHTNING_HIT } from '../sim/lightning.js';
 
-/** Default hot window — actual per-strike values are randomized. */
+/** Default hot window - actual per-strike values are randomized. */
 const HOT_MS_MIN = 70;
 const HOT_MS_MAX = 220;
-/** Default fade window — actual per-strike values are randomized. */
+/** Default fade window - actual per-strike values are randomized. */
 const FADE_MS_MIN = 280;
 const FADE_MS_MAX = 1100;
 /** Brief pulse life for non-final return strokes. */
@@ -20,7 +20,7 @@ const RETURN_PULSE_MS = 90;
 const MIN_SKY_ABOVE_IMPACT = 90;
 const BRANCH_DISPLACE = 7;
 const TUBE_SIDES = 6;
-/** Skip end caps — cheaper, ends are off-screen / at impact flash. */
+/** Skip end caps - cheaper, ends are off-screen / at impact flash. */
 const CAP_NONE = 0;
 /** Cap polyline density before meshing (createTube cost scales with points × sides). */
 const MAX_TUBE_POINTS = 28;
@@ -280,7 +280,7 @@ export function createLightningBolts(engine, scene, groundYAt, opts = {}) {
     const weights = new Float32Array(beads);
     let weightSum = 0;
     for (let i = 0; i < beads; i++) {
-      // Bias toward clumps — occasional bigger gaps.
+      // Bias toward clumps - occasional bigger gaps.
       weights[i] = 0.25 + Math.random() * Math.random() * 2.2;
       weightSum += weights[i];
     }
@@ -398,7 +398,7 @@ export function createLightningBolts(engine, scene, groundYAt, opts = {}) {
     const midZ = z - nz * midSwing + (rand() * 2 - 1) * boltLen * 0.06;
     const midY = gy + boltLen * (0.35 + rand() * 0.2);
 
-    // Keep gens modest — decimate handles zoomed-out length.
+    // Keep gens modest - decimate handles zoomed-out length.
     const gens = Math.min(5, 4 + Math.floor(boltLen / 280));
     const displace = boltLen * (0.1 + rand() * 0.05) * scale;
 
@@ -421,7 +421,7 @@ export function createLightningBolts(engine, scene, groundYAt, opts = {}) {
     main.set(lower.subarray(3), upper.length);
     paths.push(main);
 
-    // 2–3 branches, no sub-forks — biggest cost is path count × layers.
+    // 2–3 branches, no sub-forks - biggest cost is path count × layers.
     const branchCount = 2 + (seed % 2);
     for (let b = 0; b < branchCount; b++) {
       const along = 0.22 + ((seed >>> (b * 3)) & 7) / 7 * 0.45;
@@ -455,7 +455,7 @@ export function createLightningBolts(engine, scene, groundYAt, opts = {}) {
     if (strike.tubes.length === 0) {
       rebuildStrikeGeometry(strike, strike.paths, strike.scale, glowLife);
     } else {
-      // Same channel — just re-ignite glow beads.
+      // Same channel - just re-ignite glow beads.
       emitGlowForPaths(strike, glowLife);
     }
     if (worldFlash) opts.onFlash?.(flash.intensity);
@@ -489,7 +489,7 @@ export function createLightningBolts(engine, scene, groundYAt, opts = {}) {
 
     if (age >= life) {
       if (!isLast) {
-        // Hard blackout between return strokes — full off, not a soft dim.
+        // Hard blackout between return strokes - full off, not a soft dim.
         paintStrikeTubes(strike, 0, 0);
         for (let i = 0; i < strike.tubes.length; i++) {
           strike.tubes[i].mesh.visible = false;
@@ -530,7 +530,7 @@ export function createLightningBolts(engine, scene, groundYAt, opts = {}) {
     const seed = segSeed;
     const rand = makeRng(seed);
 
-    // Variable dissolve — some bolts wink out, others linger.
+    // Variable dissolve - some bolts wink out, others linger.
     const hotMs = HOT_MS_MIN + rand() * (HOT_MS_MAX - HOT_MS_MIN);
     const fadeMs = FADE_MS_MIN + rand() * (FADE_MS_MAX - FADE_MS_MIN);
     const fadePower = 1.15 + rand() * 2.4;
@@ -597,7 +597,7 @@ export function createLightningBolts(engine, scene, groundYAt, opts = {}) {
   }
 
   function commit() {
-    // Scene meshes are live — nothing to flush.
+    // Scene meshes are live - nothing to flush.
   }
 
   return {

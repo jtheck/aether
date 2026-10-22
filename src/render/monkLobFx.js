@@ -44,7 +44,7 @@ export function createMonkLobFx(emit, groundYAt) {
     return Math.random() < 0.5 ? -1 : 1;
   }
 
-  /** Fresh comic tumble recipe — different every launch. */
+  /** Fresh comic tumble recipe - different every launch. */
   function rollTumble() {
     // Always at least some end-over-end; twist/roll optional.
     const flipTurns = 1 + Math.floor(Math.random() * 3); // 1..3
@@ -122,7 +122,7 @@ export function createMonkLobFx(emit, groundYAt) {
 
   function emitLandDust(x, z) {
     const gy = groundYAt(x, z);
-    // Juicy dirt thump — alpha blend so brown actually shows.
+    // Juicy dirt thump - alpha blend so brown actually shows.
     for (let i = 0; i < 28; i++) {
       const ang = (i / 28) * Math.PI * 2 + Math.random() * 0.4;
       const speed = 5 + Math.random() * 7;

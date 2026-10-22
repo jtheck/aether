@@ -1,4 +1,4 @@
-// Page / window fullscreen — Fullscreen API, desktop F11, or a filled-window heuristic.
+// Page / window fullscreen - Fullscreen API, desktop F11, or a filled-window heuristic.
 
 const SIZE_SLACK = 2;
 
@@ -45,7 +45,7 @@ export function fullscreenButtonLabel(on) {
 
 /**
  * Leave Fullscreen API or desktop (NW.js) window fullscreen.
- * Browser-chrome F11 cannot be dismissed from the page — returns false then.
+ * Browser-chrome F11 cannot be dismissed from the page - returns false then.
  * @returns {Promise<boolean>}
  */
 export async function tryExitFullscreen(root = globalThis) {

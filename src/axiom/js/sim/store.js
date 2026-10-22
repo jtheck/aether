@@ -8,7 +8,7 @@ export const KIND_PLANE = 'plane';
 export const KIND_TETRA = 'tetra';
 
 /**
- * Mesh accent store (orbit / spin). No wave basis — points use createPointStore.
+ * Mesh accent store (orbit / spin). No wave basis - points use createPointStore.
  * @param {number} capacity
  */
 export function createStore(capacity) {
@@ -30,7 +30,7 @@ export function createStore(capacity) {
     maxLife: new Float32Array(cap),
     size: new Float32Array(cap),
     windInfluence: new Float32Array(cap),
-    /** Baked roll cos/sin (billboards) — no per-frame trig. */
+    /** Baked roll cos/sin (billboards) - no per-frame trig. */
     spinC: new Float32Array(cap),
     spinS: new Float32Array(cap),
     /** Baked 3×3 local rotation, column-major (non-billboard meshes). */
@@ -179,7 +179,7 @@ export function boxSphereOverlapFraction(bounds, sphere, samples = 40) {
   if (cornersIn === 8) return 1;
   const near = closestAabbPointToSphere(bounds, sphere);
   if (!inSphere(near.x, near.y, near.z, sphere)) return 0;
-  // Fixed grid — random samples made grazing `want` flicker every frame.
+  // Fixed grid - random samples made grazing `want` flicker every frame.
   const n = Math.max(3, samples | 0);
   const step = size / n;
   const o = step * 0.5;
@@ -390,7 +390,7 @@ export function ensureCount(store, n) {
  * @param {{ r: number, g: number, b: number }} tint
  * @param {number} [baseScale=1] extra scale multiplier for mesh kind
  * @param {{ billboard?: { rx: number, ry: number, rz: number, ux: number, uy: number, uz: number } }} [opts]
- *   billboard: camera right/up axes — bake facing into matrices (thin-instance safe; mesh billboardMode is not)
+ *   billboard: camera right/up axes - bake facing into matrices (thin-instance safe; mesh billboardMode is not)
  */
 export function packRenderBuffers(store, tint, baseScale = 1, opts = {}) {
   const n = store.count;
@@ -426,7 +426,7 @@ export function packRenderBuffers(store, tint, baseScale = 1, opts = {}) {
     const s = size[i] * baseScale;
     const o = i * 16;
     if (bb) {
-      // Face camera, then apply baked roll (spinC/spinS) — still upright-ish variety, no trig
+      // Face camera, then apply baked roll (spinC/spinS) - still upright-ish variety, no trig
       const cr = spinC[i];
       const sr = spinS[i];
       const rrx = (rx * cr + ux * sr) * s;

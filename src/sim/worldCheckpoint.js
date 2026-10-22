@@ -153,7 +153,7 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   for (const key of Object.keys(ent.arrays)) {
     if (w[key]) decodeTAInto(w[key], ent.arrays[key]);
   }
-  // Older checkpoints omit pathSlowAware — clear so restore stays geometric.
+  // Older checkpoints omit pathSlowAware - clear so restore stays geometric.
   if (!ent.arrays.pathSlowAware && w.pathSlowAware) w.pathSlowAware.fill(0);
   if (!ent.arrays.attackFocus && w.attackFocus) w.attackFocus.fill(0);
   if (!ent.arrays.leashActive && w.leashActive) w.leashActive.fill(0);
@@ -265,7 +265,7 @@ export function importWorldCheckpoint(w, field, checkpoint) {
     w.projectiles.targetDoor.fill(-1);
   }
 
-  // Render-only queues — empty after restore.
+  // Render-only queues - empty after restore.
   clearFxStore(w.lightningFx);
   clearFxStore(w.holyArmorFx);
   clearFxStore(w.priestHealFx);
@@ -413,7 +413,7 @@ function exportWaveSpawners(list) {
 }
 
 function importWaveSpawners(w, data) {
-  // Older checkpoints predate wave spawners — keep the init-built schedule.
+  // Older checkpoints predate wave spawners - keep the init-built schedule.
   if (data === undefined) return;
   if (!data) {
     w.waveSpawners = null;

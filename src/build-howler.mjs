@@ -28,5 +28,5 @@ await esbuild.build({
 
 const buf = readFileSync(out);
 console.log(
-  `vendor/howler.js — ${(buf.length / 1024).toFixed(1)} KB raw  (~${(gzipSync(buf).length / 1024).toFixed(1)} KB gzip)`,
+  `vendor/howler.js - ${(buf.length / 1024).toFixed(1)} KB raw  (~${(gzipSync(buf).length / 1024).toFixed(1)} KB gzip)`,
 );

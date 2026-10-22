@@ -160,7 +160,7 @@ function start(opts) {
   });
   server.on('error', function (err) {
     if (err.code === 'EADDRINUSE') {
-      console.warn('[steam-build] Bridge port', PORT, 'in use — another Aether instance may be running');
+      console.warn('[steam-build] Bridge port', PORT, 'in use - another Aether instance may be running');
       return;
     }
     console.error('[steam-build] Bridge server error:', err.message);

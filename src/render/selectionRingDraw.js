@@ -1,6 +1,6 @@
 /**
  * Selection collars are stored by entity id. The GPU draw count only has to
- * cover the highest visible slot — a count of `entityCount` submits one
+ * cover the highest visible slot - a count of `entityCount` submits one
  * zero-scale collar per unit for the rest of the match, including after the
  * army is dead.
  *

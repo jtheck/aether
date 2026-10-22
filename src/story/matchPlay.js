@@ -1,4 +1,4 @@
-// In-match intro playback — same reel/player as Forge, no sheet.
+// In-match intro playback - same reel/player as Forge, no sheet.
 
 import { TILE_SIZE_F, worldHalfFFromField, worldHalfZFFromField } from '../sim/field.js';
 import { createStoryHud } from './hud.js';

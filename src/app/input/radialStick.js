@@ -1,14 +1,14 @@
-// Gamepad pie-menu aim — stick up is −π/2 (screen-top); stick right is π
+// Gamepad pie-menu aim - stick up is −π/2 (screen-top); stick right is π
 // (screen-right) because the disc's B axis is screen-left.
 // Agora is two rings: half throw = inner pie, full throw = outer pads.
 // A second stick at full throw also takes the outer ring.
 
 export const RADIAL_STICK_DEADZONE = 0.22;
-/** One-stick half throw — inner ring when the menu has two levels. */
+/** One-stick half throw - inner ring when the menu has two levels. */
 export const RADIAL_STICK_INNER = 0.36;
 /** Stay on the inner ring down to here once aimed (sloppy hardware). */
 export const RADIAL_STICK_INNER_LEAVE = 0.24;
-/** One-stick / second-stick full throw — outer ring. */
+/** One-stick / second-stick full throw - outer ring. */
 export const RADIAL_STICK_OUTER = 0.72;
 /** Stay on the outer ring down to here once aimed. */
 export const RADIAL_STICK_OUTER_LEAVE = 0.55;

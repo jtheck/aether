@@ -53,6 +53,7 @@ import { LOCKSTEP_STALL_UI_MS } from './simSession.js';
  * @param {(fn: Function) => () => void} [opts.subscribePeerDisconnected]
  * @param {(fn: Function) => () => void} [opts.subscribeMatchLobbyConnected]
  * @param {() => void} [opts.onChange]
+ * @param {(active: boolean) => void} [opts.onActiveChange]
  * @param {(cfg: object) => void | Promise<void>} [opts.onStartMatch]
  * @param {() => void} [opts.onLeaveMatch]
  */
@@ -67,6 +68,7 @@ export function createMatchLobby({
   subscribePeerDisconnected,
   subscribeMatchLobbyConnected,
   onChange,
+  onActiveChange,
   onStartMatch,
   onLeaveMatch,
   onRankedLeave,
@@ -105,7 +107,7 @@ export function createMatchLobby({
   let lockstepOn = false;
   /** Bumped on each chapter reset so leftover FRAME/CONFIRM from the old map are dropped. */
   let lockstepEpoch = 0;
-  /** True after a match table was loaded — Leave must restore the sandbox. */
+  /** True after a match table was loaded - Leave must restore the sandbox. */
   let hadMatch = false;
   const chatLog = createChatLog();
   let lastChatSendAt = 0;
@@ -577,6 +579,7 @@ export function createMatchLobby({
     startGarden = null;
     startBusy = false;
     chatLog.clear();
+    onActiveChange?.(false);
     emit();
   }
 
@@ -591,6 +594,7 @@ export function createMatchLobby({
     rankedRoster = Array.isArray(opts.roster) ? opts.roster : null;
     hosting = true;
     phase = 'waiting';
+    onActiveChange?.(true);
     settings = defaultSettings(nextMode);
     if (opts.seed != null) settings.seed = (Number(opts.seed) || 0) >>> 0;
     hostId = me.userId;
@@ -621,6 +625,7 @@ export function createMatchLobby({
     hosting = false;
     watching = spectate;
     phase = 'waiting';
+    onActiveChange?.(true);
     settings = defaultSettings(nextMode);
     if (opts.seed != null) settings.seed = (Number(opts.seed) || 0) >>> 0;
     hostFromHint = from ?? null;
@@ -894,7 +899,7 @@ export function createMatchLobby({
 
   subscribeBroadcast?.((data) => {
     if (!data || data.v !== LOBBY_PROTOCOL_VERSION) return;
-    if (phase === 'idle' || !roomId || data.roomId !== roomId) return;
+    if (phase === 'idle' || !roomId || data.roomId !== roomId || data.mode !== mode) return;
     if (noteChat(data)) return;
     if (data.type === MSG.CLOSED && !hosting) {
       if (phase === 'countdown' || phase === 'starting' || phase === 'playing') return;
@@ -1024,11 +1029,10 @@ export function createMatchLobby({
   });
 
   subscribeDataMessage?.((msg, fromPeerId) => {
-    if (phase !== 'idle' && noteChat(msg)) return;
     if (!msg || msg.v !== LOBBY_PROTOCOL_VERSION) return;
     if (phase === 'idle') return;
-    if (msg.roomId && roomId && msg.roomId !== roomId) return;
-    if (msg.mode && mode && msg.mode !== mode) return;
+    if (msg.roomId !== roomId || msg.mode !== mode) return;
+    if (noteChat(msg)) return;
     notePeerUser(fromPeerId, senderUserId(msg));
 
     if (msg.type === MSG.SETTING && !hosting && msg.key) {
@@ -1168,6 +1172,7 @@ export function createMatchLobby({
     },
     getState: snapshot,
     isActive: () => phase !== 'idle',
+    hasPlayed: () => hadMatch,
     isHosting: () => hosting,
     startBlockReason: () => startBusy ? 'Loading map…' : (mode ? startBlockReason(mode, seats) : ''),
     canStart: () => !startBusy && (mode ? canStart(mode, seats) : false),

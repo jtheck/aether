@@ -1,5 +1,5 @@
 // Debug visualization for CPU ray-vs-sphere pick volumes.
-// Copied from the working projectiles.js Lite thin-instance path — not the old
+// Copied from the working projectiles.js Lite thin-instance path - not the old
 // inline pickDebug mesh in renderer.js (that path was dead for a long time).
 
 import {
@@ -62,7 +62,7 @@ function writeSphere(matrices, slot, x, y, z, radius) {
 
 /**
  * Flat mesh in local XY, spun so +Z looks at the eye.
- * Same instance-matrix path as writeSphere — the vertex shader does not billboard.
+ * Same instance-matrix path as writeSphere - the vertex shader does not billboard.
  */
 function writeFacingDisc(matrices, slot, x, y, z, radius, eye) {
   const offset = slot * 16;
@@ -226,7 +226,7 @@ export function createPickHitboxRenderer(engine, scene, capacity, opts = {}) {
     sync(spheres) {
       if (!enabled) return;
       const n = Math.min(spheres?.length ?? 0, cap);
-      // Don't spawn an empty pool — Lite can freeze a count=0 thin-instance mesh
+      // Don't spawn an empty pool - Lite can freeze a count=0 thin-instance mesh
       // so later uploads never show (same class of bug as pre-registerScene debug).
       if (n === 0) {
         if (mesh) clear();

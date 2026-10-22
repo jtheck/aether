@@ -61,7 +61,7 @@ describe('simSession lockstep leave', () => {
   it('disarms the stall clock when a tick commits (healthy lockstep)', () => {
     const session = sessionTwoPlayer();
     session.confirmedTick = 2;
-    // Peer is one tick behind — the common steady state when we render ahead of
+    // Peer is one tick behind - the common steady state when we render ahead of
     // the 20 Hz sim, so a UI sample sees tick 3's confirm still outstanding.
     session.setPeerConfirmedTick(1, 2);
     let stepHandler = null;

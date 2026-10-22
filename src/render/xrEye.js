@@ -77,7 +77,7 @@ export function xrHudProjection(frustum = reach) {
 
 /**
  * Control-group pads land at most this far off the view axis (tangent).
- * atan(0.78) is about 38 degrees — in from the visor rim.
+ * atan(0.78) is about 38 degrees - in from the visor rim.
  */
 export const XR_HUD_EDGE_TAN = 0.78;
 

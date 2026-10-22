@@ -32,7 +32,7 @@ describe('survive / defend hold-out timer', () => {
     assert.deepEqual(stepCampaignTriggers([obj], timerCtx(end - 1)), []);
     assert.equal(obj.completed, false);
 
-    // Duration met but party wiped — no completion.
+    // Duration met but party wiped - no completion.
     assert.deepEqual(stepCampaignTriggers([obj], timerCtx(end, false)), []);
     assert.equal(obj.completed, false);
 
@@ -46,7 +46,7 @@ describe('survive / defend hold-out timer', () => {
     armCampaignTriggers([obj], timerCtx(0));
     const status = campaignTriggerStatus(obj, timerCtx(4 * TICK_HZ));
     assert.equal(status.remaining, 6);
-    assert.equal(describeCampaignObjective(obj, timerCtx(4 * TICK_HZ)), 'Hold the gate — 6s');
+    assert.equal(describeCampaignObjective(obj, timerCtx(4 * TICK_HZ)), 'Hold the gate - 6s');
   });
 });
 
@@ -70,7 +70,7 @@ describe('destroy target-death trigger', () => {
     assert.deepEqual(stepCampaignTriggers([obj], destroyCtx(alive)), []);
     alive.set('unit:0', false);
     assert.deepEqual(stepCampaignTriggers([obj], destroyCtx(alive)), []);
-    assert.equal(describeCampaignObjective(obj, destroyCtx(alive)), 'Wreck the ram — 1/2 left');
+    assert.equal(describeCampaignObjective(obj, destroyCtx(alive)), 'Wreck the ram - 1/2 left');
 
     alive.set('building:0', false);
     const just = stepCampaignTriggers([obj], destroyCtx(alive));
@@ -87,7 +87,7 @@ describe('destroy target-death trigger', () => {
   });
 });
 
-describe('objective triggers — hold / capture / infiltrate / race / escort / choice', () => {
+describe('objective triggers - hold / capture / infiltrate / race / escort / choice', () => {
   const FIELD = { width: 100, height: 100, worldHalfF: 200 };
   const at = (obj) => objectiveWorldPos(obj, FIELD);
   function ctx(tick, over = {}) {

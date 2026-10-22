@@ -1,4 +1,4 @@
-// Unit lob / yeet — monk stick-bonk + fireball splash blast.
+// Unit lob / yeet - monk stick-bonk + fireball splash blast.
 // Multi-tick air travel; render lifts Y + trails from published flights.
 
 import * as fx from './fixed.js';
@@ -19,24 +19,24 @@ import {
   spatialCellId,
 } from './spatialGrid.js';
 
-/** Stick reach — close enough to whap with a staff. */
+/** Stick reach - close enough to whap with a staff. */
 export const MONK_KICK_RADIUS = fx.fromFloat(TILE_SIZE_F * 0.75);
 /** Hostile lob distance (~12 tiles). */
 export const MONK_KICK_LOB_DIST = fx.fromFloat(TILE_SIZE_F * 12);
-/** Ally lob — a firm shove, not a map clear (~5 tiles). */
+/** Ally lob - a firm shove, not a map clear (~5 tiles). */
 export const MONK_KICK_ALLY_LOB_DIST = fx.fromFloat(TILE_SIZE_F * 5);
 /** Air time (~1.35s at 20Hz). */
 export const MONK_KICK_FLIGHT_TICKS = 27;
 /** Monk cooldown between bonks (~1.4s). */
 export const MONK_KICK_COOLDOWN = 28;
-/** Ground stun after landing — get up, you clown. */
+/** Ground stun after landing - get up, you clown. */
 export const MONK_KICK_STUN_TICKS = 36;
 /** Render-only peak loft (world units). */
 export const MONK_KICK_PEAK_HEIGHT = 14;
 /** Stick slap damage as a fraction of monk attack. */
 export const MONK_KICK_DAMAGE_MUL = 0.85;
 
-/** Fireball splash yeet — shorter hop (~4 tiles mid). */
+/** Fireball splash yeet - shorter hop (~4 tiles mid). */
 export const FIREBALL_BLAST_LOB_DIST = fx.fromFloat(TILE_SIZE_F * 4);
 export const FIREBALL_BLAST_FLIGHT_TICKS = 18;
 export const FIREBALL_BLAST_STUN_TICKS = 22;
@@ -53,7 +53,7 @@ const RADIUS2 = fx.mul(MONK_KICK_RADIUS, MONK_KICK_RADIUS);
 /** Distance roll span for monk sticks (fraction of base). */
 const MONK_DIST_MIN = fx.fromFloat(0.55);
 const MONK_DIST_MAX = fx.fromFloat(1.08);
-/** Fireball blast — wider variance, still shorter than a full kick. */
+/** Fireball blast - wider variance, still shorter than a full kick. */
 const BLAST_DIST_MIN = fx.fromFloat(0.4);
 const BLAST_DIST_MAX = fx.fromFloat(1.2);
 
@@ -367,11 +367,11 @@ export function findStickTarget(w, monk) {
 
 /**
  * Passive stick system: advance lobs, then let ready monks bonk one neighbor.
- * Idle monks still swing — wander into stick range at your own risk.
+ * Idle monks still swing - wander into stick range at your own risk.
  */
 export function monkKickSystem(w, field) {
   tickMonkLobs(w);
-  // Stick seek is local — full-N scan was the stress hot path.
+  // Stick seek is local - full-N scan was the stress hot path.
   rebuildSpatialGrid(w.spatial, w);
 
   for (let i = 0; i < w.count; i++) {

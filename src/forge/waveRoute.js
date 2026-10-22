@@ -9,11 +9,11 @@ export const WAVE_DEFAULT_COUNT = 3;
 
 /** Adventure attack rosters. Index matches the sim era. */
 export const WAVE_ERAS = [
-  { id: 1, label: '1 — warriors and archers' },
-  { id: 2, label: '2 — warlocks from the second group' },
-  { id: 3, label: '3 — wizards from the second group' },
-  { id: 4, label: '4 — monks, warlocks from the first group' },
-  { id: 5, label: '5 — monks plus warlocks, wizards, and shamans' },
+  { id: 1, label: '1 - warriors and archers' },
+  { id: 2, label: '2 - warlocks from the second group' },
+  { id: 3, label: '3 - wizards from the second group' },
+  { id: 4, label: '4 - monks, warlocks from the first group' },
+  { id: 5, label: '5 - monks plus warlocks, wizards, and shamans' },
 ];
 
 export function waveHopName(index) {
@@ -49,7 +49,7 @@ export function collectWaveParams({ waves = 0, era = 0, route = [] } = {}) {
   return params;
 }
 
-/** Latest wave-armed zone, else the last zone — hops belong to that target. */
+/** Latest wave-armed zone, else the last zone - hops belong to that target. */
 export function waveTargetObjective(objectives) {
   const list = objectives || [];
   for (let i = list.length - 1; i >= 0; i--) {

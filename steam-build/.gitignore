@@ -2,7 +2,7 @@
 node_modules/
 cache/
 
-# Build output — upload to Steam, not git
+# Build output - upload to Steam, not git
 dist/
 dist-win/
 dist-win*/

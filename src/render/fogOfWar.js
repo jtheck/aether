@@ -1,5 +1,5 @@
-// Client-only fog of war. Vision is a 20 Hz tile stamp — not in lockstep/checksums.
-// Two overlay veils: visited and never-seen. Current sight is a hole — no wash.
+// Client-only fog of war. Vision is a 20 Hz tile stamp - not in lockstep/checksums.
+// Two overlay veils: visited and never-seen. Current sight is a hole - no wash.
 // Hostile units stay through the overlay trail and hide when that veil is most
 // opaque. Enemy buildings hide until seen, then last-known while fogged.
 // Changing local player or shared-vision owners wipes explored tiles and
@@ -29,10 +29,10 @@ const MIL_VISION_MIN = 10;
 const CASTER_VISION_TILES = 18;
 /** Airships see farther still; agoras share this radius. */
 const DIRIGIBLE_VISION_TILES = 24;
-/** Never-seen shroud — heavier than visited so wilderness is a third step. */
+/** Never-seen shroud - heavier than visited so wilderness is a third step. */
 const UNSEEN_MESH_ALPHA = 0.90;
 const UNSEEN_DIFFUSE = [0.01, 0.016, 0.028];
-/** Visited veil — darker than daylight, still lighter than the shroud. */
+/** Visited veil - darker than daylight, still lighter than the shroud. */
 const VISITED_MESH_ALPHA = 0.50;
 const VISITED_DIFFUSE = [0.045, 0.058, 0.072];
 const OVERLAY_LIFT = 0.18;
@@ -76,7 +76,7 @@ const VISITED_COVER = 255 - VISITED_ALPHA;
 /** Time for leftover overlay cover to fade from current sight to its floor. */
 export const COVER_DECAY_MS = 3200;
 /**
- * One texel per tile. GPU linear filter does the fade — a CPU 2× bilinear
+ * One texel per tile. GPU linear filter does the fade - a CPU 2× bilinear
  * resample was ~5ms on the play board and ~24ms + 12MB uploads on stress.
  */
 const FOG_TEX_SCALE = 1;
@@ -119,7 +119,7 @@ function buildingVisionPad(type) {
 export function visionTilesForBuilding(type) {
   if (type === 'tower' || type === 'perch') return CASTER_VISION_TILES;
   if (type === 'agora') return DIRIGIBLE_VISION_TILES;
-  // Camps used to sit at 7 — shorter than a villager — so leaving a farm or
+  // Camps used to sit at 7 - shorter than a villager - so leaving a farm or
   // barracks looked like the building had no sight at all.
   return MIL_VISION_MIN + buildingVisionPad(type);
 }
@@ -274,7 +274,7 @@ const FOG_CLUSTER_BBOX_FRAC = 0.28;
 let fogSrcKeys = null;
 /** @type {Int32Array | null} */
 let fogSrcCopy = null;
-/** Reused index list for clustering — length is srcN, not capacity. */
+/** Reused index list for clustering - length is srcN, not capacity. */
 const fogSrcSort = [];
 
 /** @type {Int32Array | null} */
@@ -413,10 +413,10 @@ export function createFogOfWar() {
   let height = 0;
   let half = 0;
   let halfZ = 0;
-  /** Occupancy count — hard vision circle. */
+  /** Occupancy count - hard vision circle. */
   /** @type {Uint32Array | null} */
   let visible = null;
-  /** Occupancy count — sight including the fade skirt. */
+  /** Occupancy count - sight including the fade skirt. */
   /** @type {Uint32Array | null} */
   let sight = null;
   /** Overlay coverage 0–255 (255 = fully seen). Hide waits until this hits the floor. */
@@ -474,13 +474,13 @@ export function createFogOfWar() {
   let visitedPixels = null;
   let texW = 0;
   let texH = 0;
-  /** Tiles with cover above the explored/unseen floor — decay walks only these. */
+  /** Tiles with cover above the explored/unseen floor - decay walks only these. */
   /** @type {Int32Array | null} */
   let hot = null;
   let hotN = 0;
   /** @type {Uint8Array | null} */
   let inHot = null;
-  /** Cover changed this stamp — overlay paint / GPU upload. */
+  /** Cover changed this stamp - overlay paint / GPU upload. */
   /** @type {Int32Array | null} */
   let dirtyList = null;
   let dirtyN = 0;
@@ -502,7 +502,7 @@ export function createFogOfWar() {
   /** @type {Int32Array | null} */
   let srcTiles = null;
   let srcN = 0;
-  /** Previous unique source tiles — skip raster when the set is unchanged. */
+  /** Previous unique source tiles - skip raster when the set is unchanged. */
   /** @type {Int32Array | null} */
   let lastSrcTiles = null;
   let lastSrcN = 0;
@@ -511,7 +511,7 @@ export function createFogOfWar() {
   let lastSourceR = null;
   /**
    * True when visible/sight are per-source counts (circle raster). Union EDT
-   * writes a 0/1 veil — incremental remove would punch holes in sitters.
+   * writes a 0/1 veil - incremental remove would punch holes in sitters.
    */
   let countedOccupancy = false;
   /** @type {Uint8Array | null} */
@@ -583,6 +583,20 @@ export function createFogOfWar() {
     if (heldExplored && explored && heldExplored.length === explored.length) explored.set(heldExplored);
     heldCover = null;
     heldExplored = null;
+    // forgetOverlay just cleared the dirty and hot lists, and the next upload
+    // paints a fresh shroud plus only dirty tiles. Restored sight is not a
+    // cover increase, so without this the veil stays black on ground the
+    // spectator union had already revealed. Units still draw: shared vision
+    // makes every army an ally.
+    if (!cover) return;
+    const n = cover.length;
+    for (let i = 0; i < n; i++) {
+      const seen = explored && explored[i];
+      const c = cover[i];
+      if (seen || c > 0) markDirty(i);
+      const floor = seen ? VISITED_COVER : 0;
+      if (c > floor) markHot(i);
+    }
   }
 
   function forgetOverlay() {
@@ -687,7 +701,7 @@ export function createFogOfWar() {
   }
 
   /**
-   * New board / match — drop explored tiles, last-known buildings, and shared
+   * New board / match - drop explored tiles, last-known buildings, and shared
    * vision so a stress FFA cannot leak onto 1v1 (or the reverse).
    */
   function reset(nextField) {
@@ -990,7 +1004,7 @@ export function createFogOfWar() {
     return { x0, z0, x1, z1, radMin, radMax, nRad, circleWork };
   }
 
-  /** Raster current `srcTiles[0..srcN)` — union EDT or per-circle. */
+  /** Raster current `srcTiles[0..srcN)` - union EDT or per-circle. */
   function stampSourceGroup(mask) {
     if (srcN <= 0) return true;
     const m = measureSources();
@@ -1072,7 +1086,7 @@ export function createFogOfWar() {
     const nextPlayer = input.localPlayerId ?? localPlayerId;
     // Spectator catch-up and loading-screen shared vision stamp every army.
     // Dropping that set (or swapping local player) must wipe explored tiles
-    // and last-known buildings — otherwise the joiner keeps a second map.
+    // and last-known buildings - otherwise the joiner keeps a second map.
     const shareChanged = input.shareVisionWith !== undefined && !sameShareVision(input.shareVisionWith);
     if (nextPlayer !== localPlayerId || shareChanged) {
       const savedAt = lastStampAt;
@@ -1149,7 +1163,7 @@ export function createFogOfWar() {
     }
     const churn = adds + removes;
     if (churn === 0 && lastSrcN > 0) {
-      // Same unique source tiles — overlay occupancy is unchanged.
+      // Same unique source tiles - overlay occupancy is unchanged.
     } else if (
       !countedOccupancy
       || lastSrcN === 0
@@ -1198,7 +1212,7 @@ export function createFogOfWar() {
     return filterStructures(list, lastBuildings, 'building');
   }
 
-  /** Agoras and their flags stay up — landmarks, not fog secrets. */
+  /** Agoras and their flags stay up - landmarks, not fog secrets. */
   function filterAgoras(list) {
     return list ?? [];
   }
@@ -1300,7 +1314,7 @@ export function createFogOfWar() {
     sealFogEdgePadding(visitedPixels, texW, texH, contentW, contentH);
   }
 
-  /** Full unseen shroud — no per-tile cover walk. */
+  /** Full unseen shroud - no per-tile cover walk. */
   function paintShroud() {
     if (!pixels || !visitedPixels) return;
     pixels.fill(255);
@@ -1326,7 +1340,7 @@ export function createFogOfWar() {
 
   /**
    * Dirty tiles as 64-aligned cells. A ring of armies dirties a huge AABB
-   * but only a fraction of cells — one rect per occupied cell beats a full upload.
+   * but only a fraction of cells - one rect per occupied cell beats a full upload.
    */
   function dirtyCellRects() {
     if (dirtyN <= 0 || !texW || !texH) return null;
@@ -1419,7 +1433,7 @@ export function createFogOfWar() {
   function uploadTexture() {
     if (!engine || !pixels || !visitedPixels || !overlayFitsField()) return;
     // After detach/attach the pixel buffers are new but paintedOnce can still
-    // be true — a dirty-only upload then writes a hole into a zeroed shroud
+    // be true - a dirty-only upload then writes a hole into a zeroed shroud
     // (wilderness stays transparent = inverted mask).
     if (paintedOnce && dirtyN === 0 && texture && visitedTexture) return;
     if (!paintedOnce) {
@@ -1603,7 +1617,7 @@ export function createFogOfWar() {
   }
 
   function createOverlayMaterial(_color, alpha) {
-    // Blend, don't cutoff — the mask's bilinear filter fades the tile stairs.
+    // Blend, don't cutoff - the mask's bilinear filter fades the tile stairs.
     // Vertices stay in world space. Mesh translation is only the sort origin.
     // The old unlit standard material shaded emissive × diffuse with emissive
     // black, so the veil is black at `alpha`. Keep that darkness.

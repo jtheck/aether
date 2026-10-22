@@ -34,6 +34,22 @@ function fakeP2p(userId = 'host') {
 }
 
 describe('match lobby', () => {
+  it('parks other matchmaking for the full room lifetime', () => {
+    const p2p = fakeP2p('host');
+    const activeChanges = [];
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      onActiveChange: (active) => activeChanges.push(active),
+    });
+
+    room.createRoom('onevsone');
+    room.leaveRoom();
+
+    assert.deepEqual(activeChanges, [true, false]);
+  });
+
   it('creates a host room and gates start until a second ready player', () => {
     const p2p = fakeP2p('host');
     const gameLobby = createGameLobby({ getP2p: () => p2p });
@@ -43,6 +59,7 @@ describe('match lobby', () => {
       gameLobby,
     });
     assert.equal(room.createRoom('teams'), true);
+    assert.equal(room.hasPlayed(), false);
     assert.equal(room.isHosting(), true);
     assert.equal(room.canStart(), false);
     assert.equal(room.startBlockReason(), 'Need 2 players');
@@ -624,7 +641,17 @@ describe('match lobby', () => {
     });
     room.createRoom('onevsone');
     const { roomId, mode } = room.getState();
-    dataFn({ type: MSG.CHAT, id: 'p:1:aa', from: 'peer', name: 'Peer', text: 'via rtc', ts: 1 });
+    dataFn({
+      v: 1,
+      type: MSG.CHAT,
+      mode,
+      roomId,
+      id: 'p:1:aa',
+      from: 'peer',
+      name: 'Peer',
+      text: 'via rtc',
+      ts: 1,
+    });
     broadcastFn({
       v: 1,
       type: MSG.CHAT,
@@ -635,6 +662,26 @@ describe('match lobby', () => {
       name: 'Peer',
       text: 'via air',
       ts: 2,
+    });
+    dataFn({
+      v: 1,
+      type: MSG.CHAT,
+      mode: 'teams',
+      roomId,
+      id: 'wrong-mode:1',
+      from: 'other',
+      text: 'wrong mode',
+      ts: 3,
+    });
+    broadcastFn({
+      v: 1,
+      type: MSG.CHAT,
+      mode,
+      roomId: 'other-room',
+      id: 'wrong-room:1',
+      from: 'other',
+      text: 'wrong room',
+      ts: 4,
     });
     const texts = room.getChatLog().map((m) => m.text);
     assert.deepEqual(texts, ['via rtc', 'via air']);

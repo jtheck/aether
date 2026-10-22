@@ -229,7 +229,7 @@ export function radialIconBounds(meshes) {
  */
 /**
  * Uniform scale so a mesh AABB fits in `targetExtent`. Never grows past
- * `fallback` — unit-tuned menus stay put; tall buildings shrink to the pad.
+ * `fallback` - unit-tuned menus stay put; tall buildings shrink to the pad.
  * @param {{ hx?: number, hy?: number, hz?: number } | null | undefined} bounds
  */
 export function radialIconFitScale(bounds, targetExtent, fallback = 1) {

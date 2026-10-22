@@ -1,4 +1,4 @@
-// Combat — acquire targets, chase, deal damage on cooldown.
+// Combat - acquire targets, chase, deal damage on cooldown.
 
 import * as fx from './fixed.js';
 import { ATTACK_DELIVERY, getUnitDef, UNIT, unitAttacksBuildings, unitIdleHunts } from './unitTypes.js';
@@ -36,7 +36,7 @@ import { armChaseLeash, chaseLeashExceeded, refreshLeashDrops } from './leash.js
 import { frostAttackAdvances } from './combatStatus.js';
 
 export const ACQUIRE_PHASES = 5;
-/** Squared-distance penalty per existing attacker — spreads fire without ignoring nearer threats. */
+/** Squared-distance penalty per existing attacker - spreads fire without ignoring nearer threats. */
 const LOAD_SPREAD = fx.mul(fx.fromInt(10), fx.fromInt(10));
 /** Must beat the current target by this much score before switching (anti-thrash). */
 const REBALANCE_MARGIN = fx.mul(fx.fromInt(4), fx.fromInt(4));
@@ -89,7 +89,7 @@ function hasSquadMates(w, i) {
 }
 
 function canAutoAcquire(w, i) {
-  // Frogs underfoot — too busy gawking to pick a fight.
+  // Frogs underfoot - too busy gawking to pick a fight.
   if (w.distractCd[i] > 0) return false;
   if (w.carriedBy?.[i] >= 0) return false;
   const order = w.order[i];
@@ -197,7 +197,7 @@ export function acquireTargets(w, field) {
     if (wasAttack && prevB >= 0 && isBuildingAlive(buildings[prevB])) continue;
 
     // Prefer military / production buildings. Economy (camp/mine/farm/silo) is
-    // fallback only — and attack-move keeps marching instead of peeling off.
+    // fallback only - and attack-move keeps marching instead of peeling off.
     const allowEconomy = w.order[i] !== w.ORDER.ATTACK_MOVE;
     let bestBi = -1;
     let bestBd2 = 0x7fffffff;
@@ -243,7 +243,7 @@ export function acquireTargets(w, field) {
  * Past the rope and not in swing range: drop the foe and go back.
  * Attack-move resumes its march. Idle walks back to the spot the chase began.
  * In-range fighters keep swinging where they stand, and only leave once the
- * foe steps out of reach — so the rope stops a chase without cancelling a hit.
+ * foe steps out of reach - so the rope stops a chase without cancelling a hit.
  */
 function giveUpChase(w, i) {
   const homeX = w.leashX[i];
@@ -286,7 +286,7 @@ function resolveAttacks(w, field) {
     }
     if (w.order[i] !== w.ORDER.ATTACK) continue;
     // Distracted units don't pick new fights, but a frog-confused unit may
-    // already be locked onto an ally — let that swing through.
+    // already be locked onto an ally - let that swing through.
 
     const target = w.targetEntity[i];
     const bi = w.targetBuilding?.[i] ?? -1;
@@ -340,7 +340,7 @@ function resolveAttacks(w, field) {
     if (attackInRange(w, i)) {
       w.vx[i] = 0;
       w.vy[i] = 0;
-      // Keep hasTarget — it marks a pending attack-move destination to resume.
+      // Keep hasTarget - it marks a pending attack-move destination to resume.
       clearPath(w, i);
       if (w.attackCd[i] <= 0) {
         if (w.type[i] === UNIT.PRIEST && tryPriestHeal(w, i, false)) {
@@ -394,7 +394,7 @@ function resolveAttacks(w, field) {
     if (w.abilityCd[i] > 0) w.abilityCd[i]--;
     if (w.distractCd[i] > 0) {
       w.distractCd[i]--;
-      // Confusion ends — stop beating up your own team.
+      // Confusion ends - stop beating up your own team.
       if (w.distractCd[i] === 0) {
         const t = w.targetEntity[i];
         if (

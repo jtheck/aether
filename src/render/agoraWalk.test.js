@@ -37,9 +37,9 @@ describe('agora walk Y', () => {
 
   it('rotates the deck with agora yaw', () => {
     const pads = agoraWalkPadsFromList([{ x: 0, z: 0, yaw: Math.PI / 2 }], () => 0);
-    // Local +Z is world +X after a +90° yaw — still on the plaza.
+    // Local +Z is world +X after a +90° yaw - still on the plaza.
     assert.equal(agoraWalkYAt(pads, 7.2, 0, 0), AGORA_DECK_Y);
-    // Local +X is world −Z — past the short side, off the deck.
+    // Local +X is world −Z - past the short side, off the deck.
     assert.equal(agoraWalkYAt(pads, 0, -7.7, 0), 0);
   });
 });

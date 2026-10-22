@@ -138,7 +138,7 @@ describe('lobby ui copy', () => {
     assert.deepEqual(ids, ['workshop:7/e1c1.garden', 'workshop:7/e1c2.garden']);
     assert.deepEqual(groupSelectOptions(opts).filter((row) => row.group), [
       {
-        group: 'Siege — The Siege',
+        group: 'Siege - The Siege',
         options: [
           { id: 'workshop:7/e1c1.garden', name: 'Breach' },
           { id: 'workshop:7/e1c2.garden', name: 'Sally' },
@@ -191,9 +191,9 @@ describe('lobby ui copy', () => {
 
   it('lists a loaded web pack ahead of workshop maps', () => {
     const opts = chapterSelectOptions([], 'pack:sally.garden', '', 'localhost', [
-      { id: 'pack:sally.garden', name: 'Siege — Sally' },
+      { id: 'pack:sally.garden', name: 'Siege - Sally' },
     ]);
-    assert.equal(opts.find((row) => row.id === 'pack:sally.garden')?.name, 'Siege — Sally');
+    assert.equal(opts.find((row) => row.id === 'pack:sally.garden')?.name, 'Siege - Sally');
   });
 });
 
@@ -293,7 +293,11 @@ function lobbyDom() {
     );
     drawers.append(drawer);
   }
-  put('match-lobby-overlay', new FakeEl('div', { hidden: true }));
+  const overlay = put('match-lobby-overlay', new FakeEl('div', { hidden: true }));
+  const panel = new FakeEl('div', { className: 'match-lobby-panel', hidden: true });
+  overlay.append(panel);
+  put('match-over', new FakeEl('div', { hidden: true }));
+  put('match-lobby-leave', new FakeEl('button'));
   put('match-lobby-min', new FakeEl('button'));
   put('match-lobby-title', new FakeEl('h3'));
   put('match-lobby-note', new FakeEl('div'));
@@ -301,6 +305,9 @@ function lobbyDom() {
   return {
     drawers,
     overlay: byId.get('match-lobby-overlay'),
+    panel,
+    score: byId.get('match-over'),
+    leave: byId.get('match-lobby-leave'),
     min: byId.get('match-lobby-min'),
     title: byId.get('match-lobby-title'),
     note: byId.get('match-lobby-note'),
@@ -549,6 +556,32 @@ describe('match lobby overlay', () => {
       });
       ui.setOverlayParked(true);
       assert.equal(dom.overlay.className.includes('is-parked'), true);
+    } finally {
+      restore();
+    }
+  });
+
+  it('shows a score card when no lobby is open', () => {
+    const dom = lobbyDom();
+    dom.score.hidden = false;
+    const restore = dom.install();
+    try {
+      setupLobbyUi({
+        gameLobby: { listLobbies: () => [], listen() {}, unlisten() {} },
+        matchLobby: {
+          isActive: () => false,
+          getState: () => null,
+          canStart: () => false,
+          startBlockReason: () => '',
+          countdownMs: () => 0,
+          lockstepStalled: () => false,
+        },
+      });
+      assert.equal(dom.overlay.hidden, false);
+      assert.equal(dom.panel.hidden, false);
+      assert.equal(dom.score.hidden, false);
+      assert.equal(dom.leave.hidden, true);
+      assert.equal(dom.overlay.className.includes('is-ranked-result'), true);
     } finally {
       restore();
     }

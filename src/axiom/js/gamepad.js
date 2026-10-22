@@ -1,4 +1,4 @@
-// Axiom fly pad — standard mapping. Left stick fly, right stick look, LT/RT rise.
+// Axiom fly pad - standard mapping. Left stick fly, right stick look, LT/RT rise.
 // Self-contained: the garden pad helper lives under /app/ and is not on the /axiom/ deploy.
 
 export const PAD = {
@@ -71,7 +71,7 @@ function xrStickAxes(pad) {
 }
 
 /**
- * Quest / Index / etc. — each hand is its own xr-standard Gamepad.
+ * Quest / Index / etc. - each hand is its own xr-standard Gamepad.
  * Left stick fly, right stick look, triggers rise, grips / Y B change shape.
  * @param {Iterable<{ handedness?: string, gamepad?: object }> | null | undefined} sources
  */
@@ -240,7 +240,7 @@ export function listAxiomFocusables(root) {
 }
 
 /**
- * Stick up is forward / look up. X is not inverted — fly felt opposite of the garden orbit pad.
+ * Stick up is forward / look up. X is not inverted - fly felt opposite of the garden orbit pad.
  * @param {{ lx?: number, ly?: number, rx?: number, ry?: number, lt?: number, rt?: number }} read
  */
 export function flyIntentFromPad(read) {

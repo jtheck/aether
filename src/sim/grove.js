@@ -1,6 +1,6 @@
 // Finished groves slowly fatten living trees in a wide disc.
 // Closer trees grow past the natural size/stock cap; the bonus fades at the rim
-// so the stand reads as a mound. Existing trees only — no new plantings.
+// so the stand reads as a mound. Existing trees only - no new plantings.
 
 import { worldToTile, worldToTileZ } from './field.js';
 import { buildingIsFinished, isBuildingAlive } from './buildings.js';

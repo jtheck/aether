@@ -1,4 +1,4 @@
-// Placed buildings (sim). Placement is via CMD.PLACE_BUILDING — no economy yet.
+// Placed buildings (sim). Placement is via CMD.PLACE_BUILDING - no economy yet.
 // Footprints write into field.pass / field.slowMask for pathing + the live tile grid.
 
 import * as fx from './fixed.js';
@@ -19,7 +19,7 @@ import {
   isTerrainSlowTile,
 } from './field.js';
 import { fellTreeAt } from './trees.js';
-import { SCENERY, rockFootprintRadiusForStock } from './scenery.js';
+import { SCENERY, clearSceneryCoveringTiles, rockFootprintRadiusForStock } from './scenery.js';
 import { UNIT, getUnitDef, isFlyer, getUnitCost } from './unitTypes.js';
 import { unitPopCost } from './pop.js';
 import { ORDER } from './world.js';
@@ -48,12 +48,12 @@ import { GENERATED_BUILDING_SPAWN_LOCAL } from './buildingSpawnLocal.generated.j
 /** @typedef {'block' | 'slow'} BuildingOccupancyMode */
 /** @typedef {'unit' | 'upgrade' | 'building'} BuildingMenuItemKind */
 
-/** Placement / ghost yaw snaps (radians). Visual only — footprints stay axis-aligned. */
+/** Placement / ghost yaw snaps (radians). Visual only - footprints stay axis-aligned. */
 export const BUILDING_YAW_SNAP = Math.PI / 12;
 
 /**
  * Baked spawn empties from building GLBs (`spawn_anchor` local translation).
- * Sim uses these — does not dig through live meshes.
+ * Sim uses these - does not dig through live meshes.
  * Hand fallback for tavern until prebake has been run; generated wins on key clash.
  * @type {Readonly<Record<string, { x: number, y: number, z: number }>>}
  */
@@ -194,9 +194,9 @@ export function getBuildingDisplayName(typeId) {
  * Placement cost per building (wood/stone/mineral/food). Charged on placement,
  * refunded if the unfinished site is cancelled. v1's building prices were placeholder
  * single-digits; re-priced here into a real curve against the ~90-wood start:
- *   basic  — affordable early from wood alone (econ/expansion),
- *   advanced — needs a stone economy first (military/tech),
- *   elemental — mineral-gated premium tier.
+ *   basic  - affordable early from wood alone (econ/expansion),
+ *   advanced - needs a stone economy first (military/tech),
+ *   elemental - mineral-gated premium tier.
  * @type {Readonly<Record<string, Record<string, number>>>}
  */
 export const BUILDING_COST = Object.freeze({
@@ -225,7 +225,7 @@ export function getBuildingCost(typeId) {
   return BUILDING_COST[typeId] ?? {};
 }
 
-/** Building `requires` — own a finished building of each listed type. */
+/** Building `requires` - own a finished building of each listed type. */
 export const BUILDING_REQUIRES = Object.freeze({
   tower: Object.freeze(['camp']),
   tavern: Object.freeze(['camp']),
@@ -320,7 +320,7 @@ export const BUILD_TIME = Object.freeze({
 
 const DEFAULT_BUILD_TIME = 100;
 
-/** Hit points by type — a warrior (10 dmg) should take a while on a camp. */
+/** Hit points by type - a warrior (10 dmg) should take a while on a camp. */
 export const BUILDING_HP = Object.freeze({
   camp: 280,
   village: 420,
@@ -350,7 +350,7 @@ export function getBuildingHp(typeId) {
 
 export function isBuildingAlive(b) {
   if (!b) return false;
-  // Older checkpoints / tests omit hp — treat as standing.
+  // Older checkpoints / tests omit hp - treat as standing.
   if (b.hp == null) return true;
   return (b.hp | 0) > 0;
 }
@@ -906,7 +906,7 @@ export function forEachFootprintTile(field, typeId, xFixed, zFixed, fn) {
 /**
  * True if the footprint fits on walkable tiles clear of structures.
  * Blocks red (impassable) and structure-yellow (farm/agora/slow buildings).
- * Tree / shore yellow (slowMask only) is allowed — buildings can claim those tiles.
+ * Tree / shore yellow (slowMask only) is allowed - buildings can claim those tiles.
  * @param {object} field
  * @param {string} typeId
  * @param {number} xFixed
@@ -966,7 +966,7 @@ export function applySerializedAgoraOccupancy(field, agoras) {
 
 /**
  * Stamp one structure onto pass / slow / structureSlowMask (OR, idempotent).
- * Clears any living trees under the claim so meshes + slow stay in sync.
+ * Clears trees and rocks covering the claim so a resource cannot share it.
  * @param {object} field
  * @param {string} typeId
  * @param {number} xFixed Q16.16
@@ -974,6 +974,11 @@ export function applySerializedAgoraOccupancy(field, agoras) {
  */
 export function applyStructureOccupancyAt(field, typeId, xFixed, zFixed, built = true) {
   if (!field?.pass || !getBuildingFootprint(typeId)) return;
+  const covered = [];
+  forEachFootprintTile(field, typeId, xFixed, zFixed, (tx, tz) => {
+    covered.push({ tx, tz });
+  });
+  clearSceneryCoveringTiles(field, covered);
   const structureSlow = ensureStructureSlowMask(field);
   if (!field.slowMask || field.slowMask.length !== structureSlow.length) {
     field.slowMask = new Uint8Array(structureSlow.length);
@@ -989,7 +994,7 @@ export function applyStructureOccupancyAt(field, typeId, xFixed, zFixed, built =
   });
   // A farm is a food worksite: mark its center tile as an infinite food node so
   // villagers work food in place (see gather.js). Only once the farm
-  // is raised — a construction site produces nothing. Rebuilds/checkpoints
+  // is raised - a construction site produces nothing. Rebuilds/checkpoints
   // re-stamp occupancy, so this stays in sync with the building set.
   if (typeId === 'farm' && built) {
     const n = field.width * field.height;
@@ -1054,7 +1059,7 @@ function tileKeepsSlow(field, i) {
 
 /**
  * Open a ruined building's tiles. Never unblocks water / table / walls / rocks /
- * other live buildings. Incremental — does not restamp the whole map.
+ * other live buildings. Incremental - does not restamp the whole map.
  */
 export function clearStructureOccupancyAt(field, typeId, xFixed, zFixed, opts = {}) {
   if (!field?.pass || !getBuildingFootprint(typeId)) return;
@@ -1143,7 +1148,7 @@ export function createBuilding(opts) {
   const z = fx.fromFloat(opts.z);
   const yaw = opts.yaw != null ? fx.fromFloat(opts.yaw) : 0;
   const buildTime = getBuildTime(type);
-  // Defaults to complete — staging showcase, checkpoints, and tests want live
+  // Defaults to complete - staging showcase, checkpoints, and tests want live
   // buildings. Placement (applyPlaceBuilding) opts into an under-construction site.
   const built = opts.built != null ? opts.built | 0 : 1;
   return {
@@ -1182,7 +1187,7 @@ export function createBuilding(opts) {
     tracks: [],
     /** Ticks accrued toward the next village villager. New villages start the first one partway done. */
     villageSpawnAcc: type === 'village' ? VILLAGE_FIRST_VILLAGER_ACC : 0,
-    /** Sim tick when a camp/mine/farm finished — AI open-rally once (0 = done). */
+    /** Sim tick when a camp/mine/farm finished - AI open-rally once (0 = done). */
     gatherRallyAt: 0,
     /** Ticks a finished derrick has left before it collapses into a well. */
     morphTicks: type === 'derrick' && built ? DERRICK_LIFE_TICKS : 0,
@@ -1235,7 +1240,7 @@ export function defaultRallyWorld(typeId, xF, zF, yawF) {
 
 /**
  * True when every trainable unit on this building is a flyer (e.g. perch → dirigible).
- * Air rallies are straight-line — no ground A*.
+ * Air rallies are straight-line - no ground A*.
  * @param {string} typeId
  */
 export function buildingTrainsOnlyFlyers(typeId) {
@@ -1271,7 +1276,7 @@ export function rallyPathWorldPoints(field, b, rx, rz, opts = null) {
     pts.push({ x: spawn.x, z: spawn.z });
   }
 
-  // Dirigibles / air units ignore ground blockers and slow — fly straight.
+  // Dirigibles / air units ignore ground blockers and slow - fly straight.
   if (buildingTrainsOnlyFlyers(b.type) || !field) {
     pts.push({ x: rx, z: rz });
     return pts;
@@ -1515,7 +1520,7 @@ export function applyPlaceBuilding(w, field, cmd) {
     rallyHop2Z: 0,
     rallyHop2Order: ORDER.MOVE,
     prodPaused: 0,
-    // Placed as an inert construction site — villagers raise it (construction.js).
+    // Placed as an inert construction site - villagers raise it (construction.js).
     built: 0,
     buildProgress: 0,
     buildHalfAcc: 0,
@@ -1752,7 +1757,7 @@ export function applyUpgradeBuilding(w, cmd) {
 
 /**
  * Replace a spent derrick with a well site on the same pad. Villagers raise it.
- * No refund — the derrick already spent the mine upgrade.
+ * No refund - the derrick already spent the mine upgrade.
  * @param {object} w
  * @param {object} b
  */

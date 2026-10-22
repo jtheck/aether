@@ -1,4 +1,4 @@
-// Cosmetic DLC packs — render-only. Sim unit ids never change.
+// Cosmetic DLC packs - render-only. Sim unit ids never change.
 // Steam App IDs unlock packs; GLBs live on the CDN like every other model.
 
 import { UNIT, UNIT_DEFS, getUnitDef } from '../sim/unitTypes.js';
@@ -38,7 +38,7 @@ export const DLC_PACKS = {
 /** Settings / wire value for the base mesh. */
 export const DEFAULT_SKIN_ID = '';
 
-/** Catalog order — first owned pack wins when two override the same unit. */
+/** Catalog order - first owned pack wins when two override the same unit. */
 export const DLC_PACK_ORDER = Object.freeze([DLC_FIRST_RESPONDER]);
 
 /** HUD / radial icons: typeId → pack id for the local player. */
@@ -61,7 +61,7 @@ export function isDlcPackId(id) {
   return typeof id === 'string' && id in DLC_PACKS;
 }
 
-/** `?dlc=` is a local art hook — ignored on aether.garden / any non-loopback host. */
+/** `?dlc=` is a local art hook - ignored on aether.garden / any non-loopback host. */
 export function isLocalDlcHost(hostname) {
   const host = String(hostname ?? '').replace(/^\[|\]$/g, '').toLowerCase();
   return host === 'localhost' || host === '127.0.0.1' || host === '::1';
@@ -241,7 +241,7 @@ export function ownerSkinsFromSeats(seats) {
   return out;
 }
 
-/** @deprecated ownerSkinsFromSeats — first pack only */
+/** @deprecated ownerSkinsFromSeats - first pack only */
 export function ownerPacksFromSeats(seats) {
   /** @type {Record<number, string>} */
   const out = {};
@@ -417,14 +417,14 @@ export function sanitizeBuildingSkins(raw) {
 
 /**
  * Map Steam /info.dlc rows onto catalog pack ids.
- * @param {{ appId?: number, owned?: boolean, available?: boolean }[]} [dlcList]
+ * @param {{ appId?: number, owned?: boolean }[]} [dlcList]
  */
 export function packsOwnedFromSteamDlc(dlcList) {
   const ownedAppIds = new Set();
   for (const row of dlcList ?? []) {
     const appId = Number(row?.appId);
     if (!Number.isFinite(appId)) continue;
-    if (row.owned || row.available) ownedAppIds.add(appId);
+    if (row.owned) ownedAppIds.add(appId);
   }
   const out = [];
   for (const id of DLC_PACK_ORDER) {

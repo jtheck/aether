@@ -27,7 +27,7 @@ function fill(el, rows, playerId) {
     const tr = document.createElement('tr');
     if (row.playerId === playerId) tr.className = 'is-you';
     const losses = row.losses ?? Math.max(0, (row.games | 0) - (row.wins ?? 0));
-    const cells = [row.rank, row.name || '—', row.rating, row.wins ?? 0, losses];
+    const cells = [row.rank, row.name || '-', row.rating, row.wins ?? 0, losses];
     for (const value of cells) {
       const td = document.createElement('td');
       td.textContent = String(value);

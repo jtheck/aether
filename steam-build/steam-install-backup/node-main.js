@@ -74,7 +74,7 @@ function openRemoteDevTools() {
       nw.Shell.openExternal('http://127.0.0.1:9222');
     });
   }).on('error', function () {
-    console.warn('[steam-build] Remote debug unavailable — restart with npm start (SDK flavor)');
+    console.warn('[steam-build] Remote debug unavailable - restart with npm start (SDK flavor)');
   });
 }
 
@@ -237,7 +237,7 @@ function ensureSteamDeferred() {
   setTimeout(function () {
     try {
       require('./steam-client').setOnSteamRestartRequired(function () {
-        console.log('[steam-build] Steam requested relaunch — quitting so Steam can restart the app');
+        console.log('[steam-build] Steam requested relaunch - quitting so Steam can restart the app');
         nw.App.quit();
       });
       ensureSteam();

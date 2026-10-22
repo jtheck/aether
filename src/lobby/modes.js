@@ -1,6 +1,7 @@
 // Pre-match lobby mode constraints. Same room shell; only seats / defaults change.
 
 import { adventureChapters } from './adventureCampaign.js';
+import { networkChannel } from '../network/namespace.js';
 
 export const FIELD_SIZES = ['tiny', 'small', 'medium', 'large', 'huge'];
 
@@ -36,7 +37,7 @@ export function chapterIdForGardenUrl(url) {
   return adventureChapters().find((c) => c.garden === url)?.id || '';
 }
 
-/** Corner mark for story mode — "Ch 1" from id, garden url, or name. */
+/** Corner mark for story mode - "Ch 1" from id, garden url, or name. */
 export function chapterLabelFor(ref = {}) {
   const id = String(ref.chapter || '');
   const url = String(ref.gardenUrl || ref.url || '');
@@ -80,7 +81,7 @@ export const MODES = {
   onevsone: {
     id: 'onevsone',
     name: '1 vs 1',
-    typeChannel: 'aether-v2-1v1',
+    typeChannel: networkChannel('aether-v2-1v1'),
     maxPlayers: 2,
     teams: false,
     defaultFieldSize: 'tiny',
@@ -93,7 +94,7 @@ export const MODES = {
   teams: {
     id: 'teams',
     name: 'Teams',
-    typeChannel: 'aether-v2-teams',
+    typeChannel: networkChannel('aether-v2-teams'),
     maxPlayers: 4,
     teams: true,
     defaultFieldSize: 'small',
@@ -106,7 +107,7 @@ export const MODES = {
   adventure: {
     id: 'adventure',
     name: 'Adventure',
-    typeChannel: 'aether-v2-adventure',
+    typeChannel: networkChannel('aether-v2-adventure'),
     maxPlayers: 4,
     teams: false,
     defaultFieldSize: 'small',
@@ -119,7 +120,7 @@ export const MODES = {
   koth: {
     id: 'koth',
     name: 'King of the Hill',
-    typeChannel: 'aether-v2-koth',
+    typeChannel: networkChannel('aether-v2-koth'),
     maxPlayers: 5,
     teams: false,
     defaultFieldSize: 'medium',

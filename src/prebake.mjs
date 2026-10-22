@@ -37,7 +37,7 @@ async function ensureVendor() {
     try {
       await access(join(ROOT, rel));
     } catch {
-      throw new Error(`Missing ${rel} — run the matching npm run build:* first`);
+      throw new Error(`Missing ${rel} - run the matching npm run build:* first`);
     }
   }
 }
@@ -108,7 +108,7 @@ async function launchBrowser() {
     '--disable-gpu-sandbox',
   ];
   // Prefer installed Chrome (usually has a real GPU adapter).
-  // Default headed on Windows when PREBAKE_HEADED unset — headless often has no adapter.
+  // Default headed on Windows when PREBAKE_HEADED unset - headless often has no adapter.
   const headed = HEADED || process.platform === 'win32';
   try {
     return await chromium.launch({
@@ -117,7 +117,7 @@ async function launchBrowser() {
       args,
     });
   } catch {
-    console.warn('system Chrome not found — falling back to Playwright Chromium');
+    console.warn('system Chrome not found - falling back to Playwright Chromium');
     return chromium.launch({ headless: headed ? false : true, args });
   }
 }

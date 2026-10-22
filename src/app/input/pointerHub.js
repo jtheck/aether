@@ -13,7 +13,7 @@ export function isRmbPassthroughTarget(target) {
 }
 
 // Sole pointer/wheel surface for mouse and touch.
-// Document-level move/up like v1 — no pointer capture.
+// Document-level move/up like v1 - no pointer capture.
 // Touch is fully owned by the touch adapter (its own multi-finger bookkeeping);
 // it drives camera + game through the same surfaces mouse uses. Gamepad owns
 // sticks + menu tab in gamepad.js (nudgeLookPan / nudge* / focus helpers).
@@ -28,7 +28,7 @@ export function isRmbPassthroughTarget(target) {
  * @param {ReturnType<import('../../render/cameraController.js').createCameraController>} opts.camera
  * @param {ReturnType<import('./gameInput.js').createGameInput>} opts.game
  * @param {ReturnType<import('./touchAdapter.js').createTouchAdapter>} [opts.touch]
- * @param {() => boolean} [opts.active] — when false, camera + game ignore input (boot splash)
+ * @param {() => boolean} [opts.active] - when false, camera + game ignore input (boot splash)
  */
 export function setupPointerHub({ canvas, camera, game, touch, active }) {
   const isActive = () => active?.() ?? true;
@@ -90,7 +90,7 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
   }
 
   /**
-   * Splash just dropped — drop any in-flight deltas, then re-begin gestures
+   * Splash just dropped - drop any in-flight deltas, then re-begin gestures
    * from where the fingers/mouse are right now.
    */
   function resumeFromHeld() {
@@ -180,7 +180,7 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
   function onPointerUp(e) {
     noteHeldUp(e);
     const { active: on, justUnlocked } = syncActive();
-    // If we just unlocked on an up, resume already ran with this id removed — nothing to end.
+    // If we just unlocked on an up, resume already ran with this id removed - nothing to end.
     if (!on || justUnlocked) return;
     if (e.pointerType === 'touch' || touch?.owns?.(e.pointerId)) {
       touch?.handlePointerUp(e);
@@ -241,7 +241,7 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
 
   function onKeyUp(e) {
     syncActive();
-    // Always release, even while splash/story has input locked — otherwise a
+    // Always release, even while splash/story has input locked - otherwise a
     // keyup during the lock leaves keyStates stuck on.
     camera.handleKeyUp(e);
   }

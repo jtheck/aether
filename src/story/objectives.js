@@ -7,7 +7,7 @@ import { TILE_SIZE_F, worldHalfFFromField, worldHalfZFFromField } from '../sim/f
 export const OBJ_REACH = 'reach';
 export const OBJ_ESCAPE = 'escape';
 export const OBJ_ADVANCE = 'advance';
-// Campaign vocabulary — completion lives in triggers.js (see CAMPAIGN_TRIGGER_KINDS).
+// Campaign vocabulary - completion lives in triggers.js (see CAMPAIGN_TRIGGER_KINDS).
 export const OBJ_DESTROY = 'destroy';
 export const OBJ_CAPTURE = 'capture';
 export const OBJ_HOLD = 'hold';
@@ -47,7 +47,7 @@ function kindOf(raw) {
   return OBJ_KINDS.includes(k) ? k : OBJ_REACH;
 }
 
-/** A chapter-ending objective — inherently terminal or explicitly flagged. */
+/** A chapter-ending objective - inherently terminal or explicitly flagged. */
 export function isTerminalObjective(obj) {
   return obj?.terminal === true || TERMINAL_KINDS.includes(obj?.kind);
 }
@@ -122,7 +122,7 @@ export function encodeObjectives(list) {
   const out = [];
   for (const obj of normalizeObjectives(list)) {
     const row = [obj.tx, obj.tz, obj.r, obj.kind];
-    // Trailing options object (index 8) — only when there's something the
+    // Trailing options object (index 8) - only when there's something the
     // positional fields can't hold. Escape/advance stay implicitly terminal,
     // so classic gardens re-encode byte-for-byte.
     const explicitTerminal = obj.terminal === true && !TERMINAL_KINDS.includes(obj.kind);

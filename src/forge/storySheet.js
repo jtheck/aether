@@ -9,7 +9,7 @@ function fmtTime(t) {
   return `${m}:${r.toFixed(2).padStart(5, '0')}`;
 }
 
-export function createStorySheet({ onSeek, onSelect } = {}) {
+export function createStorySheet({ onSeek, onSelect, onNudge } = {}) {
   const el = document.createElement('div');
   el.id = 'story-sheet';
   el.innerHTML = `
@@ -101,10 +101,43 @@ export function createStorySheet({ onSeek, onSelect } = {}) {
           ? `camera ${clip.fromTx},${clip.fromTz} → ${clip.tx},${clip.tz}`
           : `camera ${clip.tx},${clip.tz}`;
       block.addEventListener('pointerdown', (ev) => {
+        if (ev.button !== 0) return;
         ev.stopPropagation();
         ev.preventDefault();
-        onSelect?.(clip.id);
-        onSeek?.(clip.t);
+        const win = windowSec(reel);
+        const trackRect = track.getBoundingClientRect();
+        const blockRect = block.getBoundingClientRect();
+        const resizing = ev.clientX >= blockRect.right - 8;
+        const originX = ev.clientX;
+        const originT = clip.t;
+        const originDur = clip.dur;
+        let moved = false;
+        const onMove = (e) => {
+          const dt = ((e.clientX - originX) / (trackRect.width || 1)) * win;
+          if (Math.abs(e.clientX - originX) > 3) moved = true;
+          if (resizing) {
+            const dur = Math.max(0.05, originDur + dt);
+            block.style.width = `${Math.max(1.2, (dur / win) * 100)}%`;
+            block.dataset.dur = String(dur);
+          } else {
+            const t = Math.max(0, originT + dt);
+            block.style.left = `${(t / win) * 100}%`;
+            block.dataset.t = String(t);
+          }
+        };
+        const onUp = () => {
+          window.removeEventListener('pointermove', onMove);
+          window.removeEventListener('pointerup', onUp);
+          if (!moved) {
+            onSelect?.(clip.id);
+            onSeek?.(clip.t);
+            return;
+          }
+          if (resizing) onNudge?.(clip.id, { dur: Math.max(0.05, Number(block.dataset.dur) || originDur) });
+          else onNudge?.(clip.id, { t: Math.max(0, Number(block.dataset.t) || originT) });
+        };
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
       });
       track.appendChild(block);
     }

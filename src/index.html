@@ -214,13 +214,13 @@
       width: min(80vw, 506px);
       height: auto;
       opacity: 1;
-      /* White-on-black PNG — screen blend drops the black over the board. */
+      /* White-on-black PNG - screen blend drops the black over the board. */
       mix-blend-mode: screen;
       pointer-events: none;
       user-select: none;
       -webkit-user-drag: none;
     }
-    /* Side menu — accent colours match v1's rt.css (aqua hover, darkmagenta active). */
+    /* Side menu - accent colours match v1's rt.css (aqua hover, darkmagenta active). */
     #header { position: absolute; top: 0; left: 0; right: 0; z-index: 10004; padding: 15px; text-align: center; pointer-events: none; transition: opacity 0.25s ease-out, visibility 0.25s ease-out; }
     #header h3 { margin: 0; position: absolute; left: 50%; transform: translateX(-50%); transition: left 0.25s ease-out, transform 0.25s ease-out; pointer-events: none; user-select: none; }
     #header.map-ready h3 { left: 78px; transform: none; }
@@ -739,6 +739,7 @@
     #ladder_pop .btn:hover, #ladder_pop .btn:focus-visible,
     #ladder_go .btn:hover, #ladder_go .btn:focus-visible { border-color: aqua; color: aqua; outline: none; }
     #help_pop details { margin: 0 0 8px; }
+    #help_pop .help-body > details { margin-left: 12px; }
     #help_pop summary {
       display: block; padding: 8px 10px; background: #161b24; color: inherit;
       border: 1px solid #2a3140; border-radius: 3px; cursor: pointer; list-style: none;
@@ -755,10 +756,58 @@
     #help_pop .help-keys dt, #help_pop .help-keys dd { margin: 0; }
     #help_pop .help-keys dt { opacity: .8; }
     #help_pop .help-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+    #help_pop .help-units-body { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+    #help_pop .help-unit-roster {
+      display: flex; flex-direction: column; gap: 4px; min-width: 0;
+    }
+    #help_pop .help-unit-pair {
+      display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 4px;
+      align-items: start; min-width: 0;
+      padding: 3px; border: 1px solid #232936; border-radius: 3px; background: #10141c;
+    }
     #help_pop .help-tile {
       aspect-ratio: 1; display: grid; place-items: center; padding: 4px;
       background: #161b24; color: inherit; border: 1px solid #2a3140;
       font: 11px/1.2 inherit; text-align: center; cursor: pointer;
+    }
+    #help_pop .help-unit-pair .help-unit-tile {
+      display: flex; flex-direction: column; align-items: stretch; justify-content: center; gap: 4px;
+      box-sizing: border-box; width: 100%; min-width: 0; padding: 6px 8px;
+      background: #161b24; border: 1px solid #2a3140; border-radius: 3px;
+      font-size: 10px; line-height: 1.2; text-align: left;
+    }
+    #help_pop .help-unit-tile-name {
+      font-weight: 600; font-size: 11px; text-align: center; line-height: 1.2;
+    }
+    #help_pop .help-unit-tile-stats {
+      display: flex; flex-direction: column; align-items: center; gap: 2px; width: 100%;
+    }
+    #help_pop .help-unit-mini-stat {
+      display: grid; grid-template-columns: 1.85em 2.5em; align-items: center; column-gap: 4px;
+    }
+    #help_pop .help-unit-mini-label {
+      font-size: 9px; opacity: .75; font-variant-numeric: tabular-nums; text-align: right;
+    }
+    #help_pop .help-unit-mini-stat .help-pips { display: inline-flex; gap: 2px; justify-content: flex-start; }
+    #help_pop .help-pip-mini { width: 6px; height: 6px; flex: 0 0 auto; }
+    #help_pop .help-unit-cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+    #help_pop .help-unit-inline-note {
+      margin: 0; padding: 0 6px 4px; font-size: 11px; line-height: 1.35; opacity: .88;
+    }
+    #help_pop .help-unit-tile--empty { justify-content: center; opacity: .55; }
+    #help_pop .help-entry-roster { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+    #help_pop .help-entry-row {
+      padding: 6px 8px; border: 1px solid #232936; border-radius: 3px; background: #10141c;
+    }
+    #help_pop .help-entry-head {
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px;
+    }
+    #help_pop .help-entry-name { font-weight: 600; font-size: 11px; }
+    #help_pop .help-entry-stats {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
+    }
+    #help_pop .help-entry-note {
+      margin: 6px 0 0; font-size: 11px; line-height: 1.35; opacity: .88;
     }
     #help_pop .help-tile:hover, #help_pop .help-tile:focus-visible,
     #help_pop .help-tile.is-on { border-color: aqua; color: aqua; outline: none; }
@@ -790,7 +839,7 @@
     #side_menu .about { margin-top: 8px; line-height: 1.45; }
     #side_menu .about h4 { margin: 10px 0 8px; font-size: 13px; font-weight: 600; }
     #side_menu .about hr { width: 60%; border: 0; border-top: 1px solid #2a3140; margin: 14px 0; }
-    /* v1 link buttons — corner brackets, aqua / darkmagenta */
+    /* v1 link buttons - corner brackets, aqua / darkmagenta */
     #side_menu .about > a {
       text-decoration: none; color: #fff; white-space: nowrap; font-size: 1.2em;
     }
@@ -886,11 +935,12 @@
     <div id="koth-lobby">
       <div id="koth-lobby-list" role="list"></div>
       <div id="koth-lobby-empty">Listening for lobbies…</div>
-      <button type="button" id="koth-start">Start a lobby</button>
+      <button type="button" id="koth-start">Start a KOTH lobby</button>
     </div>
     <div id="koth-waiting" hidden>
       <div id="koth-waiting-title"></div>
       <div id="koth-waiting-meta" class="koth-lobby-meta"></div>
+      <div class="note" data-koth-player-requirement></div>
       <div id="koth-catchup" hidden>
         <div id="koth-catchup-bar"><div id="koth-catchup-fill"></div></div>
       </div>
@@ -978,19 +1028,19 @@
           <div class="lobby-drawer-body" id="practice-body" hidden>
             <div class="row">
               <button type="button" class="btn" id="open_replay_b">Open replay</button>
-              <div class="note">Watch a saved .gecho — a garden echo of a match.</div>
+              <div class="note">Watch a saved .gecho - a garden echo of a match.</div>
             </div>
             <div class="row">
               <button type="button" class="btn" id="solo_ai_b">1v1 vs AI</button>
-              <div class="note">Offline match — same armies as a live game.</div>
+              <div class="note">Offline match - same armies as a live game.</div>
             </div>
             <div class="row">
               <button type="button" class="btn" id="unit_tester_b">Unit tester</button>
-              <div class="note">Mirrored 1v1 — one of every unit and building.</div>
+              <div class="note">Mirrored 1v1 - one of every unit and building.</div>
             </div>
             <div class="row">
               <button type="button" class="btn" id="stressful_b">Stressful Situation</button>
-              <div class="note">Five-way FFA — 1000 units per player.</div>
+              <div class="note">Five-way FFA - 1000 units per player.</div>
             </div>
           </div>
         </div>
@@ -1155,115 +1205,109 @@
             <dt>Screen top/bottom edges</dt><dd>Rotate</dd>
             <dt>Top stats</dt><dd>Population, Game Clock, FPS, Ping</dd>
             <dt>Bottom resources</dt><dd>Wood, Stone, Minerals, Food</dd>
+            <dt>Combo abilities</dt><dd>4 villagers and an engineer, then cast to plant an agora. Casters in that selection block it. In King of the Hill you start without one and fight over them</dd>
           </dl>
         </div>
       </details>
       <details>
-        <summary>Mouse and keyboard</summary>
+        <summary>Controls</summary>
         <div class="help-body">
-          <dl class="help-keys">
-            <dt>Left click</dt><dd>Select, or attack-move</dd>
-            <dt>Left drag</dt><dd>Box select</dd>
-            <dt>Shift+click</dt><dd>Add to selection</dd>
-            <dt>Double-click</dt><dd>Select all of that type</dd>
-            <dt>Right click</dt><dd>Move, or gather</dd>
-            <dt>Right drag</dt><dd>Pan</dd>
-            <dt>Scroll</dt><dd>Zoom</dd>
-            <dt>Arrows</dt><dd>Pan</dd>
-            <dt>Q</dt><dd>Zoom out</dd>
-            <dt>T</dt><dd>Zoom in</dd>
-            <dt>S</dt><dd>Rotate</dd>
-            <dt>F</dt><dd>Rotate the other way</dd>
-            <dt>Escape</dt><dd>Open menu</dd>
-            <dt>B</dt><dd>Open agora</dd>
-            <dt>Space</dt><dd>Follow selection</dd>
-            <dt>1–6</dt><dd>Select group. Again, center camera. Hold to assign</dd>
-            <dt>Ctrl+1–6</dt><dd>Assign group</dd>
-            <dt>O</dt><dd>Hide HUD</dd>
-          </dl>
-        </div>
-      </details>
-      <details>
-        <summary>Touch</summary>
-        <div class="help-body">
-          <dl class="help-keys">
-            <dt>Tap</dt><dd>Select or order</dd>
-            <dt>Drag</dt><dd>Box select</dd>
-            <dt>Hold, then drag</dt><dd>Pan</dd>
-            <dt>Left or right edge</dt><dd>Zoom</dd>
-            <dt>Top or bottom edge</dt><dd>Orbit</dd>
-            <dt>Two fingers</dt><dd>Pinch, turn, and pan</dd>
-            <dt>Two-finger tap</dt><dd>Leave placement</dd>
-          </dl>
-        </div>
-      </details>
-      <details>
-        <summary>Gamepad</summary>
-        <div class="help-body">
-          <dl class="help-keys">
-            <dt>Sticks</dt><dd>Look</dd>
-            <dt>Sticks, opposite up and down</dt><dd>Rotate</dd>
-            <dt>Sticks, pinch</dt><dd>Zoom out</dd>
-            <dt>Sticks, open</dt><dd>Zoom in</dd>
-            <dt>L3 or R3</dt><dd>Sticks rotate and zoom</dd>
-            <dt>LT</dt><dd>Attack-move</dd>
-            <dt>RT</dt><dd>Move</dd>
-            <dt>LB</dt><dd>Drag select</dd>
-            <dt>RB</dt><dd>Drag select</dd>
-            <dt>D-pad up, right, down</dt><dd>Control group</dd>
-            <dt>Y, X, A</dt><dd>Control group</dd>
-            <dt>B</dt><dd>Cast</dd>
-            <dt>D-pad left</dt><dd>Cast</dd>
-            <dt>A, in a menu</dt><dd>Confirm</dd>
-            <dt>B, in a menu</dt><dd>Back</dd>
-          </dl>
-        </div>
-      </details>
-      <details>
-        <summary>XR</summary>
-        <div class="help-body">
-          Requires WebGPU XR capable Browser.
-          <h5>If the XR button is not visible at the top of the menu, try visiting: chrome://flags/ in your browser, and Enable: 'WebXR Layers' and 'WebXR/WebGPU Binding'.</h5>
-          <dl class="help-keys">
-            <dt>XR</dt><dd>Enter headset</dd>
-            <dt>Left stick</dt><dd>Walk</dd>
-            <dt>Right stick</dt><dd>Turn</dd>
-            <dt>Right stick, up and down</dt><dd>Height</dd>
-            <dt>Trigger</dt><dd>Select what the beam hits</dd>
-            <dt>Trigger, sweep</dt><dd>Lasso select on the field</dd>
-            <dt>Grip + trigger</dt><dd>Add to selection</dd>
-            <dt>Both triggers, sweep</dt><dd>Two lassos, one selection</dd>
-          </dl>
-        </div>
-      </details>
-      <details>
-        <summary>King of the Hill</summary>
-        <div class="help-body">
-          <dl class="help-keys">
-            <dt>Agora</dt><dd>None at the start</dd>
-            <dt>Ability</dt><dd>4 villagers and an engineer plant an agora. Casters in that selection block it</dd>
-          </dl>
+          <details>
+            <summary>Mouse and keyboard</summary>
+            <div class="help-body">
+              <dl class="help-keys">
+                <dt>Left click</dt><dd>Select, or attack-move</dd>
+                <dt>Left drag</dt><dd>Box select</dd>
+                <dt>Shift+click</dt><dd>Add to selection</dd>
+                <dt>Double-click</dt><dd>Select all of that type</dd>
+                <dt>Right click</dt><dd>Move, or gather</dd>
+                <dt>Right drag</dt><dd>Pan</dd>
+                <dt>Scroll</dt><dd>Zoom</dd>
+                <dt>Arrows</dt><dd>Pan</dd>
+                <dt>Q</dt><dd>Zoom out</dd>
+                <dt>T</dt><dd>Zoom in</dd>
+                <dt>S</dt><dd>Rotate</dd>
+                <dt>F</dt><dd>Rotate the other way</dd>
+                <dt>Escape</dt><dd>Open menu</dd>
+                <dt>B</dt><dd>Open agora</dd>
+                <dt>Space</dt><dd>Follow selection</dd>
+                <dt>1–6</dt><dd>Select group. Again, center camera. Hold to assign</dd>
+                <dt>Ctrl+1–6</dt><dd>Assign group</dd>
+                <dt>O</dt><dd>Hide HUD</dd>
+              </dl>
+            </div>
+          </details>
+          <details>
+            <summary>Touch</summary>
+            <div class="help-body">
+              <dl class="help-keys">
+                <dt>Tap</dt><dd>Select or order</dd>
+                <dt>Drag</dt><dd>Box select</dd>
+                <dt>Hold, then drag</dt><dd>Pan</dd>
+                <dt>Left or right edge</dt><dd>Zoom</dd>
+                <dt>Top or bottom edge</dt><dd>Orbit</dd>
+                <dt>Two fingers</dt><dd>Pinch, turn, and pan</dd>
+                <dt>Two-finger tap</dt><dd>Leave placement</dd>
+              </dl>
+            </div>
+          </details>
+          <details>
+            <summary>Gamepad</summary>
+            <div class="help-body">
+              <dl class="help-keys">
+                <dt>Sticks</dt><dd>Look</dd>
+                <dt>Sticks, opposite up and down</dt><dd>Rotate</dd>
+                <dt>Sticks, pinch</dt><dd>Zoom out</dd>
+                <dt>Sticks, open</dt><dd>Zoom in</dd>
+                <dt>L3 or R3</dt><dd>Sticks rotate and zoom</dd>
+                <dt>LT</dt><dd>Attack-move</dd>
+                <dt>RT</dt><dd>Move</dd>
+                <dt>LB</dt><dd>Drag select</dd>
+                <dt>RB</dt><dd>Drag select</dd>
+                <dt>D-pad up, right, down</dt><dd>Control group</dd>
+                <dt>Y, X, A</dt><dd>Control group</dd>
+                <dt>B</dt><dd>Cast</dd>
+                <dt>D-pad left</dt><dd>Cast</dd>
+                <dt>A, in a menu</dt><dd>Confirm</dd>
+                <dt>B, in a menu</dt><dd>Back</dd>
+              </dl>
+            </div>
+          </details>
+          <details>
+            <summary>XR</summary>
+            <div class="help-body">
+              Requires WebGPU XR capable Browser.
+              <h5>If the XR button is not visible at the top of the menu, try visiting: chrome://flags/ in your browser, and Enable: 'WebXR Layers' and 'WebXR/WebGPU Binding'.</h5>
+              <dl class="help-keys">
+                <dt>XR</dt><dd>Enter headset</dd>
+                <dt>Left stick</dt><dd>Walk</dd>
+                <dt>Right stick</dt><dd>Turn</dd>
+                <dt>Right stick, up and down</dt><dd>Height</dd>
+                <dt>Trigger</dt><dd>Select what the beam hits</dd>
+                <dt>Trigger, sweep</dt><dd>Lasso select on the field</dd>
+                <dt>Grip + trigger</dt><dd>Add to selection</dd>
+                <dt>Both triggers, sweep</dt><dd>Two lassos, one selection</dd>
+              </dl>
+            </div>
+          </details>
         </div>
       </details>
       <details>
         <summary>Units</summary>
-        <div class="help-body">
-          <div class="help-detail" id="help-units-detail" hidden></div>
-          <div class="help-grid" id="help-units"></div>
+        <div class="help-body help-units-body">
+          <div class="help-unit-roster" id="help-units"></div>
         </div>
       </details>
       <details>
         <summary>Buildings</summary>
         <div class="help-body">
-          <div class="help-detail" id="help-buildings-detail" hidden></div>
-          <div class="help-grid" id="help-buildings"></div>
+          <div id="help-buildings"></div>
         </div>
       </details>
       <details>
         <summary>Upgrades</summary>
         <div class="help-body">
-          <div class="help-detail" id="help-upgrades-detail" hidden></div>
-          <div class="help-grid" id="help-upgrades"></div>
+          <div id="help-upgrades"></div>
         </div>
       </details>
     </div>

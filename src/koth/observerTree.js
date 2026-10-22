@@ -103,7 +103,7 @@ function linkChild(tree, sponsorId, childId) {
  * Pick a sponsor for a new observer: prefer empty L1 under a player, else
  * shallowest observer/player with free capacity (deterministic by userId).
  * @param {ObserverTree} tree
- * @param {string[]} playerUserIds — live players
+ * @param {string[]} playerUserIds - live players
  * @param {string} observerUserId
  */
 export function assignSponsor(tree, playerUserIds, observerUserId) {
@@ -127,7 +127,7 @@ export function assignSponsor(tree, playerUserIds, observerUserId) {
   }
   candidates.sort((a, b) => a.depth - b.depth || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   if (!candidates.length) {
-    // No capacity yet — leave unassigned; caller retries.
+    // No capacity yet - leave unassigned; caller retries.
     const node = tree.nodes.get(observerUserId);
     if (node) {
       node.sponsorId = null;
@@ -211,7 +211,7 @@ export function demotePlayerToObserver(tree, userId, playerUserIds) {
  * Rebuild every observer depth by walking out from the players.
  *
  * Depth is only ever written when a link is made, so a sponsor that later
- * promotes or drops leaves its whole subtree at a stale depth — which silently
+ * promotes or drops leaves its whole subtree at a stale depth - which silently
  * excludes those observers from L1 seat offers forever.
  */
 export function recomputeDepths(tree) {
@@ -263,7 +263,7 @@ export function recomputeDepths(tree) {
  * Make the tree agree with the live roster.
  *
  * The king is the only node that computes offer eligibility, and it is not the
- * node that runs the promote/demote handoff — so without this a seat holder
+ * node that runs the promote/demote handoff - so without this a seat holder
  * stays in the tree as a caught-up L1 observer and permanently occupies the
  * eligible set while the real observers sit below them.
  * @returns {{ userId: string, sponsorId: string | null, depth: number }[]}
@@ -343,10 +343,10 @@ export function listObserversByJoin(tree) {
 /**
  * Eligible userIds for an open-seat offer.
  * Starts with caught-up L1; every expandStep adds the next caught-up observer.
- * @param {number} expandSteps — each step widens eligibility by one more observer
+ * @param {number} expandSteps - each step widens eligibility by one more observer
  * @param {{ exclude?: (userId: string) => boolean, minCandidates?: number }} [options]
- *   exclude — seat holders and mid-join claimers must not be offered a second seat
- *   minCandidates — every open seat needs a candidate (see below)
+ *   exclude - seat holders and mid-join claimers must not be offered a second seat
+ *   minCandidates - every open seat needs a candidate (see below)
  */
 export function offerEligibleUserIds(tree, expandSteps = 0, options = {}) {
   const skip = options.exclude ?? (() => false);

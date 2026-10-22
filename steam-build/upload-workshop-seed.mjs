@@ -67,7 +67,7 @@ console.log('[workshop-seed] publishedfileid', publishedId === '0' ? '(new item)
 
 const sdkRoot = (process.env.STEAMWORKS_SDK || 'C:\\Users\\blind\\steamworks_sdk').trim();
 const steamcmd = path.join(sdkRoot, 'tools', 'ContentBuilder', 'builder', 'steamcmd.exe');
-if (!fs.existsSync(steamcmd)) die('steamcmd.exe not found — set STEAMWORKS_SDK to your SDK root.');
+if (!fs.existsSync(steamcmd)) die('steamcmd.exe not found - set STEAMWORKS_SDK to your SDK root.');
 
 const user = process.env.STEAM_BUILD_USER;
 const pass = process.env.STEAM_BUILD_PASSWORD;
@@ -93,7 +93,7 @@ if (run.status !== 0) {
 
 const updated = fs.readFileSync(vdfPathOut, 'utf8');
 const id = parsePublishedIdFromVdf(updated);
-if (!id) die('Upload finished but publishedfileid is still 0 — check steamcmd output.');
+if (!id) die('Upload finished but publishedfileid is still 0 - check steamcmd output.');
 writePublishedId(id);
 console.log('[workshop-seed] Public item:', id);
 console.log('[workshop-seed] https://steamcommunity.com/sharedfiles/filedetails/?id=' + id);

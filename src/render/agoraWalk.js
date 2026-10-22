@@ -1,4 +1,4 @@
-// Walk Y for the agora plaza — same heightfield idea as terrain, one deck offset.
+// Walk Y for the agora plaza - same heightfield idea as terrain, one deck offset.
 
 /** Inner plaza floor from agora.glb (part 2), mesh-local. */
 export const AGORA_DECK_Y = 0.781;

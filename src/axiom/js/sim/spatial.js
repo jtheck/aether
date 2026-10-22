@@ -37,7 +37,7 @@ export function createSpatialHash(opts = {}) {
     invCell,
 
     clear() {
-      // Drop cells entirely when the map grows — reuse was leaking every explored region
+      // Drop cells entirely when the map grows - reuse was leaking every explored region
       // (counts reset still iterated all historical keys every frame → FPS bleed while flying).
       if (cells.size > cellCap) {
         cells.clear();

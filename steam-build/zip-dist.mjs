@@ -10,7 +10,7 @@ const outZip = path.join(root, platform === 'linux' ? 'Aether-linux64.zip' : 'Ae
 const launchBin = platform === 'linux' ? 'Aether' : 'Aether.exe';
 
 if (!fs.existsSync(path.join(dist, launchBin))) {
-  console.error(`[steam-build] ${dist}/${launchBin} missing — run npm run dist:${platform === 'linux' ? 'linux' : 'win'} first`);
+  console.error(`[steam-build] ${dist}/${launchBin} missing - run npm run dist:${platform === 'linux' ? 'linux' : 'win'} first`);
   process.exit(1);
 }
 

@@ -10,7 +10,7 @@ const STEP = 0.75;
 
 /**
  * Low-memory phones (and coarse-pointer devices with few cores) get a
- * coarser grid — about half the instances.
+ * coarser grid - about half the instances.
  * @param {Navigator | { deviceMemory?: number, hardwareConcurrency?: number } | null | undefined} [nav]
  * @param {(q: string) => { matches: boolean } | null | undefined} [match]
  */

@@ -1,4 +1,4 @@
-// Build entry only — esbuild bundles this into vendor/lite/ (run rarely).
+// Build entry only - esbuild bundles this into vendor/lite/ (run rarely).
 // App code imports the bundle, not @babylonjs/lite.
 
 export {
@@ -114,7 +114,7 @@ import { attachVat as liteAttachVat } from '@babylonjs/lite';
 import { _getPbrExts, _registerPbrExt } from '../node_modules/@babylonjs/lite/lib/material/pbr/pbr-flags.js';
 import { pbrExt as vatPbrExt } from '../node_modules/@babylonjs/lite/lib/material/pbr/fragments/vat-fragment.js';
 
-// Register at module load — before any scene pipelines are composed.
+// Register at module load - before any scene pipelines are composed.
 _registerPbrExt(vatPbrExt);
 
 export function attachVat(engine, mesh, baked, clip) {

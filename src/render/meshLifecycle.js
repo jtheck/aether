@@ -9,7 +9,7 @@ import { addToScene } from '../vendor/lite/liteVendor.js';
 /**
  * Drop meshes out of the render lists without destroying GPU buffers.
  * Hidden chunk LOD used to leave every mesh in the scene, and a max board
- * is ~20k of those — Lite still walks them after the game loop returns.
+ * is ~20k of those - Lite still walks them after the game loop returns.
  * @param {object | null | undefined} scene
  * @param {object[]} meshes
  */

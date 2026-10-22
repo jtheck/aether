@@ -619,6 +619,48 @@ function pushJamb(dst, end, edge, style, showFoot, sign) {
   pushCap(dst, end.left, end.right, end.y.footY, end.y.top, outward);
 }
 
+function crossSectionAt(stations, edges, wall, foot, arc, style, showFoot, closed, perim) {
+  let d = arc;
+  if (closed && perim > 0) {
+    d %= perim;
+    if (d < 0) d += perim;
+  }
+  for (let i = 0; i < edges.length; i++) {
+    const start = stations[i].arc;
+    const len = edges[i].len;
+    if (d < start - 1e-4 || d > start + len + 1e-4) continue;
+    const t = len > 1e-6 ? (d - start) / len : 0;
+    const tc = t < 0 ? 0 : t > 1 ? 1 : t;
+    return {
+      end: endBundle(stations, wall, foot, i, tc, style, showFoot),
+      edge: edges[i],
+    };
+  }
+  return null;
+}
+
+/**
+ * Close the wall thickness at each side of a door or gate.
+ * Cuts land on tile stations, so a span is fully solid or fully open and the
+ * edge loop never sees a partial cut to cap. A face is emitted only where
+ * solid wall meets the hole. The wall's own end cap stays; this one faces
+ * back into the opening so the cavity is closed from inside the doorway too.
+ */
+function pushOpeningJambs(dst, stations, edges, wall, foot, openings, style, showFoot, closed, perim) {
+  const probe = 0.02;
+  for (const opening of openings || []) {
+    const half = opening.span * 0.5;
+    for (const cut of [opening.d - half, opening.d + half]) {
+      const before = !!arcInOpening(cut - probe, openings, closed, perim);
+      const after = !!arcInOpening(cut + probe, openings, closed, perim);
+      if (before === after) continue;
+      const hit = crossSectionAt(stations, edges, wall, foot, cut, style, showFoot, closed, perim);
+      if (!hit) continue;
+      pushJamb(dst, hit.end, hit.edge, style, showFoot, before ? -1 : 1);
+    }
+  }
+}
+
 function spanPieces(arc0, arc1, openings, closed, perim) {
   const cuts = [arc0, arc1];
   const holes = [];
@@ -748,8 +790,6 @@ function buildRun(stone, wood, iron, run, style, sample, stats) {
       const b = endBundle(stations, wall, foot, i, (part.b - arc0) / len, style, showFoot);
       if (!part.open) {
         pushSolidEnds(stone, a, b, edges[i], style, showFoot);
-        if (part.a > arc0 + 1e-3) pushJamb(stone, a, edges[i], style, showFoot, -1);
-        if (part.b < arc1 - 1e-3) pushJamb(stone, b, edges[i], style, showFoot, 1);
       } else {
         const mid = (part.a + part.b) * 0.5;
         const opening = arcInOpening(mid, openings, closed, perim);
@@ -764,6 +804,7 @@ function buildRun(stone, wood, iron, run, style, sample, stats) {
     stats.spans += 1;
   }
   if (!closed) pushOpenCaps(stone, stations, edges, wall, foot, style, showFoot);
+  pushOpeningJambs(stone, stations, edges, wall, foot, openings, style, showFoot, closed, perim);
   for (let i = 0; i < stations.length; i++) {
     if (!stations[i].corner) continue;
     if (arcInOpening(stations[i].arc, openings, closed, perim)) continue;

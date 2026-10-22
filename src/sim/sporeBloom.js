@@ -1,4 +1,4 @@
-// Spore Bloom — myco point-cast: fell trees in blast, seed delayed outward arc.
+// Spore Bloom - myco point-cast: fell trees in blast, seed delayed outward arc.
 
 import * as fx from './fixed.js';
 import {
@@ -23,11 +23,11 @@ import { capacityFor } from './capacity.js';
 export const SPORE_OUTER_RADIUS = fx.fromFloat(TILE_SIZE_F * 3.5);
 /** Building / crop hit inside the bloom. Farms take FARM_SPORE_DAMAGE_MUL. */
 export const SPORE_BLOOM_DAMAGE = 50;
-/** (v1 wood credit zone — unused in v2, kept for parity.) */
+/** (v1 wood credit zone - unused in v2, kept for parity.) */
 export const SPORE_INNER_RADIUS = fx.fromFloat(TILE_SIZE_F * 1.75);
 /** Ticks before another bloom (~6s at 20Hz). */
 export const SPORE_BLOOM_COOLDOWN = 120;
-/** Base delay before seeded trees sprout (~6s at 20Hz) — leaves mushroom beat. */
+/** Base delay before seeded trees sprout (~6s at 20Hz) - leaves mushroom beat. */
 export const SPORE_GROWTH_DELAY = 120;
 /** Stock planted on each seed tile (4 stages × 7). */
 export const SPORE_TREE_STOCK = 28;
@@ -41,7 +41,7 @@ export const SPORE_SEED_ARC_COS = -0.9397;
 export const SPORE_SEED_ARC_HALF = Math.acos(SPORE_SEED_ARC_COS);
 /** World-unit keep-off so seeds never land next to the caster. */
 const SPORE_SEED_CASTER_CLEAR_F = TILE_SIZE_F * 2;
-/** Death ring — adjacent tile + diagonals, not the ability blast. */
+/** Death ring - adjacent tile + diagonals, not the ability blast. */
 export const MYCO_DEATH_SEED_RADIUS_F = TILE_SIZE_F * 1.5;
 export const MYCO_DEATH_MAX_SEEDS = 8;
 export const MYCO_DEATH_MIN_SEEDS = 4;
@@ -81,7 +81,7 @@ export function bloomCircleRadius(rank = 1) {
   return fx.mul(SPORE_OUTER_RADIUS, BLOOM_CIRCLE_MUL[r - 1]);
 }
 
-/** @deprecated Prefer bloomCircleRadius — same-size overlapping rings. */
+/** @deprecated Prefer bloomCircleRadius - same-size overlapping rings. */
 export function bloomOuterRadius(rank = 1) {
   return bloomCircleRadius(rank);
 }
@@ -622,7 +622,7 @@ export function queueSporeSeeds(w, field, cx, cy, {
   for (let i = 0; i < candN && selected.length < maxSeeds; i++) {
     if (rngFrac(w.rng) <= seedChance) selected.push(seedTiles[i]);
   }
-  // Floor only — if chance under-rolls, top up toward maxSeeds (not stop at min).
+  // Floor only - if chance under-rolls, top up toward maxSeeds (not stop at min).
   if (selected.length < minSeeds) {
     const used = new Set(selected);
     for (let i = 0; i < candN && selected.length < maxSeeds; i++) {

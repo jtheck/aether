@@ -12,7 +12,7 @@ export const ACH_FORGE_OPEN = 'ACH_FORGE_OPEN';
 
 export const OVERLAY_POLL_MS = 50;
 
-/** Chromium eats Shift+Tab — the page must open Friends itself. */
+/** Chromium eats Shift+Tab - the page must open Friends itself. */
 export function isSteamOverlayHotkey(e) {
   if (!e) return false;
   if (!e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return false;
@@ -122,7 +122,7 @@ function sessionHasCapturedAgora(session) {
   return false;
 }
 
-/** Agora occupy loss — not a score wipe, not a spectator. */
+/** Agora occupy loss - not a score wipe, not a spectator. */
 export function isKothAgoraDefeat(session) {
   if (!session) return false;
   if ((session.role ?? 'player') !== 'player') return false;
@@ -234,7 +234,7 @@ export function createAetherSteam(opts = {}) {
       return s && s.openOverlay ? s.openOverlay(dialog) : false;
     },
 
-    /** Steam overlay is up — Chromium must stop polling the pad. */
+    /** Steam overlay is up - Chromium must stop polling the pad. */
     overlayActive() {
       const s = steam();
       return !!(s && s.overlayActive && s.overlayActive());
@@ -284,7 +284,7 @@ export function createAetherSteam(opts = {}) {
       return true;
     },
 
-    /** First agora-capture loss (Defeat — Player N captured the agora). */
+    /** First agora-capture loss (Defeat - Player N captured the agora). */
     notifyKothDefeat(session) {
       if (api._kothDefeatHandled) return false;
       if (!isKothAgoraDefeat(session)) return false;
@@ -294,7 +294,7 @@ export function createAetherSteam(opts = {}) {
       return true;
     },
 
-    /** DevTools smoke test — API name must exist on the Steamworks partner site. */
+    /** DevTools smoke test - API name must exist on the Steamworks partner site. */
     test(achievementId) {
       const id = achievementId || ACH_FIRST_LAUNCH;
       const info = api.getInfo();

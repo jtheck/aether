@@ -7,7 +7,7 @@ export const LOD_ENABLED = false;
 
 /** Socket fire, aura sparkles, health chips. */
 export const FX_DISTANCE = 900;
-/** VAT walk/idle playback — freeze (fps=0) beyond this. */
+/** VAT walk/idle playback - freeze (fps=0) beyond this. */
 export const VAT_DISTANCE = 400;
 
 /**

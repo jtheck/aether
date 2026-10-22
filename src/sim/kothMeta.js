@@ -1,4 +1,4 @@
-// King of the Hill meta — crown, elimination, deed bounties.
+// King of the Hill meta - crown, elimination, deed bounties.
 // Lives on world.koth when mode is 'koth'. Deterministic; included in checksum.
 //
 // A seat is wiped on 0 pop, or after it has owned a completed agora and then
@@ -58,7 +58,7 @@ export function ensureKothShape(koth) {
 }
 
 /**
- * @param {number[]} activePlayerIds — slot ids (owners) in this match
+ * @param {number[]} activePlayerIds - slot ids (owners) in this match
  */
 export function createKothMeta(activePlayerIds) {
   const active = new Uint8Array(MAX_KOTH_PLAYERS);
@@ -278,7 +278,7 @@ function payDeath(w, owner, kingAtStart) {
   pushBounty(k, w.tick | 0, owner, points);
 }
 
-/** After combat / capture each tick — wipe seats, pay deeds, move the crown. */
+/** After combat / capture each tick - wipe seats, pay deeds, move the crown. */
 export function kothMetaStep(w) {
   const k = w.koth;
   if (!k) return;

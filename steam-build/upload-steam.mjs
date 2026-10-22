@@ -53,9 +53,9 @@ function linuxExecProps(localFolder) {
 if (!fs.existsSync(configPath)) {
   if (fs.existsSync(examplePath)) {
     fs.copyFileSync(examplePath, configPath);
-    console.log('[steam-upload] Created steampipe/config.json from example — edit depot IDs, then re-run.');
+    console.log('[steam-upload] Created steampipe/config.json from example - edit depot IDs, then re-run.');
   }
-  die('Missing steampipe/config.json — set depots.win and depots.linux from partner site → SteamPipe → Depots.');
+  die('Missing steampipe/config.json - set depots.win and depots.linux from partner site → SteamPipe → Depots.');
 }
 
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -133,7 +133,7 @@ console.log('[steam-upload] Depots:', platforms.map((p) => (p === 'win' ? winDep
 
 const sdkRoot = (process.env.STEAMWORKS_SDK || 'C:\\Users\\blind\\steamworks_sdk').trim();
 const steamcmd = path.join(sdkRoot, 'tools', 'ContentBuilder', 'builder', 'steamcmd.exe');
-if (!fs.existsSync(steamcmd)) die('steamcmd.exe not found — set STEAMWORKS_SDK to your SDK root.');
+if (!fs.existsSync(steamcmd)) die('steamcmd.exe not found - set STEAMWORKS_SDK to your SDK root.');
 
 const user = process.env.STEAM_BUILD_USER;
 const pass = process.env.STEAM_BUILD_PASSWORD;
@@ -147,7 +147,7 @@ args.push('+run_app_build', appVdfPath, '+quit');
 console.log('[steam-upload] Running steamcmd…');
 const run = spawnSync(steamcmd, args, { stdio: 'inherit', cwd: path.dirname(steamcmd) });
 if (run.status !== 0) {
-  console.error('[steam-upload] steamcmd failed — check logs in steampipe-output/');
+  console.error('[steam-upload] steamcmd failed - check logs in steampipe-output/');
   process.exit(run.status ?? 1);
 }
 

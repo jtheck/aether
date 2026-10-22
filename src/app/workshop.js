@@ -1,9 +1,9 @@
-// Workshop garden refs — Steam ids, not fetchable URLs.
+// Workshop garden refs - Steam ids, not fetchable URLs.
 // Host still embeds the JSON for web guests; this only loads a local subscribe.
 
 import { GARDEN_SESSION_KEY } from '../sim/garden.js';
 import { mapTypeById } from '../sim/mapType.js';
-import { isGardenOverflowMark, readCampaignPack, readSessionGarden } from './gardenSession.js';
+import { isGardenOverflowMark, readCampaignPack, readLocalGarden, readMatchingSessionGarden } from './gardenSession.js';
 import { gardenFromBundle, parsePackRef } from '../story/campaignPack.js';
 
 export const WORKSHOP_SCHEME = 'workshop:';
@@ -109,7 +109,7 @@ export function workshopNameSuggestions(garden, current = '') {
   return [...new Set(out)];
 }
 
-/** Editable Steam description — size, seed, and how to play. */
+/** Editable Steam description - size, seed, and how to play. */
 export function workshopDescriptionFor(garden, title = '') {
   const name = String(title || garden?.n || '').trim() || workshopNameSuggestions(garden)[0] || 'Garden';
   const tags = workshopListingTags(garden);
@@ -122,7 +122,7 @@ export function workshopDescriptionFor(garden, title = '') {
   if (w && h) bits.push(`${w}×${h}`);
   if (seed) bits.push(`seed ${seed}`);
   const lines = [
-    `${name} — a Forge ${kind} for Æther.Garden.`,
+    `${name} - a Forge ${kind} for Æther.Garden.`,
     bits.join(' · '),
     'Made in Forge. Subscribe to play, or open it from the Field Editor.',
   ];
@@ -171,8 +171,11 @@ export async function loadGardenRef(raw, opts = {}) {
       try { stored = sessionStorage.getItem(GARDEN_SESSION_KEY); } catch { stored = null; }
     }
     if (isGardenOverflowMark(stored)) stored = null;
+    // sessionStorage is per tab. localStorage is the copy the opener can
+    // publish before window.open returns.
+    if (!stored && typeof opts.sessionText !== 'function') stored = readLocalGarden();
     if (!stored && typeof opts.sessionFallback === 'function') stored = await opts.sessionFallback();
-    else if (!stored && typeof opts.sessionText !== 'function') stored = await readSessionGarden();
+    else if (!stored && typeof opts.sessionText !== 'function') stored = await readMatchingSessionGarden();
     if (!stored || isGardenOverflowMark(stored)) throw new Error('no session garden');
     return JSON.parse(stored);
   }

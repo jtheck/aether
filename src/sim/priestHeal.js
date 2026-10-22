@@ -1,4 +1,4 @@
-// Priest heal — same attack cooldown as smite. Holy Armor stays on abilityCd.
+// Priest heal - same attack cooldown as smite. Holy Armor stays on abilityCd.
 // Render-only pulses ride priestHealFx; they are not part of the checksum.
 
 import * as fx from './fixed.js';

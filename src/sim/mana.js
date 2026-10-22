@@ -1,4 +1,4 @@
-// Caster mana bank — 3 spells, regenerated over each ability's old cooldown.
+// Caster mana bank - 3 spells, regenerated over each ability's old cooldown.
 // A living allied myco nearby applies a slight Spirit boost to regen.
 
 import * as fx from './fixed.js';
@@ -16,12 +16,12 @@ export const MANA_MAX = MANA_CHARGE * MANA_BANK;
 export const CAST_GCD = 8;
 /** Keep in sync with abilities.js FIREBALL_COOLDOWN. */
 export const WARLOCK_FIREBALL_PERIOD = 95;
-/** ~6 tiles — same huddle as Holy Armor. */
+/** ~6 tiles - same huddle as Holy Armor. */
 export const MYCO_SPIRIT_RADIUS = fx.fromFloat(TILE_SIZE_F * 6);
 const BASE_ACC = 5;
 const SPIRIT_ACC = 6;
 
-/** Ticks to regen one charge — match each ability's old cooldown. */
+/** Ticks to regen one charge - match each ability's old cooldown. */
 const PERIOD = {
   [UNIT.WARLOCK]: WARLOCK_FIREBALL_PERIOD,
   [UNIT.PRIEST]: 115,
@@ -33,7 +33,7 @@ const PERIOD = {
 /** @type {Uint8Array} */
 let spiritMark = new Uint8Array(0);
 
-/** Spells that spend the mana bank — not villager upgrades. */
+/** Spells that spend the mana bank - not villager upgrades. */
 export function isManaAbility(abilityId) {
   if (!abilityId) return false;
   return abilityId !== 'villager_brigand';

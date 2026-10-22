@@ -1,4 +1,4 @@
-// Watchtowers — finished towers lob arrows at the nearest hostile in range.
+// Watchtowers - finished towers lob arrows at the nearest hostile in range.
 // Units already fight buildings; this is the missing building → unit fire.
 
 import * as fx from './fixed.js';

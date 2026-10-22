@@ -1,4 +1,4 @@
-// Named story units — speaker strings match garden unit names.
+// Named story units - speaker strings match garden unit names.
 
 import { UNIT } from '../sim/unitTypes.js';
 

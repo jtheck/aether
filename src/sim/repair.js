@@ -1,4 +1,4 @@
-// Engineer repair — slow HP restore for mechanical allies (buildings later).
+// Engineer repair - slow HP restore for mechanical allies (buildings later).
 
 import * as fx from './fixed.js';
 import { UNIT, getUnitDef, isMechanical } from './unitTypes.js';
@@ -28,7 +28,7 @@ export const REPAIR_AMOUNT = 2;
 export const REPAIR_INTERVAL = 8;
 
 /**
- * Buildings aren't in sim yet — reject anything that isn't a living mechanical unit.
+ * Buildings aren't in sim yet - reject anything that isn't a living mechanical unit.
  * @returns {boolean}
  */
 export function canRepairTarget(w, engineer, target) {
@@ -136,7 +136,7 @@ function pulseRepair(w, engineer, target) {
  * Idle engineers auto-seek damaged mechanicals; REPAIR orders walk in and heal.
  */
 export function repairSystem(w) {
-  // Auto-seek used to scan all units per idle engineer — spatialize once.
+  // Auto-seek used to scan all units per idle engineer - spatialize once.
   rebuildSpatialGrid(w.spatial, w);
 
   for (let i = 0; i < w.count; i++) {

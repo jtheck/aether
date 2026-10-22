@@ -25,7 +25,7 @@ function minPairDist(w, ids) {
   return best;
 }
 
-/** Right-click is ATTACK_MOVE — standing holders must soft-unstack (not IDLE-only). */
+/** Right-click is ATTACK_MOVE - standing holders must soft-unstack (not IDLE-only). */
 function attackMoveHoldersUnstack() {
   const field = openField();
   const w = createWorld(90);
@@ -55,7 +55,7 @@ function attackMoveHoldersUnstack() {
 
   for (let t = 0; t < 90; t++) step(w, field);
 
-  // Slack deadzone settles below full spacing — still far from pixel-stack.
+  // Slack deadzone settles below full spacing - still far from pixel-stack.
   const min = minPairDist(w, ids);
   assert.ok(min > 1.4, `ATTACK_MOVE holders should soft-separate (min=${min.toFixed(2)})`);
   for (const i of ids) {
@@ -65,7 +65,7 @@ function attackMoveHoldersUnstack() {
   }
 }
 
-/** Group move to one click — organic jitter + soft bloom, not a parade grid. */
+/** Group move to one click - organic jitter + soft bloom, not a parade grid. */
 function sharedDestinationBlooms() {
   const field = openField();
   const w = createWorld(91);
@@ -104,7 +104,7 @@ function sharedDestinationBlooms() {
   assert.ok(min > 1.2, `arrivals must not stay pixel-stacked (min=${min.toFixed(2)})`);
 }
 
-/** Pathing units keep ownership of the route — sep must not yank them off-goal mid-march. */
+/** Pathing units keep ownership of the route - sep must not yank them off-goal mid-march. */
 function pathFollowWinsWhileMoving() {
   const field = openField();
   const w = createWorld(92);
@@ -184,12 +184,12 @@ function densePackSettles() {
   assert.ok(minPairDist(w, ids) > 1.2, 'still not a pixel stack after settle');
 }
 
-/** Click inside a relaxed pack — nobody needs to smash onto the pixel. */
+/** Click inside a relaxed pack - nobody needs to smash onto the pixel. */
 function clickInsidePackStaysPut() {
   const field = openField();
   const w = createWorld(94);
   const ids = [];
-  // Soft-sep lattice near the settle distance — already a relaxed pack.
+  // Soft-sep lattice near the settle distance - already a relaxed pack.
   for (let z = 0; z < 3; z++) {
     for (let x = 0; x < 3; x++) {
       ids.push(
@@ -218,7 +218,7 @@ function clickInsidePackStaysPut() {
   for (const i of ids) {
     if (w.navWpCount[i] > 0 || w.pathRequest[i] || w.hasTarget[i]) pathing++;
   }
-  assert.equal(pathing, 0, 'pack already in gather disk — no paths issued');
+  assert.equal(pathing, 0, 'pack already in gather disk - no paths issued');
 
   for (let t = 0; t < 30; t++) step(w, field);
 

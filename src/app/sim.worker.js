@@ -1,4 +1,4 @@
-// Web Worker — deterministic sim authority (one commitTick = one lockstep step).
+// Web Worker - deterministic sim authority (one commitTick = one lockstep step).
 
 import {
   buildField,
@@ -152,7 +152,7 @@ self.onmessage = (e) => {
           ? msg.config.agoraOccupyEndsMatch
           : (garden?.story || garden?.objectives?.length ? 0 : undefined),
       });
-      // Stress / explicit flag — timing never feeds gameplay.
+      // Stress / explicit flag - timing never feeds gameplay.
       world.profileSim = msg.config.profileSim === true
         || (msg.config.stressPerSide | 0) > 0
         || (msg.config.animStressPerSide | 0) > 0;

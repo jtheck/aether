@@ -1,7 +1,7 @@
-// Live match browser — glass HUD lists any open game; the side menu is the full copy.
+// Live match browser - glass HUD lists any open game; the side menu is the full copy.
 
 import { formatMatchTime, matchSecondsFromTick } from './simSession.js';
-import { SHARD_ANNOUNCE_MS } from '../koth/protocol.js';
+import { MIN_LIVE_PLAYERS, SHARD_ANNOUNCE_MS } from '../koth/protocol.js';
 import { resolveLobbyName } from '../koth/lobbyName.js';
 import { MODE_IDS, getMode } from '../lobby/modes.js';
 import { formatLockstepStallTitle, formatTypeLobbyRow } from './lobbyUi.js';
@@ -279,6 +279,10 @@ export function setupKothLobby({
   const menuPlayers = document.getElementById('menu-koth-players');
   const menuClaim = document.getElementById('menu-koth-claim');
   const menuLeave = document.getElementById('menu-koth-leave');
+  const requirement = `Requires ${MIN_LIVE_PLAYERS} players to start.`;
+  for (const el of document.querySelectorAll('[data-koth-player-requirement]')) {
+    el.textContent = requirement;
+  }
 
   if (!controls || !lobbyEl || !listEl || !emptyEl || !start || !join) return { refresh() {} };
 

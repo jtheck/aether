@@ -1,4 +1,4 @@
-// Roster sheet — spectators see every army; players see shared-vision
+// Roster sheet - spectators see every army; players see shared-vision
 // others (AI / allies). Replaces the old bottom #resources dump.
 
 import { formatGameNumber } from '../sim/formatGameNumber.js';

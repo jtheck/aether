@@ -1,4 +1,4 @@
-// Campaign pack — an ordered index of chapter gardens.
+// Campaign pack - an ordered index of chapter gardens.
 // Episodes are headings. Play walks the flattened chapter list.
 // A bundle is that index plus the garden JSON, so the web build can
 // import one file. `pk.files` on a garden is a copy of this order so a
@@ -60,7 +60,7 @@ export function isCampaignIndex(raw) {
   return !!normalizeCampaignIndex(raw);
 }
 
-/** Index plus embedded gardens, one per chapter file — including chapters that are off. */
+/** Index plus embedded gardens, one per chapter file - including chapters that are off. */
 export function isCampaignBundle(raw) {
   const index = normalizeCampaignIndex(raw);
   if (!index || !raw.gardens || typeof raw.gardens !== 'object') return false;

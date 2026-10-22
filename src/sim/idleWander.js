@@ -1,4 +1,4 @@
-// Idle amble — leftover civilians / mycos pick a heading and walk (mycos
+// Idle amble - leftover civilians / mycos pick a heading and walk (mycos
 // weave through trees); engineers
 // who have stood around long enough hop to another owned building. Work
 // assignment (gather / construct / repair) runs first so a free hand can still
@@ -24,7 +24,7 @@ export const VILLAGER_WANDER_MAX_F = 22;
 /** Same trigger as villagers, much longer legs. */
 export const MYCO_WANDER_MIN_F = 48;
 export const MYCO_WANDER_MAX_F = 96;
-/** Cap while ambling — a walk, not the gather/order run. */
+/** Cap while ambling - a walk, not the gather/order run. */
 export const IDLE_WANDER_SPEED = fx.fromFloat(0.56);
 /** Stand-off when an engineer walks up to a building. */
 const ENGINEER_LOITER_MIN_F = 8;

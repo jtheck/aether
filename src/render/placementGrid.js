@@ -1,5 +1,5 @@
 // Local tile window + occupancy class for the placement ghost overlay.
-// Render-only math — sim still owns canPlaceBuildingAt.
+// Render-only math - sim still owns canPlaceBuildingAt.
 
 import { buildingFootprintBounds } from '../sim/buildings.js';
 

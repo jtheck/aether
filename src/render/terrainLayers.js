@@ -28,14 +28,14 @@ export const TERRAIN_LOOK = {
   [TERRAIN.GRASS]: {
     diffuseColor: [1.12, 1.38, 1.08],
     ambientColor: [0.16, 0.24, 0.14],
-    // Soft sheen only — shore atlas cells already look tiled; spec must not flash
+    // Soft sheen only - shore atlas cells already look tiled; spec must not flash
     // them. Short of the sun-mirror value.
     specularColor: [0.027, 0.039, 0.018],
   },
   [TERRAIN.WATER]: {
     diffuseColor: [1.02, 1.16, 1.36],
     ambientColor: [0.26, 0.32, 0.36],
-    // Glint is the additive welded sheet — tile spec makes pond squares.
+    // Glint is the additive welded sheet - tile spec makes pond squares.
     specularColor: [0, 0, 0],
   },
 };

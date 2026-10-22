@@ -101,7 +101,7 @@ describe('building multi / box select helpers', () => {
     );
   });
 
-  it('agora tap while placing exits; world taps leave the ghost for 1^', () => {
+  it('agora tap while placing is an exit; a world tap is not', () => {
     assert.equal(placementTapKind('pick', null), 'pick');
     assert.equal(placementTapKind('hub', null), 'exit');
     assert.equal(placementTapKind('chrome', { kind: 'agora' }), 'chrome');
@@ -110,61 +110,54 @@ describe('building multi / box select helpers', () => {
     assert.equal(placementTapKind('world', null), 'stay');
   });
 
-  it('mouse tap stamps; touch tap leaves the ghost; a yaw drag does not stamp', () => {
+  it('a mouse tap stamps; touch places on the tap after the ghost is sitting', () => {
     assert.equal(placementReleaseKind({
-      downKind: 'rotate',
+      downKind: 'preview',
       tap: true,
       pointerType: 'mouse',
     }), 'confirm');
     assert.equal(placementReleaseKind({
-      downKind: 'rotate',
+      downKind: 'preview',
+      tap: true,
+      pointerType: 'touch',
+      ghostReady: true,
+    }), 'confirm');
+    assert.equal(placementReleaseKind({
+      downKind: 'preview',
       tap: true,
       pointerType: 'touch',
     }), 'stay');
+    assert.equal(placementReleaseKind({ tap: true, pointerType: 'mouse' }), 'stay');
     assert.equal(placementReleaseKind({
-      downKind: 'rotate',
-      rotated: true,
-      tap: true,
+      downKind: 'preview',
+      tap: false,
       pointerType: 'mouse',
     }), 'stay');
     assert.equal(placementReleaseKind({
-      downKind: 'confirm',
-      tap: true,
-    }), 'confirm');
+      downKind: 'preview',
+      tap: false,
+      pointerType: 'touch',
+      ghostReady: true,
+    }), 'stay');
     assert.equal(placementReleaseKind({
-      downKind: 'rotate',
+      downKind: 'preview',
       tap: true,
-      pointerType: 'mouse',
       tapKind: 'exit',
       radialKind: 'world',
     }), 'confirm');
     assert.equal(placementReleaseKind({
       downKind: 'preview',
       tap: true,
-      pointerType: 'mouse',
-      tapKind: 'exit',
-      radialKind: 'world',
-    }), 'confirm');
-    assert.equal(placementReleaseKind({
-      downKind: 'rotate',
-      tap: true,
-      pointerType: 'mouse',
       tapKind: 'exit',
       radialKind: 'hub',
     }), 'exit');
-    assert.equal(placementReleaseKind({
-      downKind: 'preview',
-      tap: true,
-      pointerType: 'touch',
-    }), 'stay');
+    assert.equal(placementReleaseKind({ downKind: 'preview', tap: true, tapKind: 'pick' }), 'pick');
+    assert.equal(placementReleaseKind({ downKind: 'preview', tap: false, tapKind: 'chrome' }), 'chrome');
   });
 
-  it('1^ wins; mouse click-drags yaw; touch on the ghost yaws, empty ground walks', () => {
-    assert.equal(placementDownKind({ hasGhost: true, hitConfirm: true, hitGhost: true }), 'confirm');
-    assert.equal(placementDownKind({ hasGhost: true, hitGhost: true }), 'rotate');
-    assert.equal(placementDownKind({ hasGhost: true }), 'rotate');
-    assert.equal(placementDownKind({ hasGhost: false }), 'preview');
-    assert.equal(placementDownKind({ hasGhost: true, hitGhost: true, touch: true }), 'rotate');
+  it('a press walks the ghost; facing comes from the aim, not the press', () => {
+    assert.equal(placementDownKind(), 'preview');
+    assert.equal(placementDownKind({ hasGhost: true, hitConfirm: true, hitGhost: true }), 'preview');
     assert.equal(placementDownKind({ hasGhost: true, touch: true }), 'preview');
   });
 
@@ -261,7 +254,6 @@ describe('spectator inspect input', () => {
 function makePlaceHarness(opts = {}) {
   let placing = 'camp';
   let yaw = 0;
-  let confirmHit = false;
   const confirms = [];
   const parks = [];
   const agoras = opts.agora ? [{ owner: 0, x: 20, z: 20, yaw: 0 }] : [];
@@ -275,7 +267,6 @@ function makePlaceHarness(opts = {}) {
       return { ox: x, oy: 20, oz: z, dx: 0, dy: -1, dz: 0 };
     },
     groundYAt: () => 0,
-    hitSceneConfirm: () => confirmHit,
     setSelectionBox: () => {},
   };
   const input = createGameInput({
@@ -307,7 +298,6 @@ function makePlaceHarness(opts = {}) {
     input,
     confirms,
     parks,
-    setConfirmHit: (on) => { confirmHit = on; },
     getYaw: () => yaw,
   };
 }
@@ -574,7 +564,7 @@ describe('gamepad trigger orders', () => {
       clientY: 300,
     })).then(() => {
       assert.equal(confirms.length, 0);
-      assert.equal(parks.at(-1), true);
+      assert.equal(parks.at(-1), false);
       assert.equal(getPlacing(), 'agora');
     });
   });
@@ -719,22 +709,23 @@ describe('gamepad control groups', () => {
   });
 });
 
-describe('aim then 1^ placement', () => {
-  it('hover walks the ghost; a mouse tap stamps; click-drag yaws instead', async () => {
-    const { input, confirms, getYaw } = makePlaceHarness();
+describe('aim then stamp placement', () => {
+  it('hover walks the ghost; a tap stamps; a drag does not', async () => {
+    const { input, confirms } = makePlaceHarness();
     input.handlePointerMove(placePtr({ type: 'pointermove', clientX: 200, clientY: 200 }));
     assert.equal(confirms.length, 0);
 
     input.handlePointerDown(placePtr({ clientX: 200, clientY: 200 }));
     await input.handlePointerUp(placePtr({ type: 'pointerup', clientX: 200, clientY: 200 }));
     assert.equal(confirms.length, 1);
+    assert.equal(confirms[0].x, 20);
+    assert.equal(confirms[0].z, 20);
 
     input.handlePointerMove(placePtr({ type: 'pointermove', clientX: 200, clientY: 200 }));
     input.handlePointerDown(placePtr({ clientX: 200, clientY: 200 }));
     input.handlePointerMove(placePtr({ type: 'pointermove', clientX: 260, clientY: 200 }));
     await input.handlePointerUp(placePtr({ type: 'pointerup', clientX: 260, clientY: 200 }));
     assert.equal(confirms.length, 1);
-    assert.ok(Math.abs(getYaw()) > 0);
   });
 
   it('mouse tap stamps even when the click ray hits the agora under the ghost', async () => {
@@ -745,58 +736,50 @@ describe('aim then 1^ placement', () => {
     assert.equal(confirms.length, 1);
   });
 
-  it('1^ still stamps a mouse press on the mark', async () => {
-    const { input, confirms, setConfirmHit } = makePlaceHarness();
-    input.handlePointerMove(placePtr({ type: 'pointermove', clientX: 200, clientY: 200 }));
-    setConfirmHit(true);
-    input.handlePointerDown(placePtr({ clientX: 200, clientY: 200 }));
-    await input.handlePointerUp(placePtr({ type: 'pointerup', clientX: 200, clientY: 200 }));
-    assert.equal(confirms.length, 1);
-  });
+  it('touch drag or a first tap sits the ghost; the next tap places it', async () => {
+    const { input, confirms } = makePlaceHarness();
+    input.handlePointerDown(placePtr({ pointerType: 'touch', clientX: 200, clientY: 200 }));
+    await input.handlePointerUp(placePtr({
+      pointerType: 'touch',
+      type: 'pointerup',
+      clientX: 200,
+      clientY: 200,
+    }));
+    assert.equal(confirms.length, 0);
 
-  it('touch walks on the first contact and yaws on a later ghost drag', async () => {
-    const { input, confirms, getYaw } = makePlaceHarness();
     input.handlePointerDown(placePtr({ pointerType: 'touch', clientX: 200, clientY: 200 }));
     input.handlePointerMove(placePtr({
       pointerType: 'touch',
       type: 'pointermove',
-      clientX: 240,
+      clientX: 280,
       clientY: 200,
     }));
     await input.handlePointerUp(placePtr({
       pointerType: 'touch',
       type: 'pointerup',
-      clientX: 240,
+      clientX: 280,
       clientY: 200,
     }));
     assert.equal(confirms.length, 0);
-    assert.equal(getYaw(), 0);
 
-    input.handlePointerDown(placePtr({ pointerType: 'touch', clientX: 240, clientY: 200 }));
-    input.handlePointerMove(placePtr({
-      pointerType: 'touch',
-      type: 'pointermove',
-      clientX: 300,
-      clientY: 200,
-    }));
+    input.handlePointerDown(placePtr({ pointerType: 'touch', clientX: 280, clientY: 200 }));
     await input.handlePointerUp(placePtr({
       pointerType: 'touch',
       type: 'pointerup',
-      clientX: 300,
+      clientX: 280,
       clientY: 200,
     }));
-    assert.equal(confirms.length, 0);
-    assert.ok(Math.abs(getYaw()) > 0);
+    assert.equal(confirms.length, 1);
+    assert.equal(confirms[0].x, 28);
+    assert.equal(confirms[0].z, 20);
   });
 });
 
 describe('gamepad placement', () => {
-  it('preview follows the aim, bumper-drag yaws, A stamps, cancel leaves', () => {
+  it('preview follows the aim and A stamps that ghost', () => {
     const { input, confirms, getYaw } = makePlaceHarness();
     assert.equal(input.previewPlacementAt(200, 300), true);
     assert.equal(input.rotatePlacementAt(200, 300), true);
-    assert.equal(input.rotatePlacementAt(280, 300), true);
-    assert.ok(Math.abs(getYaw()) > 0);
     const yaw = getYaw();
     assert.equal(input.confirmPlacementAt(220, 310), true);
     assert.equal(confirms.length, 1);

@@ -97,8 +97,10 @@ import {
   removeWallSection,
   sameWallCorner,
   snapWallCorner,
+  wallPresetStyle,
 } from '../sim/walls.js';
 import { DEFAULT_MAP_TYPE, MAP_TYPES, normalizeMapType } from '../sim/mapType.js';
+import { adventureTeamByOwner } from '../sim/teams.js';
 import { agorasForMapType, spawnPadsForMapType } from '../sim/worldSetup.js';
 import { createCameraController, resolveCameraExtents, resolveCameraHalfF } from '../render/cameraController.js';
 import {
@@ -159,6 +161,7 @@ import {
 } from '../sim/backdrops.js';
 import { softDetachMesh } from '../render/meshLifecycle.js';
 import { OWNER_TINTS } from '../render/ownerTints.js';
+import { RING_SEGMENTS, fadeWidthForRadius } from '../render/workRadiusRings.js';
 import { aetherSteam } from '../app/steam.js';
 
 /** One faction per resource-bank owner. King of the Hill uses the first five. */
@@ -179,15 +182,6 @@ function factionCss(id) {
 const DEFAULT_CHUNKS = SKIRMISH_MAP_CHUNKS;
 const DEFAULT_SIZE = forgeTilesForChunks(DEFAULT_CHUNKS);
 const DEFAULT_SEED = 12345;
-const WALL_FIELDS = [
-  { key: 'height', id: 'wall-height', label: 'Height', min: 2.5, max: 14, step: 0.05 },
-  { key: 'thickness', id: 'wall-thickness', label: 'Thickness', min: 0.45, max: 2.8, step: 0.05 },
-  { key: 'merlonHeight', id: 'wall-merlon-h', label: 'Merlon height', min: 0, max: 2.4, step: 0.05 },
-  { key: 'merlonWidth', id: 'wall-merlon-w', label: 'Merlon width', min: 0.35, max: 2.4, step: 0.05 },
-  { key: 'merlonGap', id: 'wall-merlon-gap', label: 'Merlon gap', min: 0.15, max: 2.2, step: 0.05 },
-  { key: 'footing', id: 'wall-footing', label: 'Footing', min: 0, max: 1.1, step: 0.01 },
-  { key: 'pier', id: 'wall-pier', label: 'Corner pier', min: 0, max: 1.8, step: 0.01 },
-];
 
 const state = {
   layer: 'select',
@@ -215,6 +209,8 @@ const state = {
   mapType: DEFAULT_MAP_TYPE,
   /** Garden `tm`. Null until the author picks a side, so older maps keep the mode default. */
   teamByOwner: null,
+  /** Garden `nr`. Pairs of team ids that do not fight. */
+  neutralTeams: null,
   painting: false,
   selected: [],
   units: [],
@@ -224,6 +220,7 @@ const state = {
   wallDraft: [],
   wallDraftOpenings: [],
   wallKind: 'castle',
+  wallSize: 'medium',
   wallTool: 'lay',
   objectives: [],
   /** Fractional hops for the next zone (consumed when a wave zone is placed). */
@@ -286,7 +283,6 @@ let openingHover = null;
 let openingKey = '';
 let sectionMarker = null;
 let sectionKey = '';
-let passGridLatched = false;
 let fieldGen = 0;
 let rebuildTimer = 0;
 let sceneRegistered = false;
@@ -377,10 +373,10 @@ function pickWallAim(clientX, clientY) {
   const ground = pickGround(clientX, clientY);
   const ray = viewRay(clientX, clientY);
   if (!ray || !state.walls.runs.length) return ground;
-  const reachY = (state.walls.style.height || 6) + 4;
   let bestT = Infinity;
   let best = null;
   for (const run of state.walls.runs) {
+    const reachY = (run.style?.height || state.walls.style.height || 6) + 4;
     const pts = run.points;
     if (!pts || pts.length < 2) continue;
     const count = run.closed ? pts.length : pts.length - 1;
@@ -1103,22 +1099,22 @@ function syncPlacePickUi() {
   syncHand();
 }
 
-/** Implicit forge alliances when the garden has no saved `teamByOwner`. */
+const ADVENTURE_TEAMS = adventureTeamByOwner();
+
+/** Implicit alliances when the garden has no saved `teamByOwner`. */
 function defaultForgeTeam(id) {
   if (state.mapType !== 'adventure') return id;
-  if (id < 4) return SIDE_BASE;
-  const otherSides = SIDE_LETTERS.length - 1;
-  const total = FACTIONS.length - 4;
-  const slot = id - 4;
-  const base = Math.floor(total / otherSides);
-  const extra = total % otherSides;
-  let left = slot;
-  for (let s = 0; s < otherSides; s++) {
-    const block = base + (s < extra ? 1 : 0);
-    if (left < block) return SIDE_BASE + 1 + s;
-    left -= block;
-  }
-  return SIDE_BASE + otherSides;
+  const team = ADVENTURE_TEAMS[id];
+  return Number.isInteger(team) ? team : id;
+}
+
+function colorEditor() {
+  return state.mapType === 'adventure' || state.mapType === 'stress';
+}
+
+function factionLabel(id) {
+  if (colorEditor() && id === 0) return 'Players';
+  return FACTIONS[id]?.name || 'Army';
 }
 
 function authoredTeam(id) {
@@ -1129,21 +1125,47 @@ function authoredTeam(id) {
   return defaultForgeTeam(id);
 }
 
-function displaySide(id) {
-  const team = authoredTeam(id);
-  if (team === id) return 'own';
-  const offset = team - SIDE_BASE;
-  if (offset >= 0 && offset < SIDE_LETTERS.length) return SIDE_LETTERS[offset];
+function sharedTeamLetter(team) {
+  const used = new Set();
+  for (const f of FACTIONS) {
+    const off = authoredTeam(f.id) - SIDE_BASE;
+    if (off >= 0 && off < SIDE_LETTERS.length) used.add(off);
+  }
   const groups = [];
   for (const f of FACTIONS) {
     const t = authoredTeam(f.id);
-    if (t === f.id) continue;
     const off = t - SIDE_BASE;
     if (off >= 0 && off < SIDE_LETTERS.length) continue;
+    if (!sharesTeam(f.id, t)) continue;
     if (!groups.includes(t)) groups.push(t);
   }
   const idx = groups.indexOf(team);
-  return SIDE_LETTERS[idx >= 0 ? idx : 0];
+  let n = 0;
+  for (let s = 0; s < SIDE_LETTERS.length; s++) {
+    if (used.has(s)) continue;
+    if (n === idx) return SIDE_LETTERS[s];
+    n++;
+  }
+  return SIDE_LETTERS[0];
+}
+
+function displaySide(id) {
+  const team = authoredTeam(id);
+  const offset = team - SIDE_BASE;
+  if (offset >= 0 && offset < SIDE_LETTERS.length) return SIDE_LETTERS[offset];
+  if (!sharesTeam(id, team)) return 'own';
+  return sharedTeamLetter(team);
+}
+
+/** Letter joins the team that letter already shows. An unused letter starts a new side. */
+function teamForAllianceKey(key, id) {
+  if (key === 'own') return id;
+  const letter = SIDE_LETTERS.indexOf(key);
+  if (letter < 0) return -1;
+  for (const f of FACTIONS) {
+    if (displaySide(f.id) === key) return authoredTeam(f.id);
+  }
+  return SIDE_BASE + letter;
 }
 
 function materializeTeams() {
@@ -1152,52 +1174,273 @@ function materializeTeams() {
 }
 
 function armySides() {
-  if (state.mapType === 'adventure' || state.mapType === 'stress') {
-    return [{ id: 0, name: 'Players' }, { id: 4, name: 'Enemy' }];
-  }
+  if (colorEditor()) return FACTIONS.map((f) => ({ id: f.id, name: factionLabel(f.id) }));
   const spec = MAP_TYPES.find((t) => t.id === state.mapType);
   const count = spec?.players > 0 ? spec.players : 4;
   return FACTIONS.slice(0, count).map((f) => ({ id: f.id, name: f.name }));
 }
 
+function sharesTeam(id, team = authoredTeam(id)) {
+  for (const f of FACTIONS) {
+    if (f.id !== id && authoredTeam(f.id) === team) return true;
+  }
+  return false;
+}
+
+function isFriendlyTeam(team) {
+  const players = authoredTeam(0);
+  if (team === players) return false;
+  for (const pair of state.neutralTeams || []) {
+    const a = pair[0] | 0;
+    const b = pair[1] | 0;
+    if ((a === team && b === players) || (a === players && b === team)) return true;
+  }
+  return false;
+}
+
+/** players | friendly | A–F | own | team-N */
+function fightKey(id) {
+  const team = authoredTeam(id);
+  if (team === authoredTeam(0)) return 'players';
+  const off = team - SIDE_BASE;
+  if (off >= 0 && off < SIDE_LETTERS.length) return SIDE_LETTERS[off];
+  if (!sharesTeam(id, team) && isFriendlyTeam(team)) return 'friendly';
+  if (!sharesTeam(id, team)) return 'own';
+  return `team-${team}`;
+}
+
+function sideLabel(key, letterCount = 1) {
+  if (key === 'players') return 'Players';
+  if (key === 'friendly') return 'Peace';
+  if (key === 'own') return 'Enemy';
+  if (key.startsWith('team-')) return letterCount > 1 ? `Side ${letterCount}` : 'Side';
+  if (letterCount > 1) {
+    const n = SIDE_LETTERS.indexOf(key);
+    return n > 0 ? `Side ${n + 1}` : 'Side';
+  }
+  return 'Side';
+}
+
+function pruneNeutralTeams() {
+  if (!state.neutralTeams?.length || !state.teamByOwner) return;
+  const used = new Set(state.teamByOwner);
+  const next = [];
+  const seen = new Set();
+  for (const pair of state.neutralTeams) {
+    const a = pair[0] | 0;
+    const b = pair[1] | 0;
+    if (a === b || !used.has(a) || !used.has(b)) continue;
+    const lo = a < b ? a : b;
+    const hi = a < b ? b : a;
+    const token = `${lo}:${hi}`;
+    if (seen.has(token)) continue;
+    seen.add(token);
+    next.push([lo, hi]);
+  }
+  state.neutralTeams = next.length ? next : null;
+}
+
+function assignFightSide(id, key) {
+  if (id === 0) return;
+  materializeTeams();
+  const table = state.teamByOwner;
+  if (!table) return;
+  if (key === 'players') {
+    table[id] = table[0];
+  } else if (key === 'peace') {
+    assignFightSide(id, 'own');
+    setFriendlyToPlayers(id, true);
+    return;
+  } else if (key === 'own') {
+    const used = new Set();
+    for (let i = 0; i < table.length; i++) if (i !== id) used.add(table[i]);
+    let team = id;
+    if (used.has(team)) {
+      team = FACTIONS.length;
+      while (used.has(team)) team++;
+    }
+    table[id] = team;
+  } else if (key.startsWith('team-')) {
+    const team = Number(key.slice(5));
+    if (!Number.isInteger(team)) return;
+    table[id] = team;
+  } else {
+    const letter = SIDE_LETTERS.indexOf(key);
+    if (letter < 0) return;
+    table[id] = SIDE_BASE + letter;
+  }
+  if (key === 'own') setFriendlyToPlayers(id, false);
+  pruneNeutralTeams();
+}
+
+function setFriendlyToPlayers(id, friendly) {
+  materializeTeams();
+  const team = state.teamByOwner?.[id];
+  const players = state.teamByOwner?.[0];
+  if (!Number.isInteger(team) || !Number.isInteger(players) || team === players) return;
+  const pairs = [];
+  for (const pair of state.neutralTeams || []) {
+    const a = pair[0] | 0;
+    const b = pair[1] | 0;
+    if ((a === team && b === players) || (a === players && b === team)) continue;
+    pairs.push([a, b]);
+  }
+  if (friendly) pairs.push(team < players ? [team, players] : [players, team]);
+  state.neutralTeams = pairs.length ? pairs : null;
+}
+
+function pickArmyOwner(id) {
+  state.owner = id;
+  const sel = document.getElementById('place-owner');
+  if (sel) {
+    sel.value = String(id);
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  renderArmySides();
+  syncHand();
+}
+
+function ownerButton(id, dotOnly) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.classList.toggle('active', state.owner === id);
+  const name = factionLabel(id);
+  b.title = name;
+  b.setAttribute('aria-label', name);
+  const dot = document.createElement('i');
+  dot.style.background = factionCss(id);
+  b.appendChild(dot);
+  if (!dotOnly) {
+    const word = document.createElement('span');
+    word.textContent = name;
+    b.appendChild(word);
+  }
+  b.addEventListener('click', () => pickArmyOwner(id));
+  return b;
+}
+
+function paintOwnerRow(host, ids, compact) {
+  if (!host) return;
+  host.classList.toggle('sides', !!compact);
+  host.replaceChildren();
+  for (const id of ids) host.appendChild(ownerButton(id));
+}
+
+function stanceWord(id) {
+  const key = fightKey(id);
+  if (key === 'players') return '';
+  if (key === 'friendly') return 'Peace';
+  if (SIDE_LETTERS.includes(key) || key.startsWith('team-')) {
+    return isFriendlyTeam(authoredTeam(id)) ? 'Peace' : 'Enemy';
+  }
+  return 'Enemy';
+}
+
+function flipStance(id) {
+  if (id === 0) return;
+  const key = fightKey(id);
+  if (key === 'players') return;
+  if (SIDE_LETTERS.includes(key) || key.startsWith('team-')) {
+    setFriendlyToPlayers(id, !isFriendlyTeam(authoredTeam(id)));
+    return;
+  }
+  assignFightSide(id, key === 'friendly' ? 'own' : 'peace');
+}
+
+function moveSideButton(key, label) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'side';
+  b.textContent = label;
+  b.classList.toggle('active', fightKey(state.owner) === key);
+  b.addEventListener('click', () => {
+    const move = key === 'friendly' ? 'peace' : key;
+    assignFightSide(state.owner, move);
+    renderArmySides();
+  });
+  return b;
+}
+
+function paintArmyGroups(host) {
+  if (!host) return;
+  host.className = '';
+  host.replaceChildren();
+  const buckets = new Map();
+  for (const f of FACTIONS) {
+    const key = fightKey(f.id);
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(f.id);
+  }
+  const letterKeys = SIDE_LETTERS.filter((key) => buckets.has(key));
+  const extra = [...buckets.keys()].filter((key) => key.startsWith('team-'));
+  const camps = letterKeys.length + extra.length;
+  const order = ['players', ...letterKeys, ...extra];
+  if (buckets.has('friendly')) order.push('friendly');
+  if (buckets.has('own')) order.push('own');
+  for (const key of order) host.appendChild(sideRow(key, buckets.get(key), camps));
+  if (state.owner === 0) return;
+  const row = document.createElement('div');
+  row.className = 'row';
+  const word = stanceWord(state.owner);
+  if (word) {
+    const stance = document.createElement('button');
+    stance.type = 'button';
+    stance.textContent = word;
+    stance.addEventListener('click', () => {
+      flipStance(state.owner);
+      renderArmySides();
+    });
+    row.appendChild(stance);
+  }
+  if (!buckets.has('own') && fightKey(state.owner) !== 'own') {
+    row.appendChild(moveSideButton('own', 'Enemy'));
+  }
+  const nextLetter = SIDE_LETTERS.find((letter) => !buckets.has(letter));
+  if (nextLetter) row.appendChild(moveSideButton(nextLetter, 'New side'));
+  if (row.childElementCount) host.appendChild(row);
+}
+
+function sideRow(key, ids, camps) {
+  const row = document.createElement('div');
+  row.className = 'side-row';
+  const campIndex = key.startsWith('team-')
+    ? camps
+    : SIDE_LETTERS.includes(key) ? SIDE_LETTERS.indexOf(key) + 1 : 1;
+  row.appendChild(moveSideButton(key, sideLabel(key, camps > 1 ? campIndex : 1)));
+  const dots = document.createElement('div');
+  dots.className = 'ink dots';
+  for (const id of ids) dots.appendChild(ownerButton(id, true));
+  row.appendChild(dots);
+  return row;
+}
+
 function renderArmySides() {
   const sel = document.getElementById('place-owner');
   if (sel) {
-    const adventure = state.mapType === 'adventure' || state.mapType === 'stress';
     for (const opt of sel.options) {
       if (opt.dataset.split) continue;
       const id = Number(opt.value);
-      const faction = FACTIONS.find((f) => f.id === id);
-      if (!faction) continue;
-      opt.textContent = adventure && id === 0 ? 'Players' : adventure && id === 4 ? 'Enemy' : faction.name;
+      if (!FACTIONS[id]) continue;
+      opt.textContent = factionLabel(id);
     }
   }
-  const paint = (host) => {
-    if (!host) return;
-    host.replaceChildren();
-    for (const side of armySides()) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.classList.toggle('active', state.owner === side.id);
-      const dot = document.createElement('i');
-      dot.style.background = factionCss(side.id);
-      const word = document.createElement('span');
-      word.textContent = side.name;
-      b.append(dot, word);
-      b.addEventListener('click', () => {
-        state.owner = side.id;
-        if (sel) {
-          sel.value = String(side.id);
-          sel.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        renderArmySides();
-        syncHand();
-      });
-      host.appendChild(b);
+  const ids = armySides().map((side) => side.id);
+  const grouped = colorEditor();
+  if (grouped) paintArmyGroups(document.getElementById('army-sides'));
+  else {
+    const host = document.getElementById('army-sides');
+    if (host) host.className = 'ink';
+    paintOwnerRow(host, ids, false);
+  }
+  const held = document.getElementById('army-held-ink');
+  if (grouped) {
+    if (held) {
+      held.classList.remove('sides');
+      held.replaceChildren();
     }
-  };
-  paint(document.getElementById('army-sides'));
-  paint(document.getElementById('army-held-ink'));
+  } else paintOwnerRow(held, ids, false);
+  const colors = document.getElementById('army-colors');
+  if (colors) colors.hidden = true;
 }
 
 function kindWord(kind) {
@@ -1824,25 +2067,33 @@ function removeNearestPlacement(pos) {
 
 function pushGoalRing(pos, idx, x, z, radius) {
   const lift = 0.55;
-  const ribbon = 0.34;
-  const n = Math.max(1, Math.ceil((radius * 2) / (TILE_SIZE_F * 0.5)));
-  const yAt = (px, pz) => (field ? surfaceHeightAt(field, px, pz) : 0);
-  const side = (ax, az, bx, bz) => {
-    for (let i = 0; i < n; i++) {
-      const t0 = i / n;
-      const t1 = (i + 1) / n;
-      const x0 = ax + (bx - ax) * t0;
-      const z0 = az + (bz - az) * t0;
-      const x1 = ax + (bx - ax) * t1;
-      const z1 = az + (bz - az) * t1;
-      const y = Math.max(yAt(x0, z0), yAt(x1, z1), yAt((x0 + x1) * 0.5, (z0 + z1) * 0.5)) + lift;
-      pushSelectEdge(pos, idx, x0, y, z0, x1, y, z1, ribbon);
-    }
-  };
-  side(x - radius, z - radius, x + radius, z - radius);
-  side(x + radius, z - radius, x + radius, z + radius);
-  side(x + radius, z + radius, x - radius, z + radius);
-  side(x - radius, z + radius, x - radius, z - radius);
+  const inner = Math.max(0, radius - fadeWidthForRadius(radius));
+  const n = RING_SEGMENTS;
+  const yAt = (px, pz) => (field ? surfaceHeightAt(field, px, pz) : 0) + lift;
+  for (let i = 0; i < n; i++) {
+    const a0 = (i / n) * Math.PI * 2;
+    const a1 = ((i + 1) / n) * Math.PI * 2;
+    const c0 = Math.cos(a0);
+    const s0 = Math.sin(a0);
+    const c1 = Math.cos(a1);
+    const s1 = Math.sin(a1);
+    const ox0 = x + c0 * radius;
+    const oz0 = z + s0 * radius;
+    const ox1 = x + c1 * radius;
+    const oz1 = z + s1 * radius;
+    const ix0 = x + c0 * inner;
+    const iz0 = z + s0 * inner;
+    const ix1 = x + c1 * inner;
+    const iz1 = z + s1 * inner;
+    const base = pos.length / 3;
+    pos.push(
+      ox0, yAt(ox0, oz0), oz0,
+      ox1, yAt(ox1, oz1), oz1,
+      ix1, yAt(ix1, iz1), iz1,
+      ix0, yAt(ix0, iz0), iz0,
+    );
+    idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  }
 }
 
 function pushBoxMarker(pos, idx, x, y, z, sx, sy, sz) {
@@ -1872,7 +2123,7 @@ function updatePlaceMarkers() {
   if (!engine || !scene) return;
   const half = field ? worldHalfFFromField(field) : 0;
   const halfZ = field ? worldHalfZFFromField(field) : 0;
-  const addMarker = (name, positions, indices, color, order = 0) => {
+  const addMarker = (name, positions, indices, color, order = 0, alpha = 1) => {
     if (!positions.length) return;
     const pos = new Float32Array(positions);
     const normals = new Float32Array(pos.length);
@@ -1884,6 +2135,7 @@ function updatePlaceMarkers() {
     mat.ambientColor = color.map((c) => c * 0.4);
     mat.specularColor = [0, 0, 0];
     mat.backFaceCulling = false;
+    if (alpha < 1) mat.alpha = alpha;
     mesh.material = mat;
     mesh.pickable = false;
     if (order) mesh.renderOrder = order;
@@ -1924,7 +2176,7 @@ function updatePlaceMarkers() {
       const idx = [];
       pushGoalRing(pos, idx, c.x, c.z, radius);
       const ink = goalInk(i).map((v) => (state.waveEdit?.id === obj.id ? Math.min(1, v + 0.22) : v));
-      addMarker(`forge-goal-${i}`, pos, idx, ink, 48);
+      addMarker(`forge-goal-${i}`, pos, idx, ink, 48, 0.55);
     });
   }
   if (field) {
@@ -2317,21 +2569,15 @@ function syncWallTools() {
   document.querySelectorAll('[data-wall-kind]').forEach((b) => {
     b.classList.toggle('active', b.dataset.wallKind === state.wallKind);
   });
+  document.querySelectorAll('[data-wall-size]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.wallSize === state.wallSize);
+  });
   document.querySelectorAll('[data-wall-tool]').forEach((b) => {
     b.classList.toggle('active', b.dataset.wallTool === state.wallTool);
   });
 }
 
 function syncWallUi() {
-  const style = state.walls?.style;
-  if (!style) return;
-  for (const spec of WALL_FIELDS) {
-    const el = document.getElementById(spec.id);
-    if (!el) return;
-    el.value = String(style[spec.key]);
-    const label = document.getElementById(`${spec.id}-label`);
-    if (label) label.textContent = Number(style[spec.key]).toFixed(2);
-  }
   syncWallStatus();
   syncWallTools();
 }
@@ -2349,6 +2595,8 @@ function previewWallRun() {
     points: pts,
     closed,
     kind: state.wallKind,
+    size: state.wallSize,
+    style: wallPresetStyle(state.wallSize),
     openings: state.wallDraftOpenings || [],
   };
 }
@@ -2368,23 +2616,6 @@ function swapWallMesh(current, name, geometry, material, shadows) {
 function restampWallPass() {
   if (!field) return;
   applyWallOccupancy(field, wallsForGarden());
-  let blocked = false;
-  const mask = field.wallBlock;
-  if (mask) {
-    for (let i = 0; i < mask.length; i++) {
-      if (mask[i]) {
-        blocked = true;
-        break;
-      }
-    }
-  }
-  if (blocked && !passGridLatched && !state.showGrid) {
-    state.showGrid = true;
-    grid?.setVisible(true);
-    const box = document.getElementById('show-grid');
-    if (box) box.checked = true;
-  }
-  if (blocked) passGridLatched = true;
   grid?.refreshOccupancy(field);
 }
 
@@ -2419,6 +2650,8 @@ function commitWallDraft(closed) {
     points: state.wallDraft.map((q) => ({ x: q.x, z: q.z })),
     closed,
     kind: state.wallKind,
+    size: state.wallSize,
+    style: wallPresetStyle(state.wallSize),
     openings: (state.wallDraftOpenings || []).map((o) => ({ ...o })),
   });
   state.wallDraft = [];
@@ -2542,7 +2775,7 @@ function updateSectionMarker(pos) {
   if (hit.ok && engine && scene && field) {
     const ya = surfaceHeightAt(field, hit.a.x, hit.a.z);
     const yb = surfaceHeightAt(field, hit.b.x, hit.b.z);
-    const rise = state.walls.style.height || 6;
+    const rise = hit.run?.style?.height || state.walls.style.height || 6;
     const positions = new Float32Array([
       hit.a.x, ya, hit.a.z, hit.b.x, yb, hit.b.z, hit.b.x, yb + rise, hit.b.z, hit.a.x, ya + rise, hit.a.z,
       hit.a.x, ya, hit.a.z, hit.a.x, ya + rise, hit.a.z, hit.b.x, yb + rise, hit.b.z, hit.b.x, yb, hit.b.z,
@@ -2690,7 +2923,6 @@ async function rebuildTerrain() {
     updateCameraBoundMesh();
     refreshBrushCursor();
     updateWallMeshes();
-    updateStats();
   } finally {
     overlayFreeze = Math.max(0, overlayFreeze - 1);
   }
@@ -3069,6 +3301,8 @@ function wallsForGarden() {
       points: state.wallDraft.map((p) => ({ x: p.x, z: p.z })),
       closed: false,
       kind: state.wallKind,
+      size: state.wallSize,
+      style: wallPresetStyle(state.wallSize),
       openings: (state.wallDraftOpenings || []).map((o) => ({ ...o })),
     });
   }
@@ -3081,6 +3315,8 @@ function committedWallsSnapshot() {
     runs: state.walls.runs.map((run) => ({
       closed: !!run.closed,
       kind: run.kind,
+      size: run.size,
+      style: run.style ? { ...run.style } : undefined,
       points: run.points.map((p) => ({ x: p.x, z: p.z })),
       openings: (run.openings || []).map((o) => ({ ...o })),
     })),
@@ -3101,6 +3337,7 @@ function gardenExtras({ committedWalls = false } = {}) {
     celestial: celestial?.getState?.() ?? null,
     mapType: state.mapType,
     teamByOwner: state.teamByOwner,
+    neutralTeams: state.neutralTeams,
   };
 }
 
@@ -3845,6 +4082,7 @@ function applyGardenJson(json) {
   state.mapName = g.name || '';
   state.mapType = g.mapType || DEFAULT_MAP_TYPE;
   state.teamByOwner = g.teamByOwner || null;
+  state.neutralTeams = g.neutralTeams || null;
   state.units = g.units;
   state.placePicks = [];
   placeDrag = null;
@@ -4195,15 +4433,6 @@ async function loadWorkshopSelection() {
   }
 }
 
-function updateStats() {
-  const el = document.getElementById('stats');
-  if (!el || !field?.tableShape) return;
-  const s = field.tableShape;
-  let cells = 0;
-  for (let i = 0; i < s.cellMask.length; i++) if (s.cellMask[i]) cells++;
-  el.textContent = `${field.width}×${field.height}  ·  ${cells}/${s.cellMask.length} chunks`;
-}
-
 function updateSelectUi() {
   const hint = document.getElementById('select-hint');
   const enabledEl = document.getElementById('chunk-enabled');
@@ -4265,7 +4494,6 @@ function syncFormFromField() {
     const el = document.getElementById(`start-${kind}`);
     if (el) el.value = String(state.startingResources[kind] | 0);
   }
-  updateStats();
   updateSelectUi();
   syncWallUi();
 }
@@ -4328,7 +4556,7 @@ function handLabel() {
     if (state.placeKind === 'building') {
       return PLACEABLE_BUILDINGS.find((b) => b.id === state.placeType)?.name || 'Building';
     }
-    return armySides().find((s) => s.id === state.owner)?.name || 'Army';
+    return factionLabel(state.owner);
   }
   if (state.layer === 'zones') {
     if (state.placeKind === 'wavehop') return 'March stop';
@@ -4499,6 +4727,7 @@ function captureDocument() {
     wallDraft: state.wallDraft.map((p) => ({ x: p.x, z: p.z })),
     wallDraftOpenings: (state.wallDraftOpenings || []).map((o) => ({ ...o })),
     wallKind: state.wallKind,
+    wallSize: state.wallSize,
     waveRoute: state.waveRoute.map((hop) => [Number(hop[0]), Number(hop[1])]),
     waveDraft: { waves: state.waveDraft.waves | 0, era: state.waveDraft.era | 0 },
     waveEdit: state.waveEdit ? { ...state.waveEdit } : null,
@@ -4516,6 +4745,7 @@ function applyDocument(snap) {
     state.wallDraft = (snap.wallDraft || []).map((p) => ({ x: p.x, z: p.z }));
     state.wallDraftOpenings = (snap.wallDraftOpenings || []).map((o) => ({ ...o }));
     state.wallKind = snap.wallKind === 'dungeon' ? 'dungeon' : 'castle';
+    state.wallSize = snap.wallSize === 'small' || snap.wallSize === 'large' ? snap.wallSize : 'medium';
     state.waveRoute = (snap.waveRoute || []).map((hop) => [hop[0], hop[1]]);
     state.waveDraft = {
       waves: snap.waveDraft?.waves | 0,
@@ -4811,6 +5041,11 @@ function mountUi() {
         <button data-wall-kind="dungeon" type="button">Dungeon</button>
       </div>
       <div class="row">
+        <button data-wall-size="small" type="button">Small</button>
+        <button data-wall-size="medium" class="active" type="button">Medium</button>
+        <button data-wall-size="large" type="button">Large</button>
+      </div>
+      <div class="row">
         <button data-wall-tool="lay" class="active" type="button">Wall</button>
         <button data-wall-tool="erase" type="button">Erase</button>
         <button data-wall-tool="door" type="button">Door</button>
@@ -4818,24 +5053,23 @@ function mountUi() {
         <button data-wall-tool="gate" type="button">Gate</button>
         <button data-wall-tool="gate-open" type="button">Open gate</button>
       </div>
-      ${WALL_FIELDS.map((spec) => `
-        <label>${spec.label} <span id="${spec.id}-label">${Number(state.walls.style[spec.key]).toFixed(2)}</span></label>
-        <input id="${spec.id}" type="range" min="${spec.min}" max="${spec.max}" step="${spec.step}" value="${state.walls.style[spec.key]}">
-      `).join('')}
       <div class="row">
         <button id="wall-finish" type="button">Finish run</button>
         <button id="wall-clear" type="button">Clear</button>
       </div>
       <p class="hint" id="wall-status">0 runs</p>
-      <p class="hint">Castle is large pale ashlar. Dungeon is the same wall in smaller grey stone. The choice sticks to the run you finish.</p>
+      <p class="hint">Castle is pale ashlar. Dungeon is grey stone. Size and stone stick to the run you finish.</p>
     </div>
     <div id="panel-place" class="panel" style="display:none">
+      <div id="army-sides"></div>
+      <div id="army-colors" hidden></div>
       <div id="army-stamps">
-        <div id="army-sides" class="ink"></div>
+        <p class="block-title">Units</p>
         <div class="palette">
           <button data-place="party" type="button"><i class="swatch" style="background:#e6c35c"></i>Party</button>
           ${UNIT_DEFS.map((u) => `<button data-place="unit" data-type="${u.id}"><i class="swatch" style="background:rgb(${Math.round(u.color[0] * 255)}, ${Math.round(u.color[1] * 255)}, ${Math.round(u.color[2] * 255)})"></i>${u.name}</button>`).join('')}
         </div>
+        <p class="block-title">Buildings</p>
         <div class="palette">
           <button data-place="agora" data-type="agora"><i class="swatch" style="background:#e6c35c"></i>Agora</button>
           ${PLACEABLE_BUILDINGS.map((b) => {
@@ -5025,7 +5259,6 @@ function mountUi() {
     <button id="btn-chapter" type="button">Untitled</button>
     <button id="btn-top-play" type="button">Play</button>
     <span id="holding">Holding: Select</span>
-    <span id="stats"></span>
     <span class="spacer"></span>
   `;
   const view = document.createElement('div');
@@ -5063,10 +5296,15 @@ function mountUi() {
   const placeChrome = () => {
     const bar = document.getElementById('forge-top');
     if (!bar) return;
-    const y = `${Math.ceil(bar.getBoundingClientRect().bottom) + 6}px`;
+    const topPx = Math.ceil(bar.getBoundingClientRect().bottom) + 6;
+    const bottomGap = 12;
+    const y = `${topPx}px`;
+    const maxH = `calc(100% - ${topPx + bottomGap}px)`;
     for (const id of ['forge-rail', 'forge-ui', 'workshop-publish-dlg']) {
       const el = document.getElementById(id);
-      if (el) el.style.top = y;
+      if (!el) continue;
+      el.style.top = y;
+      el.style.maxHeight = maxH;
     }
     placeMenus();
   };
@@ -5141,7 +5379,7 @@ function mountUi() {
     const id = Number(sel.dataset.alliance);
     if (!Number.isInteger(id) || id < 0 || id >= FACTIONS.length) return;
     const key = sel.value;
-    const team = key === 'own' ? id : SIDE_BASE + SIDE_LETTERS.indexOf(key);
+    const team = teamForAllianceKey(key, id);
     if (!Number.isInteger(team) || team < 0) return;
     materializeTeams();
     state.teamByOwner[id] = team;
@@ -5343,15 +5581,6 @@ function mountUi() {
     const label = document.getElementById('scenery-density-label');
     if (label) label.textContent = `${n * 10}%`;
   });
-  for (const spec of WALL_FIELDS) {
-    const el = document.getElementById(spec.id);
-    el.addEventListener('input', () => {
-      state.walls.style[spec.key] = Number(el.value);
-      const label = document.getElementById(`${spec.id}-label`);
-      if (label) label.textContent = Number(el.value).toFixed(2);
-      updateWallMeshes();
-    });
-  }
   document.getElementById('wall-finish').addEventListener('click', finishWallRun);
   document.getElementById('wall-clear').addEventListener('click', () => {
     state.walls.runs = [];
@@ -5359,6 +5588,13 @@ function mountUi() {
     state.wallDraftOpenings = [];
     wallCursor = null;
     updateWallMeshes();
+  });
+  document.querySelectorAll('[data-wall-size]').forEach((b) => {
+    b.addEventListener('click', () => {
+      state.wallSize = b.dataset.wallSize === 'small' || b.dataset.wallSize === 'large' ? b.dataset.wallSize : 'medium';
+      syncWallTools();
+      updateWallGhost();
+    });
   });
   document.querySelectorAll('[data-wall-kind]').forEach((b) => {
     b.addEventListener('click', () => {
@@ -5443,6 +5679,7 @@ function mountUi() {
     propReturnChunks = false;
     state.units = [];
     state.teamByOwner = null;
+    state.neutralTeams = null;
     state.placePicks = [];
     placeDrag = null;
     placeBox = null;

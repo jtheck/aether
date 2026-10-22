@@ -6,13 +6,25 @@ import { UNIT, UNIT_DEFS } from '../sim/unitTypes.js';
 import {
   BUILDING_HP,
   BUILDING_MENUS,
+  BUILDING_MODEL_URLS,
   BUILD_TIME,
   PLACEABLE_BUILDINGS,
   UPGRADE_DEFS,
+  UPGRADE_MODEL_URLS,
   getBuildingDisplayName,
 } from '../sim/buildings.js';
+import { bakedSpriteUrl } from '../render/bakedAssets.js';
+import { localHudSkin, resolveUnitModelUrl } from './dlcCatalog.js';
 
 export const HELP_PIPS = 5;
+
+function portraitUrl(glbUrl) {
+  return glbUrl ? bakedSpriteUrl(glbUrl) : '';
+}
+
+function unitPortrait(typeId) {
+  return portraitUrl(resolveUnitModelUrl(typeId, localHudSkin(typeId)));
+}
 
 /** 0 when there is none. Otherwise 1–5 against the list maximum. */
 export function helpPips(value, max) {
@@ -134,6 +146,7 @@ export function helpUnitCards() {
   return units.map((def) => ({
     id: String(def.id),
     name: def.name,
+    sprite: unitPortrait(def.id),
     note: UNIT_NOTE[def.id] ?? '',
     stats: [
       { label: 'Health', pips: helpPips(def.hp, maxHp) },
@@ -163,6 +176,7 @@ export function helpBuildingCards() {
   return ids.map((id) => ({
     id,
     name: getBuildingDisplayName(id),
+    sprite: portraitUrl(BUILDING_MODEL_URLS[id]),
     note: BUILDING_NOTE[id] ?? '',
     stats: [
       { label: 'Health', pips: helpPips(BUILDING_HP[id] ?? 0, maxHp) },
@@ -176,6 +190,7 @@ export function helpUpgradeCards() {
   return ids.map((id) => ({
     id,
     name: UPGRADE_DEFS[id].name,
+    sprite: portraitUrl(UPGRADE_MODEL_URLS[id]),
     note: UPGRADE_NOTE[id] ?? `Researched at the ${upgradeHome(id)}.`,
     stats: [],
   }));
@@ -203,9 +218,22 @@ function pipGroup(stat, pipClass = 'help-pip') {
 const UNIT_STAT_ABBR = { Health: 'Hp', Speed: 'Spd', Damage: 'Dmg' };
 const BUILDING_STAT_ABBR = { Health: 'Hp', Time: 'Time' };
 
+function portraitImg(src, small) {
+  if (!src) return null;
+  const img = document.createElement('img');
+  img.className = small ? 'help-sprite help-sprite-sm' : 'help-sprite';
+  img.alt = '';
+  img.draggable = false;
+  img.src = src;
+  img.addEventListener('error', () => img.remove());
+  return img;
+}
+
 function unitTileFace(card, statAbbr, { empty = false } = {}) {
   const face = document.createElement('div');
   face.className = empty ? 'help-unit-tile help-unit-tile--empty' : 'help-unit-tile';
+  const portrait = portraitImg(card.sprite, false);
+  if (portrait) face.append(portrait);
   const name = document.createElement('span');
   name.className = 'help-unit-tile-name';
   name.textContent = card.name ?? '';
@@ -286,34 +314,39 @@ function entryStatsRow(card, statAbbr) {
   return stats;
 }
 
-function entryRow(card, statAbbr) {
+function entryRow(card, statAbbr, { compact = false } = {}) {
   const row = document.createElement('div');
   row.className = 'help-entry-row';
-  const head = document.createElement('div');
-  head.className = 'help-entry-head';
+  const portrait = portraitImg(card.sprite, compact);
+  if (portrait) {
+    row.classList.add('help-entry-row--pic');
+    row.append(portrait);
+  }
+  const main = document.createElement('div');
+  main.className = 'help-entry-main';
   const name = document.createElement('span');
   name.className = 'help-entry-name';
   name.textContent = card.name;
-  head.append(name);
-  if (card.stats.length) head.append(entryStatsRow(card, statAbbr));
-  row.append(head);
+  main.append(name);
+  if (card.stats.length) main.append(entryStatsRow(card, statAbbr));
   if (card.note) {
     const note = document.createElement('p');
     note.className = 'help-entry-note';
     note.textContent = card.note;
-    row.append(note);
+    main.append(note);
   }
+  row.append(main);
   return row;
 }
 
 /** @param {readonly string[]} order */
-function fillEntryRoster(host, order, cards, statAbbr) {
+function fillEntryRoster(host, order, cards, statAbbr, { compact = false } = {}) {
   const byId = new Map(cards.map((c) => [c.id, c]));
   host.replaceChildren();
   host.classList.add('help-entry-roster');
   for (const id of order) {
     const card = byId.get(id);
-    if (card) host.append(entryRow(card, statAbbr));
+    if (card) host.append(entryRow(card, statAbbr, { compact }));
   }
 }
 
@@ -342,6 +375,6 @@ export function mountHelpRoster(root) {
     );
   }
   if (buildings) fillEntryRoster(buildings, HELP_BUILDING_ORDER, helpBuildingCards(), BUILDING_STAT_ABBR);
-  if (upgrades) fillEntryRoster(upgrades, HELP_UPGRADE_ORDER, helpUpgradeCards(), {});
+  if (upgrades) fillEntryRoster(upgrades, HELP_UPGRADE_ORDER, helpUpgradeCards(), {}, { compact: true });
   syncSectionBodies(root);
 }

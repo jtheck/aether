@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { chapterSelectOptions, customMapSelectOptions, formatCountdown, formatCreateLobbyLabel, formatMatchStatus, formatSeatName, formatStartLabel, formatTypeLobbyRow, groupSelectOptions, setupLobbyUi } from './lobbyUi.js';
+import { adventureLobbySources, chapterSelectOptions, customMapSelectOptions, formatCountdown, formatCreateLobbyLabel, formatMatchStatus, formatSeatName, formatStartLabel, formatTypeLobbyRow, groupSelectOptions, setupLobbyUi } from './lobbyUi.js';
 
 describe('lobby ui copy', () => {
   it('formats a type-list row', () => {
@@ -101,14 +101,17 @@ describe('lobby ui copy', () => {
     assert.equal(formatCreateLobbyLabel('adventure'), 'Create Adventure lobby');
   });
 
-  it('lists official chapters plus subscribed Workshop maps', () => {
-    const opts = chapterSelectOptions([
+  it('keeps a subscribed map and the open chapter in separate campaigns', () => {
+    const items = [
       { id: '99', title: 'Grove', gardens: [{ file: 'map.garden', name: 'Grove' }] },
-    ], 'workshop:12/maps/02.garden');
-    assert.equal(opts.some((o) => o.id === 'ch1'), false);
-    assert.equal(opts.some((o) => o.id === 'e1c1'), false);
-    assert.equal(opts.some((o) => o.id === 'workshop:99/map.garden'), true);
-    assert.equal(opts.find((o) => o.id === 'workshop:12/maps/02.garden')?.name, 'Workshop map');
+    ];
+    const sources = adventureLobbySources(items, [], 'workshop:12/maps/02.garden');
+    assert.equal(sources.some((s) => s.chapters.some((o) => o.id === 'ch1')), false);
+    assert.equal(sources.some((s) => s.chapters.some((o) => o.id === 'e1c1')), false);
+    assert.equal(sources.find((s) => s.id === 'workshop')?.chapters[0]?.id, 'workshop:99/map.garden');
+    const open = chapterSelectOptions(items, 'workshop:12/maps/02.garden');
+    assert.deepEqual(open.map((o) => o.id), ['workshop:12/maps/02.garden']);
+    assert.equal(open[0].name, 'Workshop map');
   });
 
   it('lists a workshop campaign in index order', () => {
@@ -138,7 +141,7 @@ describe('lobby ui copy', () => {
     assert.deepEqual(ids, ['workshop:7/e1c1.garden', 'workshop:7/e1c2.garden']);
     assert.deepEqual(groupSelectOptions(opts).filter((row) => row.group), [
       {
-        group: 'Siege - The Siege',
+        group: 'The Siege',
         options: [
           { id: 'workshop:7/e1c1.garden', name: 'Breach' },
           { id: 'workshop:7/e1c2.garden', name: 'Sally' },
@@ -194,6 +197,35 @@ describe('lobby ui copy', () => {
       { id: 'pack:sally.garden', name: 'Siege - Sally' },
     ]);
     assert.equal(opts.find((row) => row.id === 'pack:sally.garden')?.name, 'Siege - Sally');
+  });
+
+  it('keeps a loaded campaign’s episodes out of the other campaign’s chapters', () => {
+    const workshop = {
+      id: '7',
+      title: 'Siege',
+      campaign: {
+        v: 1,
+        kind: 'campaign',
+        name: 'Siege',
+        episodes: [{
+          name: 'The Siege',
+          chapters: [{ file: 'e1c1.garden', name: 'Breach' }],
+        }],
+      },
+      gardens: [{ file: 'e1c1.garden', name: 'Breach' }],
+    };
+    const local = [
+      { id: 'pack:opening.garden', name: 'Opening', group: 'Act 1', campaign: 'Mine' },
+      { id: 'pack:next.garden', name: 'Next', group: 'Act 1', campaign: 'Mine' },
+      { id: 'pack:later.garden', name: 'Later', group: 'Act 2', campaign: 'Mine' },
+    ];
+    const sources = adventureLobbySources([workshop], local, 'pack:next.garden');
+    assert.deepEqual(sources.map((s) => s.name), ['Mine', 'Siege']);
+    const chapters = chapterSelectOptions([workshop], 'pack:next.garden', '', '', local);
+    assert.deepEqual(chapters.map((c) => c.id), [
+      'pack:opening.garden', 'pack:next.garden', 'pack:later.garden',
+    ]);
+    assert.deepEqual(groupSelectOptions(chapters).map((row) => row.group), ['Act 1', 'Act 2']);
   });
 });
 

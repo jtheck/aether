@@ -51,6 +51,32 @@ export function clampWallStyle(style) {
   return out;
 }
 
+function extremeStyle(end) {
+  const out = {};
+  for (const key of Object.keys(LIMITS)) {
+    const [lo, hi] = LIMITS[key];
+    out[key] = end === 'max' ? hi : lo;
+  }
+  return out;
+}
+
+/** Small is the minimum curtain with a fixed height, thickness, and footing. Large is every maximum. */
+export const WALL_PRESETS = {
+  small: clampWallStyle({ ...extremeStyle('min'), height: 5, thickness: 1.5, footing: 0.2 }),
+  medium: { ...DEFAULT_WALL_STYLE },
+  large: clampWallStyle(extremeStyle('max')),
+};
+
+export function wallPresetStyle(name) {
+  const src = WALL_PRESETS[name] || WALL_PRESETS.medium;
+  return { ...src };
+}
+
+export function wallSizeOf(run) {
+  if (run?.size === 'small' || run?.size === 'medium' || run?.size === 'large') return run.size;
+  return '';
+}
+
 function quantize(n) {
   return Math.round(Number(n) * 100) / 100;
 }
@@ -86,12 +112,20 @@ export function normalizeWallRuns(list) {
       len += Math.hypot(b.x - a.x, b.z - a.z);
     }
     if (len < 0.5) continue;
-    out.push({
+    const row = {
       closed,
       points,
       kind: run.kind === 'dungeon' ? 'dungeon' : 'castle',
       openings: normalizeOpenings(run.openings, len, closed),
-    });
+    };
+    const size = wallSizeOf(run);
+    if (size) {
+      row.size = size;
+      row.style = wallPresetStyle(size);
+    } else if (run.style) {
+      row.style = clampWallStyle(run.style);
+    }
+    out.push(row);
   }
   return out;
 }
@@ -132,13 +166,22 @@ export function wallKindOf(run) {
   return run?.kind === 'dungeon' ? 'dungeon' : 'castle';
 }
 
-/** Lintel stays at least this tall so a short wall does not lose its head. */
+/**
+ * Opening rise for a door or gate.
+ * A small curtain opens to the top of the wall. A large one scales the medium
+ * door and gate. Anything else keeps the medium opening under a lintel.
+ */
 export function openingHeight(gate, wallHeight) {
-  const want = gate ? GATE_HEIGHT : DOOR_HEIGHT;
   const h = Number(wallHeight) || 0;
+  const base = gate ? GATE_HEIGHT : DOOR_HEIGHT;
+  if (Math.abs(h - WALL_PRESETS.small.height) < 0.02) return h;
   const lintel = 0.45;
+  if (Math.abs(h - WALL_PRESETS.large.height) < 0.02) {
+    const scale = h / DEFAULT_WALL_STYLE.height;
+    return Math.min(base * scale, h - lintel * scale);
+  }
   if (h <= lintel + 1.2) return Math.max(0.8, h * 0.7);
-  return Math.min(want, h - lintel);
+  return Math.min(base, h - lintel);
 }
 
 /** Null when there is nothing to keep. Style is omitted until a run exists. */
@@ -166,6 +209,13 @@ export function encodeWalls(walls) {
   if (kinds.some((k) => k)) out.k = kinds;
   const openings = runs.map((run) => (run.openings || []).map((o) => [quantize(o.d), o.gate ? 1 : 0, o.open ? 1 : 0]));
   if (openings.some((list) => list.length)) out.o = openings;
+  const sizes = runs.map((run) => {
+    if (run.size === 'small') return 0;
+    if (run.size === 'medium') return 1;
+    if (run.size === 'large') return 2;
+    return -1;
+  });
+  if (sizes.some((n) => n >= 0)) out.z = sizes;
   return out;
 }
 
@@ -201,6 +251,8 @@ export function decodeWalls(raw) {
       if (Number.isFinite(x) && Number.isFinite(z)) points.push({ x, z });
     }
     const kind = Array.isArray(raw.k) && raw.k[runs.length] === 1 ? 'dungeon' : 'castle';
+    const sizeCode = Array.isArray(raw.z) ? raw.z[runs.length] : -1;
+    const size = sizeCode === 0 ? 'small' : sizeCode === 1 ? 'medium' : sizeCode === 2 ? 'large' : '';
     const openings = [];
     const packed = Array.isArray(raw.o) ? raw.o[runs.length] : null;
     if (Array.isArray(packed)) {
@@ -209,7 +261,9 @@ export function decodeWalls(raw) {
         openings.push({ d: Number(item[0]), gate: item[1] ? 1 : 0, open: item[2] ? 1 : 0 });
       }
     }
-    runs.push({ closed: row[0] === 1, points, kind, openings });
+    const run = { closed: row[0] === 1, points, kind, openings };
+    if (size) run.size = size;
+    runs.push(run);
   }
   walls.runs = normalizeWallRuns(runs);
   return walls;
@@ -330,6 +384,13 @@ function keptOpening(opening, d) {
   };
 }
 
+function copyRunLook(from, row) {
+  const size = wallSizeOf(from);
+  if (size) row.size = size;
+  if (from?.style) row.style = from.style;
+  return row;
+}
+
 function splitRunAtSection(run, segIndex, arc0, arc1, perim) {
   const pts = run.points.map((p) => ({ x: p.x, z: p.z }));
   const kind = run.kind === 'dungeon' ? 'dungeon' : 'castle';
@@ -346,7 +407,7 @@ function splitRunAtSection(run, segIndex, arc0, arc1, perim) {
         : (perim - arc1) + opening.d;
       kept.push(keptOpening(opening, d));
     }
-    return [{ closed: false, points: ordered, kind, openings: kept }];
+    return [copyRunLook(run, { closed: false, points: ordered, kind, openings: kept })];
   }
   const leftPts = pts.slice(0, segIndex + 1);
   const rightPts = pts.slice(segIndex + 1);
@@ -358,8 +419,8 @@ function splitRunAtSection(run, segIndex, arc0, arc1, perim) {
     else rightOpen.push(keptOpening(opening, opening.d - arc1));
   }
   const out = [];
-  if (leftPts.length >= 2) out.push({ closed: false, points: leftPts, kind, openings: leftOpen });
-  if (rightPts.length >= 2) out.push({ closed: false, points: rightPts, kind, openings: rightOpen });
+  if (leftPts.length >= 2) out.push(copyRunLook(run, { closed: false, points: leftPts, kind, openings: leftOpen }));
+  if (rightPts.length >= 2) out.push(copyRunLook(run, { closed: false, points: rightPts, kind, openings: rightOpen }));
   return out;
 }
 

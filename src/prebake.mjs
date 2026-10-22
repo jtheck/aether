@@ -7,6 +7,7 @@ import { readFile, mkdir, writeFile, access } from 'fs/promises';
 import { extname, join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { chromium } from 'playwright';
+import esbuild from 'esbuild';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const REPO = fileURLToPath(new URL('..', import.meta.url));
@@ -122,7 +123,26 @@ async function launchBrowser() {
   }
 }
 
+async function buildCaptureBundle() {
+  const outdir = join(ROOT, 'prebake', '.capture');
+  await mkdir(outdir, { recursive: true });
+  await esbuild.build({
+    absWorkingDir: ROOT,
+    entryPoints: ['prebake/liteCaptureEntry.js'],
+    bundle: true,
+    format: 'esm',
+    splitting: false,
+    minify: false,
+    outfile: join(outdir, 'liteCapture.js'),
+    platform: 'browser',
+    target: 'es2022',
+    loader: { '.wasm': 'file' },
+    logLevel: 'warning',
+  });
+}
+
 await ensureVendor();
+await buildCaptureBundle();
 const server = await startServer();
 console.log(`prebake server http://localhost:${PORT}/prebake/prebake.html?auto=1`);
 
@@ -156,7 +176,9 @@ try {
   const vatQuery = process.env.PREBAKE_VAT
     ? `&vat=${encodeURIComponent(process.env.PREBAKE_VAT)}`
     : '';
-  await page.goto(`http://localhost:${PORT}/prebake/prebake.html?auto=1${vatQuery}`, {
+  // PREBAKE_SPRITES=only skips mesh/VAT and writes portraits alone.
+  const spriteQuery = process.env.PREBAKE_SPRITES === 'only' ? '&sprites=1' : '';
+  await page.goto(`http://localhost:${PORT}/prebake/prebake.html?auto=1${vatQuery}${spriteQuery}`, {
     waitUntil: 'networkidle',
     timeout: 120_000,
   });

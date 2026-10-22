@@ -678,7 +678,7 @@ function showMenuMain(doc) {
  * @param {() => void} [opts.onPlaceAim] - after sticks, walk the ghost to the aim
  * @param {() => void} [opts.onPlaceConfirm] - A / LT / RT
  * @param {() => void} [opts.onPlaceCancel] - B
- * @param {() => void} [opts.onPlaceRotateDrag] - LB/RB held, aim yaws the ghost
+ * @param {() => void} [opts.onPlaceRotateDrag] - LB/RB held, aim still walks the ghost
  * @param {(el: Element | null) => boolean} [opts.isTyping]
  */
 export function createGamepadAdapter(opts = {}) {

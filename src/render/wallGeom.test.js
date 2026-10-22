@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { DOOR_SPAN, GATE_SPAN } from '../sim/walls.js';
+import { DOOR_SPAN, GATE_SPAN, openingHeight, wallPresetStyle } from '../sim/walls.js';
 import { DEFAULT_WALL_STYLE } from '../sim/walls.js';
 import { buildWallGeometry } from './wallGeom.js';
 
@@ -184,7 +184,8 @@ describe('curtain wall mesh', () => {
       ironHi = Math.max(ironHi, iron[i]);
     }
     assert.ok(ironLo < -0.5, `bars should enter the ground, lowest y ${ironLo}`);
-    assert.ok(ironHi > style.height, `bars should run up into the wall, highest y ${ironHi}`);
+    const gateTop = openingHeight(true, style.height);
+    assert.ok(ironHi < style.height && ironHi <= gateTop, `bars should stop under the opening, highest y ${ironHi}`);
     const open = buildWallGeometry([{
       closed: false,
       points: [{ x: 0, z: 0 }, { x: 16, z: 0 }],
@@ -225,5 +226,40 @@ describe('curtain wall mesh', () => {
     );
     assert.ok(brick.dungeon.positions.length > 0);
     assert.equal(brick.castle.positions.length, 0);
+  });
+
+  it('opens a small wall to the top and keeps a large wall on its own height', () => {
+    const small = wallPresetStyle('small');
+    const large = wallPresetStyle('large');
+    const geom = buildWallGeometry([
+      {
+        closed: false,
+        points: [{ x: 0, z: 0 }, { x: 16, z: 0 }],
+        style: small,
+        openings: [{ d: 6, span: DOOR_SPAN, gate: 0, open: 1 }, { d: 12, span: GATE_SPAN, gate: 1, open: 1 }],
+      },
+      {
+        closed: false,
+        points: [{ x: 0, z: 24 }, { x: 16, z: 24 }],
+        style: large,
+      },
+    ], DEFAULT_WALL_STYLE, () => 0);
+    let cap = 0;
+    let smallTop = -Infinity;
+    let largeTop = -Infinity;
+    const pos = stone(geom).positions;
+    for (let i = 0; i < pos.length; i += 3) {
+      const x = pos[i];
+      const y = pos[i + 1];
+      const z = pos[i + 2];
+      if (Math.abs(z) < 1.2 && y > smallTop) smallTop = y;
+      if (Math.abs(z - 24) < 2 && y > largeTop) largeTop = y;
+      const inDoor = x > 4.4 && x < 7.6;
+      const inGate = x > 8.4 && x < 15.6;
+      if (Math.abs(z) < 1.2 && y > 0.5 && y < small.height - 0.2 && (inDoor || inGate)) cap += 1;
+    }
+    assert.equal(cap, 0);
+    assert.ok(smallTop > small.height - 0.05 && smallTop < small.height + 0.5, `small top ${smallTop}`);
+    assert.ok(largeTop > large.height, `large top ${largeTop}`);
   });
 });

@@ -19,6 +19,7 @@ import {
 import { BUILDING_MODEL_URLS } from '../sim/buildings.js';
 import { serializeGeneratedTransportSeats, spawnSeatsFromSockets } from '../render/transportSeats.js';
 import { extractGlbMaterials } from './glbMaterials.js';
+import { bakeSprites } from './spriteBake.js';
 
 function mimeExt(mime) {
   if (mime === 'image/jpeg' || mime === 'image/jpg') return 'jpg';
@@ -232,6 +233,15 @@ function onlyVatUrls() {
 
 /** @returns {Promise<object>} */
 export async function runPrebake() {
+  const spritesOnly = new URLSearchParams(location.search).has('sprites');
+  if (spritesOnly) {
+    setStatus('Baking sprites…');
+    const files = await bakeSprites(setStatus);
+    setStatus(`Done - ${Object.keys(files).length} sprite files`);
+    window.__PREBAKE_RESULT__ = { ok: true, files };
+    return window.__PREBAKE_RESULT__;
+  }
+
   const vatOnly = onlyVatUrls();
   setStatus('Creating WebGPU engine…');
   const canvas = document.getElementById('canvas');
@@ -339,6 +349,9 @@ ${Object.entries(buildingSpawns).map(([id, s]) => (
   }
   files['__generated__/render/transportSeats.generated.js'] =
     serializeGeneratedTransportSeats(transportSeats);
+
+  const spriteFiles = await bakeSprites(setStatus);
+  Object.assign(files, spriteFiles);
 
   setStatus(`Done - ${Object.keys(files).length} files`);
   window.__PREBAKE_RESULT__ = { ok: true, files, buildingSpawns };

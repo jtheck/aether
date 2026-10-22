@@ -106,6 +106,58 @@ export function snapBuildingYaw(yawRad) {
   return Math.round(yawRad / BUILDING_YAW_SNAP) * BUILDING_YAW_SNAP;
 }
 
+/** v1's fallback map seed. The plot's resting facing is a hash of its cell. */
+const TILE_YAW_SEED = 12345;
+/**
+ * Inside this fraction of a tile the plot keeps its own facing.
+ * By AIM_YAW_FULL the ghost matches the pointer. The band between eases,
+ * so leaving the middle does not pop. The cell edge is half a tile out.
+ */
+const AIM_YAW_DEAD = 0.18;
+const AIM_YAW_FULL = 0.42;
+
+/** Resting facing for a snapped plot. Eight directions, stable for that cell. */
+export function buildingTileYaw(snapX, snapZ, tileSize = TILE_SIZE_F) {
+  const tile = tileSize > 0 ? tileSize : TILE_SIZE_F;
+  const gx = Math.round(snapX / tile);
+  const gz = Math.round(snapZ / tile);
+  let rotHash = TILE_YAW_SEED + gx * 73856093 + gz * 19349663;
+  rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+  rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+  rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+  return (rotHash % 8) * (Math.PI / 4);
+}
+
+/** Shortest-arc blend. `t` is 0 at `from` and 1 at `to`. */
+function lerpYaw(from, to, t) {
+  const d = Math.atan2(Math.sin(to - from), Math.cos(to - from));
+  return from + d * t;
+}
+
+/**
+ * Facing while aiming a ghost. Near the snap the plot's own facing holds
+ * still. Sliding out toward an edge turns the ghost with the pointer.
+ * @param {number} aimX raw ground aim
+ * @param {number} aimZ
+ * @param {number} snapX snapped plot
+ * @param {number} snapZ
+ * @param {number} [tileSize]
+ */
+export function buildingAimYaw(aimX, aimZ, snapX, snapZ, tileSize = TILE_SIZE_F) {
+  const tile = tileSize > 0 ? tileSize : TILE_SIZE_F;
+  const dx = aimX - snapX;
+  const dz = aimZ - snapZ;
+  const dist = Math.hypot(dx, dz);
+  const rest = buildingTileYaw(snapX, snapZ, tile);
+  if (dist <= tile * AIM_YAW_DEAD) return rest;
+  const aim = Math.atan2(dx, dz);
+  const full = tile * AIM_YAW_FULL;
+  if (dist >= full) return aim;
+  const t = (dist - tile * AIM_YAW_DEAD) / (full - tile * AIM_YAW_DEAD);
+  const s = t * t * (3 - 2 * t);
+  return lerpYaw(rest, aim, s);
+}
+
 /**
  * Square tile footprints (any odd/even size). Yaw rotates the mesh only.
  * Odd sizes snap to tile centers; even sizes snap to tile intersections.
@@ -787,6 +839,40 @@ export function snapBuildingWorld(typeId, xFixed, zFixed) {
     x: snapWorldAxis(xFixed, fp.w, 'x'),
     z: snapWorldAxis(zFixed, fp.h, 'z'),
   };
+}
+
+/**
+ * World span the pointer turns a ghost inside. Odd plots use one tile, the
+ * center tile. A 2×2 sits on a corner, so the turn spans the whole footprint.
+ * @param {string} typeId
+ */
+export function buildingAimSpan(typeId) {
+  const fp = getBuildingFootprint(typeId);
+  if (!fp || fp.w !== 2 || fp.h !== 2) return TILE_SIZE_F;
+  return TILE_SIZE_F * 2;
+}
+
+/**
+ * Keep a 2×2 on its corner while the pointer is still on that building.
+ * The nearest corner otherwise flips along the tile midlines, which cut
+ * through the footprint. Odd plots already own their center tile.
+ * @param {string} typeId
+ * @param {number} aimX
+ * @param {number} aimZ
+ * @param {number} nextX
+ * @param {number} nextZ
+ * @param {number | null | undefined} curX
+ * @param {number | null | undefined} curZ
+ */
+export function holdBuildingSnap(typeId, aimX, aimZ, nextX, nextZ, curX, curZ) {
+  const fp = getBuildingFootprint(typeId);
+  if (!fp || fp.w !== 2 || fp.h !== 2) return { x: nextX, z: nextZ };
+  if (!Number.isFinite(curX) || !Number.isFinite(curZ)) return { x: nextX, z: nextZ };
+  const half = TILE_SIZE_F;
+  if (Math.abs(aimX - curX) <= half && Math.abs(aimZ - curZ) <= half) {
+    return { x: curX, z: curZ };
+  }
+  return { x: nextX, z: nextZ };
 }
 
 /**

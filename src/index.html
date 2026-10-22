@@ -131,11 +131,14 @@
     #radial-prices { position: fixed; inset: 0; z-index: 10002; pointer-events: none; }
     #radial-prices .radial-price {
       position: absolute; left: 0; top: 0;
-      display: flex; align-items: center; gap: 3px;
-      font: 15px/1 system-ui, sans-serif;
+      display: flex; flex-direction: column; align-items: center; gap: 1px;
+      font: 13px/1.15 system-ui, sans-serif;
       font-variant-numeric: tabular-nums; white-space: nowrap;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
     }
-    #radial-prices .radial-price svg { height: 1.2em; width: auto; overflow: visible; }
+    #radial-prices .radial-price-name { font-weight: 600; letter-spacing: 0.03em; }
+    #radial-prices .radial-price-row { display: flex; align-items: center; gap: 4px; }
+    #radial-prices .radial-price svg { height: 1.05em; width: auto; overflow: visible; }
     #radial-prices .radial-price svg * { stroke: currentColor !important; fill: none !important; }
     #radial-prices .radial-price[hidden] { display: none; }
     #koth-controls {
@@ -269,6 +272,8 @@
     #side_menu #xr_button:hover, #side_menu #xr_button:focus-visible, #side_menu #xr_button.is-on { fill: aqua; outline: none; }
     #side_menu #xr_button:active { fill: darkmagenta; }
     #side_menu .page { display: none; flex: 1; overflow-y: auto; overflow-x: hidden; padding: 5px;}
+    #side_menu .page[data-page="settings"] { user-select: none; }
+    #side_menu .page[data-page="settings"] input[type="text"] { user-select: text; }
     #side_menu .page.is-active { display: block; }
     #side_menu .row { margin-bottom: 14px; }
     #side_menu [data-profile] {
@@ -636,9 +641,14 @@
     #match-lobby-overlay .match-lobby-setting[hidden] { display: none; }
     #match-lobby-overlay .match-lobby-setting label { min-width: 72px; opacity: .8; }
     #match-lobby-overlay #match-lobby-chapter,
+    #match-lobby-overlay #match-lobby-campaign,
     #match-lobby-overlay #match-lobby-map { min-width: 0; }
     #match-lobby-overlay #match-lobby-chapter-row,
     #match-lobby-overlay #match-lobby-map-row { flex-wrap: wrap; }
+    #match-lobby-overlay:has(#match-lobby-map-row:not([hidden])) #match-lobby-field-row,
+    #match-lobby-overlay:has(#match-lobby-map-row:not([hidden])) #match-lobby-seed-row {
+      padding-left: 16px;
+    }
     #match-lobby-overlay .match-lobby-load {
       flex: 1 0 100%; width: auto; margin: 1px auto 0 0; padding: 0; align-self: flex-start;
       background: none; border: 0; color: #8b93a0;
@@ -682,6 +692,7 @@
       background: rgba(12, 15, 20, .72);
     }
     #ladder_pop[hidden], #ladder_go[hidden], #help_pop[hidden], #skins_pop[hidden] { display: none; }
+    #help_pop { user-select: none; }
     #help_pop .help-card, #skins_pop .help-card {
       position: relative; width: min(420px, 92vw); max-height: min(78vh, 560px);
       overflow: auto; box-sizing: border-box; margin: 0; padding: 16px 18px 18px;
@@ -776,6 +787,12 @@
       background: #161b24; border: 1px solid #2a3140; border-radius: 3px;
       font-size: 10px; line-height: 1.2; text-align: left;
     }
+    #help_pop .help-sprite {
+      display: block; width: 56px; height: 56px; margin: 0 auto; object-fit: contain; pointer-events: none;
+    }
+    #help_pop .help-unit-tile .help-sprite { position: relative; z-index: 1; transition: transform 140ms ease; }
+    #help_pop .help-unit-cell:hover .help-unit-tile { background: #222a36; }
+    #help_pop .help-unit-cell:hover .help-sprite { transform: scale(2); z-index: 2; }
     #help_pop .help-unit-tile-name {
       font-weight: 600; font-size: 11px; text-align: center; line-height: 1.2;
     }
@@ -797,17 +814,20 @@
     #help_pop .help-unit-tile--empty { justify-content: center; opacity: .55; }
     #help_pop .help-entry-roster { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
     #help_pop .help-entry-row {
+      display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; gap: 4px 10px;
       padding: 6px 8px; border: 1px solid #232936; border-radius: 3px; background: #10141c;
     }
-    #help_pop .help-entry-head {
-      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px;
-    }
-    #help_pop .help-entry-name { font-weight: 600; font-size: 11px; }
+    #help_pop .help-entry-row--pic { grid-template-columns: auto minmax(0, 1fr); }
+    #help_pop .help-entry-row > .help-sprite { width: 72px; height: 72px; margin: 0; }
+    #help_pop .help-entry-row > .help-sprite.help-sprite-sm { width: 32px; height: 32px; }
+    #help_pop .help-entry-main { min-width: 0; }
+    #help_pop .help-entry-name { font-weight: 600; font-size: 11px; overflow-wrap: anywhere; }
     #help_pop .help-entry-stats {
-      display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
+      display: flex; flex-direction: column; align-items: flex-start; gap: 2px; margin-top: 4px;
     }
+    #help_pop .help-entry-stats .help-unit-mini-stat { grid-template-columns: 2.6em max-content; }
     #help_pop .help-entry-note {
-      margin: 6px 0 0; font-size: 11px; line-height: 1.35; opacity: .88;
+      margin: 4px 0 0; font-size: 11px; line-height: 1.35; opacity: .88;
     }
     #help_pop .help-tile:hover, #help_pop .help-tile:focus-visible,
     #help_pop .help-tile.is-on { border-color: aqua; color: aqua; outline: none; }
@@ -900,6 +920,10 @@
         <button type="button" class="btn" id="match-replay-watch" hidden>Watch</button>
       </div>
       <div id="match-lobby-seats"></div>
+      <div id="match-lobby-map-row" class="match-lobby-setting" hidden>
+        <label for="match-lobby-map">Map</label>
+        <select id="match-lobby-map"></select>
+      </div>
       <div id="match-lobby-field-row" class="match-lobby-setting">
         <label for="match-lobby-field">Field</label>
         <select id="match-lobby-field"></select>
@@ -908,12 +932,12 @@
         <label for="match-lobby-seed">Seed</label>
         <input id="match-lobby-seed" type="text" inputmode="numeric">
       </div>
-      <div id="match-lobby-map-row" class="match-lobby-setting" hidden>
-        <label for="match-lobby-map">Map</label>
-        <select id="match-lobby-map"></select>
-      </div>
       <div id="match-lobby-load-row" class="match-lobby-setting" hidden>
         <button type="button" class="match-lobby-load" id="match-lobby-load-garden" title="A .garden or .campaign you made">Load your own map</button>
+      </div>
+      <div id="match-lobby-campaign-row" class="match-lobby-setting" hidden>
+        <label for="match-lobby-campaign">Campaign</label>
+        <select id="match-lobby-campaign"></select>
       </div>
       <div id="match-lobby-chapter-row" class="match-lobby-setting" hidden>
         <label for="match-lobby-chapter">Chapter</label>
@@ -968,6 +992,14 @@
     <div class="page is-active" data-page="main">
       <img class="skinny-header" src="/assets/images/skinnyheader.png" alt="Æther.Garden" width="506" height="56">
       <div class="row" data-profile></div>
+      <div class="row" id="menu-match" hidden>
+        <div id="menu-match-status"></div>
+        <div id="menu-match-meta" class="note"></div>
+        <div id="menu-match-seats"></div>
+        <button type="button" class="btn" id="menu-match-ready">Ready</button>
+        <button type="button" class="btn" id="menu-match-start" hidden>Start</button>
+        <button type="button" class="btn" id="menu-match-leave">Leave lobby</button>
+      </div>
       <div class="row menu-mode" id="menu-koth" data-mode="koth" hidden>
         <h4 class="menu-mode-title">King of the Hill</h4>
         <div id="menu-koth-browse">
@@ -1012,14 +1044,6 @@
         </div>
         <button type="button" class="btn" id="ladder-open" aria-controls="ladder_pop" aria-expanded="false">Competition ladder</button>
       </div>
-      <div class="row" id="menu-match" hidden>
-        <div id="menu-match-status"></div>
-        <div id="menu-match-meta" class="note"></div>
-        <div id="menu-match-seats"></div>
-        <button type="button" class="btn" id="menu-match-ready">Ready</button>
-        <button type="button" class="btn" id="menu-match-start" hidden>Start</button>
-        <button type="button" class="btn" id="menu-match-leave">Leave lobby</button>
-      </div>
 
 
       <div class="menu-solo">
@@ -1027,20 +1051,20 @@
           <button type="button" class="btn lobby-drawer-toggle" id="practice-toggle" aria-expanded="false" aria-controls="practice-body">Practice</button>
           <div class="lobby-drawer-body" id="practice-body" hidden>
             <div class="row">
-              <button type="button" class="btn" id="open_replay_b">Open replay</button>
-              <div class="note">Watch a saved .gecho - a garden echo of a match.</div>
+              <button type="button" class="btn" id="solo_ai_b">1v1 vs AI</button>
+              <div class="note">Offline match vs computer.</div>
             </div>
             <div class="row">
-              <button type="button" class="btn" id="solo_ai_b">1v1 vs AI</button>
-              <div class="note">Offline match - same armies as a live game.</div>
+              <button type="button" class="btn" id="open_replay_b">Open replay</button>
+              <div class="note">Watch a saved .gecho replay.</div>
             </div>
             <div class="row">
               <button type="button" class="btn" id="unit_tester_b">Unit tester</button>
-              <div class="note">Mirrored 1v1 - one of every unit and building.</div>
+              <div class="note">One of every unit and building.</div>
             </div>
             <div class="row">
               <button type="button" class="btn" id="stressful_b">Stressful Situation</button>
-              <div class="note">Five-way FFA - 1000 units per player.</div>
+              <div class="note">Five armies of 1000 units.</div>
             </div>
           </div>
         </div>

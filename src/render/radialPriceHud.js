@@ -101,10 +101,41 @@ function readPaint(el) {
   };
 }
 
+function priceRow(el) {
+  let row = el.querySelector('.radial-price-row');
+  if (!row) {
+    row = document.createElement('div');
+    row.className = 'radial-price-row';
+    el.appendChild(row);
+  }
+  return row;
+}
+
+function paintName(el, name, css) {
+  let node = el.querySelector('.radial-price-name');
+  if (!name) {
+    node?.remove();
+    return;
+  }
+  if (!node) {
+    node = document.createElement('div');
+    node.className = 'radial-price-name';
+    el.prepend(node);
+  }
+  if (node.textContent !== name) node.textContent = name;
+  node.style.color = css;
+}
+
 function fillRow(el, spec) {
-  el.textContent = '';
+  const row = priceRow(el);
+  row.replaceChildren();
   const cost = spec.cost;
   const parts = resourceCostParts(cost);
+  if (!parts.length) {
+    row.hidden = true;
+    return;
+  }
+  row.hidden = false;
   const split = spec.gate === 'unafford';
   const lack = split ? new Set(lackingCostKinds(spec.bank, cost)) : null;
   const okCss = washCss(spec.okWash ?? spec.wash);
@@ -114,15 +145,15 @@ function fillRow(el, spec) {
       const sep = document.createElement('span');
       sep.className = 'radial-price-sep';
       sep.textContent = '·';
-      el.appendChild(sep);
+      row.appendChild(sep);
     }
     const amt = document.createElement('span');
     amt.className = 'radial-price-amt';
     amt.textContent = formatGameNumber(parts[i].amount);
-    el.appendChild(amt);
+    row.appendChild(amt);
     const src = icons[parts[i].kind];
     const icon = src ? src.cloneNode(true) : null;
-    if (icon) el.appendChild(icon);
+    if (icon) row.appendChild(icon);
     if (split) {
       const css = lack.has(parts[i].kind) ? badCss : okCss;
       amt.style.color = css;
@@ -143,12 +174,15 @@ function fillRow(el, spec) {
  *   okWash?: number[],
  *   gate?: string,
  *   bank?: Record<string, number> | null,
+ *   name?: string,
+ *   nameWash?: number[],
  * } | null} spec
  */
 export function setRadialPrice(id, spec) {
   void ensureRadialPriceHud();
   if (!root) return;
-  if (!spec || !costKey(spec.cost)) {
+  const name = spec?.name || '';
+  if (!spec || (!costKey(spec.cost) && !name)) {
     hideRadialPrice(id);
     return;
   }
@@ -161,14 +195,21 @@ export function setRadialPrice(id, spec) {
   }
   const gate = spec.gate || 'ok';
   const lackBits = gate === 'unafford' ? lackingCostKinds(spec.bank, spec.cost).join(',') : '';
-  const key = `${costKey(spec.cost)}|${washCss(spec.wash)}|${washCss(spec.okWash)}|${gate}|${lackBits}`;
+  const nameCss = washCss(spec.nameWash ?? spec.wash);
+  const key = `${costKey(spec.cost)}|${washCss(spec.wash)}|${washCss(spec.okWash)}|${gate}|${lackBits}|${name}|${nameCss}`;
   if (el.dataset.key !== key) {
     el.dataset.cost = JSON.stringify(spec.cost ?? null);
     el.dataset.bank = JSON.stringify(spec.bank ?? null);
     el.dataset.gate = gate;
     el.dataset.wash = JSON.stringify(spec.wash ?? null);
     el.dataset.okWash = JSON.stringify(spec.okWash ?? spec.wash ?? null);
-    fillRow(el, spec);
+    paintName(el, name, nameCss);
+    if (costKey(spec.cost)) fillRow(el, spec);
+    else {
+      const row = priceRow(el);
+      row.replaceChildren();
+      row.hidden = true;
+    }
     el.style.color = washCss(gate === 'unafford' ? (spec.okWash ?? spec.wash) : spec.wash);
     el.dataset.key = key;
   }

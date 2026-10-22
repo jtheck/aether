@@ -261,22 +261,18 @@ describe('xr controls: ghost-place', () => {
     assert.equal(h.of('attackMove').length, 0);
   });
 
-  it('grip yaws instead of selecting, then the ghost waits until the beam comes back', () => {
+  it('grip does not select, and the beam keeps walking the ghost', () => {
     const h = harness();
     h.state.placing = true;
-    h.state.anchor = { x: 0, z: 0 };
     h.right.grip(true);
     h.right.aim(40, 0);
     h.step();
-    assert.equal(h.of('rotate').length, 1);
-    h.right.grip(false);
+    assert.equal(h.of('preview').length, 1);
+    assert.equal(h.of('rotate').length, 0);
+    assert.equal(h.of('select').length, 0);
+    h.right.aim(80, 0);
     h.step();
-    const walked = h.of('preview').length;
-    h.step();
-    assert.equal(h.of('preview').length, walked);
-    h.right.aim(1, 0);
-    h.step();
-    assert.equal(h.of('preview').length, walked + 1);
+    assert.equal(h.of('preview').length, 2);
     assert.equal(h.of('select').length, 0);
   });
 

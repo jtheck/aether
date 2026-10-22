@@ -8,16 +8,20 @@
 import {
   addToScene,
   createDefaultTextData,
+  createMeshFromData,
   createTextLayer,
   createTextRenderer,
   disposeDefaultTextData,
   disposeTextRenderer,
   registerTextRenderer,
   createShaderMaterial,
+  loadTexture2D,
+  setShaderTexture,
   setShaderUniform,
   setSubtreeVisible,
   updateDefaultTextData,
 } from '../vendor/lite/liteVendor.js';
+import { bakedSpriteUrl } from './bakedAssets.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
 import { loadIdleIconMeshes } from './vatUnits.js';
 import { formatGameNumber } from '../sim/formatGameNumber.js';
@@ -46,6 +50,12 @@ const ICON_DEPTH = 0.8;
 const UNIT_ICON_WORLD = 1.55 * (0.8 / 28);
 /** Preferred horizontal spacing between chips (CSS px); compressed to fit. */
 const SLOT_PX = 112;
+/**
+ * Portrait size in CSS pixels. Sprites are already framed, so this stays put
+ * when the camera zooms. The old mesh scale changed with field of view and
+ * resampled the bitmap.
+ */
+const SPRITE_PX = 68;
 /** Keep the whole row inside the viewport with this side inset (CSS px). */
 const EDGE_MARGIN = 44;
 /** Icon center sits this far below the top edge (CSS px). */
@@ -204,8 +214,10 @@ function makeIconMaterial(source) {
       { name: 'iconColor', type: 'vec3<f32>', defaultValue: color },
     ],
     backFaceCulling: false,
-    // Write depth so a quiver, sword, or wheat stalk stays in front of what it covers.
-    // The chip still sits nearer than the world, so the ground does not cover it.
+    // Transparent pass, same as the build menu. Opaque chips draw before the fog
+    // veil, and the veil then paints over them. Depth write keeps a sword or
+    // wheat stalk in front of the body; the chip is nearer than the world.
+    needAlphaBlending: true,
     depthWrite: true,
     depthCompare: 'greater-equal',
     vertexSource: `struct VertexOutput {
@@ -278,6 +290,154 @@ function quatFromBasis(xx, xy, xz, yx, yy, yz, zx, zy, zz) {
     z = 0.25 * s;
   }
   return { x, y, z, w };
+}
+
+const SPRITE_QUAD = (() => {
+  const positions = new Float32Array([
+    -0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0,
+  ]);
+  const normals = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]);
+  // Local +X points screen-left, so U is swapped. V stays 0 along the bottom
+  // edge; flipping it turned the help-menu portrait upside down in game.
+  const uvs = new Float32Array([1, 0, 0, 0, 0, 1, 1, 1]);
+  const indices = new Uint32Array([0, 1, 2, 0, 2, 3]);
+  return { positions, normals, uvs, indices };
+})();
+
+function makeSpriteMaterial() {
+  return createShaderMaterial({
+    name: 'sel-sprite',
+    attributes: ['position', 'normal', 'uv'],
+    uniforms: [
+      'world',
+      'viewProjection',
+      { name: 'gain', type: 'f32', defaultValue: 1 },
+    ],
+    samplers: ['sprite'],
+    backFaceCulling: false,
+    // The fog veil is transparent and sorts behind anything nearer the camera.
+    // An opaque chip draws first, so the veil covers it. Stay transparent, at
+    // icon depth, and the portrait paints after the veil. Depth test still
+    // keeps the world from covering the chip.
+    needAlphaBlending: true,
+    blend: {
+      color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+      alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+    },
+    depthWrite: false,
+    depthCompare: 'greater-equal',
+    vertexSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+};
+@vertex fn mainVertex(input: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  let wp = shaderSystem.world * vec4<f32>(input.position, 1.0);
+  out.position = shaderSystem.viewProjection * wp;
+  out.uv = input.uv;
+  return out;
+}`,
+    fragmentSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+};
+@fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
+  let c = textureSample(sprite, spriteSampler, input.uv);
+  return vec4<f32>(c.rgb * shaderUniforms.gain, c.a);
+}`,
+  });
+}
+
+/**
+ * Screen basis at icon depth. Local +X is screen-left (the UVs are swapped)
+ * and +Z points at the camera. One basis for the whole row, taken from the
+ * same rays that place the chips, so a stale camera matrix cannot leave them
+ * sheared until the next orbit.
+ * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null | undefined} ray
+ * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null | undefined} rayRight
+ * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null | undefined} rayDown
+ * @returns {{ x: number, y: number, z: number, w: number } | null}
+ */
+function spriteQuatFromRays(ray, rayRight, rayDown) {
+  if (!ray || !rayRight || !rayDown) return null;
+  const px = ray.ox + ray.dx * ICON_DEPTH;
+  const py = ray.oy + ray.dy * ICON_DEPTH;
+  const pz = ray.oz + ray.dz * ICON_DEPTH;
+  let rx = rayRight.ox + rayRight.dx * ICON_DEPTH - px;
+  let ry = rayRight.oy + rayRight.dy * ICON_DEPTH - py;
+  let rz = rayRight.oz + rayRight.dz * ICON_DEPTH - pz;
+  const rlen = Math.hypot(rx, ry, rz);
+  if (rlen < 1e-8) return null;
+  rx /= rlen;
+  ry /= rlen;
+  rz /= rlen;
+  let dx = rayDown.ox + rayDown.dx * ICON_DEPTH - px;
+  let dy = rayDown.oy + rayDown.dy * ICON_DEPTH - py;
+  let dz = rayDown.oz + rayDown.dz * ICON_DEPTH - pz;
+  const dlen = Math.hypot(dx, dy, dz);
+  if (dlen < 1e-8) return null;
+  dx /= dlen;
+  dy /= dlen;
+  dz /= dlen;
+  const xx = -rx;
+  const xy = -ry;
+  const xz = -rz;
+  const yx = -dx;
+  const yy = -dy;
+  const yz = -dz;
+  const zx = xy * yz - xz * yy;
+  const zy = xz * yx - xx * yz;
+  const zz = xx * yy - xy * yx;
+  const zlen = Math.hypot(zx, zy, zz);
+  if (zlen < 1e-8) return null;
+  return quatFromBasis(xx, xy, xz, yx, yy, yz, zx / zlen, zy / zlen, zz / zlen);
+}
+
+function sameQuat(a, b) {
+  return !!a && !!b
+    && Math.abs(a.x - b.x) < 1e-6
+    && Math.abs(a.y - b.y) < 1e-6
+    && Math.abs(a.z - b.z) < 1e-6
+    && Math.abs(a.w - b.w) < 1e-6;
+}
+
+/** Fallback when the screen rays are not ready. */
+function spriteQuatFromCamera(camera) {
+  const w = camera?.worldMatrix;
+  if (!w || w.length < 11) return null;
+  return quatFromBasis(
+    -w[0], -w[1], -w[2],
+    w[4], w[5], w[6],
+    -w[8], -w[9], -w[10],
+  );
+}
+
+/** Place a portrait. `quat` is omitted when the camera basis has not changed. */
+function placeSprite(mesh, x, y, z, scale, quat) {
+  if (mesh.position) {
+    mesh.position.x = x;
+    mesh.position.y = y;
+    mesh.position.z = z;
+  }
+  if (mesh.scaling) {
+    mesh.scaling.x = scale;
+    mesh.scaling.y = scale;
+    mesh.scaling.z = scale;
+  }
+  if (quat) {
+    const rq = mesh.rotationQuaternion;
+    if (rq) {
+      if (typeof rq.set === 'function') rq.set(quat.x, quat.y, quat.z, quat.w);
+      else {
+        rq.x = quat.x;
+        rq.y = quat.y;
+        rq.z = quat.z;
+        rq.w = quat.w;
+      }
+    }
+  }
+  setSubtreeVisible(mesh, true);
+  mesh.markLocalDirty?.();
 }
 
 /** Place a HUD icon with a regular world transform (not thin instances). */
@@ -376,7 +536,48 @@ export async function createSelectionHud(engine, scene, screen = {}) {
     }
   }
 
+  async function tryLoadSpriteIcon(key, url) {
+    let tex = null;
+    try {
+      tex = await loadTexture2D(engine, bakedSpriteUrl(url), {
+        mipMaps: true,
+        addressModeU: 'clamp-to-edge',
+        addressModeV: 'clamp-to-edge',
+        minFilter: 'linear',
+        magFilter: 'linear',
+        srgb: false,
+      });
+    } catch {
+      return false;
+    }
+    const { positions, normals, uvs, indices } = SPRITE_QUAD;
+    const mesh = createMeshFromData(engine, `sel-sprite-${key}`, positions, normals, indices, uvs);
+    mesh.pickable = false;
+    if ('receiveShadows' in mesh) mesh.receiveShadows = false;
+    mesh.renderOrder = HUD_RENDER_ORDER;
+    mesh.boundMin = [-0.5, -0.5, -0.5];
+    mesh.boundMax = [0.5, 0.5, 0.5];
+    const mat = makeSpriteMaterial();
+    mesh.material = mat;
+    setShaderTexture(mat, 'sprite', tex);
+    addToScene(scene, mesh);
+    setSubtreeVisible(mesh, false);
+    icons.set(key, {
+      sprite: true,
+      layers: [{ mesh, baseColor: null }],
+      visible: false,
+      hoverT: 0,
+      // The portrait is framed with margin, so the card is a bit larger than a raw mesh.
+      normScale: UNIT_ICON_WORLD * 1.2,
+      cx: 0,
+      cy: 0,
+      cz: 0,
+    });
+    return true;
+  }
+
   async function loadIconInner(key, url) {
+    if (await tryLoadSpriteIcon(key, url)) return;
     try {
       let parts = null;
       if (key.startsWith('u:')) parts = await loadIdleIconMeshes(engine, url);
@@ -482,9 +683,23 @@ export async function createSelectionHud(engine, scene, screen = {}) {
     }
   }
 
-  function showIcon(key, ax, ay, az, rx, ry, rz, fx, fy, fz, compress, hoverT) {
+  function showIcon(key, ax, ay, az, rx, ry, rz, fx, fy, fz, compress, hoverT, spriteWorld, orient) {
     const batch = icons.get(key);
     if (!batch) return;
+    if (batch.sprite) {
+      const mesh = batch.layers[0].mesh;
+      const world = spriteWorld > 0 ? spriteWorld : batch.normScale;
+      const wrote = orient && !sameQuat(batch.quat, orient);
+      placeSprite(mesh, ax, ay, az, world, wrote ? orient : null);
+      if (wrote) batch.quat = orient;
+      const gain = 1 + hoverT * 0.22;
+      if (batch.gain !== gain) {
+        setShaderUniform(mesh.material, 'gain', gain);
+        batch.gain = gain;
+      }
+      batch.visible = true;
+      return;
+    }
     const s = batch.normScale * compress * (1 + hoverT * HOVER_SCALE);
     // Anchor the model's bounding-box center on the slot (up = world +Y).
     const ox = ax - s * (rx * batch.cx + fx * batch.cz);
@@ -609,6 +824,12 @@ export async function createSelectionHud(engine, scene, screen = {}) {
     const rowW = (n - 1) * pitch;
     const startX = vw * 0.5 - rowW * 0.5;
     const iconPy = TOP_MARGIN;
+    const anchor = toHud(vw * 0.5, iconPy);
+    const orient = spriteQuatFromRays(
+      screen.rayFromCanvas(anchor.x, anchor.y),
+      screen.rayFromCanvas(anchor.x + 1, anchor.y),
+      screen.rayFromCanvas(anchor.x, anchor.y + 1),
+    ) ?? spriteQuatFromCamera(camera);
 
     /** @type {Set<string>} */
     const shownKeys = new Set();
@@ -664,10 +885,20 @@ export async function createSelectionHud(engine, scene, screen = {}) {
       const hy = base.y - hoverT * HOVER_LIFT_PX;
 
       const ray = screen.rayFromCanvas(base.x, hy);
+      const rayR = screen.rayFromCanvas(base.x + 1, hy);
       if (ray && iconKey) {
         const wx = ray.ox + ray.dx * ICON_DEPTH;
         const wy = ray.oy + ray.dy * ICON_DEPTH;
         const wz = ray.oz + ray.dz * ICON_DEPTH;
+        let spriteWorld = 0;
+        if (rayR) {
+          const dx = rayR.ox + rayR.dx * ICON_DEPTH - wx;
+          const dy = rayR.oy + rayR.dy * ICON_DEPTH - wy;
+          const dz = rayR.oz + rayR.dz * ICON_DEPTH - wz;
+          const pixel = Math.hypot(dx, dy, dz);
+          const css = Math.min(SPRITE_PX, pitch * 0.85);
+          if (pixel > 1e-8) spriteWorld = pixel * css;
+        }
         // Authored face is model +Z (glTF forward, including the node's own spin).
         // Point that at the camera.
         let thx = eye.x - wx;
@@ -675,7 +906,7 @@ export async function createSelectionHud(engine, scene, screen = {}) {
         const hlen = Math.hypot(thx, thz) || 1;
         thx /= hlen;
         thz /= hlen;
-        showIcon(iconKey, wx, wy, wz, thz, 0, -thx, thx, 0, thz, compress, hoverT);
+        showIcon(iconKey, wx, wy, wz, thz, 0, -thx, thx, 0, thz, compress, hoverT, spriteWorld, orient);
         shownKeys.add(iconKey);
       }
 

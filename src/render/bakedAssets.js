@@ -16,6 +16,11 @@ export function bakedMeshStem(glbUrl) {
   return file;
 }
 
+/** Portrait PNG written by prebake (`sprites/<stem>.png`). */
+export function bakedSpriteUrl(glbUrl) {
+  return `/assets/baked/sprites/${bakedMeshStem(glbUrl)}.png`;
+}
+
 /** @param {string} glbUrl */
 export function bakedMeshJsonUrl(glbUrl) {
   return `/assets/baked/meshes/${bakedMeshStem(glbUrl)}.json`;

@@ -7,6 +7,8 @@
   <link rel="icon" href="/icons/favicon-32x32.png">
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #0e1418; color: #ddd; font: 13px/1.4 sans-serif; }
+    #forge-top, #forge-rail, #forge-ui, #workshop-publish-dlg, #story-sheet { user-select: none; }
+    #forge-ui input, #forge-ui textarea, #workshop-publish-dlg input, #workshop-publish-dlg textarea { user-select: text; }
     canvas { display: block; width: 100%; height: 100%; }
     #forge-top {
       position: absolute; top: 8px; left: 8px; right: 8px; z-index: 6;
@@ -23,10 +25,10 @@
       max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     #holding { color: #9cc; white-space: nowrap; flex: 0 0 auto; }
-    #stats { color: #888; white-space: nowrap; flex: 0 0 auto; }
     #forge-rail {
       position: absolute; top: 48px; left: 8px; z-index: 5;
       display: flex; flex-direction: column; gap: 2px;
+      box-sizing: border-box; max-height: calc(100% - 60px); overflow: auto;
       background: rgba(18, 22, 28, 0.92); border: 1px solid #333; padding: 4px;
     }
     #forge-rail button {
@@ -37,7 +39,7 @@
     #forge-ui {
       display: none;
       position: absolute; top: 48px; left: 84px; width: 260px;
-      max-height: calc(100% - 60px); overflow: auto;
+      box-sizing: border-box; max-height: calc(100% - 60px); overflow: auto;
       background: rgba(18, 22, 28, 0.92); border: 1px solid #333; padding: 10px;
     }
     #forge-ui.open { display: block; }
@@ -101,8 +103,15 @@
     }
     #forge-ui .ink button.active { color: #fff; }
     #forge-ui .ink button.active i { border-color: #fff; }
+    #forge-ui .side-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 2px 0 6px; }
+    #forge-ui .side-row > button { margin: 0; }
+    #forge-ui .side-row > .side { flex: 0 0 62px; text-align: left; padding: 2px 4px; }
+    #forge-ui .ink.dots { gap: 3px; margin: 0; flex: 1 1 80px; }
+    #forge-ui .ink.dots button { width: 22px; padding: 0; }
+    #forge-ui .ink.dots i { width: 16px; height: 16px; }
+    #forge-ui .side-row > button.active, #forge-ui .row > button.side.active { outline: 1px solid #ccc; }
     #forge-ui .hint, #forge-ui .field-note { display: none; }
-    #forge-ui #wall-aim, #forge-ui #wall-status, #forge-ui #chunk-note { display: block; }
+    #forge-ui #wall-status, #forge-ui #chunk-note { display: block; }
     #story-clip-list { display: none; }
     .row { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
     .row button.active { outline: 1px solid #ccc; }
@@ -132,6 +141,9 @@
       left: 84px;
       top: 48px;
       width: 280px;
+      box-sizing: border-box;
+      max-height: calc(100% - 60px);
+      overflow: auto;
       background: rgba(18, 22, 28, 0.94);
       border: 1px solid #333;
       padding: 10px;
@@ -192,7 +204,7 @@
       position: absolute; top: 2px; bottom: 2px;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       font-size: 10px; padding: 0 4px; margin: 0; border: 0;
-      background: #345; color: #eee; cursor: pointer;
+      background: #345; color: #eee; cursor: grab; touch-action: none;
     }
     #story-sheet .story-clip.active { outline: 1px solid #ccc; }
     #story-sheet .story-playhead {

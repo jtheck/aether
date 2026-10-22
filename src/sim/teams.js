@@ -28,6 +28,30 @@ export function normalizeTeamByOwner(raw, count = TEAM_TABLE_OWNERS) {
   return out;
 }
 
+/**
+ * Adventure with no saved table. Hero seats 0–3 share a side.
+ * Every later color fights everyone, including the other later colors.
+ */
+export function adventureTeamByOwner() {
+  const out = [];
+  for (let i = 0; i < TEAM_TABLE_OWNERS; i++) out.push(i < 4 ? 0 : i);
+  return out;
+}
+
+/**
+ * Owner→team table for a raw or decoded garden.
+ * An authored `tm` wins. Adventure with none uses the hero-seat table.
+ * @param {object | null | undefined} garden
+ */
+export function teamsFromGarden(garden) {
+  if (!garden || typeof garden !== 'object') return null;
+  const authored = normalizeTeamByOwner(garden.tm ?? garden.teamByOwner);
+  if (authored) return authored;
+  const mt = garden.mt ?? garden.mapType;
+  if (mt === 'adventure') return adventureTeamByOwner();
+  return null;
+}
+
 export function normalizeNeutralTeams(raw) {
   if (!Array.isArray(raw) || !raw.length) return null;
   const out = [];

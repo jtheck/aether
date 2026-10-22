@@ -451,17 +451,22 @@ export function fieldSnapshot(field) {
   if (field.walls?.runs?.length) {
     snapshot.walls = {
       style: { ...field.walls.style },
-      runs: field.walls.runs.map((run) => ({
-        closed: !!run.closed,
-        kind: run.kind === 'dungeon' ? 'dungeon' : 'castle',
-        points: (run.points || []).map((p) => ({ x: p.x, z: p.z })),
-        openings: (run.openings || []).map((o) => ({
-          d: o.d,
-          span: o.span,
-          gate: o.gate ? 1 : 0,
-          open: o.open ? 1 : 0,
-        })),
-      })),
+      runs: field.walls.runs.map((run) => {
+        const row = {
+          closed: !!run.closed,
+          kind: run.kind === 'dungeon' ? 'dungeon' : 'castle',
+          points: (run.points || []).map((p) => ({ x: p.x, z: p.z })),
+          openings: (run.openings || []).map((o) => ({
+            d: o.d,
+            span: o.span,
+            gate: o.gate ? 1 : 0,
+            open: o.open ? 1 : 0,
+          })),
+        };
+        if (run.size === 'small' || run.size === 'medium' || run.size === 'large') row.size = run.size;
+        if (run.style) row.style = { ...run.style };
+        return row;
+      }),
     };
   }
   if (field.wallBlock?.length) snapshot.wallBlock = field.wallBlock.slice();

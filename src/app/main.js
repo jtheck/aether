@@ -60,8 +60,8 @@ import {
   buildingTrainsOnlyFlyers,
   rallyPathWorldPoints,
   rallySegmentWorldPoints,
-  snapBuildingYaw,
   snapBuildingWorld,
+  holdBuildingSnap,
   ownedFinishedBuildingTypes,
   getBuildingCost,
   getBuildingRequires,
@@ -194,7 +194,7 @@ import {
 import { createExitMarks } from '../story/exits.js';
 import { liveConfigKeepsAdventure, resetAdventureRuntime } from '../story/adventureRuntime.js';
 import { CHAPTER_FLUSH_MS, chapterVotesReady, gardenFromChapterVotes, pickCanonicalChapter } from '../story/chapterSync.js';
-import { getTeamAssignments, getTeamNeutralPairs, isAlly, normalizeTeamByOwner, setTeamAssignments, setTeamNeutralPairs } from '../sim/teams.js';
+import { getTeamAssignments, getTeamNeutralPairs, isAlly, normalizeTeamByOwner, setTeamAssignments, setTeamNeutralPairs, teamsFromGarden } from '../sim/teams.js';
 import { aetherSteam } from './steam.js';
 import {
   localOwnedPacks,
@@ -670,6 +670,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       humanPlayers: bootCfg.humanPlayers ?? [bootCfg.localPlayerId ?? 0],
       seed: adventureDealSeed(bootCfg.seed ?? 0, garden.s ?? 0),
     });
+  }
+  if (garden) {
+    const bootTeams = teamsFromGarden(garden);
+    if (bootTeams) setTeamAssignments(bootTeams);
+    setTeamNeutralPairs(garden.nr ?? garden.neutralTeams ?? null);
   }
   const simConfig = {
     seed: garden?.s ?? bootCfg.seed ?? SEED,
@@ -1738,8 +1743,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   let placingGhostX = null;
   /** @type {number | null} */
   let placingGhostZ = null;
+  /** Fixed-point snap kept while a 2×2 ghost is held on its footprint. */
+  /** @type {number | null} */
+  let placingSnapX = null;
+  /** @type {number | null} */
+  let placingSnapZ = null;
   let placingGhostValid = true;
-  /** Ghost is parked waiting for the in-scene 1^ confirm. */
+  /** A refused stamp. Nothing draws a confirm mark from this. */
   let placementParked = false;
   /** True while setting a production building's train rally with the flag cursor. */
   let placingRally = false;
@@ -2329,15 +2339,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   }
 
   function syncSceneConfirm() {
-    if (!placingType || placingGhostX == null || placingGhostZ == null) {
-      renderer.setSceneConfirm?.(null);
-      return;
-    }
-    renderer.setSceneConfirm?.({
-      x: placingGhostX,
-      z: placingGhostZ,
-      valid: placingGhostValid,
-    });
+    // Facing comes from the aim inside the plot. The confirm mark stays hidden.
+    renderer.setSceneConfirm?.(null);
   }
 
   function applyPlacingType(t) {
@@ -2346,6 +2349,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     placingType = t ?? null;
     placingGhostX = null;
     placingGhostZ = null;
+    placingSnapX = null;
+    placingSnapZ = null;
     placementParked = false;
     renderer.setSceneConfirm?.(null);
     if (!placingType) {
@@ -2385,12 +2390,27 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
    */
   function syncPlacementGhost(worldX, worldZ, yawRad) {
     if (!placingType) return null;
-    const snapped = snapBuildingWorld(placingType, fx.fromFloat(worldX), fx.fromFloat(worldZ));
+    const raw = snapBuildingWorld(placingType, fx.fromFloat(worldX), fx.fromFloat(worldZ));
+    const nextX = fx.toFloat(raw.x);
+    const nextZ = fx.toFloat(raw.z);
+    const held = holdBuildingSnap(
+      placingType,
+      worldX,
+      worldZ,
+      nextX,
+      nextZ,
+      placingGhostX,
+      placingGhostZ,
+    );
+    const keep = placingSnapX != null && held.x === placingGhostX && held.z === placingGhostZ;
+    const snapped = keep ? { x: placingSnapX, z: placingSnapZ } : raw;
     const sx = fx.toFloat(snapped.x);
     const sz = fx.toFloat(snapped.z);
     const valid = placementGhostValid(placingType, snapped.x, snapped.z);
     placingGhostX = sx;
     placingGhostZ = sz;
+    placingSnapX = snapped.x;
+    placingSnapZ = snapped.z;
     placingGhostValid = valid;
     renderer.setBuildingGhost?.({
       type: placingType,
@@ -2401,7 +2421,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     });
     renderer.setBuildingRadialPlacingValid?.(valid);
     if (placingType === 'silo') syncSiloPlacePreview();
-    syncSceneConfirm();
     return { snapped, valid };
   }
 
@@ -2423,7 +2442,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       valid,
     });
     renderer.setBuildingRadialPlacingValid?.(valid);
-    syncSceneConfirm();
   }
 
   // Locked until boot/match ready - camera + commands stay quiet together.
@@ -3061,11 +3079,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     },
     getPlacementYaw: () => placingYaw,
     setPlacementYaw: (yaw) => {
-      placingYaw = snapBuildingYaw(yaw);
+      if (Number.isFinite(yaw)) placingYaw = yaw;
     },
     onPlacementMove: (x, z, yaw = placingYaw) => {
       if (!placingType) return null;
-      const yawRad = snapBuildingYaw(yaw ?? placingYaw);
+      const yawRad = Number.isFinite(yaw) ? yaw : placingYaw;
       placingYaw = yawRad;
       const preview = syncPlacementGhost(x, z, yawRad);
       if (!preview) return null;
@@ -3082,11 +3100,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (!playerCanIssueCommands()) return false;
       if (!placingType) return false;
       const type = placingType;
-      const yawRad = snapBuildingYaw(yaw ?? placingYaw);
+      const yawRad = Number.isFinite(yaw) ? yaw : placingYaw;
       placingYaw = yawRad;
       const preview = syncPlacementGhost(x, z, yawRad);
       if (!preview?.valid) {
-        // Stay parked; ghost is red for blocked tiles or unaffordable cost.
+        // Ghost stays, tinted for a blocked tile or a cost the bank can't cover.
         applyPlacementParked(true);
         return false;
       }
@@ -3105,6 +3123,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       renderer.setBuildingGhost?.(null);
       placingGhostX = null;
       placingGhostZ = null;
+      placingSnapX = null;
+      placingSnapZ = null;
       applyPlacementParked(false);
       renderer.setBuildingRadialPlacingValid?.(null);
       if (type === 'agora') {

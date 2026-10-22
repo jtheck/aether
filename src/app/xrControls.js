@@ -14,17 +14,13 @@
 //
 // Pie menu open (agora build / building actions): point a beam at a slice.
 // A trigger or a grip on that slice picks it. The sticks keep flying and yawing.
-// Ghost-place: the beam walks the ghost, either trigger stamps, grip held
-// yaws the ghost toward the beam. After a yaw the ghost waits where it is
-// until the beam comes back onto it.
+// Ghost-place: the beam walks the ghost. Facing is where the beam sits
+// inside the plot. Either trigger stamps. Y / B backs out.
 // A hand's aim beam shows while a finger rests on its trigger, and always in
 // a pie menu or ghost-place.
 
 import { readQuestTouch } from './xrRig.js';
 import { beamState, createXrSelect, sourceRay } from './xrSelect.js';
-
-/** Beam back within this many world units of a yawed ghost picks it up again. */
-const GHOST_PICKUP = 6;
 
 const HANDS = /** @type {const} */ (['left', 'right']);
 const BUTTONS = /** @type {const} */ (['trigger', 'grip', 'primary', 'secondary', 'stickClick']);
@@ -56,9 +52,6 @@ export function createXrControls({ renderer, getInput, jumps = {}, onJump }) {
   let aimHand = 'right';
   /** Hands whose aim beam is up (not the select gesture's). */
   const beamUp = { left: false, right: false };
-  /** Grip pressed during ghost-place: that hold yaws instead of selecting. */
-  const gripYaw = { left: false, right: false };
-  let ghostParked = false;
   let hoverKey = '';
 
   function radialOpen() {
@@ -139,31 +132,15 @@ export function createXrControls({ renderer, getInput, jumps = {}, onJump }) {
     }
   }
 
-  /** Ghost-place: beam walks, grip yaws, trigger stamps, Y / B backs out. */
+  /** Ghost-place: the beam walks the ghost, either trigger stamps, Y / B backs out. */
   function stepPlace(input, hands) {
-    for (const hand of HANDS) {
-      if (hands[hand].down.grip) gripYaw[hand] = true;
-      if (!hands[hand].held.grip) gripYaw[hand] = false;
-    }
     for (const hand of HANDS) {
       if (hands[hand].down.secondary) {
         input.cancelPlacement?.();
         return;
       }
     }
-    const yawHand = gripYaw[aimHand] ? aimHand : HANDS.find((h) => gripYaw[h]);
-    if (yawHand && hands[yawHand].ray) {
-      input.rotatePlacementAtRay?.(hands[yawHand].ray);
-      ghostParked = true;
-    } else if (hands[aimHand].ray) {
-      const ray = hands[aimHand].ray;
-      if (ghostParked) {
-        const at = input.getPlacementAnchor?.();
-        const g = renderer.rayToGround(ray);
-        if (!at || (g && Math.hypot(g.x - at.x, g.z - at.z) <= GHOST_PICKUP)) ghostParked = false;
-      }
-      if (!ghostParked) input.previewPlacementAtRay?.(ray);
-    }
+    if (hands[aimHand].ray) input.previewPlacementAtRay?.(hands[aimHand].ray);
     for (const hand of HANDS) {
       if (hands[hand].down.trigger) {
         input.confirmPlacementAtRay?.(hands[hand].ray);
@@ -215,10 +192,6 @@ export function createXrControls({ renderer, getInput, jumps = {}, onJump }) {
     const input = getInput();
     const placing = !!input?.isPlacing?.();
     const radial = !placing && radialOpen();
-    if (!placing) {
-      ghostParked = false;
-      gripYaw.left = gripYaw.right = false;
-    }
     if (!radial) hoverKey = '';
     /** @type {Set<object>} */
     const claimed = new Set();

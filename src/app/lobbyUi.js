@@ -5,7 +5,7 @@ import { rosterStatusLabel } from './viewFollow.js';
 import { FIELD_SIZES, MODE_IDS, getMode, mapTypeFitsLobby, selectableAdventureChapters } from '../lobby/modes.js';
 import { aetherSteam } from './steam.js';
 import { stashSessionGarden, writeCampaignPack } from './gardenSession.js';
-import { formatWorkshopRef, isWorkshopRef } from './workshop.js';
+import { formatWorkshopRef, isWorkshopRef, parseWorkshopRef } from './workshop.js';
 import { flattenCampaignChapters, formatPackRef, isCampaignBundle, normalizeCampaignIndex } from '../story/campaignPack.js';
 import { fetchOfficialHouseMaps } from '../houseMapCatalog.js';
 
@@ -325,49 +325,96 @@ function workshopChapterLabel(item, garden) {
   return title;
 }
 
-export function chapterSelectOptions(workshopItems, current, search, hostname, localChapters) {
+function chapterChoice(id, name, group = '') {
+  return { id, name: name || id, group: group || '' };
+}
+
+function unknownChapterLabel(chapterId) {
+  const cur = String(chapterId || '');
+  if (cur.toLowerCase().startsWith('pack:')) return 'Custom campaign';
+  if (cur === 'session') return 'Custom map';
+  if (isWorkshopRef(cur)) return 'Workshop map';
+  return '';
+}
+
+/**
+ * One entry per campaign. Chapters stay inside that campaign, grouped by episode.
+ * A loaded pack does not join the official list.
+ */
+export function adventureLobbySources(workshopItems, localChapters, current, search, hostname) {
+  const sources = [];
   const official = selectableAdventureChapters(search, hostname)
     .filter((c) => c.garden)
-    .map((c) => ({ id: c.id, name: c.name, group: c.episode || '' }));
-  const local = Array.isArray(localChapters) ? localChapters.filter((row) => row?.id) : [];
-  const extra = [];
+    .map((c) => chapterChoice(c.id, c.name, c.episode || ''));
+  if (official.length) sources.push({ id: 'official', name: 'Adventure', chapters: official });
+
+  const local = (Array.isArray(localChapters) ? localChapters : []).filter((row) => row?.id);
+  if (local.length) {
+    const named = local.find((row) => row.campaign);
+    const name = named?.campaign
+      || (local.length === 1 ? (local[0].name || 'Campaign') : 'Campaign');
+    sources.push({
+      id: 'local',
+      name,
+      chapters: local.map((row) => chapterChoice(row.id, row.name, row.group || '')),
+    });
+  }
+
+  const loose = [];
   for (const item of workshopItems || []) {
     const index = normalizeCampaignIndex(item.campaign);
     if (index) {
       const packed = flattenCampaignChapters(index);
       const title = item.title || item.campaign?.name || item.id;
-      for (const ch of packed) {
-        extra.push({
-          id: formatWorkshopRef(item.id, ch.file),
-          name: packed.length > 1 ? (ch.name || ch.file) : title,
-          group: packed.length > 1 ? [title, ch.episode].filter(Boolean).join(' - ') : '',
-        });
-      }
+      sources.push({
+        id: `workshop:${item.id}`,
+        name: title,
+        chapters: packed.map((ch) => chapterChoice(
+          formatWorkshopRef(item.id, ch.file),
+          packed.length > 1 ? (ch.name || ch.file) : title,
+          packed.length > 1 ? (ch.episode || '') : '',
+        )),
+      });
       continue;
     }
     for (const garden of item.gardens || []) {
-      extra.push({
-        id: formatWorkshopRef(item.id, garden.file),
-        name: workshopChapterLabel(item, garden),
-      });
+      loose.push(chapterChoice(
+        formatWorkshopRef(item.id, garden.file),
+        workshopChapterLabel(item, garden),
+      ));
     }
   }
+  if (loose.length) sources.push({ id: 'workshop', name: 'Workshop', chapters: loose });
+
   const cur = String(current || '');
-  const known = official.concat(local, extra);
-  if (cur && !known.some((row) => row.id === cur)) {
-    const name = cur.toLowerCase().startsWith('pack:')
-      ? 'Custom campaign'
-      : cur === 'session'
-        ? 'Custom map'
-        : isWorkshopRef(cur)
-          ? 'Workshop map'
-          : '';
-    if (name) extra.unshift({ id: cur, name });
+  if (cur && !sources.some((src) => src.chapters.some((ch) => ch.id === cur))) {
+    const name = unknownChapterLabel(cur);
+    if (name) {
+      const parsed = parseWorkshopRef(cur);
+      const home = parsed && sources.find((src) => src.id === `workshop:${parsed.id}`);
+      const choice = chapterChoice(cur, name);
+      if (home) home.chapters.unshift(choice);
+      else sources.push({ id: 'current', name, chapters: [choice] });
+    }
   }
-  return official.concat(local, extra);
+  return sources;
 }
 
-/** Workshop, official house maps, and loaded gardens for 1v1 / teams. Empty chapter = generated field. */
+/** Id of the campaign that owns this chapter, or the first campaign. A loaded pack wins a shared id. */
+export function sourceForChapter(sources, chapterId) {
+  const cur = String(chapterId || '');
+  const hits = sources.filter((src) => src.chapters.some((ch) => ch.id === cur));
+  return hits.find((src) => src.id === 'local')?.id || hits[0]?.id || sources[0]?.id || '';
+}
+
+/** Chapters for the campaign that owns `current`, grouped by episode. */
+export function chapterSelectOptions(workshopItems, current, search, hostname, localChapters) {
+  const sources = adventureLobbySources(workshopItems, localChapters, current, search, hostname);
+  const id = sourceForChapter(sources, current);
+  return sources.find((src) => src.id === id)?.chapters || [];
+}
+
+/** Workshop, official house maps, and loaded gardens for 1v1 / teams. Empty chapter = auto field. */
 export function customMapSelectOptions(workshopItems, current, localMaps, modeId, officialMaps) {
   const official = (Array.isArray(officialMaps) ? officialMaps : [])
     .filter((row) => row?.id && mapTypeFitsLobby(row.mapType, modeId));
@@ -450,11 +497,14 @@ export function setupLobbyUi({
   const fieldSelect = document.getElementById('match-lobby-field');
   const seedInput = document.getElementById('match-lobby-seed');
   const chapterSelect = document.getElementById('match-lobby-chapter');
+  const campaignSelect = document.getElementById('match-lobby-campaign');
   const mapSelect = document.getElementById('match-lobby-map');
   const spectatorInput = document.getElementById('match-lobby-spectators');
   const fieldRow = document.getElementById('match-lobby-field-row');
   const seedRow = document.getElementById('match-lobby-seed-row');
   const chapterRow = document.getElementById('match-lobby-chapter-row');
+  const chapterLabel = chapterRow?.querySelector('label');
+  const campaignRow = document.getElementById('match-lobby-campaign-row');
   const mapRow = document.getElementById('match-lobby-map-row');
   const spectatorRow = document.getElementById('match-lobby-spectators-row');
 
@@ -466,6 +516,7 @@ export function setupLobbyUi({
   let overlayParked = false;
   let workshopItems = [];
   let localChapters = [];
+  let adventureSources = [];
   let localMaps = [];
   /** @type {Record<string, { id: string, name: string, group?: string, mapType?: string }[]>} */
   let officialHouseMaps = { onevsone: [], teams: [] };
@@ -643,13 +694,17 @@ export function setupLobbyUi({
     if (mode?.hasChapter || mode?.customMap) pullWorkshopChapters();
     if (mode?.customMap) pullOfficialHouseMaps();
     fillSelect(fieldSelect, FIELD_SIZES, state.settings.fieldSize);
-    fillSelect(chapterSelect, chapterSelectOptions(
-      workshopItems,
-      state.settings.chapter,
-      undefined,
-      undefined,
-      localChapters,
-    ), state.settings.chapter);
+    adventureSources = mode?.hasChapter
+      ? adventureLobbySources(workshopItems, localChapters, state.settings.chapter)
+      : [];
+    const sourceId = sourceForChapter(adventureSources, state.settings.chapter);
+    const source = adventureSources.find((src) => src.id === sourceId);
+    fillSelect(
+      campaignSelect,
+      adventureSources.map((src) => ({ id: src.id, name: src.name })),
+      sourceId,
+    );
+    fillSelect(chapterSelect, source?.chapters || [], state.settings.chapter);
     const mapOptions = customMapSelectOptions(
       workshopItems,
       state.settings.chapter,
@@ -659,7 +714,7 @@ export function setupLobbyUi({
     );
     fillSelect(
       mapSelect,
-      mapOptions.length ? [{ id: '', name: '' }, ...mapOptions] : [],
+      [{ id: '', name: 'Auto' }, ...mapOptions],
       state.settings.chapter || '',
     );
     if (seedInput && document.activeElement !== seedInput && String(seedInput.value) !== String(state.settings.seed)) {
@@ -671,6 +726,7 @@ export function setupLobbyUi({
     if (fieldSelect) fieldSelect.disabled = !hostControls;
     if (seedInput) seedInput.disabled = !hostControls;
     if (chapterSelect) chapterSelect.disabled = !hostControls;
+    if (campaignSelect) campaignSelect.disabled = !hostControls;
     if (mapSelect) mapSelect.disabled = !hostControls;
     if (spectatorInput) spectatorInput.disabled = !hostControls;
     for (const id of ['match-lobby-load-map', 'match-lobby-load-garden']) {
@@ -678,9 +734,14 @@ export function setupLobbyUi({
       if (loadMap) loadMap.disabled = !hostControls;
     }
     const usingCustomMap = Boolean(mode?.customMap && state.settings.chapter);
+    const showCampaign = Boolean(mode?.hasChapter) && adventureSources.length > 1;
+    const showChapterPicker = Boolean(mode?.hasChapter) && (!showCampaign || (source?.chapters.length || 0) > 1);
     setHidden(fieldRow, Boolean(mode?.hasChapter) || usingCustomMap);
     setHidden(seedRow, Boolean(mode?.hasChapter) || usingCustomMap);
+    setHidden(campaignRow, !showCampaign);
     setHidden(chapterRow, !mode?.hasChapter);
+    setHidden(chapterLabel, !showChapterPicker);
+    setHidden(chapterSelect, !showChapterPicker);
     setHidden(mapRow, !mode?.customMap);
     setHidden(document.getElementById('match-lobby-load-row'), !mode?.customMap);
     setHidden(spectatorRow, !mode?.spectators);
@@ -752,6 +813,11 @@ export function setupLobbyUi({
 
   fieldSelect?.addEventListener('change', () => matchLobby.setSetting('fieldSize', fieldSelect.value));
   chapterSelect?.addEventListener('change', () => matchLobby.setSetting('chapter', chapterSelect.value));
+  campaignSelect?.addEventListener('change', () => {
+    const src = adventureSources.find((row) => row.id === campaignSelect.value);
+    const first = src?.chapters[0];
+    if (first) matchLobby.setSetting('chapter', first.id);
+  });
   mapSelect?.addEventListener('change', () => matchLobby.setSetting('chapter', mapSelect.value));
   spectatorInput?.addEventListener('change', () => {
     matchLobby.setSetting('allowSpectators', spectatorInput.checked);
@@ -768,11 +834,15 @@ export function setupLobbyUi({
     const mode = getMode(state.mode);
     file.text().then(async (text) => {
       const data = JSON.parse(text);
-      const rowsFromCampaign = () => flattenCampaignChapters(data).map((ch) => ({
-        id: formatPackRef(ch.file),
-        name: ch.name || ch.file,
-        group: ch.episode || data.name || 'Campaign',
-      }));
+      const rowsFromCampaign = () => {
+        const campaign = data.name || 'Campaign';
+        return flattenCampaignChapters(data).map((ch) => ({
+          id: formatPackRef(ch.file),
+          name: ch.name || ch.file,
+          group: ch.episode || '',
+          campaign,
+        }));
+      };
       if (isCampaignBundle(data)) {
         await writeCampaignPack(text);
         const rows = rowsFromCampaign();
@@ -781,7 +851,8 @@ export function setupLobbyUi({
         if (rows[0]) matchLobby.setSetting('chapter', rows[0].id);
       } else if (data && typeof data === 'object' && (data.v | 0) >= 3 && (data.w | 0) > 0) {
         await stashSessionGarden(text);
-        const row = { id: 'session', name: String(data.n || data.name || file.name || 'Custom map') };
+        const name = String(data.n || data.name || file.name || 'Custom map');
+        const row = { id: 'session', name, campaign: name };
         if (mode?.customMap) localMaps = [row];
         else localChapters = [row];
         matchLobby.setSetting('chapter', 'session');

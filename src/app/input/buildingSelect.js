@@ -152,34 +152,25 @@ export function placementTapKind(radialKind, buildingHit) {
 }
 
 /**
- * Pointer-down while a building ghost is up. Confirm wins so the 1^ mark
- * is not eaten by the footprint under it. Mouse click-drag yaws (ghost sits
- * under the cursor). Touch: down on the ghost yaws; empty ground walks it.
- * @param {{
- *   hasGhost?: boolean,
- *   hitConfirm?: boolean,
- *   hitGhost?: boolean,
- *   touch?: boolean,
- * }} s
- * @returns {'confirm' | 'rotate' | 'preview'}
+ * Pointer-down while a building ghost is up. The press walks the ghost.
+ * Facing comes from where the aim sits in the plot, not from the press.
+ * @returns {'preview'}
  */
-export function placementDownKind(s = {}) {
-  if (s.hitConfirm) return 'confirm';
-  if (!s.hasGhost) return 'preview';
-  if (s.touch) return s.hitGhost ? 'rotate' : 'preview';
-  return 'rotate';
+export function placementDownKind() {
+  return 'preview';
 }
 
 /**
- * Lift while placing. Mouse hover keeps the ghost under the cursor, so a
- * tap that never yawed stamps - even when the ray hits the agora under the
- * plot. The compact hub still leaves. Touch lifts leave the ghost sitting;
- * 1^ is the stamp there, and an agora tap still exits.
+ * Lift while placing. A mouse tap stamps, even when the ray hits the agora
+ * under the plot. Touch has no hover: a drag, or the first tap, only sits
+ * the ghost, and a later tap places it. A press that started before
+ * placement (the agora hold) does not stamp on the way up. A menu option
+ * still picks. The hub leaves.
  * @param {{
- *   downKind?: 'confirm' | 'rotate' | 'preview' | null,
- *   rotated?: boolean,
+ *   downKind?: 'preview' | null,
  *   tap?: boolean,
  *   pointerType?: string,
+ *   ghostReady?: boolean,
  *   tapKind?: 'pick' | 'chrome' | 'exit' | 'stay',
  *   radialKind?: 'pick' | 'hub' | 'chrome' | 'world',
  * }} s
@@ -187,20 +178,12 @@ export function placementDownKind(s = {}) {
  */
 export function placementReleaseKind(s = {}) {
   const tapKind = s.tapKind ?? 'stay';
-  if (s.downKind === 'confirm') return s.tap ? 'confirm' : 'stay';
-  if (s.downKind === 'rotate' && s.rotated) return 'stay';
-  const followStamp = s.tap && s.pointerType !== 'touch'
-    && (s.downKind === 'rotate' || s.downKind === 'preview');
-  if (s.downKind === 'preview' || (s.downKind === 'rotate' && s.tap)) {
-    if (tapKind === 'pick' || tapKind === 'chrome') return tapKind;
-    if (tapKind === 'exit') {
-      if (followStamp && s.radialKind !== 'hub') return 'confirm';
-      return 'exit';
-    }
-    if (followStamp) return 'confirm';
-    return 'stay';
-  }
-  return 'stay';
+  if (s.downKind !== 'preview') return 'stay';
+  if (tapKind === 'pick' || tapKind === 'chrome') return tapKind;
+  if (!s.tap) return 'stay';
+  if (tapKind === 'exit' && s.radialKind === 'hub') return 'exit';
+  if (s.pointerType === 'touch' && !s.ghostReady) return 'stay';
+  return 'confirm';
 }
 
 /**

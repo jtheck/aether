@@ -23,6 +23,10 @@ import {
   buildingFootprintBounds,
   buildingMeshOrigin,
   snapBuildingWorld,
+  buildingAimYaw,
+  buildingTileYaw,
+  buildingAimSpan,
+  holdBuildingSnap,
   BUILDING_FOOTPRINTS,
   getBuildingDisplayName,
   buildingCanRally,
@@ -1188,5 +1192,49 @@ describe('village and workshop menus', () => {
     w.buildings = [dead];
     for (let i = 0; i < 3; i++) tickBuildingMorphs(w);
     assert.equal(dead.type, 'derrick', 'a wrecked derrick does not become a well');
+  });
+});
+
+describe('placement facing from the aim', () => {
+  it('holds the plot facing in the middle and follows the pointer outward', () => {
+    const rest = buildingTileYaw(8, 12, 4);
+    assert.equal(buildingAimYaw(8, 12, 8, 12, 4), rest);
+    assert.equal(buildingAimYaw(8.4, 12.2, 8, 12, 4), rest);
+    assert.equal(buildingAimYaw(10, 12, 8, 12, 4), Math.PI / 2);
+    assert.equal(buildingAimYaw(8, 14, 8, 12, 4), 0);
+    assert.equal(buildingAimYaw(8, 10, 8, 12, 4), Math.PI);
+    assert.equal(buildingAimYaw(6, 12, 8, 12, 4), -Math.PI / 2);
+    const steps = [0, 1, 2, 3, 4, 5, 6, 7].map((i) => (i * Math.PI) / 4);
+    assert.ok(steps.includes(rest));
+
+    const y = buildingAimYaw(9.2, 12, 8, 12, 4);
+    const toward = Math.atan2(Math.sin(Math.PI / 2 - rest), Math.cos(Math.PI / 2 - rest));
+    const moved = Math.atan2(Math.sin(y - rest), Math.cos(y - rest));
+    if (Math.abs(toward) > 0.05) {
+      assert.ok(moved * toward > 0);
+      assert.ok(Math.abs(moved) < Math.abs(toward) - 0.02);
+    }
+    const dx = 0.85;
+    const dz = 0.85;
+    const dist = Math.hypot(dx, dz);
+    const dead = 4 * 0.18;
+    const span = 4 * 0.42 - dead;
+    const s = ((dist - dead) / span);
+    const ease = s * s * (3 - 2 * s);
+    const aim = Math.atan2(dx, dz);
+    const sweep = Math.atan2(Math.sin(aim - rest), Math.cos(aim - rest));
+    const expected = rest + sweep * ease;
+    const got = buildingAimYaw(8 + dx, 12 + dz, 8, 12, 4);
+    assert.ok(Math.abs(Math.atan2(Math.sin(got - expected), Math.cos(got - expected))) < 1e-9);
+  });
+
+  it('gives a 2×2 the whole footprint to turn in, and leaves a 3×3 on its tile', () => {
+    assert.equal(buildingAimSpan('camp'), 8);
+    assert.equal(buildingAimSpan('village'), 4);
+    assert.equal(buildingAimSpan('agora'), 4);
+    assert.deepEqual(holdBuildingSnap('camp', 3, 1, 4, 0, 0, 0), { x: 0, z: 0 });
+    assert.deepEqual(holdBuildingSnap('camp', 5, 0, 4, 0, 0, 0), { x: 4, z: 0 });
+    assert.deepEqual(holdBuildingSnap('village', 3, 0, 4, 0, 0, 0), { x: 4, z: 0 });
+    assert.deepEqual(holdBuildingSnap('camp', 1, 0, 0, 0, null, null), { x: 0, z: 0 });
   });
 });

@@ -45,7 +45,7 @@ export const FOG_VISITED_ORDER = 105;
 /**
  * Transparent meshes sort by origin, and a larger depth along the camera's Z
  * axis draws first. The veil is authored in world space, so its origin would
- * be the board center and one orbit side would paint it over the build menu.
+ * be the board center and one orbit side would paint it over the board.
  * Park the origin this far along that axis. The vertex shader ignores the
  * translation, so the sheet stays on the ground.
  */
@@ -1763,7 +1763,7 @@ export function createFogOfWar() {
     }
   }
 
-  /** Keep the veil's sort origin behind the build menu from every orbit side. */
+  /** Keep the veil's sort origin behind the board from every orbit side. */
   function pinFogSortOrigin(camera) {
     const wm = camera?.worldMatrix;
     if (!wm || !Number.isFinite(wm[12]) || !Number.isFinite(wm[8])) return;

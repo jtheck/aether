@@ -9,7 +9,6 @@ import {
   addToScene,
   createDefaultTextData,
   createMeshFromData,
-  createStandardMaterial,
   createTextLayer,
   createTextRenderer,
   disposeDefaultTextData,
@@ -35,15 +34,26 @@ import {
   RADIAL_EDGE_PICK_ALPHA,
   RADIAL_HUD_BLEND_ALPHA,
   RADIAL_ICON_RENDER_ORDER,
-  disableRadialHudDepthWrite,
   radialHudFadeAlpha,
   radialHudPremulRgba,
+  menuOverlayAnchor,
   radialIconAnchor,
   radialIconBounds,
   radialIconFitScale,
-  radialIconFrontReach,
 } from './radialPose.js';
-import { createRadialIconMaterial, syncRadialIconShade } from './radialIconMaterial.js';
+import {
+  applyMenuOverlay,
+  createMenuPlateMaterial,
+  createRadialIconMaterial,
+  syncRadialIconShade,
+} from './radialIconMaterial.js';
+import {
+  loadRadialSpriteIcon,
+  radialSpriteCaptionDown,
+  radialSpriteCaptionReach,
+  radialSpriteFit,
+  radialSpritePoseAxes,
+} from './radialSpriteIcon.js';
 import { formatResourceCost } from '../sim/resources.js';
 import { menuGateState } from '../sim/menuGate.js';
 import { applyGhostValidityTint } from './buildings.js';
@@ -65,13 +75,6 @@ const MENU_Y = 2.4;
 const MENU_RING_OUTER = 18.25;
 const MENU_RING_INNER = 17.55;
 const MENU_RING_H = 0.35;
-/**
- * Transparent draws sort by mesh origin. The outer ring is one mesh, so its
- * far arc would paint over the pads for half the orbit. Shift the origin
- * back along the normal (local +Y) and place the mesh that far behind so the
- * ring still sits on the disc but sorts behind every pad and icon.
- */
-const RING_SORT_BIAS = 4;
 const RIM_R = (MENU_RING_OUTER + MENU_RING_INNER) * 0.5;
 const PAD_OUTER = 4.68;
 const PAD_INNER = 3.06;
@@ -138,7 +141,7 @@ const PRICE_SCREEN_SCALE = 0.78;
 const PRICE_DOWN = 6.35;
 /** Pads + prices around the hub - used to keep the disc on-screen. */
 const SCREEN_FIT_RADIUS =
-  RIM_R + Math.max(PAD_OUTER + PAD_BORDER, PRICE_DOWN) + 2.8;
+  RIM_R + Math.max(PAD_OUTER + PAD_BORDER, PRICE_DOWN, radialSpriteCaptionReach(PAD_OUTER)) + 2.8;
 const PRICE_TEXT_COLOR = [0.72, 0.86, 0.92, 1];
 const LABEL_TEXT_COLOR = [0.86, 0.96, 1, 1];
 /** Resting icon wash - white, slightly red if broke, slightly black if locked. */
@@ -163,13 +166,13 @@ const MAX_OPTIONS = 5;
 
 /** Main ring only - sits above the world, so let terrain/units read through a bit. */
 const MENU_RING_ALPHA = 0.55;
-/** 🚫 bar through a locked (missing prereq) building icon. */
+/** Diagonal through a locked (missing prereq) portrait. */
 const LOCK_SLASH_LEN = 1.62;
 const LOCK_SLASH_WIDTH = 0.36;
 const LOCK_SLASH_H = 0.14;
-const LOCK_SLASH_LIFT = 0.45;
-const LOCK_SLASH_UP = 1.15;
 const LOCK_SLASH_ANG = -Math.PI / 4;
+/** Bar length relative to the portrait edge. 1.62 local units, so 0.32 is about half the card. */
+const LOCK_SLASH_CARD = 0.32;
 const LOCK_SLASH_COLOR = [0.9, 0.4, 0.35];
 const LOCK_SLASH_EMISSIVE = [0.5, 0.15, 0.12];
 
@@ -218,9 +221,8 @@ function createAnnulusMesh(engine, name, opts = {}) {
   const segments = opts.segments ?? 48;
   const ro = 1;
   const ri = Math.max(0.05, Math.min(0.95, innerFrac));
-  const yShift = opts.yOffset ?? 0;
-  const y0 = -h * 0.5 + yShift;
-  const y1 = h * 0.5 + yShift;
+  const y0 = -h * 0.5;
+  const y1 = h * 0.5;
 
   /** @type {number[]} */
   const positions = [];
@@ -521,12 +523,10 @@ function writeFacingMatrix(matrices, slot, x, y, z, rx, ry, rz, ux, uy, uz, fx, 
 }
 
 /**
- * Lite sorts transparent draws by mesh.worldMatrix translation, and standard
- * materials compose `mesh.world * instanceWorld`. An icon mesh left at the
- * origin sorts there and slips behind its pad for half the camera orbit.
- * Park the mesh on the visible anchor (in front of the pad). The bounds
- * offset is a model-space instance translation so the mesh still lands where
- * the old full instance matrix put it.
+ * Lite sorts a thin-instanced mesh by the mesh origin, not the instance.
+ * Every menu mesh shares one near anchor. The instance still holds the
+ * model offset from the pad; the material's origin fix puts that pad back
+ * on the disc.
  */
 function poseIconLayer(mesh, matrices, anchorX, anchorY, anchorZ, scale, rx, ry, rz, ux, uy, uz, fx, fy, fz, cx, cy, cz) {
   const at = radialIconAnchor(
@@ -534,11 +534,7 @@ function poseIconLayer(mesh, matrices, anchorX, anchorY, anchorZ, scale, rx, ry,
     rx, ry, rz, fx, fy, fz,
     scale, cx, cy, cz,
   );
-  if (mesh.position) {
-    mesh.position.x = anchorX;
-    mesh.position.y = anchorY;
-    mesh.position.z = anchorZ;
-  }
+  applyMenuOverlay(mesh, anchorX, anchorY, anchorZ, menuAnchor);
   if (mesh.scaling) {
     mesh.scaling.x = scale;
     mesh.scaling.y = scale;
@@ -611,14 +607,9 @@ function quatFromBasis(xx, xy, xz, yx, yy, yz, zx, zy, zz) {
 }
 
 function makeRingMaterial(diffuse, emissive, alpha = 1) {
-  const mat = createStandardMaterial();
-  mat.diffuseColor = [...diffuse];
-  mat.emissiveColor = [...emissive];
+  const blend = alpha >= 1 ? RADIAL_HUD_BLEND_ALPHA : alpha;
+  const mat = createMenuPlateMaterial(diffuse, emissive, blend);
   mat._radialBaseAlpha = alpha;
-  mat.alpha = alpha >= 1 ? RADIAL_HUD_BLEND_ALPHA : alpha;
-  if ('disableLighting' in mat) mat.disableLighting = true;
-  if ('unlit' in mat) mat.unlit = true;
-  if (mat.specularColor) mat.specularColor = [0, 0, 0];
   return mat;
 }
 
@@ -676,12 +667,10 @@ function rayHitSphereT(ray, cx, cy, cz, radius) {
  * Place annulus (local Y = face normal) with camera-facing basis.
  * Basis columns: X=right, Y=normal(toCam), Z=planeZ (−screenUp).
  */
+const menuAnchor = { x: 0, y: 0, z: 0, ok: false };
+let sortCamera = null;
+
 function placeMeshOriented(mesh, x, y, z, scale, rx, ry, rz, nx, ny, nz, tx, ty, tz) {
-  if (mesh.position) {
-    mesh.position.x = x;
-    mesh.position.y = y;
-    mesh.position.z = z;
-  }
   if (mesh.scaling) {
     mesh.scaling.x = scale;
     mesh.scaling.y = scale;
@@ -698,6 +687,7 @@ function placeMeshOriented(mesh, x, y, z, scale, rx, ry, rz, nx, ny, nz, tx, ty,
       rq.w = q.w;
     }
   }
+  applyMenuOverlay(mesh, x, y, z, menuAnchor);
   setSubtreeVisible(mesh, true);
   mesh.markLocalDirty?.();
 }
@@ -729,7 +719,6 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     inner: MENU_RING_INNER / MENU_RING_OUTER,
     height: MENU_RING_H / MENU_RING_OUTER,
     segments: 64,
-    yOffset: RING_SORT_BIAS,
   });
   menuRing.material = ringMat;
   menuRing.pickable = false;
@@ -792,7 +781,6 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       segments: 28,
     });
     const mat = makeRingMaterial(basicCat.pad, basicCat.padEm);
-    disableRadialHudDepthWrite(mat);
     pad.material = mat;
     pad.pickable = false;
     pad.renderOrder = 220;
@@ -804,7 +792,6 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       segments: 28,
     });
     const outlineMat = makeRingMaterial(basicCat.color, basicCat.emissive, 0.95);
-    disableRadialHudDepthWrite(outlineMat);
     outline.material = outlineMat;
     outline.pickable = false;
     outline.renderOrder = 219;
@@ -839,6 +826,11 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       const url = MODEL_URLS[typeId];
       if (!url) return;
       try {
+        const sprite = await loadRadialSpriteIcon(engine, scene, `build-sprite-${typeId}`, url);
+        if (sprite) {
+          icons.set(typeId, sprite);
+          return;
+        }
         const parts = await loadBakedUnitMeshParts(engine, url);
         /** @type {{ mesh: object, matrices: Float32Array, baseEmissive: number[] | null, baseDiffuse: number[] | null, visible: boolean }[]} */
         const layers = [];
@@ -998,6 +990,8 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   // Horizontal toward-camera (for upright icon facing).
   let hx = 0;
   let hz = 1;
+  /** Camera-facing basis for portrait cards. Null until the first pose. */
+  let spriteAxes = null;
 
   function hideLabel(label) {
     if (!label) return;
@@ -1164,6 +1158,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     }
     hx = thx;
     hz = thz;
+    spriteAxes = radialSpritePoseAxes(camera);
 
     const st = Math.sin(MENU_TILT);
     const ct = Math.cos(MENU_TILT);
@@ -1476,6 +1471,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
    * @param {object | null | undefined} camera
    */
   function syncPose(camera) {
+    sortCamera = camera;
     const eye = cameraEye(camera);
     const gy = groundYAt(anchorX, anchorZ);
     const groundY = Number.isFinite(gy) ? gy : 0;
@@ -1562,7 +1558,12 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   }
 
   function iconFitScale(type, fallback = OPTION_SCALE) {
-    return radialIconFitScale(icons.get(type), ICON_FIT_EXTENT, fallback);
+    const batch = icons.get(type);
+    if (batch?.sprite) {
+      const pad = radialSpriteFit(batch, PAD_OUTER);
+      return fallback > OPTION_SCALE ? pad * (fallback / OPTION_SCALE) : pad;
+    }
+    return radialIconFitScale(batch, ICON_FIT_EXTENT, fallback);
   }
 
   function redrawSlot(i) {
@@ -1594,6 +1595,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   function poseIcon(type, iconX, iconY, iconZ, iconScale, hovered) {
     const batch = icons.get(type);
     if (!batch) return;
+    const face = batch.sprite ? spriteAxes : null;
     for (const layer of batch.layers) {
       poseIconLayer(
         layer.mesh,
@@ -1602,15 +1604,15 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
         iconY,
         iconZ,
         iconScale,
-        bx,
-        0,
-        bz,
-        0,
-        1,
-        0,
-        hx,
-        0,
-        hz,
+        face?.rx ?? bx,
+        face?.ry ?? 0,
+        face?.rz ?? bz,
+        face?.ux ?? 0,
+        face?.uy ?? 1,
+        face?.uz ?? 0,
+        face?.fx ?? hx,
+        face?.fy ?? 0,
+        face?.fz ?? hz,
         batch.cx ?? 0,
         batch.cy ?? 0,
         batch.cz ?? 0,
@@ -1634,6 +1636,11 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       hideLabel(label);
       return;
     }
+    const batch = icons.get(slot.type);
+    if (batch?.sprite && !xrEye()) {
+      hideLabel(label);
+      return;
+    }
     const hovered = i === hoverIndex;
     const gate = slot.gate ?? 'ok';
     const faded = fadeAlpha(gate === 'locked' ? 0.78 : hovered ? 1 : 0.88);
@@ -1651,7 +1658,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       label.gate = gate;
       label.fadeA = faded;
     }
-    const down = LABEL_DOWN * hudScale;
+    const down = (batch?.sprite ? radialSpriteCaptionDown(batch, PAD_OUTER) : LABEL_DOWN) * hudScale;
     const lift = LABEL_LIFT * hudScale;
     const worldX = slot.x + tx * down + nx * lift;
     const worldY = slot.y + ty * down + ny * lift;
@@ -1712,12 +1719,15 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     const slot = slots[i];
     const worldToScreen = screen.worldToScreen;
     const getViewport = screen.getViewport;
-    if (!slot?.costText || !open || !worldToScreen || !getViewport) {
+    const batch = slot ? icons.get(slot.type) : null;
+    const spriteFlat = !!(batch?.sprite && !xrEye());
+    if (!slot || !open || !worldToScreen || !getViewport || (!slot.costText && !spriteFlat)) {
       hidePrice(i);
       return;
     }
     const hovered = i === hoverIndex;
-    const down = PRICE_DOWN * hudScale;
+    const cap = batch?.sprite ? radialSpriteCaptionDown(batch, PAD_OUTER) : null;
+    const down = (cap != null ? cap + (spriteFlat ? 0 : 1.45) : PRICE_DOWN) * hudScale;
     const lift = LABEL_LIFT * hudScale;
     const worldX = slot.x + tx * down + nx * lift;
     const worldY = slot.y + ty * down + ny * lift;
@@ -1728,12 +1738,18 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       hidePrice(i);
       return;
     }
+    const gate = slot.gate ?? 'ok';
+    const wash = PRICE_WASH[gate] ?? PRICE_WASH.ok;
     if (xrEye() && price) {
       hideRadialPrice(`build-${i}`);
+      if (!slot.costText) {
+        hideLabel(price);
+        return;
+      }
       showHeadsetPrice(
         price,
         formatRadialPriceText(slot.cost),
-        PRICE_WASH[slot.gate ?? 'ok'] ?? PRICE_WASH.ok,
+        wash,
         origin,
         viewport,
         fadeAlpha(hovered ? 0.95 : 0.8),
@@ -1743,14 +1759,16 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     }
     hideLabel(price);
     setRadialPrice(`build-${i}`, {
-      cost: slot.cost,
+      cost: slot.costText ? slot.cost : null,
+      name: spriteFlat ? slot.name : '',
+      nameWash: spriteFlat ? (LABEL_WASH[gate] ?? LABEL_WASH.ok) : undefined,
       x: origin.x,
       y: origin.y,
       canvas: screen.canvas,
-      opacity: fadeAlpha(hovered ? 0.95 : 0.8),
-      wash: PRICE_WASH[slot.gate ?? 'ok'] ?? PRICE_WASH.ok,
+      opacity: fadeAlpha(gate === 'locked' ? 0.78 : hovered ? 1 : 0.92),
+      wash,
       okWash: PRICE_WASH.ok,
-      gate: slot.gate ?? 'ok',
+      gate,
       bank: menuBank,
     });
   }
@@ -1795,6 +1813,11 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       hideMenuVisuals();
       return;
     }
+    const anchor = menuOverlayAnchor(sortCamera);
+    menuAnchor.x = anchor.x;
+    menuAnchor.y = anchor.y;
+    menuAnchor.z = anchor.z;
+    menuAnchor.ok = anchor.ok;
     if (placingPreviewType) {
       layoutPlacingPreview();
       applyEdgeFade();
@@ -1802,15 +1825,12 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     }
     const s = hudScale;
     // Annulus mesh outerR=1 → world outer = MENU_RING_OUTER * s.
-    // Origin sits RING_SORT_BIAS back along the normal so this mesh sorts
-    // behind the pads; the vertex shift puts the band back on the disc.
     const ringScale = MENU_RING_OUTER * s;
-    const ringBack = RING_SORT_BIAS * ringScale;
     placeMeshOriented(
       menuRing,
-      centerX - nx * ringBack,
-      centerY - ny * ringBack,
-      centerZ - nz * ringBack,
+      centerX,
+      centerY,
+      centerZ,
       ringScale,
       bx,
       by,
@@ -1923,7 +1943,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     applyEdgeFade();
   }
 
-  /** 🚫 through the building when the slot is prereq-locked. */
+  /** Diagonal across a prereq-locked portrait. Draw order puts it over the picture. */
   function placeLockSlash(i) {
     const mesh = lockSlashes[i];
     const slot = slots[i];
@@ -1933,45 +1953,43 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       return;
     }
     const s = hudScale;
+    const face = spriteAxes;
+    const rightX = face ? -face.rx : bx;
+    const rightY = face ? -face.ry : by;
+    const rightZ = face ? -face.rz : bz;
+    const upX = face ? face.ux : ux;
+    const upY = face ? face.uy : uy;
+    const upZ = face ? face.uz : uz;
+    const normX = face ? face.fx : nx;
+    const normY = face ? face.fy : ny;
+    const normZ = face ? face.fz : nz;
     const sc = Math.cos(LOCK_SLASH_ANG);
     const ss = Math.sin(LOCK_SLASH_ANG);
-    const srx = bx * sc + tx * ss;
-    const sry = by * sc + ty * ss;
-    const srz = bz * sc + tz * ss;
-    const stx = -bx * ss + tx * sc;
-    const sty = -by * ss + ty * sc;
-    const stz = -bz * ss + tz * sc;
+    const barX = rightX * sc + upX * ss;
+    const barY = rightY * sc + upY * ss;
+    const barZ = rightZ * sc + upZ * ss;
+    const sideX = -rightX * ss + upX * sc;
+    const sideY = -rightY * ss + upY * sc;
+    const sideZ = -rightZ * ss + upZ * sc;
+    const lift = ICON_LIFT * s;
     const batch = icons.get(slot.type);
-    const reach = batch
-      ? radialIconFrontReach(
-        batch,
-        iconFitScale(slot.type) * s,
-        nx, ny, nz,
-        bx, 0, bz,
-        0, 1, 0,
-        hx, 0, hz,
-      )
-      : 0;
-    // The bar has to clear the icon now that icons write depth. Center stays
-    // on the pad; only the camera-facing lift moves.
-    const halfBar = LOCK_SLASH_H * 0.5 * PAD_OUTER * s;
-    const lift = ICON_LIFT * s + Math.max(LOCK_SLASH_LIFT * s, reach + halfBar + 0.05);
-    const up = LOCK_SLASH_UP * s;
+    const iconScale = iconFitScale(slot.type) * s;
+    const slashScale = batch?.sprite ? iconScale * LOCK_SLASH_CARD : PAD_OUTER * s;
     placeMeshOriented(
       mesh,
       slot.x + nx * lift,
-      slot.y + ny * lift + up,
+      slot.y + ny * lift,
       slot.z + nz * lift,
-      PAD_OUTER * s,
-      srx,
-      sry,
-      srz,
-      nx,
-      ny,
-      nz,
-      stx,
-      sty,
-      stz,
+      slashScale,
+      barX,
+      barY,
+      barZ,
+      normX,
+      normY,
+      normZ,
+      sideX,
+      sideY,
+      sideZ,
     );
   }
 

@@ -13,7 +13,7 @@ import { applyTableSilhouette } from '../sim/tableShape.js';
 import { populateScenery } from '../sim/scenery.js';
 import { applyGardenPlacements, decodeGarden, fieldFromGarden } from '../sim/garden.js';
 import { setupWaveSpawners } from '../sim/waveSpawner.js';
-import { setTeamAssignments, setTeamNeutralPairs } from '../sim/teams.js';
+import { setTeamAssignments, setTeamNeutralPairs, teamsFromGarden } from '../sim/teams.js';
 import { armStoryProtectFromGarden } from '../sim/storyProtect.js';
 import {
   buildWorldFromConfig,
@@ -158,7 +158,8 @@ self.onmessage = (e) => {
         || (msg.config.animStressPerSide | 0) > 0;
       if (garden) applyGardenPlacements(world, field, garden);
       if (garden?.objectives?.length) setupWaveSpawners(world, field, garden.objectives);
-      if (garden?.teamByOwner) setTeamAssignments(garden.teamByOwner);
+      const teams = teamsFromGarden(garden);
+      if (teams) setTeamAssignments(teams);
       setTeamNeutralPairs(garden?.neutralTeams ?? null);
       armStoryProtectFromGarden(world, garden);
       if (!garden) {

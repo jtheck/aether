@@ -110,14 +110,22 @@ export function createPlacePreview(engine, scene, groundYAt, onReady) {
         mesh.pickable = false;
         const team = isTeamColorMaterial(mesh.material);
         if (team) prepareTeamColorMaterial(engine, mesh);
-        addToScene(scene, mesh);
-        return {
+        // Instances have to exist before the mesh joins a live scene. The first
+        // build otherwise bakes a shader with no instance color, and the model
+        // stays black until some later click rebuilds it.
+        const layer = {
           mesh,
           team,
-          matrices: new Float32Array(0),
-          colors: new Float32Array(0),
-          capacity: 0,
+          matrices: new Float32Array(4 * 16),
+          colors: new Float32Array(4 * 4),
+          capacity: 4,
         };
+        layer.colors.fill(1);
+        setThinInstances(mesh, layer.matrices, 4);
+        setThinInstanceColors(mesh, layer.colors);
+        setCount(mesh, 0);
+        addToScene(scene, mesh);
+        return layer;
       });
       unitBatches.set(key, { layers });
       return layers;
@@ -155,10 +163,31 @@ export function createPlacePreview(engine, scene, groundYAt, onReady) {
         layer.colors[o + 2] = tint[2];
         layer.colors[o + 3] = 1;
       }
-      setThinInstanceColors(layer.mesh, layer.colors);
+      // Count first, then colors. The color upload only covers the current count,
+      // so a color write while count is still 0 is dropped and the model stays black.
       setCount(layer.mesh, needed);
+      setThinInstanceColors(layer.mesh, layer.colors);
       flushThinInstances(layer.mesh);
     }
+  }
+
+  function punchUnitColors() {
+    let dirty = false;
+    for (const batch of unitBatches.values()) {
+      for (const layer of batch.layers) {
+        const mesh = layer.mesh;
+        if (!mesh.thinInstances || !layer.colors?.length) continue;
+        const mat = mesh.material;
+        if (mat) {
+          mesh.material = null;
+          mesh.material = mat;
+        }
+        setThinInstanceColors(mesh, layer.colors);
+        flushThinInstances(mesh);
+        dirty = true;
+      }
+    }
+    if (dirty) onReady?.();
   }
 
   /**
@@ -189,6 +218,15 @@ export function createPlacePreview(engine, scene, groundYAt, onReady) {
       buildingProps?.place(buildings);
       for (const [type, list] of byType) writeUnits(type, list);
       onReady?.();
+      // The first recorded pass can run before the color buffer is filled.
+      // One more upload after that frame, or the unit stays black until the next click.
+      requestAnimationFrame(() => {
+        if (disposed || token !== gen) return;
+        requestAnimationFrame(() => {
+          if (disposed || token !== gen) return;
+          punchUnitColors();
+        });
+      });
     });
   }
 

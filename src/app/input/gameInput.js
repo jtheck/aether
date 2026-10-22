@@ -1,16 +1,19 @@
 // Selection + orders (LMB). Camera pan / force-move on RMB via pointerHub.
 // Touch later synthesizes into the hub; gamepad LT/RT orders, LB/RB paint-select,
 // B / D-pad Left cast, D-pad U/R/D + Y/X/A control groups. Placement is the
-// same loop on every device: aim walks the ghost, 1^ stamps, drag yaws
-// (mouse click-drag / touch tap-drag / pad LB-RB + stick). A mouse tap that
-// never yawed also stamps - 1^ rides with the cursor. B / back / agora
-// leaves. After a stamp the type stays so you can plant more.
+// same loop on every device: aim walks the ghost, and the facing is where
+// that aim sits inside the plot. Mouse tap, pad A, and the trigger stamp.
+// Touch sits the ghost on a drag or the first tap, then a later tap places
+// it. B / back / agora hub leaves. After a stamp the type stays so you can
+// plant more.
 
 import * as fx from '../../sim/fixed.js';
 import { CMD } from '../../sim/commands.js';
 import { classifyCastSelection, COMBO, canAffordAgoraFound } from '../../sim/combos.js';
 import {
   BUILDING_YAW_SNAP,
+  buildingAimYaw,
+  buildingAimSpan,
   snapBuildingYaw,
   BUILDING_FOOTPRINTS,
   buildingCanRally,
@@ -84,8 +87,6 @@ export const DRAG_THRESHOLD_PX = 25;
 const PAD_SELECT_PTR = -2;
 const LASSO_SAMPLE_PX = 10;
 const LASSO_MAX_PTS = 80;
-/** Hold-drag past this while placing enters rotate mode. */
-const PLACE_ROTATE_THRESHOLD_PX = 18;
 /** Manual double-tap window - PointerEvent.detail is not a click count. */
 const DOUBLE_MS = 350;
 const DOUBLE_PX = 14;
@@ -283,11 +284,10 @@ export function createGameInput(opts) {
   /** @type {{ x: number, z: number } | null} */
   let placeAnchor = null;
   let placeParked = false;
-  /** @type {'preview' | 'rotate' | 'confirm' | null} */
+  /** @type {'preview' | null} */
   let placeDownKind = null;
-  let placeRotating = false;
-  /** @type {{ x: number, y: number } | null} */
-  let placeRotateFrom = null;
+  /** Touch confirms only when the ghost was already sitting before this tap. */
+  let placeTouchConfirm = false;
   let boxLastL = NaN;
   let boxLastT = NaN;
   let boxLastW = NaN;
@@ -355,77 +355,32 @@ export function createGameInput(opts) {
     return { x, z };
   }
 
-  function parkPlacement(x, z, yaw = currentYaw()) {
-    placeAnchor = emitPlacementGhost(x, z, yaw);
-    placeParked = true;
-    onPlacementParked?.(true);
-  }
-
   function clearPlacementPark() {
     placeParked = false;
     placeAnchor = null;
-    placeRotating = false;
     placeDownKind = null;
-    placeRotateFrom = null;
+    placeTouchConfirm = false;
     onPlacementParked?.(false);
   }
 
   /** In-flight press only - a sitting ghost survives cancelDrag / 2-finger camera. */
   function resetPlaceGesture() {
-    placeRotating = false;
     placeDownKind = null;
-    placeRotateFrom = null;
+    placeTouchConfirm = false;
   }
 
-  function yawGhostToward(g) {
-    if (!placeAnchor || !g) return false;
-    const yaw = snapBuildingYaw(Math.atan2(g.x - placeAnchor.x, g.z - placeAnchor.z));
-    setPlacementYaw?.(yaw);
-    emitPlacementGhost(placeAnchor.x, placeAnchor.z, yaw);
-    return true;
-  }
-
-  function stepPlaceRotate(clientX, clientY) {
-    const g = renderer.screenToGround?.(clientX, clientY);
-    if (!placeAnchor || !g) return false;
-    const origin = placeRotateFrom;
-    if (origin) {
-      const moved = Math.hypot(clientX - origin.x, clientY - origin.y);
-      if (moved <= PLACE_ROTATE_THRESHOLD_PX) {
-        if (placeRotating) emitPlacementGhost(placeAnchor.x, placeAnchor.z, currentYaw());
-        return true;
-      }
+  /**
+   * Snap the ghost to the aim, then take the facing from where that aim
+   * sits inside the snapped cell.
+   */
+  function posePlacement(x, z) {
+    const snapped = emitPlacementGhost(x, z, currentYaw());
+    const yaw = buildingAimYaw(x, z, snapped.x, snapped.z, buildingAimSpan(getPlacingType?.()));
+    if (yaw !== currentYaw()) {
+      setPlacementYaw?.(yaw);
+      return emitPlacementGhost(snapped.x, snapped.z, yaw);
     }
-    placeRotating = true;
-    return yawGhostToward(g);
-  }
-
-  function hitSceneConfirm(clientX, clientY) {
-    return renderer.hitSceneConfirm?.(clientX, clientY) === true;
-  }
-
-  function hitPlacementGhost(clientX, clientY) {
-    if (!placeAnchor) return false;
-    const type = getPlacingType?.();
-    if (!type) return false;
-    const ray = renderer.clientPickingRay?.(clientX, clientY) ?? null;
-    if (!ray) return false;
-    if (renderer.ghostHitOnRay) {
-      const meshHit = renderer.ghostHitOnRay(ray);
-      if (typeof meshHit === 'boolean') return meshHit;
-    }
-    const { halfW, halfD } = buildingFootHalf(type);
-    const gy = renderer.groundYAt?.(placeAnchor.x, placeAnchor.z) ?? 0;
-    return rayHitYawBox(
-      ray,
-      placeAnchor.x,
-      placeAnchor.z,
-      currentYaw(),
-      halfW,
-      gy - 0.2,
-      halfD,
-      gy + BUILDING_PICK_HEIGHT,
-    ) != null;
+    return snapped;
   }
 
   function resetLasso() {
@@ -1888,7 +1843,7 @@ export function createGameInput(opts) {
     onComboPlacement?.('agora', ids.slice());
     setPlacingType?.('agora');
     if (!ground) return;
-    placeAnchor = emitPlacementGhost(ground.x, ground.z, currentYaw());
+    placeAnchor = posePlacement(ground.x, ground.z);
     placeParked = false;
     onPlacementParked?.(false);
   }
@@ -2012,14 +1967,13 @@ export function createGameInput(opts) {
       return true;
     }
 
-    // Placement: aim walks the ghost; drag yaws; 1^ stamps. A mouse tap that
-    // never yawed also stamps (1^ rides with the cursor). Agora mesh / hub
-    // tap leaves. Rally is still click-to-set (no rotate / 1^).
+    // Placement: aim walks the ghost and sets its facing from where the
+    // aim sits in the plot. A mouse tap stamps. Touch sits the ghost, then
+    // a later tap places it. Agora hub tap leaves. Rally is still click-to-set.
     if (isPlacing()) {
       radialGesture = Boolean(isRadialOpen?.() && hitRadial?.(e.clientX, e.clientY));
-      placeRotating = false;
       placeDownKind = null;
-      placeRotateFrom = null;
+      placeTouchConfirm = false;
       if (isPlacingRally?.()) {
         if (!radialGesture) {
           const g = renderer.screenToGround?.(e.clientX, e.clientY);
@@ -2027,22 +1981,14 @@ export function createGameInput(opts) {
         }
         return true;
       }
-      placeDownKind = placementDownKind({
-        hasGhost: !!placeAnchor,
-        hitConfirm: hitSceneConfirm(e.clientX, e.clientY),
-        hitGhost: hitPlacementGhost(e.clientX, e.clientY),
-        touch: e.pointerType === 'touch',
-      });
-      if (placeDownKind === 'preview') {
-        if (placeParked) {
-          placeParked = false;
-          onPlacementParked?.(false);
-        }
-        const g = renderer.screenToGround?.(e.clientX, e.clientY);
-        if (g) placeAnchor = emitPlacementGhost(g.x, g.z, currentYaw());
-      } else if (placeDownKind === 'rotate') {
-        placeRotateFrom = { x: e.clientX, y: e.clientY };
+      placeDownKind = placementDownKind();
+      placeTouchConfirm = e.pointerType === 'touch' && !!placeAnchor;
+      if (placeParked) {
+        placeParked = false;
+        onPlacementParked?.(false);
       }
+      const g = renderer.screenToGround?.(e.clientX, e.clientY);
+      if (g) placeAnchor = posePlacement(g.x, g.z);
       return true;
     }
 
@@ -2071,22 +2017,12 @@ export function createGameInput(opts) {
         return true;
       }
 
-      if (placeDownKind === 'confirm') return true;
-
-      if (placeDownKind === 'rotate' && placeAnchor) {
-        stepPlaceRotate(e.clientX, e.clientY);
-        return true;
-      }
-
-      // Keep 1^ hittable - walking toward the mark would slide it off the cursor.
-      if (placeAnchor && hitSceneConfirm(e.clientX, e.clientY)) return true;
-
       if (placementHoverFollowsPointer({
         previewDragging: placeDownKind === 'preview',
         pointerType: e.pointerType,
       })) {
         placeParked = false;
-        placeAnchor = emitPlacementGhost(g.x, g.z, currentYaw());
+        placeAnchor = posePlacement(g.x, g.z);
       }
       return true;
     }
@@ -2374,7 +2310,6 @@ export function createGameInput(opts) {
             }
           }
         } else {
-          const yaw = currentYaw();
           const tap =
             d &&
             Math.hypot(e.clientX - d.x, e.clientY - d.y) <= DRAG_THRESHOLD_PX;
@@ -2384,9 +2319,9 @@ export function createGameInput(opts) {
           if (tap && hitRadialHub?.(e.clientX, e.clientY)) radialKind = 'hub';
           const release = placementReleaseKind({
             downKind: placeDownKind,
-            rotated: placeRotating,
             tap,
             pointerType: e.pointerType,
+            ghostReady: placeTouchConfirm,
             radialKind,
             tapKind: placementTapKind(
               radialKind,
@@ -2398,21 +2333,8 @@ export function createGameInput(opts) {
             onRadialPick?.(picked);
           } else if (release === 'exit') {
             cancelPlacement();
-          } else if (release === 'confirm') {
-            const stillOnMark = placeDownKind !== 'confirm'
-              || hitSceneConfirm(e.clientX, e.clientY);
-            if (stillOnMark && placeAnchor && canIssueOrders()) {
-              if (onPlacementConfirm?.(placeAnchor.x, placeAnchor.z, yaw) === true) {
-                placeParked = false;
-                placeAnchor = null;
-                onPlacementParked?.(false);
-              }
-            }
-          } else if (placeAnchor) {
-            parkPlacement(placeAnchor.x, placeAnchor.z, yaw);
-          } else {
-            const g = renderer.screenToGround?.(e.clientX, e.clientY);
-            if (g) parkPlacement(g.x, g.z, yaw);
+          } else if (release === 'confirm' && canIssueOrders()) {
+            confirmPlacementOn(renderer.screenToGround?.(e.clientX, e.clientY));
           }
         }
         resetPlaceGesture();
@@ -2892,50 +2814,24 @@ export function createGameInput(opts) {
       onRallyMove?.(g.x, g.z);
       return true;
     }
-    placeRotateFrom = null;
-    placeRotating = false;
     if (placeParked) {
       placeParked = false;
       onPlacementParked?.(false);
     }
-    placeAnchor = emitPlacementGhost(g.x, g.z, currentYaw());
+    placeAnchor = posePlacement(g.x, g.z);
     return true;
   }
 
   /**
-   * Drag-yaw around the sitting ghost. Pad holds LB/RB and aims; pointer
-   * click-drags / tap-drags. No ghost yet - walk it first.
+   * Pad bumper hold and the headset grip used to orbit the ghost. Facing
+   * now comes from the aim inside the plot, so this is the same walk.
    */
   function rotatePlacementAt(clientX, clientY) {
-    if (!canUseInput() || !isPlacing() || isPlacingRally?.()) return false;
-    if (!placeAnchor) return previewPlacementAt(clientX, clientY);
-    const g = renderer.screenToGround?.(clientX, clientY);
-    if (!g) return false;
-    // Pad has no tap-vs-drag - the aim starts on the ghost, so the pointer
-    // rotate gate would swallow the whole bumper hold.
-    if (!placeRotateFrom) {
-      placeRotateFrom = { x: clientX, y: clientY };
-      return true;
-    }
-    if (Math.hypot(clientX - placeRotateFrom.x, clientY - placeRotateFrom.y) < 2) {
-      return true;
-    }
-    placeRotating = true;
-    return yawGhostToward(g);
+    return previewPlacementAt(clientX, clientY);
   }
 
-  /**
-   * Headset grip held while placing: the beam yaws the sitting ghost. A beam
-   * still on the ghost has no direction yet, so it holds the current yaw.
-   */
   function rotatePlacementAtRay(ray) {
-    if (!canUseInput() || !isPlacing() || isPlacingRally?.() || !ray) return false;
-    if (!placeAnchor) return previewPlacementAtRay(ray);
-    const g = renderer.rayToGround?.(ray);
-    if (!g) return false;
-    if (Math.hypot(g.x - placeAnchor.x, g.z - placeAnchor.z) < TILE_SIZE_F) return true;
-    placeRotating = true;
-    return yawGhostToward(g);
+    return previewPlacementAtRay(ray);
   }
 
   /**
@@ -2957,10 +2853,10 @@ export function createGameInput(opts) {
       onRallyConfirm?.(g.x, g.z);
       return true;
     }
-    const yaw = currentYaw();
-    const at = placeAnchor ?? (g ? emitPlacementGhost(g.x, g.z, yaw) : null);
+    if (!placeAnchor && g) posePlacement(g.x, g.z);
+    const at = placeAnchor;
     if (!at) return false;
-    if (onPlacementConfirm?.(at.x, at.z, yaw) === true) {
+    if (onPlacementConfirm?.(at.x, at.z, currentYaw()) === true) {
       placeParked = false;
       placeAnchor = null;
       onPlacementParked?.(false);
@@ -2970,7 +2866,7 @@ export function createGameInput(opts) {
   }
 
   /**
-   * Legacy bumper snap. Rally has no facing. Pad rotate is drag now.
+   * Legacy bumper snap. Rally has no facing. Aim inside the plot sets facing.
    */
   function nudgePlacementYaw(dir) {
     if (!canUseInput() || !isPlacing() || isPlacingRally?.()) return false;
@@ -3151,7 +3047,6 @@ export function createGameInput(opts) {
     },
     hitControlGroupHud,
     hitSelectionHud,
-    hitSceneConfirm,
     handleControlGroupDown,
     handleControlGroupUp,
     handleControlGroupCancel,

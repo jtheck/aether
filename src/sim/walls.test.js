@@ -4,7 +4,9 @@ import { buildField, createField, findPath, TERRAIN } from './field.js';
 import * as fx from './fixed.js';
 import {
   DEFAULT_WALL_STYLE,
+  DOOR_HEIGHT,
   DOOR_SPAN,
+  GATE_HEIGHT,
   applyWallOccupancy,
   clampWallStyle,
   decodeWalls,
@@ -12,6 +14,7 @@ import {
   emptyWalls,
   nearestWallRun,
   normalizeWallRuns,
+  openingHeight,
   placeWallOpening,
   removeNearestOpening,
   removeWallSection,
@@ -97,6 +100,39 @@ describe('wall runs', () => {
     assert.equal(again.runs[0].openings[0].open, 1);
     assert.equal(again.runs[0].openings[0].gate, 0);
     assert.equal(back.runs[0].openings[0].span, 8);
+  });
+
+  it('stores a size on each run and sizes openings to that curtain', () => {
+    const walls = emptyWalls();
+    walls.runs = [
+      { size: 'small', points: [{ x: 0, z: 0 }, { x: 8, z: 0 }, { x: 16, z: 0 }] },
+      { size: 'large', points: [{ x: 0, z: 12 }, { x: 16, z: 12 }] },
+    ];
+    const back = decodeWalls(encodeWalls(walls));
+    assert.equal(back.runs[0].size, 'small');
+    assert.equal(back.runs[0].style.height, 5);
+    assert.equal(back.runs[0].style.thickness, 1.5);
+    assert.equal(back.runs[0].style.footing, 0.2);
+    assert.equal(back.runs[0].style.merlonHeight, 0);
+    assert.equal(back.runs[0].style.pier, 0);
+    assert.equal(back.runs[1].size, 'large');
+    assert.equal(back.runs[1].style.height, 16);
+    assert.equal(back.runs[1].style.thickness, 3);
+    assert.equal(back.runs[1].style.merlonHeight, 3);
+    assert.equal(openingHeight(false, back.runs[0].style.height), 5);
+    assert.equal(openingHeight(true, back.runs[0].style.height), 5);
+    assert.equal(openingHeight(false, DEFAULT_WALL_STYLE.height), DOOR_HEIGHT);
+    assert.equal(openingHeight(true, DEFAULT_WALL_STYLE.height), GATE_HEIGHT);
+    assert.ok(openingHeight(false, 16) > DOOR_HEIGHT);
+    assert.ok(openingHeight(true, 16) > GATE_HEIGHT);
+    assert.ok(openingHeight(true, 16) < 16);
+    assert.equal(removeWallSection(back.runs, 4, 0), true);
+    assert.equal(back.runs[0].size, 'small');
+    assert.equal(back.runs[0].style.height, 5);
+    const legacy = decodeWalls({ s: [7.25, 1.2, 1, 0.8, 0.6, 0.2, 0.5], r: [[0, 0, 0, 16, 0]] });
+    assert.equal(legacy.runs[0].size, undefined);
+    assert.equal(legacy.style.height, 7.25);
+    assert.equal(openingHeight(false, legacy.style.height), DOOR_HEIGHT);
   });
 });
 

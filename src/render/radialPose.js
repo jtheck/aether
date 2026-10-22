@@ -222,12 +222,6 @@ export function radialIconBounds(meshes) {
 }
 
 /**
- * How far the posed icon reaches along a world direction, measured from the
- * foot anchor (cx, cy, cz). Used to keep overlays in front of a depth-writing icon.
- * Basis columns are the icon's right, up, and forward.
- * @param {{ hx?: number, hy?: number, hz?: number }} bounds
- */
-/**
  * Uniform scale so a mesh AABB fits in `targetExtent`. Never grows past
  * `fallback` - unit-tuned menus stay put; tall buildings shrink to the pad.
  * @param {{ hx?: number, hy?: number, hz?: number } | null | undefined} bounds
@@ -236,17 +230,6 @@ export function radialIconFitScale(bounds, targetExtent, fallback = 1) {
   const span = Math.max((bounds?.hx ?? 0) * 2, bounds?.hy ?? 0, (bounds?.hz ?? 0) * 2);
   if (!(span > 1e-6) || !(targetExtent > 0)) return fallback;
   return Math.min(fallback, targetExtent / span);
-}
-
-export function radialIconFrontReach(bounds, scale, nx, ny, nz, rx, ry, rz, ux, uy, uz, fx, fy, fz) {
-  const mx = nx * rx + ny * ry + nz * rz;
-  const my = nx * ux + ny * uy + nz * uz;
-  const mz = nx * fx + ny * fy + nz * fz;
-  const hx = bounds?.hx ?? 0;
-  const hy = bounds?.hy ?? 0;
-  const hz = bounds?.hz ?? 0;
-  const along = Math.abs(mx) * hx + Math.max(0, my) * hy + Math.abs(mz) * hz;
-  return scale * along;
 }
 
 /**
@@ -259,11 +242,6 @@ export function radialIconAnchor(ax, ay, az, rx, ry, rz, fx, fy, fz, scale, cx, 
     y: ay - scale * (ry * cx + cy + fy * cz),
     z: az - scale * (rz * cx + fz * cz),
   };
-}
-
-/** Pad discs write depth; icons must not lose reverse-Z to those hit circles. */
-export function disableRadialHudDepthWrite(mat) {
-  if (mat) mat.depthWrite = false;
 }
 
 /**
@@ -416,4 +394,35 @@ export function fitRadialInViewport(opts) {
   hudScale = unconstrained * scaleMul;
 
   return { x, y, z, hudScale, opacity, hidden: opacity <= 0 };
+}
+
+/**
+ * View-depth of the shared menu sort point. Screen HUD chips sit at 0.8, so
+ * they still draw after the menu. Health chips, work-radius rings, and fog
+ * are all farther than this.
+ */
+export const MENU_OVERLAY_DEPTH = 1.25;
+
+/**
+ * One world point for every radial-menu mesh. Transparent sort uses the mesh
+ * origin, so a shared point gives the whole menu one distance and render
+ * order stacks its pieces. The material adds the visual position back.
+ * @param {object | null | undefined} camera
+ * @returns {{ x: number, y: number, z: number, ok: boolean }}
+ */
+export function menuOverlayAnchor(camera) {
+  const none = { x: 0, y: 0, z: 0, ok: false };
+  const wm = camera?.worldMatrix;
+  if (!wm || wm.length < 15) return none;
+  const ex = wm[12];
+  const ey = wm[13];
+  const ez = wm[14];
+  const lx = wm[8];
+  const ly = wm[9];
+  const lz = wm[10];
+  if (![ex, ey, ez, lx, ly, lz].every((n) => Number.isFinite(n))) return none;
+  const llen = Math.hypot(lx, ly, lz);
+  if (!(llen > 1e-6)) return none;
+  const s = MENU_OVERLAY_DEPTH / llen;
+  return { x: ex + lx * s, y: ey + ly * s, z: ez + lz * s, ok: true };
 }

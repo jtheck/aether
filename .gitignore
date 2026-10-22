@@ -27,6 +27,9 @@ yarn-error.log*
 # House maps live at repo-root maps/ only (not under src/)
 src/maps/
 
+# Sprite-capture Lite bundle, rebuilt by npm run prebake
+src/prebake/.capture/
+
 # Recovery / disk images (do not commit)
 *.img
 *.img.bz2

@@ -722,7 +722,8 @@ function addGateBars(dst, at, span, hole, ground, style) {
   const pitch = inner / count;
   const radius = Math.min(0.11, pitch * 0.22);
   const y0 = ground - 0.95;
-  const y1 = ground + Math.max(style.height, hole) + Math.min(0.4, Math.max(0, style.merlonHeight));
+  // Stop under the opening. Running past it puts the bars through the lintel and out the top.
+  const y1 = ground + hole - 0.02;
   for (let i = 0; i < count; i++) {
     const along = -inner * 0.5 + pitch * (i + 0.5);
     pushPrism(
@@ -855,10 +856,11 @@ export function buildWallGeometry(runs, style, sampleHeight) {
   const wood = emptyDst();
   const iron = emptyDst();
   const stats = { spans: 0, merlons: 0, piers: 0, doors: 0, gates: 0 };
-  const clamped = clampWallStyle(style);
+  const fallback = clampWallStyle(style);
   const sample = typeof sampleHeight === 'function' ? sampleHeight : () => 0;
   for (const run of runs || []) {
     const stone = run?.kind === 'dungeon' ? dungeon : castle;
+    const clamped = run?.style ? clampWallStyle(run.style) : fallback;
     buildRun(stone, wood, iron, run, clamped, sample, stats);
   }
   return {

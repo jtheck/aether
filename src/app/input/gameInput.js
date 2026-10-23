@@ -26,6 +26,7 @@ import {
   CONTROL_GROUP_BLACK,
   CONTROL_GROUP_COUNT,
   CONTROL_GROUP_HOLD_MS,
+  addUnitsToControlGroup,
   assignControlGroup,
   controlGroupFilled,
   controlGroupIdFromCode,
@@ -53,6 +54,7 @@ import {
   placementHoverFollowsPointer,
   placementReleaseKind,
   placementTapKind,
+  touchPlacementPoint,
   radialClickKind,
   radialHubFramedBuilding,
   screenPosInPoly,
@@ -534,6 +536,21 @@ export function createGameInput(opts) {
     markControlGroupFilled(id);
   }
 
+  function addCurrentUnitsToControlGroup(id) {
+    const snap = snapshotControlGroupSelection();
+    if (!snap.units.length) return;
+    const live = livingControlGroup(
+      controlGroups[id],
+      getWorld(),
+      localPlayerId,
+      getBuildings?.(),
+      getAgoras?.(),
+    );
+    assignControlGroup(controlGroups, id, live.units, live.buildings);
+    addUnitsToControlGroup(controlGroups, id, snap.units);
+    markControlGroupFilled(id);
+  }
+
   function selectControlGroup(id) {
     const live = markControlGroupFilled(id);
     if (!controlGroupFilled(live)) return false;
@@ -613,7 +630,7 @@ export function createGameInput(opts) {
    * Digit / numpad 1-6 and the gamepad face / D-pad stack: tap selects, second
    * tap jumps the camera, hold assigns. Ctrl/Cmd+number assigns immediately.
    * @param {number} id
-   * @param {{ assignNow?: boolean }} [opts]
+   * @param {{ assignNow?: boolean, addNow?: boolean }} [opts]
    */
   function handleControlGroupDown(id, opts = {}) {
     const i = id | 0;
@@ -623,6 +640,14 @@ export function createGameInput(opts) {
       ctrlGroupKeyId = i;
       ctrlGroupKeyAssigned = true;
       assignCurrentToControlGroup(i);
+      renderer.setControlGroupHold?.(i);
+      return true;
+    }
+    if (opts.addNow) {
+      clearCtrlGroupKeyHold();
+      ctrlGroupKeyId = i;
+      ctrlGroupKeyAssigned = true;
+      addCurrentUnitsToControlGroup(i);
       renderer.setControlGroupHold?.(i);
       return true;
     }
@@ -661,7 +686,8 @@ export function createGameInput(opts) {
 
   /**
    * Digit / numpad 1-6: tap selects, second tap jumps the camera, hold assigns
-   * (same as the pads). Ctrl/Cmd+number assigns immediately.
+   * (same as the pads). Ctrl/Cmd+number assigns immediately; Shift+number adds
+   * selected units to the group.
    * @param {KeyboardEvent} e
    */
   function handleControlGroupKeyDown(e) {
@@ -670,7 +696,13 @@ export function createGameInput(opts) {
     if (id == null || !canUseInput()) return false;
     e.preventDefault();
     if (e.repeat) return true;
-    return handleControlGroupDown(id, { assignNow: !!(e.ctrlKey || e.metaKey) });
+    if (e.ctrlKey || e.metaKey) {
+      return handleControlGroupDown(id, { assignNow: true });
+    }
+    if (e.shiftKey) {
+      return handleControlGroupDown(id, { addNow: true });
+    }
+    return handleControlGroupDown(id, {});
   }
 
   /** @param {KeyboardEvent} e */
@@ -1849,16 +1881,19 @@ export function createGameInput(opts) {
   }
 
   /** Tap+hold - unload loaded transports, else cast primary ability. */
-  function castAbilityAt(clientX, clientY) {
-    castAbilityWith(clientAim(clientX, clientY));
+  function castAbilityAt(clientX, clientY, pointerType) {
+    castAbilityWith(clientAim(clientX, clientY), { clientX, clientY, pointerType });
   }
 
   function castAbilityAtRay(ray) {
     if (ray) castAbilityWith(rayAim(ray));
   }
 
-  /** @param {OrderAim} aim */
-  function castAbilityWith(aim) {
+  /**
+   * @param {OrderAim} aim
+   * @param {{ clientX?: number, clientY?: number, pointerType?: string }} [src]
+   */
+  function castAbilityWith(aim, src = {}) {
     if (!canIssueOrders() || isPlacing()) return;
     const ids = selectedIds();
     if (ids.length === 0) return;
@@ -1896,7 +1931,10 @@ export function createGameInput(opts) {
 
     if (classifyCastSelection(world, ids, localPlayerId) === COMBO.AGORA_FOUND) {
       if (!canAffordAgoraFound(getOwnerBank?.() ?? {})) return;
-      beginAgoraComboPlacement(ids, g);
+      const ghost = src.pointerType === 'touch'
+        ? placementGround(src.clientX, src.clientY, 'touch') ?? g
+        : g;
+      beginAgoraComboPlacement(ids, ghost);
       return;
     }
 
@@ -1968,8 +2006,9 @@ export function createGameInput(opts) {
     }
 
     // Placement: aim walks the ghost and sets its facing from where the
-    // aim sits in the plot. A mouse tap stamps. Touch sits the ghost, then
-    // a later tap places it. Agora hub tap leaves. Rally is still click-to-set.
+    // aim sits in the plot. A mouse tap stamps. Touch sits the ghost above
+    // the finger, then a later tap places it. Agora hub tap leaves. Rally
+    // is still click-to-set.
     if (isPlacing()) {
       radialGesture = Boolean(isRadialOpen?.() && hitRadial?.(e.clientX, e.clientY));
       placeDownKind = null;
@@ -1987,7 +2026,7 @@ export function createGameInput(opts) {
         placeParked = false;
         onPlacementParked?.(false);
       }
-      const g = renderer.screenToGround?.(e.clientX, e.clientY);
+      const g = placementGround(e.clientX, e.clientY, e.pointerType);
       if (g) placeAnchor = posePlacement(g.x, g.z);
       return true;
     }
@@ -2009,7 +2048,9 @@ export function createGameInput(opts) {
       if (isRadialOpen?.()) void onRadialHover?.(e.clientX, e.clientY);
       if (radialGesture) return true;
 
-      const g = renderer.screenToGround?.(e.clientX, e.clientY);
+      const g = isPlacingRally?.()
+        ? renderer.screenToGround?.(e.clientX, e.clientY)
+        : placementGround(e.clientX, e.clientY, e.pointerType);
       if (!g) return true;
 
       if (isPlacingRally?.()) {
@@ -2213,7 +2254,7 @@ export function createGameInput(opts) {
         Math.hypot(e.clientX - prevTap.x, e.clientY - prevTap.y) <= DOUBLE_PX;
       if (castEligible) {
         lastTap = null;
-        castAbilityAt(e.clientX, e.clientY);
+        castAbilityAt(e.clientX, e.clientY, e.pointerType);
         return;
       }
       const hostileBld =
@@ -2793,6 +2834,17 @@ export function createGameInput(opts) {
     dragPointerId = null;
     lmbDownPos = null;
     boxDragging = false;
+  }
+
+  /**
+   * Ground under the aim. Touch reads above the finger; a miss there
+   * falls back to the contact so the top edge of the screen still places.
+   */
+  function placementGround(clientX, clientY, pointerType) {
+    const p = touchPlacementPoint(clientX, clientY, pointerType);
+    const hit = renderer.screenToGround?.(p.x, p.y);
+    if (hit || pointerType !== 'touch') return hit ?? null;
+    return renderer.screenToGround?.(clientX, clientY) ?? null;
   }
 
   /**

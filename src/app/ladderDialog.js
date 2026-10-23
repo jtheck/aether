@@ -4,6 +4,7 @@ import { ladderLooking, ladderQueueReady, leaveLadder, loadLadderBoard, queueLad
 import { rememberLadderId } from './ladderId.js';
 import { clearLadderAssignment, setLadderAssignment } from './ladderSession.js';
 import { getPlayerColor, getPlayerName } from './settings.js';
+import { focusMenuEl } from './input/gamepad.js';
 
 function fill(el, rows, playerId) {
   if (!el) return;
@@ -140,7 +141,7 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPl
     if (lookTimer) clearInterval(lookTimer);
     lookTimer = 0;
     if (open) {
-      closeBtn?.focus();
+      focusMenuEl(closeBtn);
       void reload();
       void refreshLooking();
       lookTimer = setInterval(() => { void refreshLooking(); }, 3000);

@@ -584,9 +584,9 @@ describe('zoom toward cursor', () => {
   it('keyboard zoom stays on the current look target', () => {
     const cam = fakeCamera();
     const ctrl = createCameraController(cam, fakeCanvas(), { worldHalfF: 200 });
-    ctrl.handleKeyDown(keyEvent('t'));
+    ctrl.handleKeyDown(keyEvent('v'));
     for (let i = 0; i < 8; i++) ctrl.tick(16);
-    ctrl.handleKeyUp(keyEvent('t'));
+    ctrl.handleKeyUp(keyEvent('v'));
     assert.ok(Math.abs(cam.target.x) < 0.2);
     assert.ok(Math.abs(cam.target.z) < 0.2);
   });

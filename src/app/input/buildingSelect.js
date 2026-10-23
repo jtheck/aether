@@ -186,6 +186,23 @@ export function placementReleaseKind(s = {}) {
   return 'confirm';
 }
 
+/** CSS pixels above a finger. The plot sits clear of the contact. */
+export const TOUCH_PLACE_LIFT_PX = 96;
+
+/**
+ * Touch aims above the contact so the finger does not cover the ghost.
+ * Mouse, pad, and headset stay on the pointer.
+ * @param {number} clientX
+ * @param {number} clientY
+ * @param {string} [pointerType]
+ */
+export function touchPlacementPoint(clientX, clientY, pointerType) {
+  const x = Number(clientX) || 0;
+  const y = Number(clientY) || 0;
+  if (pointerType !== 'touch') return { x, y };
+  return { x, y: y - TOUCH_PLACE_LIFT_PX };
+}
+
 /**
  * Ghost follows aim unless a rotate / confirm press owns it. Touch has no
  * hover - only a live preview drag walks the ghost.

@@ -70,6 +70,27 @@ export function assignControlGroup(groups, id, units, buildings) {
 }
 
 /**
+ * Append unit ids to a group without duplicates. Buildings are unchanged.
+ * @param {{ units: number[], buildings: { kind: string, index: number }[] }[]} groups
+ * @param {number} id
+ * @param {number[]} units
+ */
+export function addUnitsToControlGroup(groups, id, units) {
+  const i = id | 0;
+  if (i < 0 || i >= CONTROL_GROUP_COUNT) return false;
+  const g = groups[i];
+  const seen = new Set(g.units);
+  const src = units ?? [];
+  for (let k = 0; k < src.length; k++) {
+    const u = src[k] | 0;
+    if (seen.has(u)) continue;
+    seen.add(u);
+    g.units.push(u);
+  }
+  return true;
+}
+
+/**
  * Drop dead / foreign / missing members. Does not mutate `group`.
  * @param {{ units?: number[], buildings?: { kind: string, index: number }[] } | null | undefined} group
  * @param {{ count: number, alive: Uint8Array, owner: Uint8Array }} world

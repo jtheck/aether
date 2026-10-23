@@ -65,7 +65,7 @@ export const NAV_REPEAT_MS = 160;
 const ROT_SENS = 0.023;
 const ZOOM_SENS = 0.85;
 
-export const MENU_FOCUS_SEL = 'button, input, select, textarea, summary, a.btn, #settings_b, #help_b';
+export const MENU_FOCUS_SEL = 'button, input, select, textarea, summary, a[href], #settings_b, #help_b';
 
 /**
  * @param {unknown} pads
@@ -557,7 +557,7 @@ export function activateMenuEl(el, Ev = globalThis.Event) {
   if (el.tagName === 'SELECT') return cycleSelect(el, 1, Ev);
   if (el.tagName === 'INPUT' && el.type === 'range') return false;
   if (isMenuTextField(el)) {
-    el.focus?.();
+    focusMenuEl(el);
     el.select?.();
     return true;
   }
@@ -587,12 +587,22 @@ export function adjustMenuEl(el, dir, Ev = globalThis.Event) {
   return false;
 }
 
+/** Pad focus should paint :focus-visible. A plain focus() leaves the row unmarked. */
+export function focusMenuEl(el) {
+  if (!el?.focus) return;
+  try {
+    el.focus({ focusVisible: true });
+  } catch {
+    el.focus();
+  }
+}
+
 export function stepMenuFocus(items, current, dir) {
   if (!items?.length || !dir) return null;
   let i = items.indexOf(current);
   if (i < 0) i = dir > 0 ? -1 : 0;
   const next = items[(i + dir + items.length) % items.length];
-  next?.focus?.();
+  focusMenuEl(next);
   next?.scrollIntoView?.({ block: 'nearest' });
   return next ?? null;
 }
@@ -724,6 +734,8 @@ export function createGamepadAdapter(opts = {}) {
   let radialHeldRing = null;
   let pointerYielded = false;
   let stickReclaimArmed = false;
+  /** Radial confirm while the stick is still out. Hold that throw off the cursor. */
+  let menuStickCarry = false;
 
   function resetEdges() {
     prevButtons = [];
@@ -753,9 +765,9 @@ export function createGamepadAdapter(opts = {}) {
     opts.onControlGroupCancel?.();
   }
 
-  function aim(on) {
+  function aim(on, source) {
     if (!on) resetAimOffset();
-    opts.onAim?.(!!on);
+    opts.onAim?.(!!on, source);
   }
 
   function yieldToPointer() {
@@ -767,8 +779,22 @@ export function createGamepadAdapter(opts = {}) {
     aim(false);
   }
 
+  function lookSticksQuiet(read) {
+    return stickMagnitude(read?.lx, read?.ly) <= STICK_DEADZONE
+      && stickMagnitude(read?.rx, read?.ry) <= STICK_DEADZONE;
+  }
+
   function applyPlayDefault(read) {
-    const { lookX, lookY, rotX, rotY, splitYaw, splitZoom, bothLook } = stickPlayAxes(read);
+    const axes = stickPlayAxes(read);
+    let { lookX, lookY } = axes;
+    const { rotX, rotY, splitYaw, splitZoom, bothLook } = axes;
+    if (menuStickCarry) {
+      if (lookSticksQuiet(read)) menuStickCarry = false;
+      else if (!splitYaw && !splitZoom && !rotX && !rotY && !bothLook) {
+        lookX = 0;
+        lookY = 0;
+      }
+    }
     const splitting = !!(splitYaw || splitZoom);
     const vp = opts.getViewport?.();
     const w = vp?.width ?? 0;
@@ -844,7 +870,7 @@ export function createGamepadAdapter(opts = {}) {
       if (playConfirmIntent(edges)) {
         const keys = listOsKbdKeys(menuRoot);
         const cur = keys.includes(root?.activeElement) ? root.activeElement : null;
-        if (!cur) keys[0]?.focus?.();
+        if (!cur) focusMenuEl(keys[0]);
         else activateMenuEl(cur);
       }
       return;
@@ -963,6 +989,7 @@ export function createGamepadAdapter(opts = {}) {
       return;
     }
     const read = readStandardPad(pad);
+    if (menuStickCarry && lookSticksQuiet(read)) menuStickCarry = false;
     const edges = buttonEdges(read.buttons, prevButtons);
     const released = buttonReleased(read.buttons, prevButtons);
     prevButtons = read.buttons;
@@ -1000,7 +1027,7 @@ export function createGamepadAdapter(opts = {}) {
       if (opened) {
         const openedRoot = resolveMenuRoot(root);
         const items = listFocusables(openedRoot);
-        if (items[0]) items[0].focus?.();
+        if (items[0]) focusMenuEl(items[0]);
         if (menuExclusive) {
           cancelPadSelect();
           cancelPadGroup();
@@ -1023,26 +1050,16 @@ export function createGamepadAdapter(opts = {}) {
       return;
     }
 
-    const radialOpen = typeof opts.radialOpen === 'function' ? !!opts.radialOpen() : !!opts.radialOpen;
-    if (radialOpen) {
-      cancelPadSelect();
-      cancelPadGroup();
-      aim(false);
-      applyMenuCamera(read);
-      const pick = radialStickPick(radialMenuRead(read), opts.getRadialTargets?.() ?? null, radialHeldRing);
-      radialHeldRing = pick?.ring ?? null;
-      opts.onRadialHover?.(pick);
-      if (edges[PAD.B]) opts.onRadialCancel?.();
-      else if (playConfirmIntent(edges) && pick) opts.onRadialConfirm?.(pick);
-      return;
-    }
-    radialHeldRing = null;
-
     const placing = typeof opts.placing === 'function' ? !!opts.placing() : !!opts.placing;
     if (placing) {
+      // The build pie stays up in compact form while the ghost is out.
+      // Driving that pie pins the preview on the agora until the pie closes.
+      radialHeldRing = null;
       cancelPadSelect();
       cancelPadGroup();
-      aim(true);
+      // The stick is still the pie throw. Keep the field mark off until it recenters.
+      if (menuStickCarry) aim(false, 'radial');
+      else aim(true);
       applyPlay(read);
       if (playSelectHeld(read.buttons)) opts.onPlaceRotateDrag?.();
       else opts.onPlaceAim?.();
@@ -1051,6 +1068,24 @@ export function createGamepadAdapter(opts = {}) {
       else if (place.confirm) opts.onPlaceConfirm?.();
       return;
     }
+
+    const radialOpen = typeof opts.radialOpen === 'function' ? !!opts.radialOpen() : !!opts.radialOpen;
+    if (radialOpen) {
+      cancelPadSelect();
+      cancelPadGroup();
+      aim(false, 'radial');
+      applyMenuCamera(read);
+      const pick = radialStickPick(radialMenuRead(read), opts.getRadialTargets?.() ?? null, radialHeldRing);
+      radialHeldRing = pick?.ring ?? null;
+      opts.onRadialHover?.(pick);
+      if (edges[PAD.B]) opts.onRadialCancel?.();
+      else if (playConfirmIntent(edges) && pick) {
+        if (!lookSticksQuiet(read)) menuStickCarry = true;
+        opts.onRadialConfirm?.(pick);
+      }
+      return;
+    }
+    radialHeldRing = null;
 
     aim(true);
     const selectHeld = playSelectHeld(read.buttons);

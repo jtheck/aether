@@ -311,8 +311,8 @@ describe('menu focus helpers', () => {
     const a = el('button');
     const b = el('button');
     const focused = [];
-    a.focus = () => focused.push('a');
-    b.focus = () => focused.push('b');
+    a.focus = (opts) => focused.push(opts?.focusVisible ? 'a' : 'plain');
+    b.focus = (opts) => focused.push(opts?.focusVisible ? 'b' : 'plain');
     assert.equal(stepMenuFocus([a, b], a, 1), b);
     assert.equal(stepMenuFocus([a, b], b, 1), a);
     assert.deepEqual(focused, ['b', 'a']);
@@ -1636,6 +1636,87 @@ describe('createGamepadAdapter', () => {
     pads = [stdPad({ buttons: rt })];
     pad.tick();
     assert.equal(confirms.length, 2);
+    pad.dispose();
+  });
+
+  it('a ghost wins the sticks while the compact build pie is still open', () => {
+    const aims = [];
+    const confirms = [];
+    const radialConfirms = [];
+    const { doc } = menuDoc();
+    const pads = [stdPad({ axes: [1, 0, 0, 0] })];
+    const pad = createGamepadAdapter({
+      camera: { nudgeLookPan() {} },
+      active: () => true,
+      root: doc,
+      getGamepads: () => pads,
+      placing: () => true,
+      radialOpen: () => true,
+      onPlaceAim: () => aims.push(1),
+      onPlaceConfirm: () => confirms.push(1),
+      onRadialConfirm: (pick) => radialConfirms.push(pick),
+      onRadialHover: () => {},
+      autoStart: false,
+    });
+    pad.tick();
+    assert.equal(aims.length, 1);
+    assert.equal(confirms.length, 0);
+    assert.equal(radialConfirms.length, 0);
+    pad.dispose();
+  });
+
+  it('a jammed radial stick does not fling the cursor after the pick', () => {
+    const cursors = [];
+    const confirms = [];
+    const aims = [];
+    let placing = false;
+    let radial = true;
+    const { doc } = menuDoc();
+    const targets = {
+      inner: [{ kind: 'category', id: 'basic', ang: -Math.PI / 2 }],
+      outer: [{ kind: 'building', id: 'house', ang: -Math.PI / 2 }],
+    };
+    const a = [];
+    a[PAD.A] = btn(true);
+    let axes = [0, -0.9, 0, 0];
+    let buttons = a;
+    const pad = createGamepadAdapter({
+      camera: { nudgeLookPan() {} },
+      active: () => true,
+      root: doc,
+      getGamepads: () => [stdPad({ axes, buttons })],
+      getViewport: () => ({ width: 800, height: 600 }),
+      onCursor: (ox, oy) => cursors.push([ox, oy]),
+      onAim: (on, source) => aims.push([!!on, source ?? null]),
+      placing: () => placing,
+      radialOpen: () => radial,
+      getRadialTargets: () => targets,
+      onRadialConfirm: () => {
+        confirms.push(1);
+        placing = true;
+        radial = false;
+      },
+      autoStart: false,
+    });
+    pad.tick();
+    assert.equal(confirms.length, 1);
+    cursors.length = 0;
+    buttons = [];
+    pad.tick();
+    pad.tick();
+    const held = cursors.at(-1);
+    assert.ok(held);
+    assert.ok(Math.hypot(held[0], held[1]) < 1);
+    assert.deepEqual(aims.at(-1), [false, 'radial']);
+
+    axes = [0, 0, 0, 0];
+    pad.tick();
+    assert.equal(aims.at(-1)[0], true);
+    axes = [0, -0.9, 0, 0];
+    cursors.length = 0;
+    pad.tick();
+    const moved = cursors.at(-1);
+    assert.ok(Math.hypot(moved[0], moved[1]) > 8);
     pad.dispose();
   });
 

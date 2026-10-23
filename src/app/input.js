@@ -64,10 +64,12 @@ export function setupInput(opts) {
     active: opts.inputActive,
     yieldPad: () => overlay.isActive(),
     getViewport: () => canvas.getBoundingClientRect?.(),
-    onAim(on) {
+    onAim(on, source) {
       renderer.setGamepadCursorFollow?.(on);
+      // A radial still belongs to the pad. Revealing the OS pointer here leaves
+      // an arrow on screen until the stick moves.
       if (on && !padAiming) hideOsCursor();
-      else if (!on && padAiming) showOsCursor();
+      else if (!on && padAiming && source !== 'radial') showOsCursor();
       padAiming = !!on;
     },
     onActivity: hideOsCursor,
@@ -174,6 +176,8 @@ export function setupInput(opts) {
     attackMoveAtRay: (ray) => game.attackMoveAtRay?.(ray) ?? false,
     forceMoveAtRay: (ray) => game.forceMoveAtRay?.(ray) ?? false,
     castAbilityAtRay: (ray) => game.castAbilityAtRay?.(ray),
+    castAbilityAt: (clientX, clientY, pointerType) =>
+      game.castAbilityAt?.(clientX, clientY, pointerType),
     isPlacing: () => game.isPlacing?.() ?? false,
     previewPlacementAtRay: (ray) => game.previewPlacementAtRay?.(ray) ?? false,
     rotatePlacementAtRay: (ray) => game.rotatePlacementAtRay?.(ray) ?? false,

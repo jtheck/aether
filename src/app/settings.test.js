@@ -9,6 +9,9 @@ import {
   getAaEnabled,
   msaaSamples,
   setAaEnabled,
+  setVolumeLevel,
+  toggleVolumeMute,
+  DEFAULT_VOLUME_LEVEL,
 } from './settings.js';
 
 const store = Object.create(null);
@@ -73,6 +76,22 @@ describe('aaLevel storage', () => {
   it('maps the toggle onto Lite sample counts', () => {
     assert.equal(msaaSamples(false), MSAA_SAMPLES_OFF);
     assert.equal(msaaSamples(true), MSAA_SAMPLES_ON);
+  });
+});
+
+describe('toggleVolumeMute', () => {
+  it('mutes at zero and restores the previous level', () => {
+    setVolumeLevel(40);
+    assert.deepEqual(toggleVolumeMute(), { muted: true, level: 0 });
+    assert.equal(store.volumeLevel, '0');
+    assert.equal(store.volumeBeforeMute, '40');
+    assert.deepEqual(toggleVolumeMute(), { muted: false, level: 40 });
+    assert.equal(store.volumeLevel, '40');
+  });
+
+  it('unmutes to the default when there was no saved level', () => {
+    setVolumeLevel(0);
+    assert.deepEqual(toggleVolumeMute(), { muted: false, level: DEFAULT_VOLUME_LEVEL });
   });
 });
 

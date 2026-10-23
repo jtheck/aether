@@ -9,6 +9,7 @@ import {
   placementDownKind,
   placementHoverFollowsPointer,
   placementReleaseKind,
+  TOUCH_PLACE_LIFT_PX,
   placementTapKind,
   radialBuildingPickAction,
   radialClickKind,
@@ -647,6 +648,56 @@ describe('gamepad control groups', () => {
     return { input, selected };
   }
 
+  it('shift-add merges selected units into an existing group', () => {
+    const selected = new Uint8Array(4);
+    const world = {
+      count: 2,
+      alive: [1, 1],
+      owner: [0, 0],
+      type: [1, 1],
+      carriedBy: [-1, -1],
+      px: [0, 0],
+      py: [0, 0],
+    };
+    const input = createGameInput({
+      canvas: {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      },
+      renderer: {
+        pickSelectionHud: () => null,
+        pickControlGroupHud: () => null,
+        screenToGround: () => ({ x: 0, z: 0, y: 0 }),
+        setSelectionBox: () => {},
+        setControlGroupHold: () => {},
+        setControlGroupCount: () => {},
+      },
+      world,
+      selected,
+      localPlayerId: 0,
+      getUnitWorldPos: () => ({ x: 0, y: 0, z: 0 }),
+      enqueueCommand: () => {},
+      getAgoras: () => [],
+      getBuildings: () => [],
+    });
+    selected[0] = 1;
+    input.setSelectedBuffer(selected);
+    assert.equal(input.handleControlGroupDown(0, { assignNow: true }), true);
+
+    selected[0] = 0;
+    selected[1] = 1;
+    input.setSelectedBuffer(selected);
+    assert.equal(input.handleControlGroupDown(0, { addNow: true }), true);
+    assert.equal(input.handleControlGroupUp(0), true);
+
+    selected[0] = 0;
+    selected[1] = 0;
+    input.setSelectedBuffer(selected);
+    assert.equal(input.handleControlGroupDown(0), true);
+    assert.equal(input.handleControlGroupUp(0), true);
+    assert.equal(selected[0], 1);
+    assert.equal(selected[1], 1);
+  });
+
   it('hold-assign then tap-selects; cancel does not tap', () => {
     const { input, selected } = makeGroupHarness();
     assert.equal(input.handleControlGroupDown(0, { assignNow: true }), true);
@@ -771,7 +822,7 @@ describe('aim then stamp placement', () => {
     }));
     assert.equal(confirms.length, 1);
     assert.equal(confirms[0].x, 28);
-    assert.equal(confirms[0].z, 20);
+    assert.equal(confirms[0].z, (200 - TOUCH_PLACE_LIFT_PX) / 10);
   });
 });
 

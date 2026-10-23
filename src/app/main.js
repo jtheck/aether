@@ -112,6 +112,7 @@ import {
   resolveFxMode,
   resolveShadowMode,
   shadowTier,
+  toggleVolumeMute,
 } from './settings.js';
 import {
   OVERLAY_COLLAR_SPIN_DISTANCE_SQ,
@@ -129,6 +130,7 @@ import {
   unitChipLift,
 } from '../render/healthBars.js';
 import { setupInput } from './input.js';
+import { canvasCenterClient } from './input/gamepadCursor.js';
 import { isCameraFollowTypingTarget, selectionCentroidXZ, shouldHoldSelectionFollow } from './input/cameraFollow.js';
 import { isControlGroupDoubleTap } from './input/controlGroups.js';
 import {
@@ -143,7 +145,13 @@ import {
   radialBuildingPickAction,
 } from './input/buildingSelect.js';
 import { chasePoseXZ } from './poseInterp.js';
-import { init as initAudio, playMatchStart, playThunder, thunderPlaysForStrikes } from './audio.js';
+import {
+  init as initAudio,
+  playMatchStart,
+  playThunder,
+  setVolume,
+  thunderPlaysForStrikes,
+} from './audio.js';
 import { SimSession, TICK_HZ, formatHudMatchClock, matchSecondsFromTick } from './simSession.js';
 import { corpseCompactDue } from './corpseCompact.js';
 import { createKothShard, kothModeFromSearch } from './kothShard.js';
@@ -2948,6 +2956,23 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     session.submitCommand(cmd);
   }
 
+  /** Last field pointer for keyboard ability aim (gamepad B uses center + stick offset). */
+  const orderAim = { clientX: 0, clientY: 0, fromPointer: false };
+  function noteOrderAim(e) {
+    if (e.clientX == null || e.clientY == null) return;
+    orderAim.clientX = e.clientX;
+    orderAim.clientY = e.clientY;
+    orderAim.fromPointer = true;
+  }
+  function orderAimClient() {
+    if (orderAim.fromPointer) {
+      return { clientX: orderAim.clientX, clientY: orderAim.clientY };
+    }
+    return canvasCenterClient(canvas.getBoundingClientRect?.());
+  }
+  canvas.addEventListener('pointermove', noteOrderAim, { passive: true });
+  canvas.addEventListener('pointerdown', noteOrderAim, { passive: true });
+
   let inputApi = setupInput({
     canvas,
     renderer,
@@ -3404,14 +3429,18 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       void sideMenu.handleEscape?.();
       return;
     }
-    if (e.code === 'KeyJ') {
-      kothShard?.requestJoin?.();
-      return;
-    }
     if (e.code === 'KeyB' || e.code === 'Backquote') {
       if (isCameraFollowTypingTarget(document.activeElement)) return;
       e.preventDefault();
       openOwnAgoraMenu();
+      return;
+    }
+    if (e.code === 'KeyQ' || e.code === 'KeyA' || e.code === 'KeyT') {
+      if (isCameraFollowTypingTarget(document.activeElement)) return;
+      e.preventDefault();
+      if (!bootInteractive) return;
+      const c = orderAimClient();
+      if (c) inputApi.castAbilityAt?.(c.clientX, c.clientY, 'keyboard');
       return;
     }
     if (e.code === 'KeyG') {
@@ -3428,43 +3457,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
       return;
     }
-    if (e.code === 'KeyN') {
+    if (e.code === 'KeyM') {
+      if (isCameraFollowTypingTarget(document.activeElement)) return;
       e.preventDefault();
-      const on = renderer.toggleShadows?.();
-      if (typeof on === 'boolean') setStatusText(on ? 'Shadows on' : 'Shadows off');
+      const { muted, level } = toggleVolumeMute();
+      setVolume(level);
       sideMenu.refresh();
-      return;
-    }
-    if (e.code === 'KeyX') {
-      e.preventDefault();
-      const on = renderer.toggleFx?.();
-      if (typeof on === 'boolean') {
-        const st = renderer.particleStats?.();
-        setStatusText(
-          on
-            ? `FX on${st ? ` · ${st.active}/${st.hardMax} p` : ''}`
-            : 'FX off',
-        );
-      }
-      sideMenu.refresh();
-      return;
-    }
-    if (e.code === 'KeyV') {
-      e.preventDefault();
-      const on = renderer.toggleVat?.();
-      if (typeof on === 'boolean') setStatusText(on ? 'VAT on' : 'VAT off');
-      return;
-    }
-    if (e.code === 'KeyU') {
-      e.preventDefault();
-      const on = renderer.toggleUnits?.();
-      if (typeof on === 'boolean') setStatusText(on ? 'Units on' : 'Units off');
-      return;
-    }
-    if (e.code === 'KeyL') {
-      e.preventDefault();
-      const on = renderer.toggleCelestialSpin?.();
-      if (typeof on === 'boolean') setStatusText(on ? 'Sun spin on' : 'Sun spin off');
+      setStatusText(muted ? 'Muted' : `Volume ${level}%`);
       return;
     }
     if (e.code === 'KeyP') {
@@ -3522,18 +3521,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   const kothLobbyOpts = {
     kothShard,
     onLeaveSolo: () => leaveLoadingScreenSolo(ctxRef?.current),
-    onRestoreBackdrop: () => {
-      const ctx = ctxRef?.current;
-      if (!ctx) return;
-      return startSoloAiMatch(ctx, {
-        temperament: 'passive',
-        fog: fogOverrideFromSearch() ?? true,
-        sharedVision: true,
-        statusLabel: '1v1 AI',
-        mode: 'skirmish',
-        armyPerSide: 0,
-      });
-    },
+    onRestoreBackdrop: () => restoreMenuSkirmishBackdrop(ctxRef?.current),
     onCloseMenu: () => sideMenu.close(),
   };
 
@@ -3571,18 +3559,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       onLeaveMatch: () => {
         matchLobby.detachSession();
         kothShard.setLobbyMatchHold?.(false);
-        const ctx = ctxRef.current;
-        if (!ctx) return;
-        ctx.endAdventure?.();
-        ctx.localSoloHold = false;
-        return startSoloAiMatch(ctx, {
-          temperament: 'passive',
-          fog: fogOverrideFromSearch() ?? true,
-          sharedVision: true,
-          statusLabel: '1v1 AI',
-          mode: 'skirmish',
-          armyPerSide: 0,
-        });
+        return restoreMenuSkirmishBackdrop(ctxRef.current);
       },
     });
     observerLobby = matchLobby;
@@ -3596,6 +3573,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       matchLobby,
       isKothLive: () => kothShard.getLobbyPresence?.()?.browsing === false,
       getUserId: () => kothShard.getUserId(),
+      onDismissSoloScore: () => restoreMenuSkirmishBackdrop(ctxRef.current),
       onCloseMenu: () => sideMenu.close(),
       onFollowReplay: (userId) => viewFollow?.toggleUser?.(userId),
       getFollowUser: () => viewFollow?.userTarget?.() ?? null,
@@ -5085,6 +5063,21 @@ function soloAiStatusLabel(temperament, difficulty) {
  * @param {object | null} ctx
  * @param {{ temperament?: string, difficulty?: number | string, fog?: boolean, sharedVision?: boolean, shareVisionWith?: number[], statusLabel?: string, garden?: object, mode?: string, armyPerSide?: number }} [opts]
  */
+/** Fresh menu-table skirmish after a local win/loss (no lobby room open). */
+async function restoreMenuSkirmishBackdrop(ctx) {
+  if (!ctx?.session || !ctx.renderer) return;
+  ctx.endAdventure?.();
+  ctx.localSoloHold = false;
+  return startSoloAiMatch(ctx, {
+    temperament: 'passive',
+    fog: fogOverrideFromSearch() ?? true,
+    sharedVision: true,
+    statusLabel: '1v1 AI',
+    mode: 'skirmish',
+    armyPerSide: 0,
+  });
+}
+
 async function startSoloAiMatch(ctx, opts = {}) {
   if (!ctx?.session || !ctx.renderer) return;
   if (ctx._soloStarting) return;

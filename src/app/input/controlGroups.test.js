@@ -4,6 +4,7 @@ import {
   CONTROL_GROUP_BLACK,
   CONTROL_GROUP_COUNT,
   CONTROL_GROUP_DOUBLE_MS,
+  addUnitsToControlGroup,
   assignControlGroup,
   controlGroupFilled,
   controlGroupIdFromCode,
@@ -39,6 +40,14 @@ describe('control groups', () => {
     assert.equal(controlGroupIdFromCode('Numpad3'), 2);
     assert.equal(controlGroupIdFromCode('Digit7'), null);
     assert.equal(controlGroupIdFromCode('KeyQ'), null);
+  });
+
+  it('adds units to a group without duplicates', () => {
+    const groups = createEmptyControlGroups();
+    assignControlGroup(groups, 0, [1, 2], []);
+    addUnitsToControlGroup(groups, 0, [2, 3, 1]);
+    assert.deepEqual(groups[0].units, [1, 2, 3]);
+    assert.equal(addUnitsToControlGroup(groups, 99, [1]), false);
   });
 
   it('assigns a snapshot and ignores stale / foreign members', () => {

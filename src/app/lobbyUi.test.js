@@ -612,7 +612,8 @@ describe('match lobby overlay', () => {
       assert.equal(dom.overlay.hidden, false);
       assert.equal(dom.panel.hidden, false);
       assert.equal(dom.score.hidden, false);
-      assert.equal(dom.leave.hidden, true);
+      assert.equal(dom.leave.hidden, false);
+      assert.equal(dom.leave.textContent, 'Play again');
       assert.equal(dom.overlay.className.includes('is-ranked-result'), true);
     } finally {
       restore();

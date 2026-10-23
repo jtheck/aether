@@ -9,6 +9,7 @@ const SHADOW_KEY = 'shadowMode';
 const FX_KEY = 'fxMode';
 const AA_KEY = 'aaLevel';
 const VOLUME_KEY = 'volumeLevel';
+const VOLUME_BEFORE_MUTE_KEY = 'volumeBeforeMute';
 const NAME_KEY = 'playerName';
 const COLOR_KEY = 'playerColor';
 const UNIT_SKINS_KEY = 'unitSkins';
@@ -263,6 +264,20 @@ export function setVolumeLevel(level) {
   const clamped = Math.max(0, Math.min(100, level | 0));
   write(VOLUME_KEY, String(clamped));
   return clamped;
+}
+
+/** @returns {{ muted: boolean, level: number }} */
+export function toggleVolumeMute() {
+  const level = getVolumeLevel();
+  if (level > 0) {
+    write(VOLUME_BEFORE_MUTE_KEY, String(level));
+    const next = setVolumeLevel(0);
+    return { muted: true, level: next };
+  }
+  const raw = Number.parseInt(read(VOLUME_BEFORE_MUTE_KEY) ?? '', 10);
+  const restore = Number.isInteger(raw) && raw > 0 ? raw : DEFAULT_VOLUME_LEVEL;
+  const next = setVolumeLevel(restore);
+  return { muted: false, level: next };
 }
 
 /**

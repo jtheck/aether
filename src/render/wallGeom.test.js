@@ -23,6 +23,36 @@ function assertSane(part) {
   }
 }
 
+/** UV length over world length for edges of triangles that pass pred. */
+function edgeUvScales(mesh, pred) {
+  const scales = [];
+  const pos = mesh.positions;
+  const uv = mesh.uvs;
+  const idx = mesh.indices;
+  for (let t = 0; t < idx.length; t += 3) {
+    const ids = [idx[t], idx[t + 1], idx[t + 2]];
+    const n = triNormal(pos, ids[0] * 3, ids[1] * 3, ids[2] * 3);
+    const cx = (pos[ids[0] * 3] + pos[ids[1] * 3] + pos[ids[2] * 3]) / 3;
+    const cy = (pos[ids[0] * 3 + 1] + pos[ids[1] * 3 + 1] + pos[ids[2] * 3 + 1]) / 3;
+    const cz = (pos[ids[0] * 3 + 2] + pos[ids[1] * 3 + 2] + pos[ids[2] * 3 + 2]) / 3;
+    if (!pred(cx, cy, cz, n)) continue;
+    for (let e = 0; e < 3; e++) {
+      const p = ids[e];
+      const q = ids[(e + 1) % 3];
+      const w = Math.hypot(
+        pos[q * 3] - pos[p * 3],
+        pos[q * 3 + 1] - pos[p * 3 + 1],
+        pos[q * 3 + 2] - pos[p * 3 + 2],
+      );
+      if (w < 0.05) continue;
+      const du = uv[q * 2] - uv[p * 2];
+      const dv = uv[q * 2 + 1] - uv[p * 2 + 1];
+      scales.push(Math.hypot(du, dv) / w);
+    }
+  }
+  return scales;
+}
+
 function triNormal(positions, ia, ib, ic) {
   const ax = positions[ia];
   const ay = positions[ia + 1];
@@ -218,6 +248,37 @@ describe('curtain wall mesh', () => {
       if (Math.abs(n[0]) > Math.abs(n[1]) && Math.abs(n[0]) > Math.abs(n[2])) jamb += 1;
     }
     assert.ok(jamb > 0, 'door cut should close the wall thickness');
+
+    const castleUv = 1 / 3.2;
+    const stoneMesh = stone(geom);
+    const unit = (n) => {
+      const len = Math.hypot(n[0], n[1], n[2]) || 1;
+      return [n[0] / len, n[1] / len, n[2] / len];
+    };
+    const onWall = (z) => Math.abs(z) < style.thickness * 0.6;
+    const solidTop = edgeUvScales(stoneMesh, (x, y, z, n) => (
+      unit(n)[1] > 0.9 && y > style.height - 0.15 && y < style.height + 0.15
+      && x > 1 && x < 3.2 && onWall(z)
+    ));
+    const doorTop = edgeUvScales(stoneMesh, (x, y, z, n) => (
+      unit(n)[1] > 0.9 && y > style.height - 0.15 && y < style.height + 0.15
+      && x > 4.3 && x < 7.7 && onWall(z)
+    ));
+    const doorSoffit = edgeUvScales(stoneMesh, (x, y, z, n) => (
+      unit(n)[1] < -0.9 && y > 3.1 && y < 3.7 && x > 4.3 && x < 7.7 && onWall(z)
+    ));
+    const doorJamb = edgeUvScales(stoneMesh, (x, y, z, n) => (
+      Math.abs(unit(n)[0]) > 0.9 && Math.abs(x - 4) < 0.15
+      && y > 1 && y < style.height - 0.3 && onWall(z)
+    ));
+    assert.ok(solidTop.length > 0 && doorTop.length > 0, 'wall top and door top');
+    assert.ok(doorSoffit.length > 0, 'door soffit');
+    assert.ok(doorJamb.length > 0, 'door jamb');
+    for (const scales of [solidTop, doorTop, doorSoffit, doorJamb]) {
+      for (const s of scales) {
+        assert.ok(Math.abs(s - castleUv) < castleUv * 0.08, `stone scale ${s}`);
+      }
+    }
 
     const brick = buildWallGeometry(
       [{ kind: 'dungeon', closed: false, points: [{ x: 0, z: 0 }, { x: 8, z: 0 }] }],

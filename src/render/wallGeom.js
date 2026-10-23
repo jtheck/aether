@@ -500,11 +500,13 @@ function placeMerlons(dst, built, style, half, footExtra, stats) {
 
 function pushCap(dst, left, right, y0, y1, outward) {
   const u0 = left.u;
+  // Same world scale as the shaft. A fixed span smears the reveal across the thickness.
+  const u1 = u0 + Math.hypot(right.x - left.x, right.z - left.z) * uvU;
   pushOutwardQuad(
     dst,
     vert(right, y0, u0, y0 * uvV),
-    vert(left, y0, u0 + 0.2, y0 * uvV),
-    vert(left, y1, u0 + 0.2, y1 * uvV),
+    vert(left, y0, u1, y0 * uvV),
+    vert(left, y1, u1, y1 * uvV),
     vert(right, y1, u0, y1 * uvV),
     outward,
   );
@@ -588,24 +590,26 @@ function pushSolidEnds(dst, a, b, edge, style, showFoot) {
   );
 }
 
-function pushLintel(dst, a, b, edge, holeA, holeB) {
+function pushLintel(dst, a, b, edge, holeA, holeB, style) {
   const leftOut = { x: edge.nx, y: 0, z: edge.nz };
   const rightOut = { x: -edge.nx, y: 0, z: -edge.nz };
+  // Match the solid walkway. A constant 0.2 pulls the stones wide over the opening.
+  const across = style.thickness * uvU;
   pushWallFace(dst, a.left, b.left, holeA, a.y.top, holeB, b.y.top, leftOut);
   pushWallFace(dst, a.right, b.right, holeA, a.y.top, holeB, b.y.top, rightOut);
   pushOutwardQuad(
     dst,
     vert(a.left, a.y.top, a.left.u, 0),
-    vert(a.right, a.y.top, a.right.u, 0.2),
-    vert(b.right, b.y.top, b.right.u, 0.2),
+    vert(a.right, a.y.top, a.right.u, across),
+    vert(b.right, b.y.top, b.right.u, across),
     vert(b.left, b.y.top, b.left.u, 0),
     { x: 0, y: 1, z: 0 },
   );
   pushOutwardQuad(
     dst,
     vert(a.right, holeA, a.right.u, 0),
-    vert(a.left, holeA, a.left.u, 0.2),
-    vert(b.left, holeB, b.left.u, 0.2),
+    vert(a.left, holeA, a.left.u, across),
+    vert(b.left, holeB, b.left.u, across),
     vert(b.right, holeB, b.right.u, 0),
     { x: 0, y: -1, z: 0 },
   );
@@ -798,7 +802,7 @@ function buildRun(stone, wood, iron, run, style, sample, stats) {
         const holeA = a.y.ground + hole;
         const holeB = b.y.ground + hole;
         if (holeA < a.y.top - 0.08 && holeB < b.y.top - 0.08) {
-          pushLintel(stone, a, b, edges[i], holeA, holeB);
+          pushLintel(stone, a, b, edges[i], holeA, holeB, style);
         }
       }
     }

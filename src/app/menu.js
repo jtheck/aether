@@ -38,6 +38,7 @@ import {
 } from './fullscreen.js';
 import { blowGraffiti } from './graffitiPuff.js';
 import { mountHelpRoster } from './helpRoster.js';
+import { focusMenuEl } from './input/gamepad.js';
 
 /**
  * @param {object} opts
@@ -281,7 +282,7 @@ export function setupMenu({
   }
 
   function syncFromState() {
-    // N / X toggle outside the menu; reflect that rather than fighting it.
+    // Sliders mirror renderer shadow/FX mode (menu is the control surface).
     const mode = renderer.getShadowsEnabled?.() === false ? 0 : getShadowMode();
     slider.value = String(mode);
     paintShadow(mode);
@@ -386,10 +387,10 @@ export function setupMenu({
     helpBtn?.classList.toggle('is-on', open);
     helpBtn?.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open) {
-      helpClose?.focus();
+      focusMenuEl(helpClose);
       return;
     }
-    if (restoreFocus && drawer.classList.contains('is-open')) helpBtn?.focus();
+    if (restoreFocus && drawer.classList.contains('is-open')) focusMenuEl(helpBtn);
   }
 
   function closeHelp() {
@@ -409,10 +410,10 @@ export function setupMenu({
     skinsBtn?.classList.toggle('is-on', open);
     skinsBtn?.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open) {
-      skinsClose?.focus();
+      focusMenuEl(skinsClose);
       return;
     }
-    if (restoreFocus && drawer.classList.contains('is-open')) skinsBtn?.focus();
+    if (restoreFocus && drawer.classList.contains('is-open')) focusMenuEl(skinsBtn);
   }
 
   function closeSkins() {

@@ -450,11 +450,12 @@ export function customMapSelectOptions(workshopItems, current, localMaps, modeId
  * @param {() => boolean} [opts.isKothLive]
  * @param {() => string | null} [opts.getUserId]
  * @param {() => void} [opts.onCloseMenu]
+ * @param {() => void | Promise<void>} [opts.onDismissSoloScore]
  * @param {(userId: string) => void} [opts.onFollowReplay]
  * @param {() => string | null} [opts.getFollowUser]
  */
 export function setupLobbyUi({
-  gameLobby, matchLobby, isKothLive, getUserId, onCloseMenu, onFollowReplay, getFollowUser, getKing,
+  gameLobby, matchLobby, isKothLive, getUserId, onCloseMenu, onDismissSoloScore, onFollowReplay, getFollowUser, getKing,
 }) {
   const drawersRoot = document.getElementById('menu-lobbies');
   const sidebar = document.getElementById('menu-match');
@@ -620,7 +621,8 @@ export function setupLobbyUi({
     setHidden(sidebar, !active || ranked);
     setHidden(overlay, !showOverlay);
     setHidden(overlayPanel, !active && !scoreOnly);
-    setHidden(panelLeave, scoreOnly);
+    if (scoreOnly) setText(panelLeave, 'Play again');
+    setHidden(panelLeave, false);
     if (overlayMin) {
       const compact = Boolean(overlay?.classList.contains('is-parked'));
       overlayMin.textContent = compact ? '+' : '−';
@@ -804,8 +806,17 @@ export function setupLobbyUi({
   panelReady?.addEventListener('click', toggleReady);
   sideStart?.addEventListener('click', () => { matchLobby.requestStart(); refresh(); });
   panelStart?.addEventListener('click', () => { matchLobby.requestStart(); refresh(); });
-  sideLeave?.addEventListener('click', () => { matchLobby.leaveRoom(); refresh(); });
-  panelLeave?.addEventListener('click', () => { matchLobby.leaveRoom(); refresh(); });
+  function leaveOrDismissSoloScore() {
+    const scoreOnly = Boolean(matchOverEl && !matchOverEl.hidden && !matchLobby.isActive());
+    if (scoreOnly) {
+      void Promise.resolve(onDismissSoloScore?.()).then(() => refresh());
+      return;
+    }
+    matchLobby.leaveRoom();
+    refresh();
+  }
+  sideLeave?.addEventListener('click', leaveOrDismissSoloScore);
+  panelLeave?.addEventListener('click', leaveOrDismissSoloScore);
   overlayMin?.addEventListener('click', () => {
     overlayParked = !overlayParked;
     refresh();

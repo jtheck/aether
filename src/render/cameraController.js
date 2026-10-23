@@ -22,7 +22,7 @@ const KEY_ROT_SPEED = 0.2;
 const KEY_ZOOM_SPEED = 0.2;
 const KEY_PAN_BASE = 5 * 1.2;
 const CAMERA_KEYS = new Set([
-  'w', 'r', 'q', 't', 'e', 's', 'd', 'f', 'a',
+  'w', 'r', 'z', 'v', 'e', 's', 'd', 'f',
   'pageup', 'pagedown',
   'arrowup', 'arrowdown', 'arrowleft', 'arrowright',
 ]);
@@ -974,9 +974,9 @@ export function createCameraController(camera, canvas, opts = {}) {
       camera.alpha += KEY_ROT_SPEED;
     } else if (key === 'f' || key === 'pagedown') {
       camera.alpha -= KEY_ROT_SPEED;
-    } else if (key === 'q') {
+    } else if (key === 'z') {
       applyZoomInput(2.0);
-    } else if (key === 't') {
+    } else if (key === 'v') {
       applyZoomInput(-2.0);
     }
   }
@@ -993,8 +993,8 @@ export function createCameraController(camera, canvas, opts = {}) {
       markNudged();
       camera.alpha -= KEY_ROT_SPEED;
     }
-    if (keyStates.q) applyZoomInput(KEY_ZOOM_SPEED);
-    if (keyStates.t) applyZoomInput(-KEY_ZOOM_SPEED);
+    if (keyStates.z) applyZoomInput(KEY_ZOOM_SPEED);
+    if (keyStates.v) applyZoomInput(-KEY_ZOOM_SPEED);
 
     let panX = 0;
     let panZ = 0;
@@ -1002,7 +1002,6 @@ export function createCameraController(camera, canvas, opts = {}) {
     if (keyStates.d) panZ -= 1.0;
     if (keyStates.w) panX += 1.0;
     if (keyStates.r) panX -= 1.0;
-    if (keyStates.a) panX += 0.7;
     if (keyStates.arrowup) panZ += 1.0;
     if (keyStates.arrowdown) panZ -= 1.0;
     if (keyStates.arrowleft) panX -= 1.0;

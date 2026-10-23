@@ -2,6 +2,7 @@
 
 import { sameUserId } from '../lobby/ids.js';
 import { rosterStatusLabel } from './viewFollow.js';
+import { observerSheetIndexFromCode } from './observerData.js';
 import { FIELD_SIZES, MODE_IDS, getMode, mapTypeFitsLobby, selectableAdventureChapters } from '../lobby/modes.js';
 import { aetherSteam } from './steam.js';
 import { stashSessionGarden, writeCampaignPack } from './gardenSession.js';
@@ -881,7 +882,15 @@ export function setupLobbyUi({
   for (const el of drawersRoot.querySelectorAll('button, input, select')) {
     el.addEventListener('keydown', (e) => e.stopPropagation());
   }
-  overlay?.addEventListener('keydown', (e) => e.stopPropagation());
+  overlay?.addEventListener('keydown', (e) => {
+    const tag = e.target instanceof Element ? e.target.tagName : '';
+    const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+      || (e.target instanceof HTMLElement && e.target.isContentEditable);
+    // Number keys follow the spectator sheet. A focused lobby button
+    // (Watch, after a click) must not eat the first one.
+    if (!typing && observerSheetIndexFromCode(e.code) != null) return;
+    e.stopPropagation();
+  });
 
   refresh();
   return {

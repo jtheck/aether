@@ -119,6 +119,26 @@ export function kothNameRoster(presence, koth) {
   return { owners, names };
 }
 
+/** Panel order is 1–9, then 0 for the tenth row. */
+const SHEET_KEY_INDEX = {
+  Digit1: 0, Numpad1: 0,
+  Digit2: 1, Numpad2: 1,
+  Digit3: 2, Numpad3: 2,
+  Digit4: 3, Numpad4: 3,
+  Digit5: 4, Numpad5: 4,
+  Digit6: 5, Numpad6: 5,
+  Digit7: 6, Numpad7: 6,
+  Digit8: 7, Numpad8: 7,
+  Digit9: 8, Numpad9: 8,
+  Digit0: 9, Numpad0: 9,
+};
+
+/** @param {string} code KeyboardEvent.code @returns {number | null} */
+export function observerSheetIndexFromCode(code) {
+  const index = SHEET_KEY_INDEX[code];
+  return index == null ? null : index;
+}
+
 export function observerOwnerName(owner, names, computers) {
   const o = owner | 0;
   const named = names?.[o];
@@ -139,6 +159,8 @@ export function createObserverData(host) {
   const rows = new Map();
   let followOwner = null;
   let followable = false;
+  /** @type {number[]} Owners in the order the sheet paints them. */
+  let sheetOwners = [];
   /** @type {((owner: number) => void) | null} */
   let onFollow = null;
 
@@ -180,6 +202,7 @@ export function createObserverData(host) {
   function paint(state) {
     if (!root) return;
     const owners = state?.hidden ? [] : (state?.owners ?? []);
+    sheetOwners = owners.slice();
     if (!owners.length) {
       if (rows.size) {
         root.textContent = '';
@@ -249,6 +272,7 @@ export function createObserverData(host) {
     paint,
     setFollowTarget,
     setFollowHandler(fn) { onFollow = fn; },
+    sheetOwners() { return sheetOwners; },
     get ready() { return ready; },
   };
 }

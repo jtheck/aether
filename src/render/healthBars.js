@@ -57,6 +57,8 @@ export const AGORA_SPRITE_COUNT = AGORA_CHIP_COUNT;
 export const AGORA_TINT_NEUTRAL = -2;
 /** Mid gray. Dark enough to sit under a team swatch, light enough to not read as ink. */
 export const AGORA_NEUTRAL_RGB = [0.58, 0.6, 0.63];
+/** Unclaimed / lost milestone dots — see-through so team fills read clearly. */
+export const AGORA_NEUTRAL_ALPHA = 0.48;
 const CHIP_COUNT_MAX = Math.max(BUILDING_CHIP_COUNT, AGORA_SPRITE_COUNT);
 /** Ready-mana bank / max vehicle seats drawn under the HP line. */
 export const UNDER_DOT_MAX = 6;
@@ -1036,6 +1038,13 @@ function agoraChipRestRgb(index, state = {}) {
   return ownerTint(tint);
 }
 
+/** Full opacity for team-colored dots; neutral milestones stay translucent. */
+export function agoraChipAlpha(index, state = {}, nowMs = 0) {
+  if (index === agoraChipLeadIndex(state) && agoraLeadBlinkBlack(nowMs)) return CHIP_TEAM_FILL_ALPHA;
+  if (agoraChipTintOwner(index, state) === AGORA_TINT_NEUTRAL) return AGORA_NEUTRAL_ALPHA;
+  return CHIP_TEAM_FILL_ALPHA;
+}
+
 export function agoraChipRgb(index, state = {}, nowMs = 0) {
   if (index === agoraChipLeadIndex(state) && agoraLeadBlinkBlack(nowMs)) {
     return agoraIsNeutral(state) ? AGORA_CONTESTED_RGB : AGORA_INK_RGB;
@@ -1756,7 +1765,14 @@ export function createHealthBars(engine, scene, opts = {}) {
             }
             const d = row.dotD * (style ? style.size : 1);
             const drop = style ? row.dotD * style.drop : 0;
-            placeAlong(spr, row.dotAlong[i], d, d, rgb, CHIP_TEAM_FILL_ALPHA, FRAME_LEAD_ROUND, 0, drop);
+            let tintState = lockView;
+            if (beat.kind === 'melt' || beat.kind === 'build') {
+              tintState = beat.kind === 'build' ? agoraTugRestFlags(flags) : lockView;
+            } else if (beat.kind !== 'hold') {
+              tintState = agoraTugRestFlags(flags);
+            }
+            const alpha = style ? CHIP_TEAM_FILL_ALPHA : agoraChipAlpha(i, tintState);
+            placeAlong(spr, row.dotAlong[i], d, d, rgb, alpha, FRAME_LEAD_ROUND, 0, drop);
             const bit = 1 << i;
             if (beat.kind === 'melt' && !(rec.unlockMelt & bit)) {
               rec.unlockMelt |= bit;
@@ -1776,7 +1792,8 @@ export function createHealthBars(engine, scene, opts = {}) {
           const pulse = rite === AGORA_RITE_FINALE ? 1 : agoraChipPulseMul(i, flags, chipNow);
           const d = row.dotD * (style ? style.size : pulse);
           const drop = style ? row.dotD * style.drop : 0;
-          placeAlong(spr, row.dotAlong[i], d, d, rgb, CHIP_TEAM_FILL_ALPHA, FRAME_LEAD_ROUND, 0, drop);
+          const alpha = style ? CHIP_TEAM_FILL_ALPHA : agoraChipAlpha(i, flags, chipNow);
+          placeAlong(spr, row.dotAlong[i], d, d, rgb, alpha, FRAME_LEAD_ROUND, 0, drop);
           if (flip && !flip.emitted) {
             flip.emitted = true;
             emitAgoraFlipFx(

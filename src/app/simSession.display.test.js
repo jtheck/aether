@@ -1,6 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { TICK_MS, displayPoseSample, stepDisplayTick } from './simSession.js';
+import {
+  TICK_MS,
+  displayPoseSample,
+  peerAppliedDisplayCeiling,
+  stepDisplayTick,
+} from './simSession.js';
 
 describe('displayPoseSample', () => {
   it('sits on an integer tick at the end of that segment', () => {
@@ -52,5 +57,26 @@ describe('stepDisplayTick', () => {
 
   it('holds on the newest snapshot instead of running past it', () => {
     assert.equal(stepDisplayTick(4.9, 16, TICK_MS, 5), 5);
+  });
+});
+
+describe('peerAppliedDisplayCeiling', () => {
+  it('releases the newest tick only after every required peer has applied it', () => {
+    const players = [0, 1, 2];
+    const confirms = new Map([[1, 21], [2, 20]]);
+    assert.equal(peerAppliedDisplayCeiling(20, players, 0, confirms), 19);
+
+    confirms.set(2, 21);
+    assert.equal(peerAppliedDisplayCeiling(20, players, 0, confirms), 20);
+  });
+
+  it('does not add display lag when there is no remote peer', () => {
+    assert.equal(peerAppliedDisplayCeiling(20, [0], 0, new Map()), 20);
+  });
+
+  it('keeps replay and spectator transitions moving before confirms attach', () => {
+    assert.equal(peerAppliedDisplayCeiling(20, [0, 1], -1, new Map(), 1), 19);
+    assert.equal(peerAppliedDisplayCeiling(20, [0, 1], -1, new Map([[0, 18]]), 1), 19);
+    assert.equal(peerAppliedDisplayCeiling(20, [0, 1], -1, new Map(), 2), 18);
   });
 });

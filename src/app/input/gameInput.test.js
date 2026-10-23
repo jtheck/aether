@@ -318,8 +318,9 @@ function placePtr(partial) {
   };
 }
 
-function makeOrderHarness() {
+function makeOrderHarness({ unitHit = -1 } = {}) {
   const cmds = [];
+  let unitPicks = 0;
   const selected = new Uint8Array(4);
   const world = {
     count: 1,
@@ -342,7 +343,13 @@ function makeOrderHarness() {
       dy: -1,
       dz: 0,
     }),
-    rayHitSpheresAllInto: () => 0,
+    rayHitSpheresAllInto: (_ray, _spheres, _count, outIds, outTs) => {
+      unitPicks++;
+      if (unitHit < 0) return 0;
+      outIds[0] = unitHit;
+      outTs[0] = 1;
+      return 1;
+    },
     groundYAt: () => 0,
     setSelectionBox: () => {},
   };
@@ -361,7 +368,7 @@ function makeOrderHarness() {
   });
   selected[0] = 1;
   input.setSelectedBuffer(selected);
-  return { input, cmds };
+  return { input, cmds, getUnitPicks: () => unitPicks };
 }
 
 function makePadSelectHarness(opts = {}) {
@@ -484,6 +491,17 @@ describe('gamepad trigger orders', () => {
     const { input, cmds } = makeOrderHarness();
     input.castAbilityAt(200, 300);
     assert.equal(cmds[0]?.type, CMD.CAST);
+  });
+
+  it('defers the hold pick and suppresses a cast started on an own unit', (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const { input, cmds, getUnitPicks } = makeOrderHarness({ unitHit: 0 });
+    input.handlePointerDown(placePtr({ clientX: 200, clientY: 300 }));
+    assert.equal(getUnitPicks(), 0);
+
+    t.mock.timers.tick(ABILITY_HOLD_MS);
+    assert.equal(getUnitPicks(), 1);
+    assert.equal(cmds.length, 0);
   });
 
   function makeAgoraComboHarness(opts = {}) {

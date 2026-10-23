@@ -77,6 +77,7 @@ import {
   createObserverData,
   kothNameRoster,
   namesFromLobbySeats,
+  observerSheetIndexFromCode,
   observerSheetOwners,
 } from './observerData.js';
 import { ownerTint, setLocalOwnerTint, setOwnerTints } from '../render/ownerTints.js';
@@ -1358,7 +1359,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   const updateColors = () => {
     const world = session.state;
-    const { selected, deathFade, colors } = bufs;
+    const { deathFade, colors } = bufs;
     for (let i = 0; i < session.count; i++) {
       const fade = deathFade[i];
       if (!world.alive[i] && fade <= 0) {
@@ -1807,6 +1808,18 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     const pose = replayCtl?.camPose?.(replayCamOwner, replayViewTick());
     if (!pose) return;
     renderer.cameraController?.setPose?.(pose);
+  }
+
+  /** Play one player's saved camera. A repeat on the same owner stays there. */
+  function engageReplayCamOwner(owner) {
+    const id = owner | 0;
+    if (!Number.isFinite(Number(owner))) return;
+    if (replayCamOwner === id) return;
+    replayCamOwner = id;
+    viewFollow?.clear?.();
+    paintResources();
+    applyReplayCam();
+    stampFog();
   }
 
   /** Toggle playback of one player's saved camera. A second click releases it. */
@@ -2990,7 +3003,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     },
     enqueueCommand: (cmd) => submitIssuedCommand(cmd),
     onSelectionChanged: () => {
-      updateColors();
       if (viewFollow?.isApplying?.()) return;
       engageSelectionFollow();
     },
@@ -3382,6 +3394,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (!inSkinControl) e.preventDefault();
       return;
     }
+    if (followSpectatorFromNumber(e)) return;
     if (inputApi.handleControlGroupKeyDown?.(e)) return;
     if (e.code === 'Space') {
       if (isCameraFollowTypingTarget(document.activeElement)) return;
@@ -3480,6 +3493,31 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       liteExplorer.toggle();
     }
   });
+  /**
+   * While spectating, 1–9 then 0 follow the sheet rows in paint order.
+   * Players keep those keys for control groups.
+   */
+  function followSpectatorFromNumber(e) {
+    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return false;
+    const active = document.activeElement;
+    const tag = active instanceof Element ? active.tagName : '';
+    const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+      || (active instanceof HTMLElement && active.isContentEditable);
+    if (typing) return false;
+    const index = observerSheetIndexFromCode(e.code);
+    if (index == null) return false;
+    const observing = session.role === 'spectator' || (localPlayerId | 0) < 0;
+    const owners = observerData.sheetOwners?.() ?? [];
+    if (!observing || !owners.length) return false;
+    e.preventDefault();
+    if (active instanceof HTMLElement && tag === 'BUTTON') active.blur();
+    if (e.repeat || !bootInteractive || index >= owners.length) return true;
+    const owner = owners[index] | 0;
+    if (session.watchingReplay) engageReplayCamOwner(owner);
+    else viewFollow?.followOwner?.(owner);
+    return true;
+  }
+
   window.addEventListener('keyup', (e) => {
     inputApi.handleControlGroupKeyUp?.(e);
     if (e.code === 'Space') releaseSpaceFollow();

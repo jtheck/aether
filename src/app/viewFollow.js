@@ -340,13 +340,30 @@ export function createViewFollow(deps) {
   }
 
   /** @param {number} owner */
-  function toggleOwner(owner) {
+  function canFollowOwner(owner) {
     const id = owner | 0;
-    if (!Number.isFinite(id)) return;
+    if (!Number.isFinite(id)) return null;
     const mine = deps.localOwner?.();
-    if (mine != null && mine >= 0 && id === (mine | 0)) return;
+    if (mine != null && mine >= 0 && id === (mine | 0)) return null;
+    return id;
+  }
+
+  /** @param {number} owner */
+  function toggleOwner(owner) {
+    const id = canFollowOwner(owner);
+    if (id == null) return;
     if (target?.kind === 'owner' && target.owner === id) target = null;
     else target = { kind: 'owner', owner: id };
+    glide.reset();
+    emit();
+  }
+
+  /** Enter follow for this owner. Stays put when that owner is already the target. */
+  function followOwner(owner) {
+    const id = canFollowOwner(owner);
+    if (id == null) return;
+    if (target?.kind === 'owner' && target.owner === id) return;
+    target = { kind: 'owner', owner: id };
     glide.reset();
     emit();
   }
@@ -447,6 +464,7 @@ export function createViewFollow(deps) {
 
   return {
     toggleOwner,
+    followOwner,
     toggleUser,
     clear,
     publish,

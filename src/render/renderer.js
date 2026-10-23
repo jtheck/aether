@@ -4824,7 +4824,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       return actionRadial.getArmed?.() ?? null;
     },
 
-    /** Hide the open radial while ghost-placing; `typeId` is shown in the hub. */
+    /** Hide radial chrome while ghost-placing; hub hole stays open on the agora. */
     setBuildingRadialCompact(typeId) {
       buildingRadial.setCompact?.(typeId || null);
     },

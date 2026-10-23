@@ -895,10 +895,33 @@ export function createGameInput(opts) {
 
   /** @returns {OrderAim} */
   function clientAim(clientX, clientY) {
+    let rayReady = false;
+    let ray = null;
+    let groundReady = false;
+    let ground = null;
+    const readRay = () => {
+      if (!rayReady) {
+        rayReady = true;
+        ray = renderer.clientPickingRay?.(clientX, clientY) ?? null;
+      }
+      return ray;
+    };
     return {
-      ray: () => renderer.clientPickingRay?.(clientX, clientY) ?? null,
-      ground: () => renderer.screenToGround?.(clientX, clientY) ?? null,
-      unit: () => pickUnitAt(clientX, clientY),
+      ray: readRay,
+      ground: () => {
+        if (!groundReady) {
+          groundReady = true;
+          ground = renderer.rayToGround
+            ? renderer.rayToGround(readRay())
+            : renderer.screenToGround?.(clientX, clientY) ?? null;
+        }
+        return ground;
+      },
+      unit: () => {
+        if (USE_GPU_PICK) return pickUnitAt(clientX, clientY);
+        const hits = pickUnitsAtRay(readRay());
+        return hits.length > 0 ? hits[0] : -1;
+      },
     };
   }
 
@@ -1849,7 +1872,7 @@ export function createGameInput(opts) {
 
     // Attack-move onto a tree / rock: villagers gather (same volume pick as RMB).
     // Soldiers never mine - leftover army still gets the ground order.
-    if (cmdType === CMD.ATTACK_MOVE) {
+    if (cmdType === CMD.ATTACK_MOVE && hasGatherVillager(moveIds)) {
       const node = resolveGatherAim(aim);
       // Left-click starts the job immediately. An attack-move onto the pad
       // never "arrives" when the tile is blocked, so they walk up and idle.
@@ -1947,31 +1970,57 @@ export function createGameInput(opts) {
     });
   }
 
-  async function armAbilityHold(clientX, clientY) {
+  function finishAbilityHold(gen, hit) {
+    if (gen !== abilityHoldGen) return;
+    if (boxDragging || dragPointerId == null) return;
+    const world = getWorld();
+    if (hit >= 0 && world.owner[hit] === localPlayerId) return;
+    abilityHoldFired = true;
+    castAbilityAt(abilityHoldClientX, abilityHoldClientY);
+  }
+
+  function fireAbilityHold(gen, clientX, clientY) {
+    if (gen !== abilityHoldGen) return;
+    if (boxDragging || dragPointerId == null) return;
+    const hit = pickUnitAt(clientX, clientY);
+    if (hit && typeof hit.then === 'function') {
+      void hit.then((id) => finishAbilityHold(gen, id));
+      return;
+    }
+    finishAbilityHold(gen, hit);
+  }
+
+  function armAbilityHold(clientX, clientY) {
     clearAbilityHold();
     abilityHoldFired = false;
     abilityHoldClientX = clientX;
     abilityHoldClientY = clientY;
     if (isPlacing() || !hasOrderableSelection() || !canIssueOrders()) return;
 
-    // Arm the timer immediately. Waiting on GPU pick first made hold-cast miss under
-    // stress (pick latency ate the whole gesture before the 400ms timer even started).
+    // Ordinary clicks never need this pick. Preserve the down-point ownership test,
+    // but perform it only if the press actually survives to the hold deadline.
     const gen = ++abilityHoldGen;
     abilityHoldTimer = setTimeout(() => {
       abilityHoldTimer = null;
-      if (gen !== abilityHoldGen) return;
-      if (boxDragging || dragPointerId == null) return;
-      abilityHoldFired = true;
-      castAbilityAt(abilityHoldClientX, abilityHoldClientY);
+      if (USE_GPU_PICK) {
+        if (gen !== abilityHoldGen || boxDragging || dragPointerId == null) return;
+        abilityHoldFired = true;
+        castAbilityAt(abilityHoldClientX, abilityHoldClientY);
+      } else {
+        fireAbilityHold(gen, clientX, clientY);
+      }
     }, ABILITY_HOLD_MS);
-
-    // Best-effort: cancel if this press is on an own unit (selection, not cast).
-    const world = getWorld();
-    const hit = await pickUnitAt(clientX, clientY);
-    if (gen !== abilityHoldGen) return;
-    if (hit >= 0 && world.owner[hit] === localPlayerId) {
-      clearAbilityHold();
-      abilityHoldFired = false;
+    // Keep the dormant GPU mode's old behavior: start its asynchronous
+    // cancellation pick at down-time so it cannot consume the hold deadline.
+    if (USE_GPU_PICK) {
+      void pickUnitAt(clientX, clientY).then((hit) => {
+        if (gen !== abilityHoldGen) return;
+        const world = getWorld();
+        if (hit >= 0 && world.owner[hit] === localPlayerId) {
+          clearAbilityHold();
+          abilityHoldFired = false;
+        }
+      });
     }
   }
 
@@ -2110,13 +2159,14 @@ export function createGameInput(opts) {
     const epoch = click.epoch ?? worldClickEpoch;
     if (!d || Math.hypot(e.clientX - d.x, e.clientY - d.y) > DRAG_THRESHOLD_PX) return;
     const world = getWorld();
+    const aim = clientAim(e.clientX, e.clientY);
     // One unproject for unit + building miss - GPU path still goes through pickUnitsAt.
     let hits;
     let bld = null;
     if (USE_GPU_PICK) {
       hits = await pickUnitsAt(e.clientX, e.clientY);
     } else {
-      const ray = renderer.clientPickingRay?.(e.clientX, e.clientY) ?? null;
+      const ray = aim.ray();
       hits = pickUnitsAtRay(ray);
       // Defer building fill until units miss (avoid wasted building scan).
       if (hits.length === 0 || world.owner[hits[0]] !== localPlayerId) {
@@ -2140,7 +2190,7 @@ export function createGameInput(opts) {
       if (canEmbark && canIssueOrders()) {
         lastTap = null;
         if (!clickCurrent(epoch)) return;
-        await orderAt(clientAim(e.clientX, e.clientY), CMD.ATTACK_MOVE, hit, epoch);
+        await orderAt(aim, CMD.ATTACK_MOVE, hit, epoch);
       } else {
         const typeId = world.type[hit];
         const selectAll =
@@ -2197,7 +2247,7 @@ export function createGameInput(opts) {
     if (bld?.kind === 'door') {
       if (hasOrderableSelection() && canIssueOrders() && !click.selectOnly) {
         if (!clickCurrent(epoch)) return;
-        await orderAt(clientAim(e.clientX, e.clientY), CMD.ATTACK_MOVE, -1, epoch, bld);
+        await orderAt(aim, CMD.ATTACK_MOVE, -1, epoch, bld);
         if (!clickCurrent(epoch)) return;
         lastTap = { t: tapAt, x: e.clientX, y: e.clientY, kind: 'enemy' };
       }
@@ -2263,7 +2313,7 @@ export function createGameInput(opts) {
         (hit >= 0 && world.owner[hit] !== localPlayerId) || hostileBld
           ? 'enemy'
           : 'ground';
-      await orderAt(clientAim(e.clientX, e.clientY), CMD.ATTACK_MOVE, hit, epoch, bld);
+      await orderAt(aim, CMD.ATTACK_MOVE, hit, epoch, bld);
       if (!clickCurrent(epoch)) return;
       lastTap = { t: tapAt, x: e.clientX, y: e.clientY, kind: orderKind };
       return;
@@ -2716,9 +2766,31 @@ export function createGameInput(opts) {
    * Returns true when any command was issued (skips the terrain force-move).
    */
   function tryGatherAim(aim) {
+    if (!hasSelectedGatherVillager()) return false;
     const node = resolveGatherAim(aim);
     if (!node) return false;
     return issueGatherAtNode(selectedIds(), node, CMD.MOVE);
+  }
+
+  function hasGatherVillager(ids) {
+    const world = getWorld();
+    for (let k = 0; k < ids.length; k++) {
+      const id = ids[k];
+      if (world.owner[id] === localPlayerId && isVillagerLine(world.type[id])) return true;
+    }
+    return false;
+  }
+
+  function hasSelectedGatherVillager() {
+    compactSelection();
+    const world = getWorld();
+    for (let k = 0; k < selCount; k++) {
+      const id = selIds[k];
+      if (world.owner[id] !== localPlayerId) continue;
+      if (world.carriedBy?.[id] >= 0) continue;
+      if (isVillagerLine(world.type[id])) return true;
+    }
+    return false;
   }
 
   /** Villagers vs everyone else. Soldiers never take GATHER. */

@@ -77,6 +77,36 @@ export function displayPoseSample(displayTickF) {
   return { tick: cur, alpha: alpha >= 1 ? 1 : alpha };
 }
 
+/**
+ * Newest local snapshot every required peer has already applied.
+ * A peer confirm for tick N is sent after that peer commits N - 1.
+ */
+export function peerAppliedDisplayCeiling(
+  confirmedTick,
+  humanPlayers,
+  localPlayerId,
+  peerConfirmedTick,
+  inputDelayTicks = 1,
+) {
+  let cap = Math.max(0, confirmedTick | 0);
+  const players = humanPlayers ?? [];
+  let hasRemote = false;
+  const fallback = Math.max(0, cap - Math.max(1, inputDelayTicks | 0));
+  for (let i = 0; i < players.length; i++) {
+    const playerId = players[i] | 0;
+    if (playerId === (localPlayerId | 0)) continue;
+    hasRemote = true;
+    const ready = peerConfirmedTick?.get?.(playerId);
+    // Offline replay/catch-up and some spectator transitions rebuild confirmed
+    // state before their live peer-confirm map is attached. Never rewind those
+    // displays to tick zero; retain the old conservative one-tick presentation.
+    if (ready == null || (ready | 0) < cap) return fallback;
+    const applied = Math.max(0, (ready | 0) - 1);
+    if (applied < cap) cap = applied;
+  }
+  return hasRemote ? cap : Math.max(0, confirmedTick | 0);
+}
+
 export function matchSecondsFromTick(tick) {
   return Math.max(0, Math.floor(tick / TICK_HZ));
 }
@@ -153,8 +183,10 @@ export class SimSession {
     this.ledger = new Map();
     /** @type {import('../sim/commandFrame.js').CommandFrame[]} */
     this.fullLedgerFrames = [];
+    this._fullFrameIds = new Set();
     /** @type {import('../sim/commandFrame.js').CommandFrame[]} frames proven by committed worker ticks */
     this.committedLedgerFrames = [];
+    this._committedFrameIds = new Set();
     /** Unpruned command tape for post-match save. Catch-up still prunes the live ledgers. */
     this.replayFrames = [];
     this.replayFrameIds = new Set();
@@ -453,7 +485,13 @@ export class SimSession {
   }
 
   _maxDisplayTick() {
-    return Math.max(0, this.confirmedTick - this.inputDelayTicks);
+    return peerAppliedDisplayCeiling(
+      this.confirmedTick,
+      this.humanPlayers,
+      this.localPlayerId,
+      this.peerConfirmedTick,
+      this.inputDelayTicks,
+    );
   }
 
   /**
@@ -491,7 +529,7 @@ export class SimSession {
     return this._displaySample.tick;
   }
 
-  /** Snapshot pair for render interpolation (display lags sim by inputDelayTicks). */
+  /** Snapshot pair for render interpolation, capped at state every required peer has applied. */
   displaySnapshots() {
     if (this.resetting) return { prev: null, cur: null, displayTick: this.confirmedTick };
     const displayTick = this._displayTick();
@@ -682,6 +720,12 @@ export class SimSession {
     const keepFrom = checkpointTick | 0;
     this.committedLedgerFrames = this.committedLedgerFrames.filter((f) => (f.tick | 0) > keepFrom);
     this.fullLedgerFrames = this.fullLedgerFrames.filter((f) => (f.tick | 0) > keepFrom);
+    this._fullFrameIds = new Set(
+      this.fullLedgerFrames.map((frame) => frame.commandId).filter(Boolean),
+    );
+    this._committedFrameIds = new Set(
+      this.committedLedgerFrames.map((frame) => this._committedFrameKey(frame)),
+    );
   }
 
   /** @deprecated */
@@ -698,7 +742,9 @@ export class SimSession {
 
   replaceFullLedger(frames) {
     this.fullLedgerFrames = [];
+    this._fullFrameIds = new Set();
     this.committedLedgerFrames = [];
+    this._committedFrameIds = new Set();
     this.replayFrames = [];
     this.replayFrameIds = new Set();
     this._seenFrameIds.clear();
@@ -723,7 +769,9 @@ export class SimSession {
     this.client.terminate();
     this.ledger.clear();
     this.fullLedgerFrames = [];
+    this._fullFrameIds.clear();
     this.committedLedgerFrames = [];
+    this._committedFrameIds.clear();
     this.replayFrames = [];
     this.replayFrameIds = new Set();
     this.replayCams = [];
@@ -779,7 +827,13 @@ export class SimSession {
     // already baked in (tick <= confirmedTick); the rest bridge the catch-up gap.
     pruneLedger(this.ledger, other.confirmedTick, 0);
     this.fullLedgerFrames = other.fullLedgerFrames;
+    this._fullFrameIds = other._fullFrameIds ?? new Set(
+      this.fullLedgerFrames.map((frame) => frame.commandId).filter(Boolean),
+    );
     this.committedLedgerFrames = other.committedLedgerFrames;
+    this._committedFrameIds = other._committedFrameIds ?? new Set(
+      this.committedLedgerFrames.map((frame) => this._committedFrameKey(frame)),
+    );
     this.replayFrames = other.replayFrames ?? this.replayFrames;
     this.replayFrameIds = other.replayFrameIds ?? this.replayFrameIds;
     this.replayCams = other.replayCams ?? this.replayCams;
@@ -804,7 +858,7 @@ export class SimSession {
     this.lastSnapshotAt = performance.now();
     this._displayBlendMs = other._displayBlendMs || TICK_MS;
     this._displayBlendLive = true;
-    this._displayTickF = Math.max(0, this.confirmedTick - this.inputDelayTicks);
+    this._displayTickF = this._maxDisplayTick();
     this._displaySample = displayPoseSample(this._displayTickF);
     this._lastDisplayAlpha = this._displaySample.alpha;
     this._lastDisplayTick = this._displaySample.tick;
@@ -825,25 +879,37 @@ export class SimSession {
 
   _recordFullFrame(frame) {
     if (!frame || !frame.commands?.length) return;
-    if (frame.commandId && this.fullLedgerFrames.some((existing) => existing.commandId === frame.commandId)) return;
+    if (!this._fullFrameIds) {
+      this._fullFrameIds = new Set(
+        this.fullLedgerFrames.map((existing) => existing.commandId).filter(Boolean),
+      );
+    }
+    if (frame.commandId && this._fullFrameIds.has(frame.commandId)) return;
     this.fullLedgerFrames.push({
       ...frame,
       commands: frame.commands.map((cmd) => ({ ...cmd })),
     });
+    if (frame.commandId) this._fullFrameIds.add(frame.commandId);
+  }
+
+  _committedFrameKey(frame) {
+    return frame.commandId ?? `${frame.tick}:${frame.playerId}:${JSON.stringify(frame.commands)}`;
   }
 
   _recordCommittedFrame(frame) {
     if (!frame || !frame.commands?.length) return;
-    const key = frame.commandId ?? `${frame.tick}:${frame.playerId}:${JSON.stringify(frame.commands)}`;
-    const exists = this.committedLedgerFrames.some((existing) => {
-      const existingKey = existing.commandId ?? `${existing.tick}:${existing.playerId}:${JSON.stringify(existing.commands)}`;
-      return existingKey === key;
-    });
-    if (exists) return;
+    if (!this._committedFrameIds) {
+      this._committedFrameIds = new Set(
+        this.committedLedgerFrames.map((existing) => this._committedFrameKey(existing)),
+      );
+    }
+    const key = this._committedFrameKey(frame);
+    if (this._committedFrameIds.has(key)) return;
     this.committedLedgerFrames.push({
       ...frame,
       commands: frame.commands.map((cmd) => ({ ...cmd })),
     });
+    this._committedFrameIds.add(key);
     this._recordReplayFrame(frame);
   }
 

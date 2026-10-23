@@ -1066,6 +1066,9 @@ export function createReplayController(deps) {
       state.barDismissed = false;
       paint();
       togglePlay();
+      // A click leaves this button focused. The next key would light it
+      // and the lobby would swallow the key before spectator follow.
+      watch.blur();
     });
     let scrubTimer = 0;
     scrub?.addEventListener('input', () => {

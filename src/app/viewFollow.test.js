@@ -201,6 +201,24 @@ describe('view follow session', () => {
     assert.equal(follow.isFollowing(), false);
   });
 
+  it('enters follow for an owner and stays when that owner is pressed again', () => {
+    let mine = -1;
+    const follow = createViewFollow({
+      sample: () => ({}),
+      send: () => {},
+      localOwner: () => mine,
+    });
+    follow.followOwner(2);
+    assert.equal(follow.ownerTarget(), 2);
+    follow.followOwner(2);
+    assert.equal(follow.ownerTarget(), 2);
+    follow.followOwner(0);
+    assert.equal(follow.ownerTarget(), 0);
+    mine = 1;
+    follow.followOwner(1);
+    assert.equal(follow.ownerTarget(), 0);
+  });
+
   it('follows a replay viewer by user id, including the tape', () => {
     const tapes = [];
     const follow = createViewFollow({

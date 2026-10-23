@@ -5,6 +5,7 @@ import {
   collectObserverOwners,
   namesFromLobbySeats,
   observerOwnerName,
+  observerSheetIndexFromCode,
   observerSheetOwners,
 } from './observerData.js';
 
@@ -48,6 +49,16 @@ describe('observer data', () => {
       observerSheetOwners({ observing: false, localId: 0, session, shareWith: [] }),
       [],
     );
+  });
+
+  it('maps number keys onto sheet order, 1 first and 0 tenth', () => {
+    assert.equal(observerSheetIndexFromCode('Digit1'), 0);
+    assert.equal(observerSheetIndexFromCode('Numpad1'), 0);
+    assert.equal(observerSheetIndexFromCode('Digit6'), 5);
+    assert.equal(observerSheetIndexFromCode('Numpad9'), 8);
+    assert.equal(observerSheetIndexFromCode('Digit0'), 9);
+    assert.equal(observerSheetIndexFromCode('Numpad0'), 9);
+    assert.equal(observerSheetIndexFromCode('KeyA'), null);
   });
 
   it('falls back to P# / Auto when a seat has no name', () => {

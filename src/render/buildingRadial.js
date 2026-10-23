@@ -2,8 +2,8 @@
 // building; near the screen edge the disc slides off the building, then
 // shrinks, then fades.
 // Option angles stay screen-stable; hover/click uses CPU pad discs (the
-// circles under icons). While ghost-placing, chrome hides and the chosen
-// building sits in the hub.
+// circles under icons). While ghost-placing, chrome hides and the hub hole
+// stays open on the agora (world ghost shows validity).
 
 import {
   addToScene,
@@ -1408,7 +1408,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   }
 
   /**
-   * Hide ring/pie/pads while ghost-placing, and show `typeId` in the hub.
+   * Hide ring/pie/pads while ghost-placing; hub hole stays open on the agora.
    * Pass null to restore the full menu.
    * @param {string | null | undefined} typeId
    */
@@ -1421,10 +1421,6 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       hoverIndex = -1;
       pieHoverId = null;
       applyPieAppearance();
-      const want = next;
-      void ensureIcon(want).then(() => {
-        if (open && placingPreviewType === want) layout();
-      });
     }
     if (open) layout();
   }
@@ -1793,17 +1789,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
 
   function layoutPlacingPreview() {
     hideMenuChrome();
-    hideIconsExcept(placingPreviewType);
-    const lift = (PAD_LIFT + ICON_LIFT) * hudScale;
-    poseIcon(
-      placingPreviewType,
-      centerX + nx * lift,
-      centerY + ny * lift,
-      centerZ + nz * lift,
-      iconFitScale(placingPreviewType, PLACE_ICON_SCALE) * hudScale,
-      false,
-    );
-    applyPlacingPreviewTint();
+    hideAllIcons();
   }
 
   function layout() {

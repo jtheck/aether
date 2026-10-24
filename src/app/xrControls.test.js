@@ -33,8 +33,8 @@ function makeHand(handedness) {
     trigger: set(0),
     grip: set(1),
     stickClick: set(2),
-    primary: set(3),
-    secondary: set(4),
+    primary: set(4),
+    secondary: set(3),
     touch(on) { buttons[0].touched = on; },
     stick(x, y) {
       pad.axes[2] = x;
@@ -137,7 +137,7 @@ describe('xr controls: play', () => {
     assert.equal(h.of('attackMove').length, 1);
   });
 
-  it('X and A use the unit ability at that hand', () => {
+  it('Y and B use the unit ability at that hand', () => {
     const h = harness();
     h.left.aim(-20, 0);
     h.right.aim(30, 0);
@@ -149,7 +149,7 @@ describe('xr controls: play', () => {
     assert.ok(casts[1].args[0].dx > 0);
   });
 
-  it('Y and B clear the selection', () => {
+  it('X and A clear the selection', () => {
     const h = harness();
     tap(h, h.left.secondary);
     tap(h, h.right.secondary);
@@ -242,7 +242,7 @@ describe('xr controls: pie menu', () => {
     assert.equal(h.of('hover').length, 1);
   });
 
-  it('Y / B backs out, and X / A do not cast', () => {
+  it('X / A backs out, and Y / B do not cast', () => {
     const h = harness();
     h.state.radial = true;
     tap(h, h.right.primary);
@@ -290,7 +290,7 @@ describe('xr controls: ghost-place', () => {
     assert.equal(h.of('select').length, 0);
   });
 
-  it('Y / B cancels the ghost', () => {
+  it('X / A cancels the ghost', () => {
     const h = harness();
     h.state.placing = true;
     tap(h, h.left.secondary);

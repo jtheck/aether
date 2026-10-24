@@ -4,7 +4,7 @@
 // author the table: terrain, a mirrored wood/stone camp at each start, and
 // enough dry ground that those starts can path to each other.
 
-import { mkdirSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import {
@@ -380,8 +380,23 @@ function writeIndex(dir, rows) {
   writeFileSync(join(mapsRoot, dir, 'index.json'), `${JSON.stringify(index, null, 2)}\n`);
 }
 
-writeIndex('1v1', written.filter((m) => m.dir === '1v1'));
-writeIndex('teams', written.filter((m) => m.dir === 'teams'));
+function handAuthored(dir) {
+  const generated = new Set(MAPS.filter((m) => m.dir === dir).map((m) => m.file));
+  const rows = [];
+  for (const file of readdirSync(join(mapsRoot, dir))) {
+    if (!file.endsWith('.garden') || generated.has(file)) continue;
+    const data = JSON.parse(readFileSync(join(mapsRoot, dir, file), 'utf8'));
+    rows.push({
+      file,
+      name: data.n || file.replace(/\.garden$/i, ''),
+      mapType: data.mt || (dir === '1v1' ? 'onevsone' : 'teams'),
+    });
+  }
+  return rows;
+}
+
+writeIndex('1v1', [...written.filter((m) => m.dir === '1v1'), ...handAuthored('1v1')]);
+writeIndex('teams', [...written.filter((m) => m.dir === 'teams'), ...handAuthored('teams')]);
 
 for (const row of written) {
   console.log(`${row.dir}/${row.file}  ${row.name}  ${row.bytes} bytes  trees/start ${row.trees.join(',')}`);

@@ -26,7 +26,7 @@ import {
   updateBillboardSprite,
 } from '../vendor/lite/liteVendor.js';
 import { CAMERA_BASE_FOV, CAMERA_CLOSE_SPAN, cameraZoomNormalized } from './cameraController.js';
-import { agoraCaptureDotMul, agoraFxSizeMul, stampAgoraFx } from './flagScale.js';
+import { agoraCaptureDotMul, agoraFxSizeMul, flagScaleMul, stampAgoraFx } from './flagScale.js';
 import { HEALTH_BAR_CAPACITY } from './overlayLod.js';
 import { ownerTint } from './ownerTints.js';
 import {
@@ -195,8 +195,11 @@ export const AGORA_UNLOCK_PAUSE_MS = 200;
 export const AGORA_LINE_STAGGER_MS = 72;
 export const AGORA_LINE_FLIP_MS = 380;
 export const AGORA_UNLOCK_BUILD_GAP_MS = 60;
-/** Last pip plays, then every dot wishes together. */
-export const AGORA_FINALE_WISH_AT_MS = AGORA_FLIP_MS + 90;
+/**
+ * Finale “key hit” lines up with the ownership flag deck impact
+ * (`AGORA_FLAG_SLAM_IMPACT_MS` in agoras.js).
+ */
+export const AGORA_FINALE_WISH_AT_MS = 520;
 /** How often a stalled tug coughs mixed ink + seeds. */
 export const AGORA_MIX_MS = 400;
 const HOLY_RING_VS_NORMAL = 1.04;
@@ -869,7 +872,7 @@ export function agoraFromRight(state = {}) {
   return !agoraIsNeutral(state);
 }
 
-function agoraMeterState(state = {}) {
+export function agoraMeterState(state = {}) {
   const segs = AGORA_SEG_COUNT;
   if ((state.phase | 0) === AGORA_PHASE_TUG) {
     return agoraMeterParts(state.tug, segs, AGORA_TUG_TICKS);
@@ -1177,6 +1180,12 @@ export function pickAgoraWind() {
 /** Menu-logo seeds: pale cyan discs with a soft glow. */
 const AGORA_SEED_RGB = [236 / 255, 1, 1, 1];
 const AGORA_SEED_GLOW = [0.78, 1, 1, 0.5];
+const AGORA_FLORAL_RGB = [
+  AGORA_SEED_RGB,
+  [1, 0.82, 0.92, 1],
+  [1, 0.96, 0.78, 1],
+  [0.88, 1, 0.86, 1],
+];
 
 /**
  * Screen-right and screen-up for the gust. `right` from the chip camera is
@@ -1290,6 +1299,71 @@ export function emitAgoraSeedGust(emit, px, py, pz, size, dist = 0, axes = null,
 /** Wish gust for a new owner. */
 export function emitAgoraDandelion(emit, px, py, pz, size, wind, dist = 0, axes = null) {
   return emitAgoraSeedGust(emit, px, py, pz, size, dist, axes, wind);
+}
+
+/**
+ * Seeds and petals spurt from the plaza base when the banner slams the deck.
+ * @param {object} [opts]
+ * @param {boolean} [opts.finale] — wider ring for the finale key hit.
+ */
+export function emitAgoraSlamFlowerBurst(emit, x, gy, z, dist = 0, opts = {}) {
+  if (!emit) return 0;
+  const finale = !!opts.finale;
+  const motion = agoraFxSizeMul(dist);
+  const grow = agoraFxSizeMul(dist);
+  const bannerMul = flagScaleMul(dist);
+  const count = finale ? 36 : 24;
+  const baseR = (finale ? 11.5 : 9.2) * bannerMul;
+  const spreadR = (finale ? 4.2 : 3.2) * bannerMul;
+  const lift = 0.38;
+  let n = 0;
+  for (let i = 0; i < count; i++) {
+    const ang = (i / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.35;
+    const rad = baseR + (Math.random() - 0.5) * spreadR;
+    const px = x + Math.cos(ang) * rad;
+    const pz = z + Math.sin(ang) * rad;
+    const py = (Number.isFinite(gy) ? gy : 0) + lift + (Math.random() - 0.5) * 0.12;
+    const out = 5.5 + Math.random() * (finale ? 5 : 3.5);
+    const up = 4.2 + Math.random() * (finale ? 5.5 : 3.8);
+    const palette = AGORA_FLORAL_RGB[i % AGORA_FLORAL_RGB.length];
+    const core = (finale ? 0.42 : 0.32) * (0.75 + Math.random() * 0.55);
+    const hang = 0.04 + Math.random() * 0.07;
+    const life = (finale ? 2.1 : 1.65) + Math.random() * 0.55;
+    emit(stampAgoraFx({
+      blend: 'alpha',
+      fadeOut: true,
+      position: [px, py, pz],
+      velocity: [Math.cos(ang) * out, up, Math.sin(ang) * out],
+      gravity: [0, -2.8 - Math.random() * 1.2, 0],
+      color: palette,
+      hangTime: hang,
+      lifetime: life,
+      startSize: core * 0.35,
+      peakSize: core * 1.35,
+      endSize: core * 0.22,
+      drag: 1.35 + Math.random() * 0.45,
+      spin: (Math.random() - 0.5) * 8,
+    }, grow, motion));
+    n += 1;
+    if (i % 2 === 0) {
+      emit(stampAgoraFx({
+        blend: 'additive',
+        fadeOut: true,
+        position: [px, py + 0.05, pz],
+        velocity: [Math.cos(ang) * out * 0.85, up * 1.05, Math.sin(ang) * out * 0.85],
+        gravity: [0, -2.2, 0],
+        color: AGORA_SEED_GLOW,
+        hangTime: hang * 0.5,
+        lifetime: life * 0.92,
+        startSize: core * 1.4,
+        peakSize: core * 2.2,
+        endSize: core * 0.35,
+        drag: 1.2,
+      }, grow, motion));
+      n += 1;
+    }
+  }
+  return n;
 }
 
 /** Ink when the owner is losing the pad; wish when a new side is taking it. */
@@ -1683,7 +1757,6 @@ export function createHealthBars(engine, scene, opts = {}) {
             unlockMelt: 0,
             unlockBuild: 0,
             unlockWind: null,
-            finaleWished: false,
           };
           agoraFlips.set(flipKey, rec);
         }
@@ -1702,7 +1775,6 @@ export function createHealthBars(engine, scene, opts = {}) {
           if (rec.rite !== AGORA_RITE_FINALE) {
             rec.rite = AGORA_RITE_FINALE;
             rec.riteT0 = chipNow;
-            rec.finaleWished = false;
           }
           if (meter.filled !== rec.filled) {
             const queued = agoraQueuedFlips(rec.phase, phase, rec.filled, meter.filled);
@@ -1720,7 +1792,6 @@ export function createHealthBars(engine, scene, opts = {}) {
           rec.phase = phase;
         } else if (rec.rite !== 0) {
           rec.rite = 0;
-          rec.finaleWished = false;
           rec.filled = meter.filled;
           rec.phase = phase;
         } else if (meter.filled !== rec.filled || rec.phase !== phase) {
@@ -1810,15 +1881,7 @@ export function createHealthBars(engine, scene, opts = {}) {
             );
           }
         }
-        if (rite === AGORA_RITE_FINALE && !rec.finaleWished && chipNow - rec.riteT0 >= AGORA_FINALE_WISH_AT_MS) {
-          rec.finaleWished = true;
-          const wind = pickAgoraWind();
-          for (let i = 0; i < AGORA_CHIP_COUNT; i++) {
-            const spr = slot.dots[i];
-            if (!spr.handle) continue;
-            emitAgoraDandelion(emitFx, spr.position[0], spr.position[1], spr.position[2], row.dotD, wind, dist, gustAxes);
-          }
-        } else if (
+        if (
           !unlockT
           && rite !== AGORA_RITE_FINALE
           && agoraIsNeutral(flags)

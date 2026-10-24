@@ -3,7 +3,7 @@ import { setXrEyeFromPose } from '../render/xrEye.js';
 // Quest Touch. Trigger and grip are always the first two buttons.
 // An `xr-standard` pad (current Quest browser) is:
 //   buttons[2] touchpad   buttons[3] stick click
-//   buttons[4] X / A      buttons[5] Y / B
+//   buttons[4] X / A      buttons[5] Y / B  (Y/B ability, X/A cancel)
 // Older Quest 1 reports put the stick click at 2 and the faces at 3 and 4.
 //   axes[0], axes[1] are the unused touchpad slot
 //   axes[2], axes[3] are the stick (push forward is negative y)
@@ -32,10 +32,10 @@ export function stickAxes(axes) {
   return [axes[0] || 0, axes[1] || 0];
 }
 
-/** Face-button slots. X / A is primary, Y / B is secondary. */
+/** Face-button slots. Y / B is primary (ability), X / A is secondary (cancel). */
 function faceButtons(gamepad) {
-  if (gamepad?.mapping === 'xr-standard') return { stick: 3, primary: 4, secondary: 5 };
-  return { stick: 2, primary: 3, secondary: 4 };
+  if (gamepad?.mapping === 'xr-standard') return { stick: 3, primary: 5, secondary: 4 };
+  return { stick: 2, primary: 4, secondary: 3 };
 }
 
 /** Named Quest controls off an XR input source's gamepad. Missing buttons stay released. */

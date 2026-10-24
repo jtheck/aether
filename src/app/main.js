@@ -4562,6 +4562,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
     }
     renderer.endHealthBars?.();
+    if (session.agoras?.length) {
+      const ringAgoras = [];
+      for (let ai = 0; ai < session.agoras.length; ai++) {
+        const a = session.agoras[ai];
+        if (fog.hidesHostile(a.owner, a.x, a.z)) continue;
+        ringAgoras.push(a);
+      }
+      renderer.syncAgoraCaptureRings?.(ringAgoras, deltaMs);
+    } else {
+      renderer.syncAgoraCaptureRings?.(null, deltaMs);
+    }
     if (renderer.setSelectionGroups) {
       if (selectedBuildings.length > 0) {
         renderer.setSelectionGroups(

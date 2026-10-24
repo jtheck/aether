@@ -37,6 +37,10 @@ npm start
 
 ## Build Windows / Linux
 
+NW.js is intentionally pinned to **0.118.0 (Chromium 155)** in `build.mjs`.
+Do not upgrade it without testing headset entry: NW.js 0.119.x / Chromium 156
+crashes in `xr_gpu_swap_chain.cc` while creating the WebGPU WebXR shared image.
+
 ```powershell
 $env:STEAMWORKS_SDK="C:\Users\blind\steamworks_sdk"   # optional but needed for Steam API DLL
 npm run zip:win

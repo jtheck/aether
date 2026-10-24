@@ -18,8 +18,12 @@ import { inwardNormals } from './selectionBox.js';
 const INK = [70 / 255, 230 / 255, 110 / 255];
 const MAX_QUADS = 640;
 const TIP_SEGMENTS = 20;
+const BEAM_SEGMENTS = 8;
 /** Hand end of the beam as a fraction of the far end's width. */
 const BEAM_HAND_FRAC = 0.015;
+/** Subtle downward bow, capped in beam widths so long pointers stay readable. */
+const BEAM_BEND_FRAC = 0.055;
+const BEAM_BEND_WIDTHS = 10;
 const LIFT = 0.75;
 
 /**
@@ -134,6 +138,31 @@ function quatFromUp(dx, dy, dz) {
 }
 
 /**
+ * Point on a controller beam that keeps the exact ray endpoints while bowing
+ * toward world-down, perpendicular to the ray.
+ */
+export function bentBeamPoint(ray, length, bend, t) {
+  const downDot = -ray.dy;
+  let bx = -downDot * ray.dx;
+  let by = -1 - downDot * ray.dy;
+  let bz = -downDot * ray.dz;
+  const bl = Math.hypot(bx, by, bz);
+  if (bl > 1e-5) {
+    bx /= bl;
+    by /= bl;
+    bz /= bl;
+  } else {
+    bx = by = bz = 0;
+  }
+  const bow = bend * 4 * t * (1 - t);
+  return {
+    x: ray.ox + ray.dx * length * t + bx * bow,
+    y: ray.oy + ray.dy * length * t + by * bow,
+    z: ray.oz + ray.dz * length * t + bz * bow,
+  };
+}
+
+/**
  * @param {object} engine
  * @param {object} scene
  * @param {(x: number, z: number) => number} groundYAt
@@ -145,14 +174,6 @@ export function createXrLassoOverlay(engine, scene, groundYAt) {
   setSubtreeVisible(ribbon.mesh, false);
   let quads = 0;
 
-  const beam = createCylinder(engine, {
-    diameterBottom: BEAM_HAND_FRAC,
-    diameterTop: 1,
-    height: 1,
-    tessellation: 10,
-  });
-  beam.pickable = false;
-  beam.receiveShadows = false;
   const beamMat = createStandardMaterial();
   beamMat.diffuseColor = [...INK];
   beamMat.emissiveColor = [...INK];
@@ -160,9 +181,23 @@ export function createXrLassoOverlay(engine, scene, groundYAt) {
   beamMat.disableLighting = true;
   // Below 1 keeps Lite off the opaque render-bundle path for a mesh that moves every frame.
   beamMat.alpha = 0.7;
-  beam.material = beamMat;
-  addToScene(scene, beam);
-  setSubtreeVisible(beam, false);
+  const beams = [];
+  for (let i = 0; i < BEAM_SEGMENTS; i++) {
+    const a = i / BEAM_SEGMENTS;
+    const b = (i + 1) / BEAM_SEGMENTS;
+    const beam = createCylinder(engine, {
+      diameterBottom: BEAM_HAND_FRAC + (1 - BEAM_HAND_FRAC) * a,
+      diameterTop: BEAM_HAND_FRAC + (1 - BEAM_HAND_FRAC) * b,
+      height: 1,
+      tessellation: 10,
+    });
+    beam.pickable = false;
+    beam.receiveShadows = false;
+    beam.material = beamMat;
+    addToScene(scene, beam);
+    setSubtreeVisible(beam, false);
+    beams.push(beam);
+  }
 
   function setQuads(n) {
     const idx = n * 6;
@@ -213,7 +248,9 @@ export function createXrLassoOverlay(engine, scene, groundYAt) {
   }
 
   function hideBeam() {
-    if (beam.visible) setSubtreeVisible(beam, false);
+    for (const beam of beams) {
+      if (beam.visible) setSubtreeVisible(beam, false);
+    }
   }
 
   function poseBeam(ray, length, width) {
@@ -221,26 +258,36 @@ export function createXrLassoOverlay(engine, scene, groundYAt) {
       hideBeam();
       return;
     }
-    const h = length * 0.5;
-    beam.position.x = ray.ox + ray.dx * h;
-    beam.position.y = ray.oy + ray.dy * h;
-    beam.position.z = ray.oz + ray.dz * h;
-    beam.scaling.x = width;
-    beam.scaling.y = length;
-    beam.scaling.z = width;
-    const q = quatFromUp(ray.dx, ray.dy, ray.dz);
-    const rq = beam.rotationQuaternion;
-    if (rq) {
-      if (typeof rq.set === 'function') rq.set(q[0], q[1], q[2], q[3]);
-      else {
-        rq.x = q[0];
-        rq.y = q[1];
-        rq.z = q[2];
-        rq.w = q[3];
+    const bend = Math.min(length * BEAM_BEND_FRAC, width * BEAM_BEND_WIDTHS);
+    let a = bentBeamPoint(ray, length, bend, 0);
+    for (let i = 0; i < BEAM_SEGMENTS; i++) {
+      const beam = beams[i];
+      const b = bentBeamPoint(ray, length, bend, (i + 1) / BEAM_SEGMENTS);
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dz = b.z - a.z;
+      const segmentLength = Math.hypot(dx, dy, dz);
+      beam.position.x = (a.x + b.x) * 0.5;
+      beam.position.y = (a.y + b.y) * 0.5;
+      beam.position.z = (a.z + b.z) * 0.5;
+      beam.scaling.x = width;
+      beam.scaling.y = segmentLength;
+      beam.scaling.z = width;
+      const q = quatFromUp(dx / segmentLength, dy / segmentLength, dz / segmentLength);
+      const rq = beam.rotationQuaternion;
+      if (rq) {
+        if (typeof rq.set === 'function') rq.set(q[0], q[1], q[2], q[3]);
+        else {
+          rq.x = q[0];
+          rq.y = q[1];
+          rq.z = q[2];
+          rq.w = q[3];
+        }
       }
+      beam.markLocalDirty?.();
+      if (!beam.visible) setSubtreeVisible(beam, true);
+      a = b;
     }
-    beam.markLocalDirty?.();
-    if (!beam.visible) setSubtreeVisible(beam, true);
   }
 
   function hide() {

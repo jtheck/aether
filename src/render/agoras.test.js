@@ -16,9 +16,11 @@ import {
   flagScaleForDist,
   emitAgoraFlagDisintegrate,
   emitAgoraFlagSlam,
+  AGORA_FLAG_SLAM_IMPACT_MS,
   stepAgoraFlagAct,
 } from './agoras.js';
 import { AGORA_PHASE_LOCK, AGORA_PHASE_TUG, AGORA_RITE_FINALE, AGORA_RITE_UNLOCK } from '../sim/agora.js';
+import { AGORA_FINALE_WISH_AT_MS, emitAgoraSlamFlowerBurst } from './healthBars.js';
 
 describe('agora ownership flags', () => {
   it('plants quietly on first sight of a locked pad', () => {
@@ -104,6 +106,19 @@ describe('agora ownership flags', () => {
     assert.ok(far > mid);
     assert.ok(flagScaleForDist(1) >= 1.35);
     assert.ok(flagScaleForDist(4000) <= 3.4);
+  });
+
+  it('lines the finale key hit up with the flag deck impact', () => {
+    assert.equal(AGORA_FLAG_SLAM_IMPACT_MS, AGORA_FLAG_SLAM_DROP_MS);
+    assert.equal(AGORA_FINALE_WISH_AT_MS, AGORA_FLAG_SLAM_IMPACT_MS);
+  });
+
+  it('spurts floral seeds around the plaza base on slam', () => {
+    const parts = [];
+    const n = emitAgoraSlamFlowerBurst((p) => parts.push(p), 0, 0, 0, 0, { finale: true });
+    assert.ok(n >= 36);
+    assert.ok(parts.some((p) => p.peakSize > p.startSize));
+    assert.ok(parts.every((p) => p.position[1] >= 0));
   });
 
   it('stops on the deck instead of squashing through it', () => {

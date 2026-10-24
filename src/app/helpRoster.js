@@ -64,15 +64,15 @@ const BUILDING_NOTE = {
   derrick: 'Temporary mineral rig on a Mine. Collapses into a Well.',
   well: 'Mineral trickle after the Derrick collapses.',
   tower: 'Trains Wizards. Needs a Camp.',
-  tavern: 'Trains Warlocks. Researches Patronage. Needs a Camp.',
+  tavern: 'Recruits Warlocks. Researches Patronage. Needs a Camp.',
   lab: 'Researches Artillery. Needs a Camp.',
   barracks: 'Trains Warriors and Archers. Researches Drayage. Needs a Village.',
-  workshop: 'Trains Wagons. Researches Armor and Scribes. Needs a Village.',
-  factory: 'Trains APCs.',
+  workshop: 'Builds Wagons. Researches Armor and Scribes. Needs a Village.',
+  factory: 'Makes APCs.',
   church: 'Trains Priests.',
   moonwell: 'Researches Prospecting and Stewardship.',
-  perch: 'Trains Dirigibles.',
-  grove: 'Trains Shamans.',
+  perch: 'Harbor Dirigibles.',
+  grove: 'Train Shaman.',
 };
 
 const UPGRADE_NOTE = {

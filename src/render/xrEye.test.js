@@ -2,12 +2,16 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   XR_HUD_CHROME_TAN,
+  XR_HUD_DRIFT_CARRY,
   XR_HUD_DRIFT_FOLLOW,
   XR_HUD_DRIFT_MAX,
   XR_HUD_EDGE_TAN,
+  XR_HUD_TURN_FOLLOW,
+  XR_HUD_TURN_SNAP,
   eyeReach,
   xrFitFov,
   xrHudChromeScale,
+  xrHudDriftDirection,
   xrHudDriftPosition,
   xrHudEdgeScale,
   xrHudLayoutPoint,
@@ -53,14 +57,37 @@ describe('xrHudProjection', () => {
 });
 
 describe('xrHudDriftPosition', () => {
-  it('caps movement lag and then eases the HUD back onto the eye', () => {
-    const target = [1, 2, 3];
-    const first = xrHudDriftPosition([0, 2, 3], target, 0.016);
-    assert.ok(Math.abs((target[0] - first[0]) - XR_HUD_DRIFT_MAX) < 1e-9);
-    const settled = xrHudDriftPosition(first, target, 0.016);
-    assert.ok(target[0] - settled[0] < XR_HUD_DRIFT_MAX);
-    assert.ok(target[0] - settled[0] > 0);
+  it('builds carried motion gradually, then springs home without a hard stop', () => {
+    const start = [0, 0, 0];
+    const firstTarget = [1, 0, 0];
+    const first = xrHudDriftPosition(start, start, firstTarget, 0.016);
+    const firstLag = firstTarget[0] - first[0];
+    const secondTarget = [2, 0, 0];
+    const second = xrHudDriftPosition(first, firstTarget, secondTarget, 0.016);
+    const secondLag = secondTarget[0] - second[0];
+    const settled = xrHudDriftPosition(second, secondTarget, secondTarget, 0.016);
+    assert.ok(firstLag > 0 && firstLag < XR_HUD_DRIFT_MAX);
+    assert.ok(secondLag > firstLag && secondLag < XR_HUD_DRIFT_MAX);
+    assert.ok(secondTarget[0] - settled[0] < secondLag);
     assert.ok(XR_HUD_DRIFT_FOLLOW > 0);
+    assert.ok(XR_HUD_DRIFT_CARRY > 0);
+  });
+});
+
+describe('xrHudDriftDirection', () => {
+  it('trails a turn and strengthens the spring at larger angles', () => {
+    const from = [0, 0, 1];
+    const largeTarget = [1, 0, 0];
+    const angle = 5 * Math.PI / 180;
+    const smallTarget = [Math.sin(angle), 0, Math.cos(angle)];
+    const large = xrHudDriftDirection(from, largeTarget, 0.016);
+    const small = xrHudDriftDirection(from, smallTarget, 0.016);
+    const moved = (v) => Math.acos(Math.max(-1, Math.min(1, v[2])));
+    const largeFraction = moved(large) / (Math.PI / 2);
+    const smallFraction = moved(small) / angle;
+    assert.ok(large[0] > 0 && large[0] < 1);
+    assert.ok(largeFraction > smallFraction);
+    assert.ok(XR_HUD_TURN_SNAP > XR_HUD_TURN_FOLLOW);
   });
 });
 

@@ -792,14 +792,23 @@
       font: inherit; cursor: pointer;
     }
     .snap-key[aria-pressed="true"] { border-color: #e0b050; color: #e0b050; }
-    .snap-view { flex: 1; min-width: 0; }
-    .snap-chart { display: block; width: 100%; height: auto; }
+    .snap-view { flex: 1; min-width: 0; position: relative; overflow: hidden; }
+    .snap-chart, .snap-build { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .snap-chart { display: block; }
+    .snap-build {
+      display: flex; flex-direction: column; box-sizing: border-box;
+      padding: 0 1.54% 0 7.69%;
+    }
     .snap-axis, .snap-empty { color: #8b93a7; font-size: 11px; }
-    .snap-axis { display: flex; justify-content: space-between; }
-    .snap-lane { display: flex; margin-top: 4px; }
-    .snap-track { position: relative; flex: 1; min-height: 44px; background: #4a5568; border-radius: 3px; }
-    .snap-mark { position: absolute; width: 40px; height: 40px; margin-left: -20px; }
-    .snap-mark img { width: 40px; height: 40px; object-fit: contain; display: block; }
+    .snap-axis { display: flex; justify-content: space-between; flex: 0 0 auto; }
+    .snap-lane { display: flex; flex: 1 1 0; min-height: 0; margin-top: 4px; }
+    .snap-track { position: relative; flex: 1; min-height: 0; height: 100%; overflow: hidden; background: #4a5568; border-radius: 3px; }
+    .snap-mark {
+      --mark: 56px;
+      position: absolute; width: var(--mark); height: var(--mark); margin-left: calc(var(--mark) / -2);
+      top: calc(50% - var(--mark) / 2 + var(--stack, 0) * 10px);
+    }
+    .snap-mark img { width: 100%; height: 100%; object-fit: contain; display: block; }
     .snap-stats { width: 100%; margin-top: 16px; border-collapse: collapse; font-size: 11px; }
     .snap-stats th, .snap-stats td { padding: 2px 6px; text-align: right; white-space: nowrap; font-weight: 500; }
     .snap-stats th { color: #8b93a7; }

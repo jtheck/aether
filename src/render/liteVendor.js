@@ -16,6 +16,7 @@ export {
   createLineSystem,
   createCylinder,
   createMeshFromData,
+  createTorus,
   createTube,
   updateMeshPositions,
   updateMeshGeometryCapacity,

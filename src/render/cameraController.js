@@ -258,7 +258,8 @@ export function resolveCameraExtents(tableHalfX, tableHalfZ, authoredHalfF) {
 /**
  * @param {object} camera Lite ArcRotateCamera
  * @param {HTMLCanvasElement} canvas
- * @param {{ worldHalfF?: number, worldHalfZF?: number }} [opts]
+ * @param {{ worldHalfF?: number, worldHalfZF?: number, betaBias?: number }} [opts]
+ * `betaBias` subtracts radians from the zoom pitch (positive looks more straight down).
  */
 export function createCameraController(camera, canvas, opts = {}) {
   let worldHalfF = opts.worldHalfF ?? WORLD_HALF_F;
@@ -268,6 +269,7 @@ export function createCameraController(camera, canvas, opts = {}) {
   let RESET_RADIUS = Math.max(worldHalfF, worldHalfZF) * 1.8;
   /** Max zoom-out - keep the look-up view near the table, not a wide pullback. */
   let UPPER_RADIUS = Math.max(worldHalfF, worldHalfZF) * 2.15;
+  const betaBias = Number.isFinite(opts.betaBias) ? opts.betaBias : 0;
   const velocity = { alpha: 0, radius: 0, panX: 0, panZ: 0 };
   const keyStates = Object.create(null);
   let nudged = false;
@@ -582,7 +584,7 @@ export function createCameraController(camera, canvas, opts = {}) {
   function destBeta() {
     const loB = camera.lowerBetaLimit ?? 0.1;
     const hiB = camera.upperBetaLimit ?? 1.5;
-    return Math.max(loB, Math.min(hiB, betaForNormalizedZoom(zoomNormalized())));
+    return Math.max(loB, Math.min(hiB, betaForNormalizedZoom(zoomNormalized()) - betaBias));
   }
 
   function snapBeta() {
@@ -1221,6 +1223,7 @@ export function createCameraController(camera, canvas, opts = {}) {
 
   if (camera.radius == null) camera.radius = DEFAULT_RADIUS;
   snapFov();
+  if (betaBias !== 0) snapBeta();
 
   return {
     handleWheel,

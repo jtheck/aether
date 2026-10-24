@@ -92,6 +92,7 @@ import { createProjectileRenderer } from './projectiles.js';
 import { createPickHitboxRenderer } from './pickHitboxes.js';
 import { createHolyShieldMaterial, createHolyShieldMesh } from './holyShields.js';
 import { createWorkRadiusRings } from './workRadiusRings.js';
+import { createAgoraCaptureRings } from './agoraCaptureRing.js';
 import { createXrLassoOverlay } from './xrLasso.js';
 import { createFrogRenderer } from './frogs.js';
 import { createArrowTrails } from './arrowTrails.js';
@@ -1352,6 +1353,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     healthBars.end();
     workRadiusRings.clear();
     objectiveRings.clear();
+    agoraCaptureRings.clear();
     tileGrid?.setVisible(false);
     placementGrid?.setFocus(null);
     sceneConfirm.clear?.();
@@ -1726,6 +1728,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   // Flat rim-fade rings for selected camp/mine/farm gather reach.
   const workRadiusRings = createWorkRadiusRings(engine, scene, groundYAt);
   const objectiveRings = createWorkRadiusRings(engine, scene, groundYAt);
+  const agoraCaptureRings = createAgoraCaptureRings(engine, scene, groundYAt);
   let lastObjectiveRingSpec = null;
   /** @type {Map<string, ReturnType<typeof createXrLassoOverlay>>} one per hand */
   const xrLassos = new Map([
@@ -3995,12 +3998,14 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       if (orderMarker) orderMarker.visible = false;
       workRadiusRings.clear();
       objectiveRings.clear();
+      agoraCaptureRings.clear();
     }
     // Selection / order matrices marked dirty on write.
     pickHitboxes.commit();
     holyShields.commit();
     workRadiusRings.commit();
     objectiveRings.commit();
+    agoraCaptureRings.commit();
     carryLoads.commit();
     projectileRenderer.commit();
     frogRenderer.sync();
@@ -4701,6 +4706,15 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         return;
       }
       objectiveRings.sync(list);
+    },
+
+    /** Occupation ring while an agora is contested or capturing. */
+    syncAgoraCaptureRings(agoras, deltaMs, nowMs) {
+      if (screenshotHudHidden) {
+        agoraCaptureRings.clear();
+        return;
+      }
+      agoraCaptureRings.sync(agoras, deltaMs, nowMs);
     },
 
     /**

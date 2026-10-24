@@ -5880,12 +5880,14 @@ async function main() {
   placeGeneratedScenery();
   const worldHalfF = worldHalfFFromField(field);
   const worldHalfZF = worldHalfZFFromField(field);
-  camera = createArcRotateCamera(-Math.PI / 2.1, Math.PI / 3.2, Math.max(worldHalfF, worldHalfZF) * 1.55, {
+  // Steeper than play, and yaw on the table axes so the board reads square.
+  const FORGE_PITCH_BIAS = 0.36;
+  camera = createArcRotateCamera(-Math.PI / 2, Math.PI / 3.2 - FORGE_PITCH_BIAS, Math.max(worldHalfF, worldHalfZF) * 1.55, {
     x: 0, y: 0, z: 0,
   });
   camera.farPlane = 40000;
   scene.camera = camera;
-  cam = createCameraController(camera, canvas, { worldHalfF, worldHalfZF });
+  cam = createCameraController(camera, canvas, { worldHalfF, worldHalfZF, betaBias: FORGE_PITCH_BIAS });
 
   storyHud = createStoryHud(document.body);
   storySpeech = createStorySpeech({

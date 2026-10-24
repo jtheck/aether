@@ -9,6 +9,11 @@
       "file": "bowl.garden",
       "name": "The Bowl",
       "mapType": "onevsone"
+    },
+    {
+      "file": "bloodbath.garden",
+      "name": "bloodbath",
+      "mapType": "onevsone"
     }
   ]
 }

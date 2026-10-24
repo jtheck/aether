@@ -27,7 +27,11 @@ export function snapClock(tick) {
 }
 
 const FIELD_TILES = { tiny: 80, small: 144, medium: 208, large: 272, huge: 336 };
-const ICON = 40;
+const CHART_W = 520;
+const CHART_H = 180;
+// Fraction of the match before a building takes another overlapping row.
+// The row step itself is the `--stack` offset in the snap-mark rule.
+const MARK_GAP = 0.055;
 
 function cleanLabel(value) {
   return String(value ?? '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 48);
@@ -105,8 +109,8 @@ function techName(kind, id) {
 function drawLine(canvas, doc, key) {
   const players = doc.players || [];
   const samples = doc.samples || [];
-  const width = 520;
-  const height = 180;
+  const width = CHART_W;
+  const height = CHART_H;
   const left = 40;
   const right = 8;
   const top = 8;
@@ -186,12 +190,13 @@ function buildTimeline(doc) {
     for (const row of events) {
       const x = duration > 0 ? Math.min(1, Math.max(0, (row.tick | 0) / duration)) : 0;
       let stack = 0;
-      while (placed.some((mark) => mark.stack === stack && Math.abs(mark.x - x) < 0.12)) stack += 1;
+      while (placed.some((mark) => mark.stack === stack && Math.abs(mark.x - x) < MARK_GAP)) stack += 1;
       placed.push({ x, stack });
       const mark = document.createElement('span');
       mark.className = 'snap-mark';
       mark.style.left = `${x * 100}%`;
-      mark.style.top = `${2 + stack * (ICON + 2)}px`;
+      mark.style.setProperty('--stack', String(stack));
+      mark.style.zIndex = String(stack + 1);
       mark.title = `${player.name || 'Player'} ${techName(row.kind, row.id)} ${snapClock(row.tick)}`;
       const src = techIcon(row.kind, row.id);
       if (src) {
@@ -205,8 +210,6 @@ function buildTimeline(doc) {
       track.append(mark);
       any = true;
     }
-    const stacks = placed.reduce((n, mark) => Math.max(n, mark.stack), 0);
-    track.style.height = `${ICON + 4 + stacks * (ICON + 2)}px`;
     lane.append(track);
     wrap.append(lane);
   });
@@ -328,6 +331,7 @@ export function mountMatchSnapshot(parent, doc, opts) {
   keys.className = 'snap-keys';
   const view = document.createElement('div');
   view.className = 'snap-view';
+  view.style.aspectRatio = `${CHART_W} / ${CHART_H}`;
   let current = 'villagers';
   for (const [id, label] of METRICS) {
     const btn = document.createElement('button');

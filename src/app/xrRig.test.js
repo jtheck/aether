@@ -22,8 +22,8 @@ describe('readQuestTouch', () => {
         { value: 0.4, pressed: true },
         { value: 1, pressed: true },
         { value: 1, pressed: true },
-        { value: 1, pressed: true },
         { value: 0, pressed: false },
+        { value: 1, pressed: true },
       ],
       axes: [0.5, -0.8],
     };
@@ -37,15 +37,15 @@ describe('readQuestTouch', () => {
     assert.equal(touch.stickY, -0.8);
   });
 
-  it('reads X/A and Y/B from an xr-standard pad', () => {
+  it('reads Y/B and X/A from an xr-standard pad', () => {
     const buttons = [0, 1, 2, 3, 4, 5].map(() => ({ pressed: false, value: 0 }));
     buttons[3].pressed = true;
-    buttons[4].pressed = true;
+    buttons[5].pressed = true;
     const touch = readQuestTouch({ mapping: 'xr-standard', buttons, axes: [0, 0, 0, 0] });
     assert.equal(touch.stickClick.pressed, true);
     assert.equal(touch.primary.pressed, true);
     assert.equal(touch.secondary.pressed, false);
-    buttons[5].pressed = true;
+    buttons[4].pressed = true;
     const cancel = readQuestTouch({ mapping: 'xr-standard', buttons, axes: [0, 0, 0, 0] });
     assert.equal(cancel.secondary.pressed, true);
   });

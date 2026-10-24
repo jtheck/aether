@@ -8,13 +8,19 @@ const hudWorld = new Float32Array(16);
 hudWorld[0] = hudWorld[5] = hudWorld[10] = hudWorld[15] = 1;
 let version = 1;
 let hudSeeded = false;
+let hudTargetPosition = null;
 
 /** Widest tangent of any eye frustum, in the viewer's own frame. */
 const reach = { h: 1, v: 1 };
 
 /** Camera-locked HUD translation follows softly but can never trail far. */
-export const XR_HUD_DRIFT_FOLLOW = 8;
-export const XR_HUD_DRIFT_MAX = 0.035;
+export const XR_HUD_DRIFT_FOLLOW = 4;
+export const XR_HUD_DRIFT_MAX = 0.09;
+export const XR_HUD_DRIFT_CARRY = 0.02;
+/** Angular spring: loose near home, stronger only after the HUD floats away. */
+export const XR_HUD_TURN_FOLLOW = 4;
+export const XR_HUD_TURN_SNAP = 16;
+export const XR_HUD_TURN_SNAP_ARC = Math.PI / 10;
 
 /** @type {{ x: number, y: number, z: number, worldMatrix: Float32Array } | null} */
 let eye = null;
@@ -33,30 +39,78 @@ const hudView = {
   worldMatrix: hudWorld,
 };
 
-/** Capped positional lag for the HUD sphere; orientation remains head-locked. */
+/** Carry a small part of camera translation, then spring home through a soft limit. */
 export function xrHudDriftPosition(
   current,
+  previousTarget,
   target,
   dt,
   follow = XR_HUD_DRIFT_FOLLOW,
   maxLag = XR_HUD_DRIFT_MAX,
+  carry = XR_HUD_DRIFT_CARRY,
 ) {
-  if (!current) return [target[0], target[1], target[2]];
-  const k = 1 - Math.exp(-Math.max(0, dt) * Math.max(0, follow));
-  let x = current[0] + (target[0] - current[0]) * k;
-  let y = current[1] + (target[1] - current[1]) * k;
-  let z = current[2] + (target[2] - current[2]) * k;
-  const dx = target[0] - x;
-  const dy = target[1] - y;
-  const dz = target[2] - z;
-  const lag = Math.hypot(dx, dy, dz);
+  if (!current || !previousTarget) return [target[0], target[1], target[2]];
+  const decay = Math.exp(-Math.max(0, dt) * Math.max(0, follow));
+  const carried = Math.max(0, carry);
+  let ox = (
+    current[0] - previousTarget[0]
+    - (target[0] - previousTarget[0]) * carried
+  ) * decay;
+  let oy = (
+    current[1] - previousTarget[1]
+    - (target[1] - previousTarget[1]) * carried
+  ) * decay;
+  let oz = (
+    current[2] - previousTarget[2]
+    - (target[2] - previousTarget[2]) * carried
+  ) * decay;
+  const lag = Math.hypot(ox, oy, oz);
   const cap = Math.max(0, maxLag);
-  if (lag > cap && lag > 1e-8) {
-    const s = cap / lag;
-    x = target[0] - dx * s;
-    y = target[1] - dy * s;
-    z = target[2] - dz * s;
+  if (lag > 1e-8) {
+    const soft = cap > 0 ? cap * Math.tanh(lag / cap) : 0;
+    const s = soft / lag;
+    ox *= s;
+    oy *= s;
+    oz *= s;
   }
+  return [target[0] + ox, target[1] + oy, target[2] + oz];
+}
+
+/** Ease a unit direction with a loose tail and a stronger large-angle spring. */
+export function xrHudDriftDirection(
+  current,
+  target,
+  dt,
+  follow = XR_HUD_TURN_FOLLOW,
+  snap = XR_HUD_TURN_SNAP,
+  snapArc = XR_HUD_TURN_SNAP_ARC,
+) {
+  const tx = target?.[0] ?? 0;
+  const ty = target?.[1] ?? 0;
+  const tz = target?.[2] ?? 0;
+  const tl = Math.hypot(tx, ty, tz);
+  if (tl < 1e-8) return current ? [current[0], current[1], current[2]] : [0, 0, 1];
+  const to = [tx / tl, ty / tl, tz / tl];
+  const cx = current?.[0] ?? 0;
+  const cy = current?.[1] ?? 0;
+  const cz = current?.[2] ?? 0;
+  const cl = Math.hypot(cx, cy, cz);
+  if (cl < 1e-8) return to;
+  const from = [cx / cl, cy / cl, cz / cl];
+  const dot = Math.max(-1, Math.min(1, from[0] * to[0] + from[1] * to[1] + from[2] * to[2]));
+  const angle = Math.acos(dot);
+  const amount = Math.min(1, angle / Math.max(1e-5, snapArc));
+  const ease = amount * amount * (3 - 2 * amount);
+  const rate = Math.max(0, follow + (snap - follow) * ease);
+  const k = 1 - Math.exp(-Math.max(0, dt) * rate);
+  let x = from[0] + (to[0] - from[0]) * k;
+  let y = from[1] + (to[1] - from[1]) * k;
+  let z = from[2] + (to[2] - from[2]) * k;
+  const len = Math.hypot(x, y, z);
+  if (len < 1e-8) return to;
+  x /= len;
+  y /= len;
+  z /= len;
   return [x, y, z];
 }
 
@@ -68,6 +122,8 @@ export function xrHudDriftPosition(
  */
 export function setXrEyeFromPose(rh, views, dt = 0) {
   const previousHud = hudSeeded ? [hudWorld[12], hudWorld[13], hudWorld[14]] : null;
+  const previousUp = hudSeeded ? [hudWorld[4], hudWorld[5], hudWorld[6]] : null;
+  const previousBack = hudSeeded ? [hudWorld[8], hudWorld[9], hudWorld[10]] : null;
   world[0] = rh[0];
   world[1] = rh[1];
   world[2] = -rh[2];
@@ -85,14 +141,46 @@ export function setXrEyeFromPose(rh, views, dt = 0) {
   world[14] = -rh[14];
   world[15] = 1;
   hudWorld.set(world);
+  if (hudSeeded) {
+    const back = xrHudDriftDirection(previousBack, [world[8], world[9], world[10]], dt);
+    const upHint = xrHudDriftDirection(previousUp, [world[4], world[5], world[6]], dt);
+    let rx = upHint[1] * back[2] - upHint[2] * back[1];
+    let ry = upHint[2] * back[0] - upHint[0] * back[2];
+    let rz = upHint[0] * back[1] - upHint[1] * back[0];
+    let rl = Math.hypot(rx, ry, rz);
+    if (rl < 1e-8) {
+      rx = world[0];
+      ry = world[1];
+      rz = world[2];
+      rl = Math.hypot(rx, ry, rz) || 1;
+    }
+    rx /= rl;
+    ry /= rl;
+    rz /= rl;
+    const ux = back[1] * rz - back[2] * ry;
+    const uy = back[2] * rx - back[0] * rz;
+    const uz = back[0] * ry - back[1] * rx;
+    hudWorld[0] = rx;
+    hudWorld[1] = ry;
+    hudWorld[2] = rz;
+    hudWorld[4] = ux;
+    hudWorld[5] = uy;
+    hudWorld[6] = uz;
+    hudWorld[8] = back[0];
+    hudWorld[9] = back[1];
+    hudWorld[10] = back[2];
+  }
+  const targetPosition = [world[12], world[13], world[14]];
   const hudPosition = xrHudDriftPosition(
     previousHud,
-    [world[12], world[13], world[14]],
+    hudTargetPosition,
+    targetPosition,
     dt,
   );
   hudWorld[12] = hudPosition[0];
   hudWorld[13] = hudPosition[1];
   hudWorld[14] = hudPosition[2];
+  hudTargetPosition = targetPosition;
   hudSeeded = true;
   if (views?.length) {
     const r = eyeReach(views);
@@ -110,6 +198,7 @@ export function xrEyeVersion() {
 export function clearXrEye() {
   eye = null;
   hudSeeded = false;
+  hudTargetPosition = null;
 }
 
 export function xrEye() {

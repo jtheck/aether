@@ -9,6 +9,16 @@
       "file": "corners.garden",
       "name": "Four Corners",
       "mapType": "teams"
+    },
+    {
+      "file": "bloodbath.garden",
+      "name": "bloodbath",
+      "mapType": "teams"
+    },
+    {
+      "file": "temple.garden",
+      "name": "temple",
+      "mapType": "teams"
     }
   ]
 }

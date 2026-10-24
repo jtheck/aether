@@ -70,10 +70,10 @@ const CSS = `
 #chat-hud { position: fixed; left: var(--corner-left, 12px); bottom: var(--corner-bottom, 40px);
   z-index: 10001; width: var(--corner-width, min(320px, 70vw));
   display: flex; flex-direction: column;
-  align-items: flex-start; font-size: 13px; pointer-events: none;
+  align-items: flex-start; font-size: 20px; pointer-events: none;
   user-select: none; -webkit-user-select: none; }
 #chat-hud[hidden] { display: none; }
-#chat-hud .chat-log { position: fixed; left: min(160px, 18vw);
+#chat-hud .chat-log { position: fixed; left: min(135px, 9vw);
   bottom: max(var(--chat-log-bottom, 0px), min(240px, 28vh));
   display: flex; flex-direction: column; justify-content: flex-end; gap: 2px;
   width: max-content; max-width: min(520px, 56vw); max-height: 40vh; overflow: hidden;

@@ -12,7 +12,14 @@ import {
   setThinInstanceColors,
 } from '../vendor/lite/liteVendor.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
-import { meshRoofY, roofChipLift, DEFAULT_AGORA_ROOF, agoraPropTint, pickAgoraWind } from './healthBars.js';
+import {
+  DEFAULT_AGORA_ROOF,
+  agoraPropTint,
+  emitAgoraSlamFlowerBurst,
+  meshRoofY,
+  pickAgoraWind,
+  roofChipLift,
+} from './healthBars.js';
 import { AGORA_PHASE_TUG, AGORA_RITE_FINALE } from '../sim/agora.js';
 import { USE_GPU_PICK } from './pickMode.js';
 import { ownerTint } from './ownerTints.js';
@@ -47,6 +54,8 @@ export const AGORA_FLAG_SLAM_DROP_MS = 520;
 export const AGORA_FLAG_SLAM_SETTLE_MS = 90;
 export const AGORA_FLAG_SLAM_HEIGHT = 16.5;
 export const AGORA_FLAG_SLAM_TOTAL_MS = AGORA_FLAG_SLAM_DROP_MS + AGORA_FLAG_SLAM_SETTLE_MS;
+/** Deck impact — same instant as `agoraFlagSlamPose` punch. */
+export const AGORA_FLAG_SLAM_IMPACT_MS = AGORA_FLAG_SLAM_DROP_MS;
 export const AGORA_FLAG_SLAM_RING = 20;
 
 /** Dashed rally stroke (world units). */
@@ -988,6 +997,9 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
           const gy = groundYAt(a.x, a.z);
           const dist = eye ? Math.hypot(eye.x - a.x, eye.y - gy, eye.z - a.z) : 0;
           emitAgoraFlagSlam(emitFx, emitBurstFx, a.x, gy, a.z, dist);
+          emitAgoraSlamFlowerBurst(emitFx, a.x, gy, a.z, dist, {
+            finale: (a.rite | 0) === AGORA_RITE_FINALE,
+          });
           dirty = true;
         }
       }

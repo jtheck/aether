@@ -53,6 +53,8 @@ import {
   packLedgerChunks,
 } from './kothCheckpointWire.js';
 import { CMD } from '../sim/commands.js';
+import { SIM_GENERATION, hasCurrentSimGeneration } from '../sim/generation.js';
+import { compactFrameForTransport, expandTransportFrame } from '../network/lockstepWire.js';
 import { kothWipedOwners } from '../sim/kothMeta.js';
 import {
   LOBBY,
@@ -599,6 +601,7 @@ export function createKothShard(options = {}) {
         role,
         appState,
         v: KOTH_PROTOCOL_VERSION,
+        sim: SIM_GENERATION,
         peers: connectedPeerIds(),
         sponsorId: assignedSponsorId,
         observerDepth,
@@ -1408,6 +1411,7 @@ export function createKothShard(options = {}) {
         appState,
         phase: SHARD_PHASE.SANDBOX,
         v: KOTH_PROTOCOL_VERSION,
+        sim: SIM_GENERATION,
       },
       BROADCAST,
     );
@@ -1743,7 +1747,14 @@ export function createKothShard(options = {}) {
   }
 
   function withMessageId(msg) {
-    const versioned = msg.v == null ? { ...msg, v: KOTH_PROTOCOL_VERSION } : msg;
+    const framed =
+      msg?.type === MSG.COMMAND_FRAME && msg.frame
+        ? { ...msg, frame: compactFrameForTransport(msg.frame) }
+        : msg;
+    const versioned =
+      framed.v === KOTH_PROTOCOL_VERSION && framed.sim === SIM_GENERATION
+        ? framed
+        : { ...framed, v: KOTH_PROTOCOL_VERSION, sim: SIM_GENERATION };
     const sourced = versioned.from == null && localUserId ? { ...versioned, from: localUserId } : versioned;
     if (sourced._mid) return sourced;
     return { ...sourced, _mid: nextMessageId(sourced.type ?? 'msg') };
@@ -2648,6 +2659,7 @@ export function createKothShard(options = {}) {
   }
 
   function ingestCommandFrame(frame) {
+    frame = expandTransportFrame(frame);
     if (!validateCommandFrame(frame)) return;
     if (holdingCatchupLockstep()) {
       heldCatchupFrames.push(frame);
@@ -4726,6 +4738,7 @@ export function createKothShard(options = {}) {
     if (!msg?.type) return;
     if (noteChat(msg, { requireMatchId: true })) return;
     if (msg.v !== KOTH_PROTOCOL_VERSION) return;
+    if (!hasCurrentSimGeneration(msg.sim)) return;
     if (msg._mid) {
       if (seenMessageIds.has(msg._mid)) return;
       rememberMessageId(msg._mid);
@@ -5196,6 +5209,7 @@ export function createKothShard(options = {}) {
     sendPeer(peerId, {
       type: MSG.SHARD_HELLO,
       v: KOTH_PROTOCOL_VERSION,
+      sim: SIM_GENERATION,
       matchId,
       from: localUserId,
       phase,
@@ -5343,6 +5357,7 @@ export function createKothShard(options = {}) {
     if (!msg?.type) return;
     if (msg.from && userIdsMatch(msg.from, localUserId)) return;
     if (msg.v !== KOTH_PROTOCOL_VERSION) return;
+    if (!hasCurrentSimGeneration(msg.sim)) return;
     if (msg._mid) {
       if (seenMessageIds.has(msg._mid)) return;
       rememberMessageId(msg._mid);
@@ -5421,6 +5436,7 @@ export function createKothShard(options = {}) {
     emitListeners(broadcastListeners, data, raw);
     if (!data?.type) return;
     if (noteChat(data, { requireMatchId: true })) return;
+    if (!hasCurrentSimGeneration(data.sim)) return;
     if (data.type !== MSG.SHARD_PRESENCE) {
       onGameBroadcastMessage(data);
       return;

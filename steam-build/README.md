@@ -19,6 +19,7 @@ npm start
 | Env | Purpose |
 |-----|---------|
 | `AETHER_URL` | Override start URL (allowlisted: aether.garden / localhost) |
+| `AETHER_WINDOWED=1` | Start windowed (1280×800) instead of fullscreen |
 | `AETHER_STEAM=0` | Disable Steam worker |
 | `AETHER_STEAM_SKIP_RESTART=1` | Don’t quit for Steam relaunch (local testing) |
 | `AETHER_BRIDGE_PORT` | Bridge HTTP port (default **9787**) |

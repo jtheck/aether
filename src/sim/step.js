@@ -15,6 +15,7 @@
 
 import * as fx from './fixed.js';
 import { applyCommands } from './commands.js';
+import { sampleMatch, SNAP_SAMPLE_TICKS } from './matchSnapshot.js';
 import { buildingProductionSystem } from './buildingProduction.js';
 import { waveSpawnerSystem } from './waveSpawner.js';
 import { combatSystem } from './combat.js';
@@ -207,6 +208,7 @@ export function step(world, field, commands) {
   // Late deaths (fire, etc.) after the spore phase still plant this tick.
   flushMycoDeathBursts(world, field);
   world.tick++;
+  if ((world.tick % SNAP_SAMPLE_TICKS) === 0) sampleMatch(world);
   if (profile) timing.step = performance.now() - tAll;
 }
 

@@ -5211,7 +5211,7 @@ class FrogSwarmBehavior extends PointCastEffect {
         this.bounceDistanceFalloff = Number.isFinite(params.bounceDistanceFalloff) ? params.bounceDistanceFalloff : 0.85;
         this.bounceArcHeightFalloff = Number.isFinite(params.bounceArcHeightFalloff) ? params.bounceArcHeightFalloff : 0.88;
         this.bounceDamageMultiplier = Number.isFinite(params.bounceDamageMultiplier) ? params.bounceDamageMultiplier : 0.85;
-        this.hopModelPath = params.hopModelPath || 'assets/models/frog.glb';
+        this.hopModelPath = params.hopModelPath || '../assets/models/frog.glb';
         this._shotsLaunched = 0;
         this._pendingImpacts = [];
         this._impactCounter = 0;
@@ -5778,7 +5778,7 @@ registerAbilitySpec({
             bounceDistanceFalloff: 0.86,
             bounceArcHeightFalloff: 0.9,
             bounceDamageMultiplier: 0.85,
-            hopModelPath: 'assets/models/frog.glb'
+            hopModelPath: '../assets/models/frog.glb'
         };
     },
     createRuntime(unit, params, spec) {

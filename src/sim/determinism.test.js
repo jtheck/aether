@@ -92,8 +92,9 @@ const ta = runTrace(0x777, 1000);
 const tb = runTrace(0x777, 1000);
 const traceEqual = ta.length === tb.length && ta.every((v, i) => v === tb[i]);
 
-function runKoth(seed, ticks, framesByTick) {
+function runKoth(seed, ticks, framesByTick, { opened = false } = {}) {
   const w = buildWorldFromConfig({ seed, mode: 'koth', activeSlots: [0, 1] });
+  if (opened && w.koth) w.koth.opened = 1;
   for (let t = 1; t <= ticks; t++) step(w, field, framesByTick.get(t) ?? []);
   return checksum(w);
 }
@@ -161,7 +162,10 @@ function samePlayerCommandOrderOk() {
     { type: CMD.MOVE, entities: [0], tx: [fx.fromInt(15)], ty: [fx.fromInt(20)] },
     { type: CMD.STOP, entities: [0] },
   ]);
-  return runKoth(0xbeef, 20, ordered) !== runKoth(0xbeef, 20, reversed);
+  return (
+    runKoth(0xbeef, 20, ordered, { opened: true }) !==
+    runKoth(0xbeef, 20, reversed, { opened: true })
+  );
 }
 
 function joinAndDeathOk() {

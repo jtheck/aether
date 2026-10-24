@@ -2,6 +2,16 @@ import { START_RATING } from './elo.js';
 import { INDEX_KEY, boardDocument, boardKey, mergeIndex } from './publish.js';
 import { countLooking, handleHill, handleHillSplit, handleLeave, handleName, handleQueue } from './queue.js';
 import {
+  historyPuts,
+  isLadderPlayerId,
+  isMatchId,
+  matchSnapshotKey,
+  playerRecentKey,
+  recentPartition,
+  RECENT_SK,
+} from './recent.js';
+import { parseSnapshot } from './snapshot.js';
+import {
   boardPartition,
   judgeReports,
   parseKothReport,
@@ -99,6 +109,98 @@ async function publish(store, { season, envSeason, board, now }) {
   return doc;
 }
 
+async function loadHistories(store, playerIds) {
+  const loaded = {};
+  for (const playerId of playerIds) {
+    loaded[playerId] = await store.getItem(recentPartition(playerId), RECENT_SK);
+  }
+  return loaded;
+}
+
+async function ladderName(store, season, playerId) {
+  for (const board of ['1v1', 'teams', 'koth']) {
+    const row = await store.getItem(boardPartition(board, season), playerKey(playerId));
+    const name = String(row?.name || '').trim();
+    if (name) return name;
+  }
+  return 'Player';
+}
+
+function sideNames(players) {
+  return players.map((player) => player.name || 'Player').join(', ') || 'Player';
+}
+
+function matchEntries(report, rated, at) {
+  const winner = report.players.find((player) => player.seat === report.winnerSeat);
+  const mode = report.board === 'teams' ? '2v2' : '1v1';
+  const entries = {};
+  for (const row of rated) {
+    const player = report.players.find((item) => item.playerId === row.playerId);
+    const opponents = report.players.filter((item) => item.team !== player.team);
+    entries[row.playerId] = {
+      at,
+      mode,
+      result: player.team === winner.team ? 'win' : 'loss',
+      opponent: sideNames(opponents),
+      delta: row.delta,
+      rating: row.rating,
+      matchId: report.matchId,
+    };
+  }
+  return entries;
+}
+
+function kothEntries(report, rated, names, at) {
+  const victimName = names[report.victimId] || 'Player';
+  const survivorName = report.survivorIds.map((id) => names[id] || 'Player').join(', ') || 'Player';
+  const entries = {};
+  for (const row of rated) {
+    const won = row.playerId !== report.victimId;
+    entries[row.playerId] = {
+      at,
+      mode: 'KOTH',
+      result: won ? 'win' : 'loss',
+      opponent: won ? victimName : survivorName,
+      delta: row.delta,
+      rating: row.rating,
+      matchId: report.matchId,
+    };
+  }
+  return entries;
+}
+
+async function acceptSnapshot(store, parsed, now) {
+  const pk = `snap#${parsed.snapshot.matchId}`;
+  await store.putItem({
+    pk,
+    sk: `p#${parsed.reporterId}`,
+    playerId: parsed.reporterId,
+    canonical: parsed.canonical,
+    snapshot: parsed.snapshot,
+  });
+  const rows = await store.listByPrefix(pk, 'p#');
+  const agreed = rows.filter((row) => row.canonical === parsed.canonical);
+  const reporters = new Set(agreed.map((row) => row.playerId));
+  if (reporters.size < 2) return { status: 200, body: { ok: true, status: 'pending' } };
+  const doc = { ...parsed.snapshot, updatedAt: now() };
+  await store.putObject(matchSnapshotKey(parsed.snapshot.matchId), JSON.stringify(doc));
+  return { status: 200, body: { ok: true, status: 'saved' } };
+}
+
+async function publishRecent(store, playerIds, now) {
+  for (const playerId of playerIds) {
+    if (!isLadderPlayerId(playerId)) continue;
+    const row = await store.getItem(recentPartition(playerId), RECENT_SK);
+    if (!row) continue;
+    const doc = {
+      playerId,
+      updatedAt: now(),
+      recent: Array.isArray(row.recent) ? row.recent : [],
+    };
+    await store.putObject(playerRecentKey(playerId), JSON.stringify(doc));
+  }
+}
+
 /**
  * @param {object} opts
  * @param {object} opts.store
@@ -151,47 +253,65 @@ async function settleKoth(store, { season, report, canonical, now }) {
 
   const pk = boardPartition('koth', season);
   const ratings = {};
-  for (const id of [report.victimId, ...report.survivorIds]) {
-    const row = await store.getItem(pk, playerKey(id));
-    ratings[id] = {
-      rating: row?.rating ?? START_RATING,
-      games: row?.games ?? 0,
-      wins: row?.wins ?? 0,
-    };
-  }
-  const next = rateElimination(report, ratings);
-  const deltas = next.map((row) => ({
-    playerId: row.playerId,
-    rating: row.rating,
-    delta: row.delta,
-    games: row.games,
-    wins: row.wins,
-  }));
-  const result = await store.settle({
-    settled: {
-      pk: resultPk,
-      sk: SETTLED,
-      canonical,
-      board: 'koth',
-      season,
-      matchId: report.matchId,
-      tick: report.tick,
-      checksum: report.checksum,
-      deltas,
-      at: now(),
-    },
-    players: next.map((row) => ({
-      pk,
-      sk: playerKey(row.playerId),
+  const ids = [report.victimId, ...report.survivorIds];
+  const names = {};
+  for (const id of ids) names[id] = await ladderName(store, season, id);
+  let result = { ok: false, reason: 'conflict' };
+  let next = [];
+  let deltas = [];
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const raced = await store.getItem(resultPk, SETTLED);
+    if (raced) {
+      result = { ok: false, reason: 'exists' };
+      deltas = raced.deltas;
+      break;
+    }
+    for (const id of ids) {
+      const row = await store.getItem(pk, playerKey(id));
+      ratings[id] = {
+        rating: row?.rating ?? START_RATING,
+        games: row?.games ?? 0,
+        wins: row?.wins ?? 0,
+      };
+    }
+    next = rateElimination(report, ratings);
+    deltas = next.map((row) => ({
       playerId: row.playerId,
-      name: '',
-      oldRating: row.oldRating,
-      oldGames: row.oldGames,
       rating: row.rating,
+      delta: row.delta,
       games: row.games,
       wins: row.wins,
-    })),
-  });
+    }));
+    const at = now();
+    const histories = await loadHistories(store, ids);
+    result = await store.settle({
+      settled: {
+        pk: resultPk,
+        sk: SETTLED,
+        canonical,
+        board: 'koth',
+        season,
+        matchId: report.matchId,
+        tick: report.tick,
+        checksum: report.checksum,
+        deltas,
+        at,
+      },
+      players: next.map((row) => ({
+        pk,
+        sk: playerKey(row.playerId),
+        playerId: row.playerId,
+        name: '',
+        oldRating: row.oldRating,
+        oldGames: row.oldGames,
+        rating: row.rating,
+        games: row.games,
+        wins: row.wins,
+      })),
+      histories: historyPuts(kothEntries(report, next, names, at), histories),
+    });
+    if (result.ok || result.reason === 'exists') break;
+  }
   if (!result.ok && result.reason !== 'exists') {
     return { statusCode: 500, rated: false, body: { ok: false, error: 'could not settle' } };
   }
@@ -244,6 +364,20 @@ export function createHandler({
         const looking = await countLooking(store, clock(), which);
         return respond(200, { ok: true, looking, board: which }, origin, origins);
       }
+      const player = String(event?.queryStringParameters?.player ?? '').toLowerCase();
+      if (player) {
+        if (!isLadderPlayerId(player)) return respond(400, { ok: false, error: 'invalid player' }, origin, origins);
+        const rawRecent = await store.getObject(playerRecentKey(player));
+        if (rawRecent) {
+          try { return respond(200, JSON.parse(rawRecent), origin, origins); } catch { /* rebuild below */ }
+        }
+        const row = await store.getItem(recentPartition(player), RECENT_SK);
+        return respond(200, {
+          playerId: player,
+          updatedAt: now(),
+          recent: Array.isArray(row?.recent) ? row.recent : [],
+        }, origin, origins);
+      }
       if (board === '1v1' || board === 'teams' || board === 'koth') {
         const raw = await store.getObject(boardKey(season, board));
         let doc = { season, board, updatedAt: now(), rows: [] };
@@ -252,18 +386,34 @@ export function createHandler({
         }
         return respond(200, doc, origin, origins);
       }
+      const match = String(event?.queryStringParameters?.match ?? '').toLowerCase();
+      if (match) {
+        if (!isMatchId(match)) return respond(400, { ok: false, error: 'invalid match' }, origin, origins);
+        const rawSnap = await store.getObject(matchSnapshotKey(match));
+        if (!rawSnap) return respond(404, { ok: false, error: 'no snapshot' }, origin, origins);
+        try { return respond(200, JSON.parse(rawSnap), origin, origins); } catch {
+          return respond(404, { ok: false, error: 'no snapshot' }, origin, origins);
+        }
+      }
       return respond(200, { ok: true, season, boards: ['1v1', 'teams', 'koth'] }, origin, origins);
     }
     if (method !== 'POST') return respond(405, { ok: false, error: 'method not allowed' }, origin, origins);
 
     const raw = readBody(event);
-    if (raw.length > 8192) return respond(400, { ok: false, error: 'body too large' }, origin, origins);
+    if (raw.length > 65536) return respond(400, { ok: false, error: 'body too large' }, origin, origins);
     let body;
     try {
       body = JSON.parse(raw);
     } catch {
       return respond(400, { ok: false, error: 'invalid json' }, origin, origins);
     }
+    if (body?.action === 'snapshot') {
+      const parsed = parseSnapshot(body);
+      if (!parsed.ok) return respond(400, { ok: false, error: parsed.error }, origin, origins);
+      const saved = await acceptSnapshot(store, parsed, now);
+      return respond(saved.status, saved.body, origin, origins);
+    }
+    if (raw.length > 8192) return respond(400, { ok: false, error: 'body too large' }, origin, origins);
 
     if (body?.action === 'name') {
       const named = await handleName(store, body, { season });
@@ -309,6 +459,7 @@ export function createHandler({
       const settled = await settleKoth(store, { season, report: parsedKoth.report, canonical: parsedKoth.canonical, now });
       if (settled.rated) {
         await publish(store, { season, envSeason: season, board: 'koth', now });
+        await publishRecent(store, [parsedKoth.report.victimId, ...parsedKoth.report.survivorIds], now);
       }
       return respond(settled.statusCode, settled.body, origin, origins);
     }
@@ -321,6 +472,7 @@ export function createHandler({
     const already = await store.getItem(resultPk, SETTLED);
     if (already) {
       await publish(store, { season: already.season, envSeason: season, board: report.board, now });
+      await publishRecent(store, (already.deltas || []).map((row) => row.playerId), now);
       return respond(200, {
         ok: true,
         status: 'settled',
@@ -391,6 +543,9 @@ export function createHandler({
       const ratings = await loadRatings(store, season, report);
       const next = rateMatch(report, ratings);
       const playerPk = boardPartition(report.board, season);
+      const at = now();
+      const ids = report.players.map((player) => player.playerId);
+      const histories = await loadHistories(store, ids);
       const result = await store.settle({
         settled: {
           pk: resultPk,
@@ -408,7 +563,7 @@ export function createHandler({
             games: row.games,
             wins: row.wins,
           })),
-          at: now(),
+          at,
         },
         players: next.map((row) => ({
           pk: playerPk,
@@ -421,6 +576,7 @@ export function createHandler({
           games: row.games,
           wins: row.wins,
         })),
+        histories: historyPuts(matchEntries(report, next, at), histories),
       });
       if (result.ok || result.reason === 'exists') {
         const settled = result.ok ? null : await store.getItem(resultPk, SETTLED);
@@ -437,6 +593,7 @@ export function createHandler({
     if (!rated) return respond(500, { ok: false, error: 'could not settle' }, origin, origins);
 
     await publish(store, { season, envSeason: season, board: report.board, now });
+    await publishRecent(store, report.players.map((player) => player.playerId), now);
     return respond(200, {
       ok: true,
       status: 'settled',

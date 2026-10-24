@@ -158,7 +158,10 @@ export function spreadLocust(w, {
   }
 
   if (unit >= 0) applyLocustDot(w, unit, { source });
-  if (building >= 0) applyLocustDotBuilding(buildings?.[building], { source });
+  if (building >= 0) {
+    applyLocustDotBuilding(buildings?.[building], { source });
+    w.buildingsDirty = 1;
+  }
 
   const range2 = fx.mul(LOCUST_HOP_RANGE, LOCUST_HOP_RANGE);
   const best = [];
@@ -190,7 +193,10 @@ export function spreadLocust(w, {
   for (let i = 0; i < best.length; i++) {
     const hop = best[i];
     if (hop.kind === 0) applyLocustDot(w, hop.id, { source });
-    else applyLocustDotBuilding(buildings[hop.id], { source });
+    else {
+      applyLocustDotBuilding(buildings[hop.id], { source });
+      w.buildingsDirty = 1;
+    }
   }
 }
 
@@ -238,6 +244,7 @@ function tickLocustOnBuilding(w, field, bi, b) {
     b.locustAcc = 0;
     b.locustSource = -1;
     b.locustHops = 0;
+    w.buildingsDirty = 1;
   }
 }
 
@@ -288,6 +295,7 @@ export function tickCombatStatus(w, field) {
           b.locustAcc = 0;
           b.locustSource = -1;
           b.locustHops = 0;
+          w.buildingsDirty = 1;
         }
         continue;
       }

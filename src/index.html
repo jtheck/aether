@@ -68,6 +68,10 @@
       overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
     }
     #status { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); z-index: 10001; font-size: 13px; opacity: 0.9; pointer-events: none; user-select: none; -webkit-user-select: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    /* skinnyheader.png is optically left of its bbox; nudge loading status to match. */
+    body:has(#boot-splash:not([data-leaving="1"])) #status {
+      transform: translateX(calc(-50% - 22px));
+    }
     #status-pop { position: absolute; right: 100%; top: 0; margin-right: 1.4em; white-space: nowrap; opacity: 0.68; color: var(--pop-ink); }
     #status-side { position: absolute; left: 100%; top: 0; margin-left: 1.4em; white-space: nowrap; word-spacing: 0.9em; opacity: 0.46; color: #7a8496; }
     #resources { position: fixed; left: 50%; bottom: 8px; transform: translateX(-50%); z-index: 10001; font-size: 13px; opacity: 0.9; pointer-events: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -286,7 +290,7 @@
       letter-spacing: 0.06em;
       line-height: 1.15;
       color: var(--player, #c8cbd0);
-      text-shadow: 0px 0px 21px #fff, 0px 0px 7px #fff;
+      text-shadow: 0px 0px 21px #fff, 0px 0px 8px #fff;
       border-bottom: 2px solid var(--player, #c8cbd0);
     }
     #side_menu .settings-split { border: 0; border-top: 1px solid #2a3140; margin: 2px 0 16px; }
@@ -346,7 +350,8 @@
     #side_menu .koth-lobby-meta { opacity: .7; font-size: 12px; font-variant-numeric: tabular-nums; }
     #side_menu #menu-koth-status,
     #side_menu #menu-match-status { font-weight: 600; margin-bottom: 4px; }
-    #side_menu #menu-lobbies.is-dimmed { opacity: .4; pointer-events: none; }
+    #side_menu #menu-lobbies.is-dimmed,
+    #side_menu .menu-solo.is-dimmed { opacity: .4; pointer-events: none; }
     #side_menu .menu-mode {
       margin: 0 0 12px;
       padding: 8px 8px 2px 10px;
@@ -451,6 +456,9 @@
       justify-content: flex-start;
       padding: 0;
       gap: 0;
+    }
+    #match-lobby-overlay.is-parked:has(#match-over:not([hidden])) {
+      width: min(680px, calc(100vw - 24px));
     }
     #match-lobby-overlay[hidden] { display: none; }
     #match-lobby-overlay.is-ranked-result .match-lobby-setting,
@@ -610,16 +618,17 @@
       text-align: left;
       font: 600 16px/1.25 system-ui, sans-serif;
       color: #f2fbff;
+      max-height: min(78vh, 720px);
+      overflow: auto;
     }
     #match-over[hidden] { display: none; }
-    #match-over { overflow-x: auto; }
     #match-over-sub {
       margin-top: 2px;
       font: 500 12px/1.3 system-ui, sans-serif;
       opacity: .75;
     }
     #match-lobby-overlay:not(.is-parked):has(#match-over:not([hidden])) .match-lobby-panel {
-      width: min(520px, 96vw);
+      width: min(680px, 96vw);
     }
     #match-stats {
       width: 100%;
@@ -687,12 +696,21 @@
     #help_b:hover, #help_b:focus-visible,
     #help_b.is-on { stroke: aqua; opacity: 1; outline: none; }
     #settings_b:active, #help_b:active { stroke: darkmagenta; }
-    #ladder_pop, #ladder_go, #help_pop, #skins_pop {
+    #ladder_pop, #ladder_go, #ladder_hist, #help_pop, #skins_pop {
       position: fixed; inset: 0; z-index: 10008;
       display: grid; place-items: center;
       background: rgba(12, 15, 20, .72);
     }
-    #ladder_pop[hidden], #ladder_go[hidden], #help_pop[hidden], #skins_pop[hidden] { display: none; }
+    #ladder_pop[hidden], #ladder_go[hidden], #ladder_hist[hidden], #help_pop[hidden], #skins_pop[hidden] { display: none; }
+    #ladder_hist { z-index: 10009; user-select: none; -webkit-user-select: none; }
+    #ladder_pop {
+      align-items: start;
+      justify-items: center;
+      box-sizing: border-box;
+      padding-top: max(11vh, calc((100vh - 560px) / 2));
+      user-select: none;
+      -webkit-user-select: none;
+    }
     #help_pop { user-select: none; }
     #help_pop .help-card, #skins_pop .help-card {
       position: relative; width: min(420px, 92vw); max-height: min(78vh, 560px);
@@ -700,19 +718,19 @@
       background: #0c0f14; border: 1px solid #2a3140; color: #fff;
       font: 13px/1.45 system-ui, sans-serif;
     }
-    #ladder_go h3, #help_pop h3, #skins_pop h3 { margin: 0 28px 10px 0; font-size: 15px; font-weight: 600; }
-    #ladder_pop .ladder-card, #ladder_go .ladder-card {
+    #help_pop h3, #skins_pop h3 { margin: 0 28px 10px 0; font-size: 15px; font-weight: 600; }
+    #ladder_pop .ladder-card, #ladder_go .ladder-card, #ladder_hist .ladder-card {
       display: flex; flex-direction: column; overflow: hidden;
       width: min(420px, 92vw); max-height: min(78vh, 560px);
       box-sizing: border-box; margin: 0;
       background: #0c0f14; border: 1px solid #2a3140; color: #fff;
       font: 13px/1.45 system-ui, sans-serif;
     }
-    #ladder_pop .ladder-bar {
+    #ladder_pop .ladder-bar, #ladder_hist .ladder-bar {
       display: flex; align-items: flex-start; gap: 10px; flex: 0 0 auto;
       padding: 8px 8px 8px 16px;
     }
-    #ladder_pop .ladder-bar h3 { margin: 0; flex: 1; font-size: 15px; font-weight: 600; }
+    #ladder_pop .ladder-bar h3, #ladder_hist .ladder-bar h3 { margin: 0; flex: 1; font-size: 15px; font-weight: 600; }
     #ladder_pop .ladder-season-meta { margin-left: auto; padding-top: 2px; text-align: right; }
     #ladder_pop .ladder-season-meta p { margin: 0; font-size: 11px; color: #e0b050; white-space: nowrap; }
     #ladder_pop .ladder-modes {
@@ -731,25 +749,119 @@
     #ladder_pop .ladder-play { display: flex; flex-direction: column; align-items: center; }
     #ladder_pop #ladder_find { margin: 10px 0 0; text-align: center; }
     #ladder_pop #ladder_status { margin: 6px 0 0; font-size: 11px; color: #e0b050; text-align: center; }
-    #ladder_close {
+    #ladder_close, #ladder_hist_close, #ladder_hist_back {
       position: static; margin-left: 0; width: 28px; height: 28px; padding: 0;
       background: transparent; color: inherit; border: 0; font: 18px/1 system-ui, sans-serif;
       cursor: pointer; opacity: .7;
     }
-    #ladder_pop .ladder-body { overflow: auto; padding: 0 16px 14px; }
-    #ladder_go .ladder-card { padding: 16px 18px; }
+    #ladder_hist_back { width: auto; padding-right: 4px; font-size: 13px; }
+    #ladder_hist_back[hidden] { display: none; }
+    #ladder_hist .ladder-bar {
+      display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+      gap: 8px; padding: 8px;
+    }
+    #ladder_hist .ladder-bar h3 { flex: none; text-align: center; }
+    #ladder_hist .ladder-hist-side { display: flex; align-items: center; min-width: 0; }
+    #ladder_hist .ladder-hist-side.is-end { justify-content: flex-end; gap: 6px; }
+    #ladder_hist_meta {
+      min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-size: 11px; font-weight: 500; color: #e0b050;
+    }
+    #ladder_hist_meta[hidden] { display: none; }
+    #ladder_hist .ladder-card { width: min(640px, 94vw); max-height: min(78vh, 640px); }
+    #ladder_hist .ladder-body { overflow: auto; min-height: 0; padding: 0 16px 14px; }
+    #ladder_hist table { width: 100%; border-collapse: collapse; margin: 0; }
+    #ladder_hist th, #ladder_hist td {
+      text-align: left; padding: 4px 8px; border-bottom: 1px solid #2a3140; font-weight: 400;
+    }
+    #ladder_hist th { font-size: 11px; color: #8b93a7; }
+    #ladder_hist td.when, #ladder_hist td.num { white-space: nowrap; font-variant-numeric: tabular-nums; }
+    #ladder_hist td.num { text-align: right; }
+    #ladder_hist td.is-win { color: aqua; }
+    #ladder_hist td.is-loss { color: #e07070; }
+    #ladder_hist .note { margin: 4px 0; font-size: 12px; color: #e0b050; }
+    #ladder_hist tr.ladder-match { cursor: pointer; }
+    .snap { margin-top: 8px; font: 500 12px/1.35 system-ui, sans-serif; }
+    .snap-meta { margin: 0 0 6px; color: #e0b050; }
+    .snap-stage { display: flex; gap: 8px; align-items: flex-start; }
+    .snap-keys { display: flex; flex-direction: column; gap: 4px; flex: 0 0 auto; }
+    .snap-key {
+      width: 76px; margin: 0; padding: 6px 8px; text-align: left;
+      background: #161b24; color: inherit; border: 1px solid #2a3140; border-radius: 3px;
+      font: inherit; cursor: pointer;
+    }
+    .snap-key[aria-pressed="true"] { border-color: #e0b050; color: #e0b050; }
+    .snap-view { flex: 1; min-width: 0; }
+    .snap-chart { display: block; width: 100%; height: auto; }
+    .snap-axis, .snap-empty { color: #8b93a7; font-size: 11px; }
+    .snap-axis { display: flex; justify-content: space-between; }
+    .snap-lane { display: flex; margin-top: 4px; }
+    .snap-track { position: relative; flex: 1; min-height: 44px; background: #4a5568; border-radius: 3px; }
+    .snap-mark { position: absolute; width: 40px; height: 40px; margin-left: -20px; }
+    .snap-mark img { width: 40px; height: 40px; object-fit: contain; display: block; }
+    .snap-stats { width: 100%; margin-top: 16px; border-collapse: collapse; font-size: 11px; }
+    .snap-stats th, .snap-stats td { padding: 2px 6px; text-align: right; white-space: nowrap; font-weight: 500; }
+    .snap-stats th { color: #8b93a7; }
+    .snap-stats th:first-child, .snap-stats td:first-child { text-align: left; }
+    .snap-g { border-left: 1px solid #2a3140; }
+    #ladder_pop .ladder-body { overflow: auto; min-height: 0; padding: 0 16px 14px; }
+    #ladder_go .ladder-card {
+      align-items: center; width: min(520px, 92vw); padding: 26px 28px 18px; text-align: center;
+    }
+    #ladder_go .ladder-matchup {
+      display: flex; align-items: center; justify-content: center; gap: 22px; width: 100%;
+    }
+    #ladder_go .ladder-side {
+      flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px;
+    }
+    #ladder_go .ladder-player { min-width: 0; }
+    #ladder_go .ladder-player-name {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      font-size: 18px; font-weight: 600; line-height: 1.2;
+    }
+    #ladder_go .ladder-player-name span {
+      min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    #ladder_go .ladder-swatch {
+      width: 16px; height: 16px; flex: 0 0 auto; border-radius: 4px; border: 1px solid #2a3140;
+    }
+    #ladder_go .ladder-rating {
+      margin-top: 3px; font-size: 12px; letter-spacing: 0.06em;
+      font-variant-numeric: tabular-nums; color: #e0b050;
+    }
+    #ladder_go .ladder-vs {
+      flex: 0 0 auto; font-size: 11px; font-weight: 600; letter-spacing: 0.18em;
+      text-transform: uppercase; color: #6d7688;
+    }
+    #ladder_go #ladder_go_count {
+      width: 100%; margin: 18px 0 0; padding-top: 14px; border-top: 1px solid #2a3140;
+      font-size: 28px; font-weight: 600; letter-spacing: 0.08em; font-variant-numeric: tabular-nums;
+    }
+    #ladder_go #ladder_go_count.is-wait {
+      font-size: 12px; font-weight: 500; letter-spacing: 0.14em;
+      text-transform: uppercase; color: #8b93a7;
+    }
+    #ladder_go #ladder_go_cancel { display: block; margin: 14px auto 0; }
     #ladder_pop h4 { margin: 12px 0 4px; font-size: 12px; font-weight: 600; }
     #ladder_pop table { width: 100%; border-collapse: collapse; margin: 0 0 8px; }
     #ladder_pop th, #ladder_pop td { text-align: left; padding: 3px 6px; border-bottom: 1px solid #2a3140; font-weight: 400; }
     #ladder_pop tr.is-you { color: aqua; }
+    #ladder_pop .ladder-name {
+      background: none; border: 0; padding: 0; color: inherit; font: inherit;
+      cursor: pointer; text-align: left;
+    }
+    #ladder_pop .ladder-name:hover,
+    #ladder_pop .ladder-name:focus-visible,
+    #ladder_pop .ladder-name.is-on { color: aqua; outline: none; }
     #ladder_pop p { margin: 2px 0; }
-    #ladder_pop .btn, #ladder_go .btn {
+    #ladder_pop .btn, #ladder_go .btn, #ladder_hist .btn {
       display: inline-block; width: auto; margin: 8px 8px 0 0; padding: 8px 10px;
       background: #161b24; color: inherit; border: 1px solid #2a3140; border-radius: 3px;
       font: inherit; cursor: pointer;
     }
     #ladder_pop .btn:hover, #ladder_pop .btn:focus-visible,
-    #ladder_go .btn:hover, #ladder_go .btn:focus-visible { border-color: aqua; color: aqua; outline: none; }
+    #ladder_go .btn:hover, #ladder_go .btn:focus-visible,
+    #ladder_hist .btn:hover, #ladder_hist .btn:focus-visible { border-color: aqua; color: aqua; outline: none; }
     #help_pop details { margin: 0 0 8px; }
     #help_pop .help-body > details { margin-left: 12px; }
     #help_pop summary {
@@ -763,6 +875,10 @@
     #help_pop summary:active { border-color: darkmagenta; color: darkmagenta; }
     #help_pop details:not([open]) .help-body { display: none; }
     #help_pop .help-body { padding: 8px 2px 2px; }
+    #help_pop .help-hud-diagram {
+      display: block; width: 100%; height: auto; margin: 0 0 10px;
+      filter: invert(1);
+    }
     #help_pop p, #skins_pop p { margin: 0 0 8px; }
     #help_pop .help-keys { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; margin: 0; }
     #help_pop .help-keys dt, #help_pop .help-keys dd { margin: 0; }
@@ -846,6 +962,8 @@
       cursor: pointer; opacity: .7;
     }
     #ladder_close:hover, #ladder_close:focus-visible,
+    #ladder_hist_close:hover, #ladder_hist_close:focus-visible,
+    #ladder_hist_back:hover, #ladder_hist_back:focus-visible,
     #help_close:hover, #help_close:focus-visible,
     #skins_close:hover, #skins_close:focus-visible { color: aqua; opacity: 1; outline: none; }
     #skins_pop .skin-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 8px; }
@@ -913,6 +1031,7 @@
       <div id="match-over" hidden>
         <div id="match-over-title"></div>
         <div id="match-over-sub"></div>
+        <div id="match-snap"></div>
         <table id="match-stats" hidden></table>
       </div>
       <h3 id="match-lobby-title">Lobby</h3>
@@ -1047,7 +1166,7 @@
       </div>
 
 
-      <div class="menu-solo">
+      <div class="menu-solo" id="menu-solo">
         <div class="lobby-drawer menu-mode">
           <button type="button" class="btn lobby-drawer-toggle" id="practice-toggle" aria-expanded="false" aria-controls="practice-body">Practice</button>
           <div class="lobby-drawer-body" id="practice-body" hidden>
@@ -1056,11 +1175,11 @@
               <div class="note">Offline match vs computer.</div>
             </div>
             <div class="row">
-              <button type="button" class="btn" id="open_replay_b">Open replay</button>
+              <button type="button" class="btn" id="open_replay_b">Open Replay</button>
               <div class="note">Watch a saved .gecho replay.</div>
             </div>
             <div class="row">
-              <button type="button" class="btn" id="unit_tester_b">Unit tester</button>
+              <button type="button" class="btn" id="unit_tester_b">Unit Tester</button>
               <div class="note">One of every unit and building.</div>
             </div>
             <div class="row">
@@ -1078,12 +1197,12 @@
         <input type="text" id="name_input" maxlength="24" spellcheck="false" autocomplete="off" inputmode="text" enterkeyhint="done">
       </div>
       <div class="row">
-        <label for="color_picker">Colour</label>
+        <label for="color_picker">Color</label>
         <select id="color_picker"></select>
       </div>
       <div class="row">
         <button type="button" class="btn" id="skins_b" aria-controls="skins_pop" aria-expanded="false">Skins</button>
-        <div class="note">Alternate looks for units and buildings.</div>
+        <div class="note">Custom unit and building models.</div>
       </div>
       <hr class="settings-split">
       <div class="row">
@@ -1159,11 +1278,11 @@
         </div>
         <a href="mailto:aethergarden123@pm.me" title="Contact e-mail">Contact</a>
         <hr>
-        <span class="axiom"><a href="/axiom">ÆæXi0m</a></span>
+        <span class="axiom"><a href="/axiom" target="_blank">ÆæXi0m</a></span>
         <span class="credit">©'26 Aether.Garden</span>
       </div>
     </div>
-    <button type="button" class="btn" id="fullscreen_exit_b">Fullscreen [F11]</button>
+    <button type="button" class="btn" id="fullscreen_exit_b" title="Toggle Full Screen">Fullscreen [F11]</button>
     <div id="help_b" title="Help" role="button" tabindex="0" aria-label="Help" aria-controls="help_pop" aria-expanded="false"><svg fill="none" aria-hidden="true" width="100%" height="100%" viewBox="0 0 100 100">
     <g transform="matrix(1.2422 0 0 1.2422 .645 11.825)" style="stroke-opacity:1">
         <path style="stroke-width:6.19401;stroke-linecap:square;stroke-linejoin:round;stroke-miterlimit:2.6;stroke-dasharray:none;stroke-opacity:1" d="M29.687 15.412c.494-.597 1.24-.914 1.987-1.067.22-.045.446-.06.67-.09.6.014.781-.017 1.366.134.208.053.406.14.608.21.02.007-.074-.035-.06-.02.646.704.239.084.709.934.217.642.237 1.277.023 1.926-.076.231-.16.467-.298.667-.434.627-.866.823-1.493 1.243-.338.156-.66.351-1.014.466-1.7.554-3.716.386-5.383-.194-.428-.149-.832-.361-1.248-.542-.7-.544-1.886-1.57-2.124-2.434-.275-.996.057-2.29.457-3.174.288-.638.718-1.203 1.077-1.804 1.34-1.495 1.88-2.266 3.566-3.437 2.427-1.687 5.438-2.835 8.303-3.5.965-.223 1.953-.334 2.93-.502.949-.044 1.897-.151 2.847-.131 2.971.062 6.56.855 9.008 2.633.374.272.658.651.988.977.39.47.825.907 1.172 1.411.97 1.41 1.645 3.218 1.849 4.918.186 1.556.028 2.137-.147 3.688-.168.634-.29 1.282-.506 1.901-.701 2.015-1.844 3.863-3.186 5.51-1.227 1.507-1.788 1.952-3.205 3.297-2.314 2.072-4.884 3.823-7.395 5.641-1.916 1.387-1.516 1.1-3.34 2.504-1.491 1.256-3.163 2.526-4.147 4.256-.444.78-.423.962-.602 1.791-.027.818.085 1.41.635 2.046.462.535 1.2.922 1.794 1.22.242.122.509.188.763.281.26.06.514.14.777.18.877.131 1.858.057 2.644-.384.137-.077.255-.183.383-.275.373-.365.682-.868.47-1.4-.03-.076-.08-.143-.119-.213-.154-.167-.165-.204-.368-.317-.701-.388-.86-.534-1.562-.478a1.71 1.71 0 0 0-.881.366c.1.186.036.091.207.274l.012.007v0c.271.09.142.059.387.099.243-.197.537-.303.848-.335.204-.01.263-.024.47.01.08.013.285.124.239.057-.086-.125-.257-.162-.376-.255-.125-.098.539.323.38.286.042.066.093.126.126.197.236.498-.062.986-.414 1.333-.123.089-.238.192-.37.266-.776.435-1.742.497-2.604.36-.261-.042-.514-.125-.771-.187-.253-.097-.507-.19-.758-.29-.038-.016-.078-.03-.11-.055-.602-.485-1.036-.927-1.187-1.723-.047-.249-.023-.506-.035-.759.165-.823.14-1.002.57-1.78.965-1.743 2.606-3.001 4.088-4.27 1.798-1.398 1.43-1.135 3.323-2.512 2.508-1.825 5.079-3.578 7.394-5.651 1.438-1.36 1.973-1.776 3.219-3.3 1.349-1.65 2.499-3.501 3.211-5.52.22-.62.344-1.27.516-1.906.178-1.53.343-2.163.165-3.7-.197-1.701-.879-3.534-1.845-4.947-.347-.508-.783-.949-1.175-1.423-1.476-1.165-2.094-1.81-3.757-2.581-2.222-1.03-4.76-1.509-7.197-1.55-.95-.016-1.896.094-2.844.141-.977.17-1.964.285-2.929.511-2.835.664-5.933 1.84-8.344 3.498-1.663 1.143-2.272 1.975-3.604 3.436-.368.602-.806 1.166-1.104 1.805-.407.872-.773 2.207-.515 3.203.105.403.392.74.647 1.07.812 1.05 1.361 1.234 2.546 2.007.417.178.821.387 1.25.533 1.682.572 3.716.729 5.425.17.357-.116.683-.314 1.024-.472.635-.423 1.087-.631 1.531-1.262.143-.203.228-.443.307-.678.224-.66.214-1.307.004-1.966-.093-.18-.162-.376-.28-.54-.591-.825-1.819-1.291-2.809-1.376-.233-.02-.468-.006-.702-.008-.226.032-.454.05-.677.096-.768.161-1.524.489-2.044 1.09z"/>
@@ -1211,25 +1330,37 @@
       </div>
     </div>
   </div>
+  <div id="ladder_hist" hidden>
+    <div class="ladder-card" role="dialog" aria-modal="true" aria-labelledby="ladder_hist_name">
+      <div class="ladder-bar">
+        <div class="ladder-hist-side">
+          <button type="button" id="ladder_hist_back" hidden aria-label="Back to recent matches">Back</button>
+        </div>
+        <h3 id="ladder_hist_name">Recent</h3>
+        <div class="ladder-hist-side is-end">
+          <span id="ladder_hist_meta" hidden></span>
+          <button type="button" id="ladder_hist_close" aria-label="Close recent matches">×</button>
+        </div>
+      </div>
+      <div class="ladder-body" id="ladder_hist_list"></div>
+    </div>
+  </div>
   <div id="ladder_go" hidden>
-    <div class="ladder-card" role="dialog" aria-modal="true" aria-labelledby="ladder_go_names">
-      <h3 id="ladder_go_names">Match</h3>
-      <p id="ladder_go_count">Connecting</p>
+    <div class="ladder-card" role="dialog" aria-modal="true" aria-label="Ladder match">
+      <div id="ladder_go_names" class="ladder-matchup" aria-hidden="true"></div>
+      <p id="ladder_go_count" class="is-wait">Connecting</p>
       <button type="button" class="btn" id="ladder_go_cancel">Cancel</button>
     </div>
   </div>
   <div id="help_pop" hidden>
     <div class="help-card" role="dialog" aria-modal="true" aria-labelledby="help_title">
       <button type="button" id="help_close" aria-label="Close help">×</button>
-      <h3 id="help_title">Help</h3>
+      <h3 id="help_title">Game Manual</h3>
       <details>
         <summary>General</summary>
         <div class="help-body">
+          <img class="help-hud-diagram" src="/assets/aether-hud.svg" alt="HUD layout diagram" width="297" height="210" decoding="async" />
           <dl class="help-keys">
-            <dt>Screen side edges</dt><dd>Zoom</dd>
-            <dt>Screen top/bottom edges</dt><dd>Rotate</dd>
-            <dt>Top stats</dt><dd>Population, Game Clock, FPS, Ping</dd>
-            <dt>Bottom resources</dt><dd>Wood, Stone, Minerals, Food</dd>
             <dt>Combo abilities</dt><dd>4 villagers and an engineer, then cast to plant an agora. Casters in that selection block it. In King of the Hill you start without one and fight over them</dd>
           </dl>
         </div>
@@ -1346,10 +1477,10 @@
   <div id="skins_pop" hidden>
     <div class="help-card" role="dialog" aria-modal="true" aria-labelledby="skins_title">
       <button type="button" id="skins_close" aria-label="Close skins">×</button>
-      <h3 id="skins_title">Skins</h3>
-      <p>Alternate looks for units and buildings.</p>
+      <h3 id="skins_title">Custom Models</h3>
+      <p>Select custom looks for units and buildings.</p>
       <div id="skins_list"></div>
-      <p id="skins_store_note" class="note" hidden>Purchase on <a href="https://store.steampowered.com/app/5043860/" target="_blank" rel="noreferrer">Steam</a> to use these looks.</p>
+      <p id="skins_store_note" class="note" hidden>Alternative model packs are available for purchase on <a href="https://store.steampowered.com/app/5043860/" target="_blank" rel="noreferrer">Steam</a>.</p>
     </div>
   </div>
   <div id="replay-watch" hidden>

@@ -2,9 +2,20 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMatchLobby } from './matchLobby.js';
 import { createGameLobby } from './gameLobby.js';
-import { MSG } from '../lobby/protocol.js';
+import { COUNTDOWN_MS, MSG } from '../lobby/protocol.js';
 import { ladderMatchDeal } from '../lobby/ladderMap.js';
 import { CMD } from '../sim/commands.js';
+import { SIM_GENERATION } from '../sim/generation.js';
+
+const withSim = (fn) => (message, ...rest) => fn(
+  { sim: SIM_GENERATION, ...message },
+  ...rest,
+);
+
+async function finishCountdown(t) {
+  t.mock.timers.tick(COUNTDOWN_MS);
+  await Promise.resolve();
+}
 
 function fakeP2p(userId = 'host') {
   const broadcasts = [];
@@ -67,6 +78,25 @@ describe('match lobby', () => {
     room.leaveRoom();
   });
 
+  it('rejects a peer that omits the live simulation generation', () => {
+    const p2p = fakeP2p('host');
+    let receive = null;
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      subscribeDataMessage: (fn) => { receive = fn; return () => {}; },
+    });
+    room.createRoom('onevsone');
+    const { roomId, mode } = room.getState();
+    const join = { v: 1, type: MSG.JOIN, userId: 'guest', roomId, mode };
+
+    receive(join);
+    assert.equal(room.getState().playerCount, 1);
+    receive({ ...join, sim: SIM_GENERATION });
+    assert.equal(room.getState().playerCount, 2);
+  });
+
   it('host applies join/ready and can start', () => {
     const p2p = fakeP2p('host');
     let dataFn = null;
@@ -75,7 +105,7 @@ describe('match lobby', () => {
       getP2p: () => p2p,
       getUserId: () => 'host',
       gameLobby,
-      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
     });
     room.createRoom('onevsone');
     const { roomId, mode } = room.getState();
@@ -115,7 +145,7 @@ describe('match lobby', () => {
       getP2p: () => hostP2p,
       getUserId: () => 'host-id',
       gameLobby: createGameLobby({ getP2p: () => hostP2p }),
-      subscribeBroadcast: (fn) => { hostBroadcast = fn; return () => {}; },
+      subscribeBroadcast: (fn) => { hostBroadcast = withSim(fn); return () => {}; },
     });
     hostRoom.createRoom('onevsone');
     const { roomId, mode } = hostRoom.getState();
@@ -142,7 +172,7 @@ describe('match lobby', () => {
       getP2p: () => hostP2p,
       getUserId: () => 'host-id',
       gameLobby: createGameLobby({ getP2p: () => hostP2p }),
-      subscribeBroadcast: (fn) => { hostBroadcast = fn; return () => {}; },
+      subscribeBroadcast: (fn) => { hostBroadcast = withSim(fn); return () => {}; },
     });
     hostRoom.createRoom('onevsone', { roomId: 'lobby-ranked', seed: 7, ranked: true });
     hostBroadcast({
@@ -170,7 +200,7 @@ describe('match lobby', () => {
       getP2p: () => hostP2p,
       getUserId: () => 'host-id',
       gameLobby: createGameLobby({ getP2p: () => hostP2p }),
-      subscribeBroadcast: (fn) => { hostBroadcast = fn; return () => {}; },
+      subscribeBroadcast: (fn) => { hostBroadcast = withSim(fn); return () => {}; },
     });
     hostRoom.createRoom('onevsone', { roomId: 'lobby-ranked', seed: 7, ranked: true });
     const guestP2p = fakeP2p('guest-id');
@@ -179,7 +209,7 @@ describe('match lobby', () => {
       getP2p: () => guestP2p,
       getUserId: () => 'guest-id',
       gameLobby: createGameLobby({ getP2p: () => guestP2p }),
-      subscribeBroadcast: (fn) => { guestBroadcast = fn; return () => {}; },
+      subscribeBroadcast: (fn) => { guestBroadcast = withSim(fn); return () => {}; },
     });
     guestRoom.joinRoom('onevsone', 'lobby-ranked', 'host-id', { ranked: true, seed: 7 });
     hostBroadcast({
@@ -214,7 +244,7 @@ describe('match lobby', () => {
       getP2p: () => hostP2p,
       getUserId: () => 'host-id',
       gameLobby: createGameLobby({ getP2p: () => hostP2p }),
-      subscribeBroadcast: (fn) => { hostBroadcast = fn; return () => {}; },
+      subscribeBroadcast: (fn) => { hostBroadcast = withSim(fn); return () => {}; },
     });
     hostRoom.createRoom('teams', {
       roomId: 'lobby-teams',
@@ -262,7 +292,7 @@ describe('match lobby', () => {
       getP2p: () => p2p,
       getUserId: () => 'host',
       gameLobby: createGameLobby({ getP2p: () => p2p }),
-      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
     });
     room.createRoom('onevsone');
     const { roomId, mode } = room.getState();
@@ -271,7 +301,8 @@ describe('match lobby', () => {
     room.leaveRoom();
   });
 
-  it('countdown finish loads playing and drops the browse row', async () => {
+  it('countdown finish loads playing and drops the browse row', async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
     const p2p = fakeP2p('host');
     let dataFn = null;
     let started = null;
@@ -279,7 +310,7 @@ describe('match lobby', () => {
       getP2p: () => p2p,
       getUserId: () => 'host',
       gameLobby: createGameLobby({ getP2p: () => p2p }),
-      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
       onStartMatch: (snap) => { started = snap; },
     });
     room.createRoom('onevsone');
@@ -287,8 +318,7 @@ describe('match lobby', () => {
     dataFn({ v: 1, type: MSG.JOIN, userId: 'guest', name: 'Guest', color: '#0f0', roomId, mode });
     dataFn({ v: 1, type: MSG.READY, userId: 'guest', ready: true, roomId, mode });
     assert.equal(room.requestStart(), true);
-    dataFn({ v: 1, type: MSG.START, countdownEndsAt: Date.now() - 1, roomId, mode });
-    await new Promise((r) => setTimeout(r, 0));
+    await finishCountdown(t);
     assert.equal(room.getState().phase, 'playing');
     assert.equal(started?.roomId, roomId);
     assert.ok(p2p.broadcasts.some((row) => row.data.type === MSG.CLOSED));
@@ -301,7 +331,7 @@ describe('match lobby', () => {
       getP2p: () => fakeP2p('guest-id'),
       getUserId: () => 'guest-id',
       gameLobby: createGameLobby({ getP2p: () => fakeP2p('guest-id') }),
-      subscribeBroadcast: (fn) => { onBroadcast = fn; return () => {}; },
+      subscribeBroadcast: (fn) => { onBroadcast = withSim(fn); return () => {}; },
     });
     guest.joinRoom('onevsone', 'lobby-1', 'host-id');
     onBroadcast({
@@ -322,7 +352,8 @@ describe('match lobby', () => {
     guest.leaveRoom();
   });
 
-  it('delivers chapter votes while the match is playing', () => {
+  it('delivers chapter votes while the match is playing', async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
     const p2p = fakeP2p('host');
     let dataFn = null;
     const votes = [];
@@ -330,7 +361,7 @@ describe('match lobby', () => {
       getP2p: () => p2p,
       getUserId: () => 'host',
       gameLobby: createGameLobby({ getP2p: () => p2p }),
-      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
       onChapter: (msg) => votes.push(msg),
     });
     room.createRoom('adventure');
@@ -346,7 +377,7 @@ describe('match lobby', () => {
     });
     dataFn({ v: 1, type: MSG.READY, userId: 'guest', ready: true, roomId, mode });
     room.requestStart();
-    dataFn({ v: 1, type: MSG.START, countdownEndsAt: Date.now() - 1, roomId, mode });
+    await finishCountdown(t);
     dataFn({
       v: 1,
       type: MSG.CHAPTER,
@@ -392,7 +423,7 @@ describe('match lobby', () => {
       getP2p: () => fakeP2p('guest-id'),
       getUserId: () => 'guest-id',
       gameLobby: createGameLobby({ getP2p: () => fakeP2p('guest-id') }),
-      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
     });
     guest.joinRoom('adventure', 'lobby-1', 'host-id');
     dataFn({
@@ -415,7 +446,7 @@ describe('match lobby', () => {
       getP2p: () => p2p,
       getUserId: () => 'host',
       gameLobby: createGameLobby({ getP2p: () => p2p }),
-      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
     });
     room.createRoom('adventure');
     const { roomId, mode } = room.getState();
@@ -458,22 +489,22 @@ describe('match lobby', () => {
     room.leaveRoom();
   });
 
-  it('removes a departing player from lockstep during play', async () => {
+  it('removes a departing player from lockstep during play', async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
     const p2p = fakeP2p('host');
     let dataFn = null;
     const room = createMatchLobby({
       getP2p: () => p2p,
       getUserId: () => 'host',
       gameLobby: createGameLobby({ getP2p: () => p2p }),
-      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
     });
     room.createRoom('onevsone');
     const { roomId, mode } = room.getState();
     dataFn({ v: 1, type: MSG.JOIN, userId: 'guest', name: 'Guest', color: '#0f0', roomId, mode });
     dataFn({ v: 1, type: MSG.READY, userId: 'guest', ready: true, roomId, mode });
     room.requestStart();
-    dataFn({ v: 1, type: MSG.START, countdownEndsAt: Date.now() - 1, roomId, mode });
-    await new Promise((r) => setTimeout(r, 0));
+    await finishCountdown(t);
     assert.equal(room.getState().phase, 'playing');
 
     const removed = [];
@@ -509,14 +540,233 @@ describe('match lobby', () => {
     room.leaveRoom();
   });
 
-  it('reopens ready-up and browse announce when the match ends', async () => {
+  it('forfeits an opponent who drops during play', async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+    const p2p = fakeP2p('host');
+    let dataFn = null;
+    let onDisconnect = null;
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
+      subscribePeerDisconnected: (fn) => { onDisconnect = fn; return () => {}; },
+    });
+    room.createRoom('onevsone');
+    const { roomId, mode } = room.getState();
+    dataFn({ v: 1, type: MSG.JOIN, userId: 'guest', name: 'Guest', color: '#0f0', roomId, mode });
+    dataFn({ v: 1, type: MSG.READY, userId: 'guest', ready: true, roomId, mode });
+    room.requestStart();
+    await finishCountdown(t);
+    assert.equal(room.getState().phase, 'playing');
+
+    const removed = [];
+    const frames = [];
+    onDisconnect('guest');
+    assert.equal(room.getState().playerCount, 1);
+    room.attachSession({
+      localPlayerId: 0,
+      role: 'player',
+      confirmedTick: 10,
+      humanPlayers: [0, 1],
+      submitCommand() { return null; },
+      removeHumanPlayer(id) { removed.push(id); },
+      submitAtTick(tick, cmd, opts) {
+        frames.push({ tick, cmd, opts });
+        return { tick, playerId: 0, commands: [cmd], commandId: opts.commandId };
+      },
+      bufferRemoteFrame() {},
+      setPeerConfirmedTick() {},
+    });
+    assert.deepEqual(removed, [1]);
+    assert.equal(frames[0].cmd.type, CMD.FORCE_ELIMINATE);
+    assert.equal(frames[0].cmd.playerId, 1);
+    room.leaveRoom();
+  });
+
+  it('forfeits the host when their link drops during play', async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+    let dataFn = null;
+    let onDisconnect = null;
+    const guest = createMatchLobby({
+      getP2p: () => fakeP2p('guest'),
+      getUserId: () => 'guest',
+      gameLobby: createGameLobby({ getP2p: () => fakeP2p('guest') }),
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
+      subscribePeerDisconnected: (fn) => { onDisconnect = fn; return () => {}; },
+      onStartMatch: () => {},
+    });
+    guest.joinRoom('onevsone', 'lobby-1', 'host');
+    dataFn({
+      v: 1,
+      type: MSG.START,
+      countdownEndsAt: Date.now() - 1,
+      roomId: 'lobby-1',
+      mode: 'onevsone',
+      seats: [
+        { index: 0, kind: 'human', userId: 'host', name: 'Host', ready: true },
+        { index: 1, kind: 'human', userId: 'guest', name: 'Guest', ready: true },
+      ],
+    });
+    await finishCountdown(t);
+    assert.equal(guest.getState().phase, 'playing');
+    const removed = [];
+    guest.attachSession({
+      localPlayerId: 1,
+      role: 'player',
+      confirmedTick: 4,
+      submitCommand() { return null; },
+      removeHumanPlayer(id) { removed.push(id); },
+      submitAtTick() { return { tick: 6 }; },
+      bufferRemoteFrame() {},
+      setPeerConfirmedTick() {},
+    });
+    onDisconnect('host');
+    assert.deepEqual(removed, [0]);
+    assert.equal(guest.getState().playerCount, 1);
+    guest.leaveRoom();
+  });
+
+  it('closes a ranked countdown when the opponent leaves', async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+    const p2p = fakeP2p('host-id');
+    let onBroadcast = null;
+    let requeue = 0;
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host-id',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      subscribeBroadcast: (fn) => { onBroadcast = withSim(fn); return () => {}; },
+      onRankedPregameEnd: () => { requeue += 1; },
+    });
+    room.createRoom('onevsone', { roomId: 'lobby-ranked', seed: 7, ranked: true });
+    onBroadcast({
+      v: 1,
+      type: MSG.JOIN,
+      userId: 'guest-id',
+      name: 'Guest',
+      color: '#00f',
+      ready: true,
+      roomId: 'lobby-ranked',
+      mode: 'onevsone',
+    });
+    assert.equal(room.getState().phase, 'countdown');
+    onBroadcast({
+      v: 1,
+      type: MSG.LEAVE,
+      userId: 'guest-id',
+      roomId: 'lobby-ranked',
+      mode: 'onevsone',
+    });
+    assert.equal(room.isActive(), false);
+    assert.equal(requeue, 1);
+    room.leaveRoom();
+    assert.equal(requeue, 1);
+  });
+
+  it('leaves the countdown when the host closes it', () => {
+    let onBroadcast = null;
+    let requeue = 0;
+    const guest = createMatchLobby({
+      getP2p: () => fakeP2p('guest-id'),
+      getUserId: () => 'guest-id',
+      gameLobby: createGameLobby({ getP2p: () => fakeP2p('guest-id') }),
+      subscribeBroadcast: (fn) => { onBroadcast = withSim(fn); return () => {}; },
+      onRankedPregameEnd: () => { requeue += 1; },
+    });
+    guest.joinRoom('onevsone', 'lobby-ranked', 'host-id', { ranked: true, seed: 7 });
+    onBroadcast({
+      v: 1,
+      type: MSG.START,
+      countdownEndsAt: Date.now() + 3000,
+      roomId: 'lobby-ranked',
+      mode: 'onevsone',
+      phase: 'countdown',
+      seats: [
+        { index: 0, kind: 'human', userId: 'host-id', name: 'H', ready: true },
+        { index: 1, kind: 'human', userId: 'guest-id', name: 'G', ready: true },
+      ],
+    });
+    assert.equal(guest.getState().phase, 'countdown');
+    onBroadcast({
+      v: 1,
+      type: MSG.CLOSED,
+      mode: 'onevsone',
+      roomId: 'lobby-ranked',
+      phase: 'countdown',
+    });
+    assert.equal(guest.isActive(), false);
+    assert.equal(requeue, 1);
+  });
+
+  it('forfeits a player whose confirms stop', async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'] });
     const p2p = fakeP2p('host');
     let dataFn = null;
     const room = createMatchLobby({
       getP2p: () => p2p,
       getUserId: () => 'host',
       gameLobby: createGameLobby({ getP2p: () => p2p }),
-      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
+    });
+    room.createRoom('onevsone');
+    const { roomId, mode } = room.getState();
+    dataFn({ v: 1, type: MSG.JOIN, userId: 'guest', name: 'Guest', color: '#0f0', roomId, mode });
+    dataFn({ v: 1, type: MSG.READY, userId: 'guest', ready: true, roomId, mode });
+    room.requestStart();
+    await finishCountdown(t);
+    assert.equal(room.getState().phase, 'playing');
+    const removed = [];
+    const frames = [];
+    room.attachSession({
+      localPlayerId: 0,
+      role: 'player',
+      confirmedTick: 10,
+      lockstepBlockedMs() { return 8000; },
+      lockstepWaiters() { return [1]; },
+      submitCommand() { return null; },
+      removeHumanPlayer(id) { removed.push(id); },
+      submitAtTick(tick, cmd) {
+        frames.push({ tick, cmd });
+        return { tick, playerId: 0, commands: [cmd] };
+      },
+      bufferRemoteFrame() {},
+      setPeerConfirmedTick() {},
+    });
+    t.mock.timers.tick(500);
+    assert.deepEqual(removed, [1]);
+    assert.equal(frames[0].cmd.type, CMD.FORCE_ELIMINATE);
+    assert.equal(frames[0].cmd.playerId, 1);
+    room.leaveRoom();
+  });
+
+  it('leaves a ranked lobby when the opponent never arrives', (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'] });
+    const p2p = fakeP2p('host-id');
+    let requeue = 0;
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host-id',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      onRankedPregameEnd: () => { requeue += 1; },
+    });
+    room.createRoom('onevsone', { roomId: 'lobby-ranked', seed: 7, ranked: true });
+    assert.equal(room.getState().phase, 'waiting');
+    t.mock.timers.tick(500);
+    t.mock.timers.tick(12000);
+    assert.equal(room.isActive(), false);
+    assert.equal(requeue, 1);
+  });
+
+  it('reopens ready-up and browse announce when the match ends', async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+    const p2p = fakeP2p('host');
+    let dataFn = null;
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
       onStartMatch: () => {},
     });
     room.createRoom('onevsone');
@@ -524,8 +774,7 @@ describe('match lobby', () => {
     dataFn({ v: 1, type: MSG.JOIN, userId: 'guest', name: 'Guest', color: '#0f0', roomId, mode });
     dataFn({ v: 1, type: MSG.READY, userId: 'guest', ready: true, roomId, mode });
     assert.equal(room.requestStart(), true);
-    dataFn({ v: 1, type: MSG.START, countdownEndsAt: Date.now() - 1, roomId, mode });
-    await new Promise((r) => setTimeout(r, 0));
+    await finishCountdown(t);
     assert.equal(room.getState().phase, 'playing');
     const before = p2p.broadcasts.length;
     assert.equal(room.returnToWaiting(), true);
@@ -538,7 +787,8 @@ describe('match lobby', () => {
     room.leaveRoom();
   });
 
-  it('restores the sandbox if you leave the rematch lobby', async () => {
+  it('restores the sandbox if you leave the rematch lobby', async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
     const p2p = fakeP2p('host');
     let dataFn = null;
     let left = 0;
@@ -546,7 +796,7 @@ describe('match lobby', () => {
       getP2p: () => p2p,
       getUserId: () => 'host',
       gameLobby: createGameLobby({ getP2p: () => p2p }),
-      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
       onStartMatch: () => {},
       onLeaveMatch: () => { left += 1; },
     });
@@ -555,8 +805,7 @@ describe('match lobby', () => {
     dataFn({ v: 1, type: MSG.JOIN, userId: 'guest', name: 'Guest', color: '#0f0', roomId, mode });
     dataFn({ v: 1, type: MSG.READY, userId: 'guest', ready: true, roomId, mode });
     room.requestStart();
-    dataFn({ v: 1, type: MSG.START, countdownEndsAt: Date.now() - 1, roomId, mode });
-    await new Promise((r) => setTimeout(r, 0));
+    await finishCountdown(t);
     room.returnToWaiting();
     assert.equal(left, 0);
     room.leaveRoom();
@@ -570,7 +819,7 @@ describe('match lobby', () => {
       getP2p: () => p2p,
       getUserId: () => 'guest-id',
       gameLobby: createGameLobby({ getP2p: () => p2p }),
-      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
       onStartMatch: () => {},
     });
     guest.joinRoom('onevsone', 'lobby-1', 'host-id');
@@ -636,8 +885,8 @@ describe('match lobby', () => {
       getP2p: () => p2p,
       getUserId: () => 'host',
       gameLobby: createGameLobby({ getP2p: () => p2p }),
-      subscribeBroadcast: (fn) => { broadcastFn = fn; return () => {}; },
-      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      subscribeBroadcast: (fn) => { broadcastFn = withSim(fn); return () => {}; },
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
     });
     room.createRoom('onevsone');
     const { roomId, mode } = room.getState();
@@ -722,8 +971,8 @@ describe('match lobby', () => {
       getP2p: () => fakeP2p('guest-id'),
       getUserId: () => 'guest-id',
       gameLobby: createGameLobby({ getP2p: () => fakeP2p('guest-id') }),
-      subscribeBroadcast: (fn) => { onBroadcast = fn; return () => {}; },
-      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      subscribeBroadcast: (fn) => { onBroadcast = withSim(fn); return () => {}; },
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
       onStartMatch: () => {},
       onLeaveMatch: () => { left += 1; },
     });
@@ -749,7 +998,7 @@ describe('match lobby', () => {
       getP2p: () => p2p,
       getUserId: () => 'host',
       gameLobby: createGameLobby({ getP2p: () => p2p }),
-      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
     });
     room.createRoom('onevsone');
     const { roomId, mode } = room.getState();
@@ -769,7 +1018,7 @@ describe('match lobby', () => {
       getP2p: () => fakeP2p('eye'),
       getUserId: () => 'eye',
       gameLobby: createGameLobby({ getP2p: () => fakeP2p('eye') }),
-      subscribeBroadcast: (fn) => { onBroadcast = fn; return () => {}; },
+      subscribeBroadcast: (fn) => { onBroadcast = withSim(fn); return () => {}; },
       onStartMatch: (snap) => { started = snap; },
     });
     guest.joinRoom('onevsone', 'lobby-1', 'host-id');
@@ -811,7 +1060,7 @@ describe('match lobby', () => {
       getP2p: () => p2p,
       getUserId: () => 'host',
       gameLobby: createGameLobby({ getP2p: () => p2p }),
-      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
     });
     room.createRoom('onevsone');
     const { roomId, mode } = room.getState();
@@ -834,7 +1083,7 @@ describe('match lobby', () => {
       getP2p: () => p2p,
       getUserId: () => 'host',
       gameLobby: createGameLobby({ getP2p: () => p2p }),
-      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
       loadGarden: async (settings) => (settings.chapter === 'workshop:10/map.garden' ? garden : null),
     });
     room.createRoom('onevsone');
@@ -857,7 +1106,7 @@ describe('match lobby', () => {
       getP2p: () => p2p,
       getUserId: () => 'host',
       gameLobby: createGameLobby({ getP2p: () => p2p }),
-      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
     });
     room.createRoom('teams');
     room.setSetting('allowSpectators', false);
@@ -882,7 +1131,7 @@ describe('match lobby', () => {
       getP2p: () => fakeP2p('eye'),
       getUserId: () => 'eye',
       gameLobby: createGameLobby({ getP2p: () => fakeP2p('eye') }),
-      subscribeBroadcast: (fn) => { onBroadcast = fn; return () => {}; },
+      subscribeBroadcast: (fn) => { onBroadcast = withSim(fn); return () => {}; },
     });
     assert.equal(guest.spectateRoom('onevsone', 'lobby-1', 'host-id'), true);
     onBroadcast({
@@ -907,7 +1156,7 @@ describe('match lobby', () => {
       getP2p: () => fakeP2p('eye'),
       getUserId: () => 'eye',
       gameLobby: createGameLobby({ getP2p: () => fakeP2p('eye') }),
-      subscribeBroadcast: (fn) => { onBroadcast = fn; return () => {}; },
+      subscribeBroadcast: (fn) => { onBroadcast = withSim(fn); return () => {}; },
     });
     guest.spectateRoom('onevsone', 'lobby-1', 'host-id');
     onBroadcast({
@@ -963,7 +1212,7 @@ describe('match lobby', () => {
       getP2p: () => p2p,
       getUserId: () => 'host',
       gameLobby: createGameLobby({ getP2p: () => p2p }),
-      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
     });
     room.createRoom('onevsone');
     const { roomId, mode } = room.getState();

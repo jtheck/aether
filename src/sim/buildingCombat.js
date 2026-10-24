@@ -209,9 +209,11 @@ export function tickBuildingFires(w, field) {
     if ((b.fireTicks | 0) <= 0) continue;
     if (!isBuildingAlive(b)) {
       b.fireTicks = 0;
+      w.buildingsDirty = 1;
       continue;
     }
     b.fireTicks = (b.fireTicks | 0) - 1;
+    w.buildingsDirty = 1;
     if (b.fireTicks > 0 && b.fireTicks % LIGHTNING_BUILDING_BURN_INTERVAL === 0) {
       applyDamageBuilding(
         w,

@@ -27,7 +27,7 @@ export function createMemoryStore() {
     async getItem(pk, sk) {
       return items.get(itemKey(pk, sk)) ?? null;
     },
-    async settle({ settled, players }) {
+    async settle({ settled, players, histories = [] }) {
       if (items.has(itemKey(settled.pk, settled.sk))) return { ok: false, reason: 'exists' };
       for (const player of players) {
         const current = items.get(itemKey(player.pk, player.sk));
@@ -36,6 +36,11 @@ export function createMemoryStore() {
         if (rating !== player.oldRating || games !== player.oldGames) {
           return { ok: false, reason: 'conflict' };
         }
+      }
+      for (const history of histories) {
+        const current = items.get(itemKey(history.pk, history.sk));
+        const rev = Number.isInteger(current?.rev) ? current.rev : null;
+        if (rev !== (history.oldRev ?? null)) return { ok: false, reason: 'conflict' };
       }
       items.set(itemKey(settled.pk, settled.sk), settled);
       for (const player of players) {
@@ -47,6 +52,15 @@ export function createMemoryStore() {
           rating: player.rating,
           games: player.games,
           wins: player.wins,
+        });
+      }
+      for (const history of histories) {
+        items.set(itemKey(history.pk, history.sk), {
+          pk: history.pk,
+          sk: history.sk,
+          playerId: history.playerId,
+          rev: (history.oldRev ?? 0) + 1,
+          recent: history.recent,
         });
       }
       return { ok: true };

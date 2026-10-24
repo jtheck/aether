@@ -3,6 +3,9 @@
 
 import { packReplayCams } from './replayCam.js';
 import { isWorkshopRef } from './workshop.js';
+import { SIM_GENERATION } from '../sim/generation.js';
+
+export { SIM_GENERATION } from '../sim/generation.js';
 
 export const REPLAY_KIND = 'aether-replay';
 export const REPLAY_VERSION = 1;
@@ -11,7 +14,6 @@ export const REPLAY_VERSION = 1;
  * Presentation, fog, and camera changes stay on this number.
  * Tapes saved before the field existed are generation 1.
  */
-export const SIM_GENERATION = 1;
 export const REPLAY_SIM_UNSTAMPED = 1;
 export const REPLAY_SIM_UPDATE = 'Update Aether to watch this replay';
 export const REPLAY_SIM_OLD = 'This replay was recorded on older rules and will not play';

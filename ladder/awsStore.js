@@ -50,7 +50,7 @@ export function createAwsStore({ ddb, s3, table, bucket }) {
       }));
       return got.Item ?? null;
     },
-    async settle({ settled, players }) {
+    async settle({ settled, players, histories = [] }) {
       const transact = [
         {
           Put: {
@@ -77,6 +77,36 @@ export function createAwsStore({ ddb, s3, table, bucket }) {
             },
           },
         })),
+        ...histories.map((history) => (
+          history.oldRev == null
+            ? {
+              Put: {
+                TableName: table,
+                Item: {
+                  pk: history.pk,
+                  sk: history.sk,
+                  playerId: history.playerId,
+                  rev: 1,
+                  recent: history.recent,
+                },
+                ConditionExpression: 'attribute_not_exists(pk)',
+              },
+            }
+            : {
+              Update: {
+                TableName: table,
+                Key: { pk: history.pk, sk: history.sk },
+                UpdateExpression: 'SET playerId = :playerId, rev = :rev, recent = :recent',
+                ConditionExpression: 'rev = :oldRev',
+                ExpressionAttributeValues: {
+                  ':playerId': history.playerId,
+                  ':rev': history.oldRev + 1,
+                  ':oldRev': history.oldRev,
+                  ':recent': history.recent,
+                },
+              },
+            }
+        )),
       ];
       try {
         await ddb.send(new TransactWriteCommand({ TransactItems: transact }));

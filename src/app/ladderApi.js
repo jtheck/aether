@@ -54,6 +54,26 @@ export function postLadderReport(body) {
   return post(body);
 }
 
+export function postLadderSnapshot(body) {
+  return post({ action: 'snapshot', ...body });
+}
+
+const LADDER_MATCH = /^[a-z0-9][a-z0-9-]{0,63}$/i;
+
+export async function loadLadderSnapshot(matchId, pageOrigin = '') {
+  const id = String(matchId || '').toLowerCase();
+  if (!LADDER_MATCH.test(id)) return null;
+  if (String(pageOrigin).includes('aether.garden')) {
+    try {
+      const res = await fetch(`/ladder/matches/${id}.json`);
+      if (res.ok) return res.json();
+    } catch { /* fall through to the function */ }
+  }
+  const res = await fetch(`${LADDER_URL}?match=${id}`);
+  if (!res.ok) return null;
+  return res.json().catch(() => null);
+}
+
 export function postLadderKoth(body) {
   return post({ action: 'koth', ...body });
 }
@@ -64,6 +84,22 @@ export function postHill(body) {
 
 export function postHillSplit(body) {
   return post({ action: 'hill-split', ...body });
+}
+
+const LADDER_PLAYER = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export async function loadLadderRecent(playerId, pageOrigin = '') {
+  const id = String(playerId || '').toLowerCase();
+  if (!LADDER_PLAYER.test(id)) return { playerId: id, recent: [] };
+  if (String(pageOrigin).includes('aether.garden')) {
+    try {
+      const res = await fetch(`/ladder/players/${id}.json`);
+      if (res.ok) return res.json();
+    } catch { /* fall through to the function */ }
+  }
+  const res = await fetch(`${LADDER_URL}?player=${id}`);
+  if (!res.ok) return { playerId: id, recent: [] };
+  return res.json().catch(() => ({ playerId: id, recent: [] }));
 }
 
 export async function loadLadderBoard(pageOrigin = '', board = '1v1') {

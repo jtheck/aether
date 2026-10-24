@@ -64,7 +64,7 @@
       // Load both villager sound variants
       const sound1 = await BABYLON.CreateSoundAsync(
         "villager_move_1",
-        "assets/sounds/units/villager.ogg",
+        "../assets/sounds/units/villager.ogg",
         window.gfx?.scene,
         null, // callback
         soundOptions
@@ -72,7 +72,7 @@
 
       const sound2 = await BABYLON.CreateSoundAsync(
         "villager_move_2",
-        "assets/sounds/units/villager2.ogg",
+        "../assets/sounds/units/villager2.ogg",
         window.gfx?.scene,
         null, // callback
         soundOptions

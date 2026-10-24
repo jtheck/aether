@@ -11,6 +11,7 @@ import { applyRockOccupancyFromStock } from './scenery.js';
 import { applyWorldStructureOccupancy, defaultRallyWorld, getBuildTime, getBuildingHp } from './buildings.js';
 import { exportDoorState, importDoorState } from './doorCombat.js';
 import { ORDER } from './world.js';
+import { exportMatchSnapState, importMatchSnapState } from './matchSnapshot.js';
 import * as fx from './fixed.js';
 import { applySerializedTech, serializeTech } from './tech.js';
 import { applySerializedResources, serializeResources } from './resources.js';
@@ -121,6 +122,7 @@ export function exportWorldCheckpoint(w, field, checksum) {
     resources: serializeResources(w),
     foodUpkeepAcc: serializeFoodUpkeep(w),
     ownerStats: exportOwnerStats(w),
+    snap: exportMatchSnapState(w),
     field: exportFieldMutable(field),
     pendingLightning: exportPendingLightning(w.pendingLightning),
     waveSpawners: exportWaveSpawners(w.waveSpawners),
@@ -256,6 +258,7 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   applySerializedResources(w, checkpoint.resources);
   applySerializedFoodUpkeep(w, checkpoint.foodUpkeepAcc);
   importOwnerStats(w, checkpoint.ownerStats);
+  importMatchSnapState(w, checkpoint.snap);
   importFieldMutable(field, checkpoint.field);
   // pass is not checkpointed; shrink rock discs to remaining stock, then OR buildings.
   applyRockOccupancyFromStock(field);

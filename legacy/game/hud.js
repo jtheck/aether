@@ -1443,7 +1443,7 @@
           window.buildingSystem.cancelPlacement();
         }
         hud.showSubMenu("units");
-      }, new BABYLON.Color3(0.2, 0.6, 1), null, 'assets/models/gnome.glb'); // Blue with gnome model
+      }, new BABYLON.Color3(0.2, 0.6, 1), null, '../assets/models/gnome.glb'); // Blue with gnome model
 
       hud.addRadialMenuItem("Buildings", "🏗️", () => hud.showSubMenu("buildings"), new BABYLON.Color3(0, 1, 0)); // Green - in the middle
 
@@ -1453,7 +1453,7 @@
           window.buildingSystem.cancelPlacement();
         }
         hud.showSubMenu("research");
-      }, new BABYLON.Color3(1, 1, 0), null, 'assets/models/mushroom.glb'); // Yellow with mushroom model
+      }, new BABYLON.Color3(1, 1, 0), null, '../assets/models/mushroom.glb'); // Yellow with mushroom model
     }
     
     // Ensure containers are enabled (positioning is handled by animateMenuItems)

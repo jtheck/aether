@@ -842,6 +842,36 @@ describe('aim then stamp placement', () => {
     assert.equal(confirms[0].x, 28);
     assert.equal(confirms[0].z, (200 - TOUCH_PLACE_LIFT_PX) / 10);
   });
+
+  it('touch confirm tap keeps the sitting ghost; it does not re-aim on down', async () => {
+    const { input, confirms } = makePlaceHarness();
+    const sitX = 200;
+    const sitY = 220;
+    const sitZ = (sitY - TOUCH_PLACE_LIFT_PX) / 10;
+
+    input.handlePointerDown(placePtr({ pointerType: 'touch', clientX: sitX, clientY: sitY }));
+    await input.handlePointerUp(placePtr({
+      pointerType: 'touch',
+      type: 'pointerup',
+      clientX: sitX,
+      clientY: sitY,
+    }));
+    assert.equal(confirms.length, 0);
+    assert.deepEqual(input.getPlacementAnchor(), { x: sitX / 10, z: sitZ });
+
+    // Tap elsewhere (e.g. on the ghost sprite) must confirm in place, not jump.
+    input.handlePointerDown(placePtr({ pointerType: 'touch', clientX: 320, clientY: 320 }));
+    assert.deepEqual(input.getPlacementAnchor(), { x: sitX / 10, z: sitZ });
+    await input.handlePointerUp(placePtr({
+      pointerType: 'touch',
+      type: 'pointerup',
+      clientX: 320,
+      clientY: 320,
+    }));
+    assert.equal(confirms.length, 1);
+    assert.equal(confirms[0].x, sitX / 10);
+    assert.equal(confirms[0].z, sitZ);
+  });
 });
 
 describe('gamepad placement', () => {

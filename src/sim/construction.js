@@ -19,6 +19,7 @@ import { isCarried } from './transport.js';
 import { getBuildingFootprint, applyStructureOccupancyAt } from './buildings.js';
 import { createAgora } from './agora.js';
 import { DROP_OFF_TYPES } from './gather.js';
+import { noteMatchBuilding } from './matchSnapshot.js';
 
 /** Most workers that can claim a single site. */
 export const MAX_BUILDERS = 2;
@@ -197,6 +198,7 @@ export function constructionSystem(w, field) {
     if (b.buildProgress >= time) {
       b.buildProgress = time;
       b.built = 1;
+      noteMatchBuilding(w, b.owner, b.type);
       if ((b.hp | 0) > 0 && (b.maxHp | 0) > 0) b.hp = b.maxHp | 0;
       // Turn on the finished building's live effects (e.g. farm food node).
       if (field) applyStructureOccupancyAt(field, b.type, b.x, b.z, /* built */ true);

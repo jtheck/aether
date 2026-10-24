@@ -3,6 +3,8 @@
 
 import { animStressPerSideFromSearch, stressPerSideFromSearch } from '../sim/worldSetup.js';
 import { networkChannel } from '../network/namespace.js';
+import { SIM_GENERATION, hasCurrentSimGeneration } from '../sim/generation.js';
+import { compactFrameForTransport, expandTransportFrame } from '../network/lockstepWire.js';
 
 const LOBBY = networkChannel('aether-v2');
 const MATCH_TIMEOUT_MS = 120_000;
@@ -81,6 +83,38 @@ export function createNetMatch(options = {}) {
     matchResolve(config);
   }
 
+  function rejectPeerGeneration(value, id = peerId) {
+    if (matchDone) return;
+    matchDone = true;
+    clearTimeout(matchTimeout);
+    if (rejoinTimer) clearInterval(rejoinTimer);
+    const shown = value == null ? 'missing' : String(value);
+    const error = new Error(`Simulation generation mismatch (peer ${shown}, local ${SIM_GENERATION})`);
+    onStatus(error.message);
+    p2p?.disconnectPeer?.(id);
+    matchReject(error);
+  }
+
+  function sendMatchReady(id) {
+    sendReliable(p2p, { type: 'match_ready', sim: SIM_GENERATION }, id);
+  }
+
+  function sendMatchStart(id) {
+    const startMsg = {
+      type: 'match_start',
+      sim: SIM_GENERATION,
+      seed: defaultSeed,
+      hostUserId: localUserId,
+      guestUserId: id,
+    };
+    sendReliable(p2p, startMsg, id);
+    for (const delay of [250, 750, 1500]) {
+      setTimeout(() => {
+        if (peerId === id) sendReliable(p2p, startMsg, id);
+      }, delay);
+    }
+  }
+
   /** v1-style fallback when built-in auto-match misses a join event. */
   function tryMatchWithPeer(theirId) {
     if (matchDone || !p2p || !theirId || theirId === localUserId) return;
@@ -132,14 +166,34 @@ export function createNetMatch(options = {}) {
     switch (msg.type) {
       case 'match_start':
         if (matchDone) return;
+        if (!hasCurrentSimGeneration(msg.sim)) {
+          rejectPeerGeneration(msg.sim, fromPeerId);
+          return;
+        }
         if (!localUserId) localUserId = p2p.getUserId?.() ?? null;
         localPlayerId = msg.hostUserId === localUserId ? 0 : 1;
         isHost = localPlayerId === 0;
         finishMatch({ localPlayerId, seed: msg.seed, peerId: fromPeerId, isHost });
         break;
 
+      case 'match_ready':
+        if (!hasCurrentSimGeneration(msg.sim)) {
+          rejectPeerGeneration(msg.sim, fromPeerId);
+          return;
+        }
+        if (matchDone) return;
+        peerId = fromPeerId;
+        if (!localUserId) localUserId = p2p.getUserId?.() ?? null;
+        isHost = localUserId < fromPeerId;
+        localPlayerId = isHost ? 0 : 1;
+        if (isHost) {
+          sendMatchStart(fromPeerId);
+          finishMatch({ localPlayerId, seed: defaultSeed, peerId: fromPeerId, isHost });
+        }
+        break;
+
       case 'command_frame':
-        session?.bufferRemoteFrame(msg.frame);
+        session?.bufferRemoteFrame(expandTransportFrame(msg.frame));
         break;
 
       case 'tick_confirm':
@@ -168,26 +222,12 @@ export function createNetMatch(options = {}) {
     if (!localUserId) localUserId = p2p.getUserId();
     isHost = localUserId < id;
     localPlayerId = isHost ? 0 : 1;
-    const seed = defaultSeed;
-
-    if (isHost) {
-      const startMsg = {
-        type: 'match_start',
-        seed,
-        hostUserId: localUserId,
-        guestUserId: id,
-      };
-      sendReliable(p2p, startMsg, id);
-      // Data channel may not be open on guest yet - retry a few times.
-      for (const delay of [250, 750, 1500]) {
-        setTimeout(() => {
-          if (!matchDone) sendReliable(p2p, startMsg, id);
-        }, delay);
-      }
+    sendMatchReady(id);
+    for (const delay of [250, 750, 1500]) {
+      setTimeout(() => {
+        if (!matchDone && peerId === id) sendMatchReady(id);
+      }, delay);
     }
-
-    // Both sides start here - don't wait for match_start (guest channel race).
-    finishMatch({ localPlayerId, seed, peerId: id, isHost });
   }
 
   function onPeerDisconnected() {
@@ -236,7 +276,11 @@ export function createNetMatch(options = {}) {
       session.submitCommand = (command) => {
         const frame = prevSubmit(command);
         if (frame && peerId) {
-          sendReliable(p2p, { type: 'command_frame', frame }, peerId);
+          sendReliable(
+            p2p,
+            { type: 'command_frame', frame: compactFrameForTransport(frame) },
+            peerId,
+          );
         }
         return frame;
       };

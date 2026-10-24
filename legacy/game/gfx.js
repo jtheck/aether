@@ -550,7 +550,7 @@
       // Expected format: 8 columns x 8 rows (64 total slots) for 1024x1024 texture
       // Each slot should be 128x128 pixels for optimal quality
       // Current usage: ~20 slots, plenty of room for expansion
-      billboardMaterial.diffuseTexture = new BABYLON.Texture('assets/textures/atlas-hd.png', scene);
+      billboardMaterial.diffuseTexture = new BABYLON.Texture('../assets/textures/atlas-hd.png', scene);
       billboardMaterial.diffuseTexture.hasAlpha = true;
       billboardMaterial.useAlphaFromDiffuseTexture = true;
       billboardMaterial.transparencyMode = BABYLON.Material.MATERIAL_ALPHATEST;
@@ -1871,13 +1871,13 @@ let pov2 = 240;
     5: { // GRASS_IN
       models: [
         // Ordered rarest to most common for priority spawning - THICKER SPAWNS
-        { path: "assets/models/mushroom.glb", chance: 0.2, scale: 0.1, billboardScale: 0.5, lodDistance: pov1 }, // 20% - rare finds
-        { path: "assets/models/rocks_plain.glb", chance: 0.3, scale: 3.0, billboardScale: 3, lodDistance: pov1 }, // 30% - plain rocks
-        { path: "assets/models/rocks_moss.glb", chance: 0.4, scale: 7.5, billboardScale: 5.9, lodDistance: pov2 }, // 40% - moss rocks
-        { path: "assets/models/trees.glb", chance: 0.75, scale: .9, billboardScale: 2.4, lodDistance: pov1 }, // 70% - THICK FORESTS!
-        { path: "assets/models/tortle.glb", chance: 0.5, scale: 0.1, billboardScale: 11, lodDistance: pov1 }, // 50% - more tortles
-        { path: "assets/models/frog.glb", chance: 0.6, scale: 0.1, billboardScale: 0.5, lodDistance: pov1 }, // 60% - more frogs
-        { path: "assets/models/rocks_snow.glb", chance: 0.95, scale: 11.5, billboardScale: 7.5, lodDistance: pov2 } // 95% - snow everywhere!
+        { path: "../assets/models/mushroom.glb", chance: 0.2, scale: 0.1, billboardScale: 0.5, lodDistance: pov1 }, // 20% - rare finds
+        { path: "../assets/models/rocks_plain.glb", chance: 0.3, scale: 3.0, billboardScale: 3, lodDistance: pov1 }, // 30% - plain rocks
+        { path: "../assets/models/rocks_moss.glb", chance: 0.4, scale: 7.5, billboardScale: 5.9, lodDistance: pov2 }, // 40% - moss rocks
+        { path: "../assets/models/trees.glb", chance: 0.75, scale: .9, billboardScale: 2.4, lodDistance: pov1 }, // 70% - THICK FORESTS!
+        { path: "../assets/models/tortle.glb", chance: 0.5, scale: 0.1, billboardScale: 11, lodDistance: pov1 }, // 50% - more tortles
+        { path: "../assets/models/frog.glb", chance: 0.6, scale: 0.1, billboardScale: 0.5, lodDistance: pov1 }, // 60% - more frogs
+        { path: "../assets/models/rocks_snow.glb", chance: 0.95, scale: 11.5, billboardScale: 7.5, lodDistance: pov2 } // 95% - snow everywhere!
 
       ]
     },
@@ -1890,22 +1890,22 @@ let pov2 = 240;
     // Rock tiles (40-55) - more rocks, windvanes
     45: { // ROCK_IN
       models: [
-        { path: "assets/models/windvane.glb", chance: 0.015, scale: 0.009, billboardScale: 2, lodDistance: 120 },
-        // { path: "assets/models/ae.glb", chance: 0.1, scale: 0.8 }
+        { path: "../assets/models/windvane.glb", chance: 0.015, scale: 0.009, billboardScale: 2, lodDistance: 120 },
+        // { path: "../assets/models/ae.glb", chance: 0.1, scale: 0.8 }
       ]
     },
     // Sand tiles (60-75) - tortles, birdies
     65: { // SAND_IN
       models: [
-        { path: "assets/models/tortle.glb", chance: 0.12, scale: 0.01, billboardScale: 0.5, lodDistance: 30 },
-        { path: "assets/models/birdy.glb", chance: 0.08, scale: 0.07, billboardScale: 1, lodDistance: 40 }
+        { path: "../assets/models/tortle.glb", chance: 0.12, scale: 0.01, billboardScale: 0.5, lodDistance: 30 },
+        { path: "../assets/models/birdy.glb", chance: 0.08, scale: 0.07, billboardScale: 1, lodDistance: 40 }
       ]
     },
     // Water tiles (80-95) - frogs, boats
     85: { // WATER_IN
       models: [
-        { path: "assets/models/frog.glb", chance: 0.02, scale: 0.1, billboardScale: 0.5, lodDistance: 35 },
-        // { path: "assets/models/ae.glb", chance: 0.05, scale: 0.1 }
+        { path: "../assets/models/frog.glb", chance: 0.02, scale: 0.1, billboardScale: 0.5, lodDistance: 35 },
+        // { path: "../assets/models/ae.glb", chance: 0.05, scale: 0.1 }
       ]
     }
   };
@@ -2397,28 +2397,28 @@ let pov2 = 240;
   function getManualResourceDescriptor(resourceType) {
     const resourceDescriptors = {
       trees: {
-        path: 'assets/models/trees.glb',
+        path: '../assets/models/trees.glb',
         scale: 0.9,
         resultType: 'wood',
         amount: 7,
         remaining: 28
       },
       rocks_plain: {
-        path: 'assets/models/rocks_plain.glb',
+        path: '../assets/models/rocks_plain.glb',
         scale: 3.0,
         resultType: 'stone',
         amount: 4,
         remaining: 56
       },
       rocks_moss: {
-        path: 'assets/models/rocks_moss.glb',
+        path: '../assets/models/rocks_moss.glb',
         scale: 7.5,
         resultType: 'stone',
         amount: 5,
         remaining: 70
       },
       rocks_snow: {
-        path: 'assets/models/rocks_snow.glb',
+        path: '../assets/models/rocks_snow.glb',
         scale: 11.5,
         resultType: 'stone',
         amount: 6,
@@ -3293,17 +3293,17 @@ let pov2 = 240;
         let modelPath, scale, billboardScale;
         if (sizeRoll < 0.3) {
           // Small rocks (30%)
-          modelPath = "assets/models/rocks_plain.glb";
+          modelPath = "../assets/models/rocks_plain.glb";
           scale = 3.0;
           billboardScale = 3;
         } else if (sizeRoll < 0.7) {
           // Medium rocks (40%)
-          modelPath = "assets/models/rocks_moss.glb";
+          modelPath = "../assets/models/rocks_moss.glb";
           scale = 7.5;
           billboardScale = 5.9;
         } else {
           // Large rocks (30%)
-          modelPath = "assets/models/rocks_snow.glb";
+          modelPath = "../assets/models/rocks_snow.glb";
           scale = 11.5;
           billboardScale = 7.5;
         }
@@ -3449,14 +3449,14 @@ let pov2 = 240;
                 // Queue the respawned tree model
                 initBillboardAtlas(scene);
                 modelLoadQueue.push({
-                  modelPath: "assets/models/trees.glb",
+                  modelPath: "../assets/models/trees.glb",
                   scene: scene,
                   position: position,
                   rotation: rotation,
                   scale: 0.9,
                   chunk: chunk,
                   models: models,
-                  modelRule: { path: "assets/models/trees.glb", scale: 0.9, billboardScale: 2.4, lodDistance: 170 },
+                  modelRule: { path: "../assets/models/trees.glb", scale: 0.9, billboardScale: 2.4, lodDistance: 170 },
                   gridX: respawnPos.gridX,
                   gridZ: respawnPos.gridZ
                 });
@@ -3506,14 +3506,14 @@ let pov2 = 240;
         // Queue the tree model for loading
         initBillboardAtlas(scene);
         modelLoadQueue.push({
-          modelPath: "assets/models/trees.glb",
+          modelPath: "../assets/models/trees.glb",
           scene: scene,
           position: position,
           rotation: rotation,
           scale: 0.9,
           chunk: chunk,
           models: models,
-          modelRule: { path: "assets/models/trees.glb", scale: 0.9, billboardScale: 2.4, lodDistance: 170 },
+          modelRule: { path: "../assets/models/trees.glb", scale: 0.9, billboardScale: 2.4, lodDistance: 170 },
           gridX: gridX, // For resource depletion tracking
           gridZ: gridZ
         });
@@ -4063,15 +4063,15 @@ let pov2 = 240;
     
     // Load textures now that we have a scene
     // Terrain transition atlases
-    grassDirtAtlasTexture = new BABYLON.Texture("assets/textures/atlas-grass-dirt.png", gfx.scene);
+    grassDirtAtlasTexture = new BABYLON.Texture("../assets/textures/atlas-grass-dirt.png", gfx.scene);
     
     // Legacy/fallback textures (using new atlases as fallbacks)
     grassAtlasTexture = grassDirtAtlasTexture; // Use grass-dirt as fallback
     dirtAtlasTexture = grassDirtAtlasTexture;
-    rockAtlasTexture = new BABYLON.Texture("assets/textures/atlas-hd.png", gfx.scene);
+    rockAtlasTexture = new BABYLON.Texture("../assets/textures/atlas-hd.png", gfx.scene);
     sandAtlasTexture = grassDirtAtlasTexture;
     // Water transition atlases
-    grassWaterAtlasTexture = new BABYLON.Texture("assets/textures/atlas-grass-water.png", gfx.scene);
+    grassWaterAtlasTexture = new BABYLON.Texture("../assets/textures/atlas-grass-water.png", gfx.scene);
     dirtWaterAtlasTexture = grassDirtAtlasTexture; // Fallback - we avoid dirt-water adjacency
     waterAtlasTexture = grassWaterAtlasTexture; // Pure water uses grass-water atlas
 
@@ -4158,7 +4158,7 @@ let pov2 = 240;
       }
       
       // Load cursor frog indicator (deferred - not needed for menu)
-      BABYLON.SceneLoader.LoadAssetContainerAsync("assets/models/frog.glb", undefined, gfx.scene)
+      BABYLON.SceneLoader.LoadAssetContainerAsync("../assets/models/frog.glb", undefined, gfx.scene)
         .then(container => {
           const result = container.instantiateModelsToScene();
           sanitizeInstantiatedSceneNodes(gfx.scene, result.rootNodes, 'cursor-frog');
@@ -6006,7 +6006,7 @@ let pov2 = 240;
   function getHudAtlasMaterial(scene) {
     if (hudAtlasMaterial) return hudAtlasMaterial;
     hudAtlasMaterial = new BABYLON.StandardMaterial('hudAtlasMat', scene);
-    hudAtlasMaterial.diffuseTexture = new BABYLON.Texture('assets/textures/atlas-hd.png', scene);
+    hudAtlasMaterial.diffuseTexture = new BABYLON.Texture('../assets/textures/atlas-hd.png', scene);
     hudAtlasMaterial.diffuseTexture.hasAlpha = true;
     hudAtlasMaterial.useAlphaFromDiffuseTexture = true;
     hudAtlasMaterial.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
@@ -6050,7 +6050,7 @@ let pov2 = 240;
   let atlasImageReady = false;
   const atlasImg = new Image();
   atlasImg.onload = function() { atlasImage = atlasImg; atlasImageReady = true; };
-  atlasImg.src = 'assets/textures/atlas-hd.png';
+  atlasImg.src = '../assets/textures/atlas-hd.png';
 
   gfx.getAtlasImage = function() { return atlasImageReady ? atlasImage : null; };
   gfx.ATLAS_TYPE_ALIASES = ATLAS_TYPE_ALIASES;
@@ -7260,15 +7260,15 @@ let pov2 = 240;
   
   // Model paths that support thin instancing
   const THIN_INSTANCE_MODELS = [
-    'assets/models/trees.glb',
-    'assets/models/rocks_plain.glb',
-    'assets/models/rocks_moss.glb',
-    'assets/models/rocks_snow.glb'
+    '../assets/models/trees.glb',
+    '../assets/models/rocks_plain.glb',
+    '../assets/models/rocks_moss.glb',
+    '../assets/models/rocks_snow.glb'
   ];
   
   // Check if a model path supports thin instancing
   function supportsThinInstancing(path) {
-    return THIN_INSTANCE_MODELS.some(p => path.includes(p.replace('assets/models/', '')));
+    return THIN_INSTANCE_MODELS.some(p => path.includes(p.replace('../assets/models/', '')));
   }
   
   // Enable/disable thin instance mode based on shadow setting

@@ -1,8 +1,8 @@
 // app/ - SimSession (lockstep) + Lite renderer + input.
 
 import { livingByOwner, ORDER, MAX_ENTITIES } from '../sim/world.js';
-import { matchStatOwners, matchStatRows } from './matchStats.js';
 import { shownKing } from '../sim/kothMeta.js';
+import { mountMatchSnapshot, snapshotDocFromSession } from './matchSnapshotView.js';
 import { getUnitDef, isFlyer, isTransport, FLY_HEIGHT } from '../sim/unitTypes.js';
 import {
   DROP_OFF_TYPES,
@@ -73,6 +73,7 @@ import { agoraOverlayActive } from '../sim/agora.js';
 import { ownerResourcesFrom } from '../sim/resources.js';
 import { formatGameNumber } from '../sim/formatGameNumber.js';
 import { createResourceBank } from './resourceBank.js';
+import { inputLatency } from './inputLatency.js';
 import {
   createObserverData,
   kothNameRoster,
@@ -653,7 +654,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   let lobbyUi = { refresh() {} };
   /** Replay roster click: play this owner's saved camera. Null when idle. */
   let replayCamOwner = null;
-  let ladderUi = { refresh() {}, close() {} };
+  let ladderUi = { refresh() {}, close() {}, requeue() {} };
   const queuedStory = [];
   let chatHud = {
     refresh() {},
@@ -1452,6 +1453,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   };
 
   session.onBuildingsChanged = (list) => {
+    markHudDirty(HUD_RESOURCES);
     if (session.field) {
       applySerializedBuildingOccupancy(session.field, list);
       applySerializedAgoraOccupancy(session.field, session.agoras);
@@ -1504,6 +1506,18 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.setActionRadialResearched?.(researchedUpgradeIdsFor(localPlayerId));
   }
 
+  const HUD_CLOCK = 1;
+  const HUD_POP = 2;
+  const HUD_SIDE = 4;
+  const HUD_RESOURCES = 8;
+  const HUD_ALL = HUD_CLOCK | HUD_POP | HUD_SIDE | HUD_RESOURCES;
+  let hudDirty = HUD_ALL;
+  let lastHudClockBucket = -1;
+
+  function markHudDirty(bits = HUD_ALL) {
+    hudDirty |= bits;
+  }
+
   function paintStatusClock() {
     const timeEl = document.getElementById('status-time');
     if (!timeEl) return;
@@ -1539,6 +1553,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     lobbyUi.refresh();
     chatHud.refresh();
     paintResources();
+    hudDirty = 0;
+  }
+
+  function paintDirtyHud() {
+    const dirty = hudDirty;
+    if (!dirty) return;
+    hudDirty = 0;
+    if (dirty & HUD_CLOCK) paintStatusClock();
+    if (dirty & HUD_POP) paintStatusPop();
+    if (dirty & HUD_SIDE) paintStatusSide();
+    if (dirty & HUD_RESOURCES) paintResources();
   }
 
   const resourceBank = createResourceBank();
@@ -1894,7 +1919,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   let ghostPathPoints = null;
 
   session.onResourcesChanged = () => {
-    paintResources();
+    markHudDirty(HUD_RESOURCES);
     syncRadialMenuGate();
     refreshPlacementGhostFromBank();
   };
@@ -3590,6 +3615,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         ladderUi.refresh();
       },
       onRankedLeave: (userId) => noteLadderDisconnect(userId, rememberLadderId()),
+      onRankedPregameEnd: () => ladderUi.requeue?.(),
       onChat: () => chatHud.refresh(),
       onActiveChange: (active) => kothShard.setLobbyMatchHold?.(active),
       onStartMatch: (snap) => startLobbyMatch(ctxRef.current, snap, kothShard, matchLobby, sideMenu),
@@ -3790,6 +3816,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   const prevCommit = session.onCommit;
   session.onCommit = (tick, checksum) => {
     prevCommit?.(tick, checksum);
+    markHudDirty(HUD_POP);
+    // Presentation-only safety refresh. Five 20 Hz sim ticks = 4 Hz.
+    if ((tick | 0) % 5 === 0) markHudDirty(HUD_ALL);
     const live = ctxRef.current;
     if (live?.pendingMatchStartCue && !session.replayingCatchUp && !session.watchingReplay) {
       live.pendingMatchStartCue = false;
@@ -3916,14 +3945,20 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       fpsDisplay = Math.round((fpsFrames * 1000) / fpsAcc);
       fpsAcc = 0;
       fpsFrames = 0;
+      markHudDirty(HUD_SIDE);
     }
-    paintStatusClock();
-    paintStatusPop();
-    paintStatusSide();
-    paintResources();
+    const clockTick =
+      session.replayClockTick != null ? session.replayClockTick : session.confirmedTick;
+    const clockBucket = Math.floor((clockTick | 0) / 20);
+    if (clockBucket !== lastHudClockBucket) {
+      lastHudClockBucket = clockBucket;
+      markHudDirty(HUD_CLOCK);
+    }
+    paintDirtyHud();
 
     const alpha = session.displayAlpha;
-    const { prev, cur } = session.displaySnapshots();
+    const { prev, cur, displayTick } = session.displaySnapshots();
+    inputLatency.eligible(displayTick);
     if (!prev || !cur) {
       finishFrameProf(frameT0);
       return;
@@ -3933,6 +3968,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (renderer.getUnitsEnabled && !renderer.getUnitsEnabled()) {
       pushSelectionFollow();
       renderer.commit();
+      inputLatency.rendered(displayTick);
       finishFrameProf(frameT0);
       return;
     }
@@ -4696,6 +4732,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     pushSelectionFollow();
     profSplit('worldFx');
     renderer.commit();
+    inputLatency.rendered(displayTick);
     profSplit('commit');
     finishFrameProf(frameT0);
   });
@@ -5116,10 +5153,17 @@ async function restoreMenuSkirmishBackdrop(ctx) {
   });
 }
 
+/** A lobby or hill match owns the world. A local map reset hands the other player the win. */
+function liveMatchOpen(ctx) {
+  if (ctx?.matchLobby?.isActive?.()) return true;
+  const presence = ctx?.kothShard?.getLobbyPresence?.();
+  return Boolean(presence && presence.browsing === false);
+}
+
 async function startSoloAiMatch(ctx, opts = {}) {
   if (!ctx?.session || !ctx.renderer) return;
   if (ctx._soloStarting) return;
-  if (ctx.kothShard?.isLiveSpectating?.()) return;
+  if (liveMatchOpen(ctx)) return;
   const {
     fog = true,
     sharedVision = false,
@@ -5199,6 +5243,7 @@ async function startUnitTesterMatch(ctx) {
 async function startStressfulSituation(ctx) {
   if (!ctx?.session || !ctx.renderer) return;
   if (ctx._soloStarting) return;
+  if (liveMatchOpen(ctx)) return;
   ctx._soloStarting = true;
   ctx.localSoloHold = true;
   try {
@@ -5319,12 +5364,14 @@ function clearMatchScore(opts = {}) {
     const titleEl = document.getElementById('match-over-title');
     const subEl = document.getElementById('match-over-sub');
     const table = document.getElementById('match-stats');
+    const snap = document.getElementById('match-snap');
     if (titleEl) titleEl.textContent = '';
     if (subEl) subEl.textContent = '';
     if (table) {
       table.replaceChildren();
       table.hidden = true;
     }
+    if (snap) snap.replaceChildren();
     hideReplaySave();
   }
   if (el) el.hidden = true;
@@ -5343,52 +5390,18 @@ function showAdventureResult(title, sub) {
   el.hidden = false;
 }
 
-function kindTitle(split) {
-  if (!split) return '';
-  return `wood ${split.wood}   stone ${split.stone}   mineral ${split.mineral}   food ${split.food}`;
-}
-
 function paintMatchStats(board = session) {
+  const host = document.getElementById('match-snap');
   const table = document.getElementById('match-stats');
-  if (!table) return;
-  const rows = matchStatRows(board?.ownerStats, matchStatOwners(board));
-  table.replaceChildren();
-  if (!rows.length) {
+  if (table) {
+    table.replaceChildren();
     table.hidden = true;
-    return;
   }
-  const head = document.createElement('tr');
-  for (const label of ['', 'Kill', 'Lost', 'Train', 'Raze', 'Bldg', 'Gathered', 'Spent']) {
-    const th = document.createElement('th');
-    th.textContent = label;
-    if (label === 'Bldg') th.title = 'Buildings lost';
-    if (label === 'Raze') th.title = 'Buildings razed';
-    if (label === 'Train') th.title = 'Units trained';
-    head.append(th);
-  }
-  table.append(head);
-  for (const row of rows) {
-    const tr = document.createElement('tr');
-    const cells = [
-      ownerName(row.owner),
-      row.kills,
-      row.losses,
-      row.trained,
-      row.razes,
-      row.buildingsLost,
-      row.gathered,
-      row.spent,
-    ];
-    for (let i = 0; i < cells.length; i++) {
-      const td = document.createElement('td');
-      td.textContent = String(cells[i]);
-      if (i === 6) td.title = kindTitle(row.gatheredBy);
-      if (i === 7) td.title = kindTitle(row.spentBy);
-      tr.append(td);
-    }
-    table.append(tr);
-  }
-  table.hidden = false;
+  if (!host) return;
+  const doc = snapshotDocFromSession(board, ownerName);
+  host.replaceChildren();
+  if (!doc) return;
+  mountMatchSnapshot(host, doc);
 }
 
 function ownerName(owner) {

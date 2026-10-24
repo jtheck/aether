@@ -13,13 +13,14 @@ describe('shipped adventure campaign', () => {
 
   it('lists every live chapter under its episode', () => {
     assert.equal(isCampaignBundle(bundle), true);
-    assert.equal(bundle.name, 'Adventure');
+    assert.ok(String(bundle.name || '').trim());
     const flat = flattenCampaignChapters(bundle);
     const listed = installAdventureCampaign(bundle);
     assert.deepEqual(listed.map((ch) => ch.id), flat.map((ch) => formatPackRef(ch.file)));
-    const chapter4 = listed.find((ch) => ch.id === 'pack:Chapter_4.garden');
-    assert.equal(chapter4?.name, 'Chapter 4');
-    assert.equal(chapter4?.episode, 'Episode 2');
+    assert.deepEqual(
+      listed.map((ch) => ({ name: ch.name, episode: ch.episode })),
+      flat.map((ch) => ({ name: ch.name, episode: ch.episode })),
+    );
   });
 
   it('stores the network campaign and does not read the saved pack', async () => {

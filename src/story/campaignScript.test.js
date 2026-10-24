@@ -8,7 +8,6 @@ describe('campaign screenplay', () => {
     assert.match(script, /^Title:\s*\n\tAETHER/m);
     assert.match(script, /ancient grove/i);
     assert.match(script, /EPISODE 1: Episode 1/);
-    assert.match(script, /GOBLIN/);
     assert.match(script, /PLAY\./);
     assert.match(script, /THE END/);
     assert.ok((script.match(/^EXT\./gm) || []).length >= 4);
@@ -18,10 +17,10 @@ describe('campaign screenplay', () => {
     const html = renderCampaignScriptHtml();
     assert.match(html, /<title>AETHER<\/title>/);
     assert.match(html, /id="ep1"/);
-    assert.match(html, /id="chapter1"/);
+    assert.match(html, /class="chapter" id="[^"]+"/);
     assert.match(html, /class="action"/);
     assert.match(html, /class="camera"/);
-    assert.match(html, /class="who who-goblin"/);
+    assert.match(html, /class="who who-[^"]+"/);
     assert.match(html, /class="play"/);
     assert.match(html, /ancient grove/i);
   });

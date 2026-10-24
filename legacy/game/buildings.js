@@ -124,7 +124,7 @@ const BuildingTypes = {
 
   agora: {
     name: "Agora",
-    model: "assets/models/agora.glb",
+    model: "../assets/models/agora.glb",
     scale: 1.0,
     rotation: 0,
     size: { width: 4, height: 4 },
@@ -143,7 +143,7 @@ const BuildingTypes = {
 
   camp: {
     name: "Camp",
-    model: "assets/models/camp.glb",
+    model: "../assets/models/camp.glb",
     scale: 0.4,
     rotation: 0,
     size: { width: 2, height: 2 },
@@ -164,7 +164,7 @@ const BuildingTypes = {
 
   village: {
     name: "Village",
-    model: "assets/models/village.glb",
+    model: "../assets/models/village.glb",
     scale: 0.2,
     rotation: 0,
     size: { width: 2, height: 2 },
@@ -183,7 +183,7 @@ const BuildingTypes = {
 
   farm: {
     name: "Farm",
-    model: "assets/models/farm.glb",
+    model: "../assets/models/farm.glb",
     scale: 0.4,
     rotation: 0,
     size: { width: 2, height: 2 },
@@ -203,7 +203,7 @@ const BuildingTypes = {
 
   silo: {
     name: "Silo",
-    model: "assets/models/silo.glb",
+    model: "../assets/models/silo.glb",
     scale: 0.35,
     rotation: 0,
     size: { width: 2, height: 2 },
@@ -219,7 +219,7 @@ const BuildingTypes = {
 
   tower: {
     name: "Watchtower",
-    model: "assets/models/tower.glb",
+    model: "../assets/models/tower.glb",
     scale: 0.429,
     rotation: 0,
     size: { width: 2, height: 2 },
@@ -237,7 +237,7 @@ const BuildingTypes = {
 
   mine: {
     name: "Mine",
-    model: "assets/models/mine.glb",
+    model: "../assets/models/mine.glb",
     scale: 0.4,
     rotation: 0,
     size: { width: 2, height: 2 },
@@ -261,7 +261,7 @@ const BuildingTypes = {
 
   tavern: {
     name: "Tavern",
-    model: "assets/models/tavern.glb",
+    model: "../assets/models/tavern.glb",
     scale: 0.25,
     rotation: 0,
     size: { width: 3, height: 3 },
@@ -279,7 +279,7 @@ const BuildingTypes = {
 
   moonwell: {
     name: "Moon Well",
-    model: "assets/models/moonwell.glb",
+    model: "../assets/models/moonwell.glb",
     scale: 0.3,
     rotation: 0,
     size: { width: 2, height: 2 },
@@ -299,7 +299,7 @@ const BuildingTypes = {
 
   barracks: {
     name: "Barracks",
-    model: "assets/models/barracks.glb",
+    model: "../assets/models/barracks.glb",
     scale: 0.3,
     rotation: 0,
     size: { width: 3, height: 3 },
@@ -317,7 +317,7 @@ const BuildingTypes = {
 
   lab: {
     name: "Laboratory",
-    model: "assets/models/lab.glb",
+    model: "../assets/models/lab.glb",
     scale: 0.35,
     rotation: 0,
     size: { width: 3, height: 3 },
@@ -334,7 +334,7 @@ const BuildingTypes = {
 
   workshop: {
     name: "Workshop",
-    model: "assets/models/workshop.glb",
+    model: "../assets/models/workshop.glb",
     scale: 0.35,
     rotation: 0,
     size: { width: 3, height: 3 },
@@ -356,7 +356,7 @@ const BuildingTypes = {
 
   factory: {
     name: "Factory",
-    model: "assets/models/factory.glb",
+    model: "../assets/models/factory.glb",
     scale: 0.4,
     rotation: 0,
     size: { width: 3, height: 3 },
@@ -373,7 +373,7 @@ const BuildingTypes = {
 
   church: {
     name: "Church",
-    model: "assets/models/church.glb",
+    model: "../assets/models/church.glb",
     scale: 0.5,
     rotation: 0,
     size: { width: 3, height: 3 },
@@ -390,7 +390,7 @@ const BuildingTypes = {
 
   perch: {
     name: "Perch",
-    model: "assets/models/perch.glb",
+    model: "../assets/models/perch.glb",
     scale: 0.45,
     rotation: 0,
     size: { width: 2, height: 3 },
@@ -407,7 +407,7 @@ const BuildingTypes = {
 
   grove: {
     name: "Grove",
-    model: "assets/models/trees.glb",
+    model: "../assets/models/trees.glb",
     scale: 0.5,
     rotation: 0,
     size: { width: 3, height: 3 },
@@ -666,7 +666,7 @@ function placeBuilding(buildingType, x, z, scene, options = {}) {
           }
           building.flagRoots = null;
           
-          window.gfx.getModel('assets/models/flag.glb', scene).then(flagModel => {
+          window.gfx.getModel('../assets/models/flag.glb', scene).then(flagModel => {
             // Use ALL root nodes from the GLB so nothing is left floating in the scene
             const flagNodes = flagModel.nodes && flagModel.nodes.length ? flagModel.nodes : [flagModel.root];
             const flagRoot = flagModel.root;

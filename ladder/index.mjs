@@ -1,5 +1,6 @@
 // Lambda entry. The console looks for this file. Handler stays index.handler.
 // package.json "type": "module" must be in the zip so the .js imports load.
+// Deploy: README "Ladder Lambda". Update function aether-ladder in us-west-2.
 
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';

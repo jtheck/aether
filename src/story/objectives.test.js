@@ -13,7 +13,7 @@ import {
   zoneContains,
 } from './objectives.js';
 
-const field = { worldHalfF: 160, width: 80 };
+const field = { worldHalfF: 160, width: 80, height: 80 };
 
 function unitAt(tx, tz, extra = {}) {
   const x = (tx + 0.5) * TILE_SIZE_F - field.worldHalfF;

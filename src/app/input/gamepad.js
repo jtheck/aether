@@ -515,6 +515,8 @@ export function activeMenuRoot(doc) {
   if (kbd && !kbd.hidden) return kbd;
   const skins = doc.getElementById('skins_pop');
   if (skins && !skins.hidden) return skins;
+  const hist = doc.getElementById('ladder_hist');
+  if (hist && !hist.hidden) return hist;
   const ladder = doc.getElementById('ladder_pop');
   if (ladder && !ladder.hidden) return ladder;
   const help = doc.getElementById('help_pop');
@@ -875,9 +877,12 @@ export function createGamepadAdapter(opts = {}) {
       }
       return;
     }
-    if ((menuRoot?.id === 'help_pop' || menuRoot?.id === 'skins_pop' || menuRoot?.id === 'ladder_pop') && (edges[PAD.B] || edges[PAD.START] || edges[PAD.BACK])) {
+    if ((menuRoot?.id === 'help_pop' || menuRoot?.id === 'skins_pop' || menuRoot?.id === 'ladder_pop' || menuRoot?.id === 'ladder_hist') && (edges[PAD.B] || edges[PAD.START] || edges[PAD.BACK])) {
       blurInside(menuRoot, root);
-      const closeId = menuRoot.id === 'skins_pop' ? 'skins_close' : menuRoot.id === 'ladder_pop' ? 'ladder_close' : 'help_close';
+      const closeId = menuRoot.id === 'skins_pop' ? 'skins_close'
+        : menuRoot.id === 'ladder_hist' ? 'ladder_hist_close'
+        : menuRoot.id === 'ladder_pop' ? 'ladder_close'
+        : 'help_close';
       root.getElementById(closeId)?.click?.();
       return;
     }

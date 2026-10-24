@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { ratingDelta } from './elo.js';
 import { createHandler } from './handler.js';
 import { mergeIndex } from './publish.js';
+import { prependRecent, RECENT_LIMIT } from './recent.js';
 import { createMemoryStore } from './store.js';
 
 const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -101,6 +102,8 @@ test('a repeated report does not move the rating again', async () => {
   assert.equal(row.games, 1);
   assert.equal(row.rating, 1016);
   assert.equal(row.wins, 1);
+  const recent = await store.getItem(`recent#${A}`, 'recent');
+  assert.equal(recent.recent.length, 1);
 });
 
 test('disagreement does not change ratings', async () => {
@@ -522,4 +525,173 @@ test('a koth death settles once and a repeat does not move rating again', async 
   const row = await store.getItem('koth#2026-1', `p#${A}`);
   assert.equal(row.rating, 1004);
   assert.equal(row.games, 1);
+  const recent = await store.getItem(`recent#${A}`, 'recent');
+  assert.equal(recent.recent.length, 1);
+  assert.equal(recent.recent[0].mode, 'KOTH');
+  assert.equal(recent.recent[0].result, 'win');
+});
+
+test('recent results keep the last matches and drop the oldest', () => {
+  let recent = [];
+  for (let i = 0; i < RECENT_LIMIT + 3; i++) {
+    recent = prependRecent(recent, {
+      at: `t${i}`,
+      mode: '1v1',
+      result: 'win',
+      opponent: 'Bea',
+      delta: 16,
+      rating: 1000 + i,
+    });
+  }
+  assert.equal(recent.length, RECENT_LIMIT);
+  assert.equal(recent[0].at, `t${RECENT_LIMIT + 2}`);
+  assert.equal(recent.at(-1).at, 't3');
+});
+
+test('a workshop file id stays on that match only', () => {
+  const withReplay = prependRecent([], {
+    at: 't1',
+    mode: '1v1',
+    result: 'win',
+    opponent: 'Bea',
+    delta: 16,
+    rating: 1016,
+    replay: '3801871581',
+  });
+  assert.equal(withReplay[0].replay, '3801871581');
+  const mixed = prependRecent(withReplay, {
+    at: 't2',
+    mode: '2v2',
+    result: 'loss',
+    opponent: 'Cy',
+    delta: -8,
+    rating: 1008,
+    replay: 'https://steamcommunity.com/sharedfiles/filedetails/?id=3801871581',
+  });
+  assert.equal(mixed[0].replay, undefined);
+  assert.equal(mixed[1].replay, '3801871581');
+});
+
+test('one player list holds 1v1, 2v2, and koth together', async () => {
+  const { store, handler } = setup();
+  const players = [
+    { playerId: A, seat: 0, name: 'Ann' },
+    { playerId: B, seat: 1, name: 'Bea' },
+  ];
+  await handler(post(duel(A, { players })));
+  await handler(post(duel(B, { players })));
+  const team = (playerId) => post({
+    board: 'teams',
+    matchId: 'lobby-teams-9',
+    playerId,
+    tick: 8000,
+    checksum: 7,
+    winnerSeat: 0,
+    players: [
+      { playerId: A, seat: 0, team: 0, name: 'Ann' },
+      { playerId: B, seat: 1, team: 0, name: 'Bea' },
+      { playerId: C, seat: 2, team: 1, name: 'Cy' },
+      { playerId: D, seat: 3, team: 1, name: 'Dee' },
+    ],
+  });
+  await handler(team(A));
+  await handler(team(C));
+  const hill = await json(handler, post({
+    action: 'koth',
+    matchId: 'hill-9',
+    playerId: A,
+    tick: 1200,
+    checksum: 7,
+    points: 1,
+    victimId: B,
+    survivorIds: [A],
+  }));
+  assert.equal(hill.body.status, 'settled');
+
+  const recent = await store.getItem(`recent#${A}`, 'recent');
+  assert.deepEqual(recent.recent.map((entry) => entry.mode), ['KOTH', '2v2', '1v1']);
+  assert.equal(recent.recent[0].result, 'win');
+  assert.equal(recent.recent[0].opponent, 'Bea');
+  assert.equal(recent.recent[1].result, 'win');
+  assert.equal(recent.recent[1].opponent, 'Cy, Dee');
+  assert.equal(recent.recent[2].result, 'win');
+  assert.equal(recent.recent[2].opponent, 'Bea');
+  assert.equal(recent.recent[2].delta, 16);
+  assert.equal(recent.recent[0].matchId, 'hill-9');
+
+  const pub = JSON.parse(store.objects.get(`ladder/players/${A}.json`));
+  assert.equal(pub.playerId, A);
+  assert.deepEqual(pub.recent.map((entry) => entry.mode), ['KOTH', '2v2', '1v1']);
+  const fetched = await json(handler, {
+    requestContext: { http: { method: 'GET' } },
+    queryStringParameters: { player: A },
+  });
+  assert.equal(fetched.status, 200);
+  assert.equal(fetched.body.recent[2].result, 'win');
+});
+
+function snapshotBody(playerId, extra = {}) {
+  return {
+    action: 'snapshot',
+    matchId: 'lobby-abc123',
+    playerId,
+    tick: 200,
+    players: [
+      { playerId: A, seat: 0, name: 'Ann' },
+      { playerId: B, seat: 1, name: 'Bea' },
+    ],
+    map: 'Duel',
+    mapType: '1 vs 1',
+    mapSize: 'Small',
+    mapSeed: '4821',
+    samples: [{
+      tick: 200,
+      villagers: [4, 3],
+      army: [40, 0],
+      income: [12, 8],
+      bank: [90, 70],
+      actions: [6, 2],
+    }],
+    tech: [{ playerId: A, kind: 'building', id: 'barracks', tick: 200 }],
+    stats: [
+      { playerId: A, kills: 1, losses: 0, trained: 2, razes: 0, buildingsLost: 0, gathered: 12, spent: 10 },
+      { playerId: B, kills: 0, losses: 1, trained: 1, razes: 0, buildingsLost: 0, gathered: 8, spent: 4 },
+    ],
+    ...extra,
+  };
+}
+
+test('a snapshot is stored once when two players agree', async () => {
+  const { store, handler } = setup();
+  const first = await json(handler, post(snapshotBody(A)));
+  assert.equal(first.body.status, 'pending');
+  assert.equal(store.objects.has('ladder/matches/lobby-abc123.json'), false);
+  const second = await json(handler, post(snapshotBody(B, { map: 'Other' })));
+  assert.equal(second.body.status, 'saved');
+  const saved = JSON.parse(store.objects.get('ladder/matches/lobby-abc123.json'));
+  assert.equal(saved.tick, 200);
+  assert.equal(saved.map, 'Other');
+  assert.equal(saved.mapType, '1 vs 1');
+  assert.equal(saved.mapSize, 'Small');
+  assert.equal(saved.mapSeed, '4821');
+  assert.equal(saved.samples[0].army[0], 40);
+  assert.equal(saved.tech[0].id, 'barracks');
+  const again = await json(handler, post(snapshotBody(A, {
+    samples: [{
+      tick: 200,
+      villagers: [1, 1],
+      army: [0, 0],
+      income: [0, 0],
+      bank: [0, 0],
+      actions: [0, 0],
+    }],
+  })));
+  assert.equal(again.body.status, 'pending');
+  assert.equal(JSON.parse(store.objects.get('ladder/matches/lobby-abc123.json')).samples[0].army[0], 40);
+  const fetched = await json(handler, {
+    requestContext: { http: { method: 'GET' } },
+    queryStringParameters: { match: 'lobby-abc123' },
+  });
+  assert.equal(fetched.status, 200);
+  assert.equal(fetched.body.players[0].name, 'Ann');
 });

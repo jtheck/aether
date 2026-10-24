@@ -1038,6 +1038,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let fxPaused = false;
   /** Stable list so shadow task state is not rebuilt every flush. */
   let shadowCasterList = [];
+  /** Cached topology; live batch counts/visibility are still filtered per flush. */
+  let shadowCasterEntries = [];
+  let shadowCasterBookkeepingDirty = true;
+  let shadowBookkeepingPasses = 0;
+  const SHADOW_BOOKKEEPING_SAFETY_PASSES = 300;
   // Tiny hidden caster used while shadows are "off". Keeps CSM passes non-empty
   // (empty [] still records depth-only passes that crash billboards) without
   // detaching the generator (that poisoned near cascades on re-enable).
@@ -2652,6 +2657,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
    */
   const shadowCasterDefer = new WeakSet();
 
+  function invalidateShadowCasterBookkeeping() {
+    shadowCasterBookkeepingDirty = true;
+  }
+
   function isBackdropMesh(mesh) {
     const name = mesh?.name || '';
     return name === 'distant-mountains' || name === 'sky-dome' || name.startsWith('backdrop-');
@@ -2663,6 +2672,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         shadowCasterDefer.delete(mesh);
+        invalidateShadowCasterBookkeeping();
         try {
           applyShadowState();
         } catch (err) {
@@ -2676,6 +2686,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   function noteShadowMesh(mesh) {
     if (!mesh || shadowCasterNoted.has(mesh)) return;
     shadowCasterNoted.add(mesh);
+    invalidateShadowCasterBookkeeping();
     if (!shadowNotesReady) {
       pendingShadowNotes.push(mesh);
       return;
@@ -2701,40 +2712,47 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
   }
 
-  function collectShadowCasters() {
-    /** @type {object[]} */
-    const casters = [];
-    const pushMesh = (mesh, { ignoreVisible = false } = {}) => {
-      if (!isRenderableMesh(mesh)) return;
-      if (shadowCasterDefer.has(mesh)) return;
-      // Units-off A/B hides meshes for the color pass but should still cast -
-      // otherwise U looks like a huge win that is really just shadows.
-      if (!ignoreVisible && mesh.visible === false) return;
-      const ti = mesh.thinInstances;
-      if (ti && !(ti.count > 0)) return;
-      casters.push(mesh);
-    };
+  function rebuildShadowCasterBookkeeping() {
+    const entries = [];
     for (const batch of typeBatches.values()) {
-      // KOTH keeps empty owner batches at full ti.count with zero matrices - skip those.
-      if (!(batch.mappedSize > 0)) continue;
       for (const mesh of vatPartMeshes(batch)) {
-        pushMesh(mesh, { ignoreVisible: !unitsEnabled });
+        entries.push({ mesh, batch, unit: true });
       }
     }
-    if (fallback?.mappedSize > 0) {
-      pushMesh(fallback.mesh, { ignoreVisible: !unitsEnabled });
+    if (fallback?.mesh) {
+      entries.push({ mesh: fallback.mesh, batch: fallback, unit: true });
     }
+    const pushStatic = (mesh) => entries.push({ mesh, batch: null, unit: false });
     if (terrain?.meshes) {
       for (const root of terrain.meshes) {
         // GLB/bake scenery only - billboard impostors are flat cards and cast junk.
         const name = root.name || '';
         if (typeof name === 'string' && (name.startsWith('scenery-model-') || name.startsWith('wall-'))) {
-          forEachMesh(root, pushMesh);
+          forEachMesh(root, pushStatic);
         }
       }
     }
-    buildingProps.forEachShadowMesh?.(pushMesh);
-    agoraProps.forEachShadowMesh?.(pushMesh);
+    buildingProps.forEachShadowMesh?.(pushStatic);
+    agoraProps.forEachShadowMesh?.(pushStatic);
+    shadowCasterEntries = entries;
+    shadowCasterBookkeepingDirty = false;
+  }
+
+  function collectShadowCasters() {
+    if (shadowCasterBookkeepingDirty) rebuildShadowCasterBookkeeping();
+    /** @type {object[]} */
+    const casters = [];
+    for (let i = 0; i < shadowCasterEntries.length; i++) {
+      const { mesh, batch, unit } = shadowCasterEntries[i];
+      if (batch && !(batch.mappedSize > 0)) continue;
+      if (!isRenderableMesh(mesh) || shadowCasterDefer.has(mesh)) continue;
+      // Units-off A/B hides meshes for the color pass but should still cast -
+      // otherwise U looks like a huge win that is really just shadows.
+      if ((!unit || unitsEnabled) && mesh.visible === false) continue;
+      const ti = mesh.thinInstances;
+      if (ti && !(ti.count > 0)) continue;
+      casters.push(mesh);
+    }
     return casters;
   }
 
@@ -2832,6 +2850,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     // CSM (billboard pipeline crash, or near-cascade dead / far still lit).
     // Off = dummy caster only (cheap map fill) + receivers cleared (fully lit).
     syncShadowCoverage();
+    if (++shadowBookkeepingPasses >= SHADOW_BOOKKEEPING_SAFETY_PASSES) {
+      shadowBookkeepingPasses = 0;
+      invalidateShadowCasterBookkeeping();
+    }
     if (!shadowsEnabled) {
       if (!sameCasterList(shadowCasterList, SHADOW_CASTERS_OFF)) {
         try {
@@ -4395,6 +4417,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         if (pendingBuildings) {
           void buildingProps.place(pendingBuildings).then(() => {
             buildingProps.forEachShadowMesh?.(noteShadowMesh);
+            invalidateShadowCasterBookkeeping();
             if (shadowsEnabled) applyShadowState();
           });
         }
@@ -4403,6 +4426,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         pendingBuildings = null;
         agoraProps.forEachShadowMesh?.(noteShadowMesh);
         buildingProps.forEachShadowMesh?.(noteShadowMesh);
+        invalidateShadowCasterBookkeeping();
         if (shadowsEnabled) applyShadowState();
         bootLog('buildings + props');
       });
@@ -4516,6 +4540,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       syncAgoraWalk(list);
       agoraProps.place(list ?? []);
       agoraProps.forEachShadowMesh?.(noteShadowMesh);
+      invalidateShadowCasterBookkeeping();
       if (shadowsEnabled) applyShadowState();
     },
 
@@ -4540,6 +4565,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       lastBuildingList = list ?? [];
       await buildingProps.place?.(lastBuildingList);
       buildingProps.forEachShadowMesh?.(noteShadowMesh);
+      invalidateShadowCasterBookkeeping();
       if (shadowsEnabled) applyShadowState();
     },
 
@@ -5006,6 +5032,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         celestial.setWorldHalfF?.(Math.max(tableHalf, tableHalfZ));
         fogApi?.reset?.(snap ?? null);
         fogApi?.detachOverlay?.();
+        invalidateShadowCasterBookkeeping();
         applyShadowState();
         prev?.dispose?.();
         if (ground) {
@@ -5030,6 +5057,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         }
         terrain = next;
         sceneryModelsReady = next.modelsReady ?? Promise.resolve();
+        invalidateShadowCasterBookkeeping();
         applyShadowState();
         // New grass is a fresh standard material. Requeue it now that
         // receiveShadows is set so the swap compiles shadow sampling in.
@@ -5095,6 +5123,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         mesh.receiveShadows = shadowsEnabled && !mesh._skipShadowReceive;
         noteShadowMesh(mesh);
       }
+      invalidateShadowCasterBookkeeping();
       applyShadowState();
       const list = doors || [];
       for (let i = 0; i < list.length; i++) {
@@ -5565,6 +5594,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       if (!buildingProps.refreshSkins) return;
       await buildingProps.refreshSkins(lastBuildingList);
       buildingProps.forEachShadowMesh?.(noteShadowMesh);
+      invalidateShadowCasterBookkeeping();
       if (shadowsEnabled) applyShadowState();
     },
 

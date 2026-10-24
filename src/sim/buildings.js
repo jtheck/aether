@@ -1870,6 +1870,7 @@ export function tickBuildingMorphs(w) {
       if (left <= 0) left = DERRICK_LIFE_TICKS;
       left -= 1;
       b.morphTicks = left;
+      w.buildingsDirty = 1;
       if (left <= 0) becomeWell(w, b);
       continue;
     }

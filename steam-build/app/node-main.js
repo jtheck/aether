@@ -116,6 +116,34 @@ function isWindowFullscreen(win) {
   return !!(win && (win.isFullscreen || win.fullscreen));
 }
 
+function shouldStartFullscreen() {
+  return process.env.AETHER_WINDOWED !== '1';
+}
+
+/** @param {ReturnType<typeof activeWindow>} [win] */
+function enterFullscreenOn(win) {
+  const target = win || activeWindow();
+  if (!target) return false;
+  if (isWindowFullscreen(target)) return true;
+  try {
+    target.enterFullscreen();
+    return true;
+  } catch (err) {
+    console.warn('[steam-build] Enter fullscreen failed:', err.message);
+    return false;
+  }
+}
+
+/** Once per window: package.json fullscreen + retry after first load if needed. */
+function applyStartupFullscreen(win) {
+  if (!win || win._aetherStartupFullscreenDone) return;
+  if (!shouldStartFullscreen()) {
+    win._aetherStartupFullscreenDone = true;
+    return;
+  }
+  if (enterFullscreenOn(win)) win._aetherStartupFullscreenDone = true;
+}
+
 function leaveFullscreen() {
   const win = activeWindow();
   if (!win || !isWindowFullscreen(win)) return false;
@@ -129,16 +157,7 @@ function leaveFullscreen() {
 }
 
 function enterFullscreen() {
-  const win = activeWindow();
-  if (!win) return false;
-  if (isWindowFullscreen(win)) return true;
-  try {
-    win.enterFullscreen();
-    return true;
-  } catch (err) {
-    console.warn('[steam-build] Enter fullscreen failed:', err.message);
-    return false;
-  }
+  return enterFullscreenOn(activeWindow());
 }
 
 function toggleFullscreen() {
@@ -231,11 +250,13 @@ function wireWindow(win) {
   win._aetherWired = true;
 
   applyStartUrl(win);
+  applyStartupFullscreen(win);
 
   lockTitle(win);
   win.on('loaded', function () {
     applyStartUrl(win);
     lockTitle(win);
+    applyStartupFullscreen(win);
   });
   if (!win._aetherTitleTimer) {
     win._aetherTitleTimer = setInterval(function () { lockTitle(win); }, 1000);

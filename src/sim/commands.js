@@ -50,6 +50,11 @@ import {
 import { applyGather, beginDeposit, depositDropOffAt, releaseGatherOrder } from './gather.js';
 import { setStoryProtect } from './storyProtect.js';
 import { assignBuildersToSite } from './construction.js';
+import { noteMatchAction } from './matchSnapshot.js';
+
+const ACTION_COMMANDS = new Set([
+  1, 2, 3, 4, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 19,
+]);
 
 export const CMD = {
   MOVE: 1,
@@ -94,6 +99,12 @@ export function applyCommands(world, field, commands) {
   for (let c = 0; c < commands.length; c++) {
     const cmd = commands[c];
     if (holding && cmd.type !== CMD.SPAWN_SLOT && cmd.type !== CMD.FORCE_ELIMINATE) continue;
+    if (ACTION_COMMANDS.has(cmd.type)) {
+      const owner = Number.isInteger(cmd.playerId) && cmd.playerId >= 0
+        ? cmd.playerId | 0
+        : (cmd.entities?.length && world.owner ? world.owner[cmd.entities[0]] | 0 : -1);
+      noteMatchAction(world, owner);
+    }
     switch (cmd.type) {
       case CMD.MOVE:
         applyMove(world, field, cmd.entities, cmd.tx, cmd.ty, ORDER.MOVE);

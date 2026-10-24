@@ -65,6 +65,19 @@ describe('lobby ui copy', () => {
       maxPlayers: 2,
     });
     assert.equal(joined.title, "In Overseer's 1 vs 1");
+    const ladder = formatMatchStatus({
+      ranked: true,
+      hosting: true,
+      mode: 'onevsone',
+      playerCount: 2,
+      maxPlayers: 2,
+      seats: [
+        { kind: 'human', name: 'Blind' },
+        { kind: 'human', name: 'Aria' },
+      ],
+    });
+    assert.equal(ladder.title, '1v1 Ladder');
+    assert.equal(ladder.meta, 'Blind vs Aria');
   });
 
   it('labels start from the gate and countdown', () => {
@@ -309,6 +322,12 @@ function lobbyDom() {
     return el;
   };
   const drawers = put('menu-lobbies', new FakeEl('div'));
+  const practice = put('menu-solo', new FakeEl('div', { className: 'menu-solo' }));
+  const solo = put('solo_ai_b', new FakeEl('button'));
+  put('practice-toggle', new FakeEl('button'));
+  put('open_replay_b', new FakeEl('button'));
+  put('unit_tester_b', new FakeEl('button'));
+  put('stressful_b', new FakeEl('button'));
   for (const mode of ['onevsone', 'teams', 'adventure']) {
     const drawer = new FakeEl('div', { dataset: { mode } });
     drawer.append(
@@ -334,8 +353,17 @@ function lobbyDom() {
   put('match-lobby-title', new FakeEl('h3'));
   put('match-lobby-note', new FakeEl('div'));
   put('match-lobby-seats', new FakeEl('div'));
+  const sidebar = put('menu-match', new FakeEl('div', { hidden: true }));
+  put('menu-match-status', new FakeEl('div'));
+  put('menu-match-meta', new FakeEl('div'));
+  put('menu-match-seats', new FakeEl('div'));
+  put('menu-match-ready', new FakeEl('button'));
+  put('menu-match-start', new FakeEl('button', { hidden: true }));
+  put('menu-match-leave', new FakeEl('button'));
   return {
     drawers,
+    practice,
+    solo,
     overlay: byId.get('match-lobby-overlay'),
     panel,
     score: byId.get('match-over'),
@@ -344,6 +372,11 @@ function lobbyDom() {
     title: byId.get('match-lobby-title'),
     note: byId.get('match-lobby-note'),
     seats: byId.get('match-lobby-seats'),
+    sidebar,
+    sideStatus: byId.get('menu-match-status'),
+    sideMeta: byId.get('menu-match-meta'),
+    sideReady: byId.get('menu-match-ready'),
+    sideLeave: byId.get('menu-match-leave'),
     create(mode) {
       return drawers.querySelector(`[data-mode="${mode}"]`).querySelector('.lobby-create');
     },
@@ -588,6 +621,76 @@ describe('match lobby overlay', () => {
       });
       ui.setOverlayParked(true);
       assert.equal(dom.overlay.className.includes('is-parked'), true);
+    } finally {
+      restore();
+    }
+  });
+
+  it('shows a ladder match in the menu with forfeit', () => {
+    const dom = lobbyDom();
+    const restore = dom.install();
+    try {
+      let left = 0;
+      setupLobbyUi({
+        gameLobby: { listLobbies: () => [], listen() {}, unlisten() {} },
+        matchLobby: {
+          isActive: () => true,
+          getState: () => ({
+            mode: 'onevsone',
+            ranked: true,
+            hosting: false,
+            phase: 'playing',
+            playerCount: 2,
+            maxPlayers: 2,
+            hostName: 'Aria',
+            seats: [
+              { kind: 'human', name: 'Aria', userId: 'u2', ready: true, index: 0 },
+              { kind: 'human', name: 'Blind', userId: 'u1', ready: true, index: 1 },
+            ],
+            settings: { fieldSize: 'small', seed: 1, chapter: '' },
+          }),
+          canStart: () => false,
+          startBlockReason: () => '',
+          countdownMs: () => 0,
+          lockstepStalled: () => false,
+          leaveRoom() { left += 1; },
+        },
+        getUserId: () => 'u1',
+      });
+      assert.equal(dom.sidebar.hidden, false);
+      assert.equal(dom.sideStatus.textContent, '1v1 Ladder');
+      assert.equal(dom.sideMeta.textContent, 'Aria vs Blind');
+      assert.equal(dom.sideReady.hidden, true);
+      assert.equal(dom.sideLeave.textContent, 'Forfeit');
+      assert.equal(dom.overlay.hidden, true);
+      dom.sideLeave.click();
+      assert.equal(left, 1);
+      assert.equal(dom.practice.className.includes('is-dimmed'), true);
+      assert.equal(dom.solo.disabled, true);
+      assert.equal(dom.drawers.className.includes('is-dimmed'), true);
+    } finally {
+      restore();
+    }
+  });
+
+  it('unlocks practice when no match is open', () => {
+    const dom = lobbyDom();
+    const restore = dom.install();
+    try {
+      setupLobbyUi({
+        gameLobby: { listLobbies: () => [], listen() {}, unlisten() {} },
+        matchLobby: {
+          isActive: () => false,
+          getState: () => null,
+          canStart: () => false,
+          startBlockReason: () => '',
+          countdownMs: () => 0,
+          lockstepStalled: () => false,
+        },
+        getUserId: () => 'u1',
+      });
+      assert.equal(dom.practice.className.includes('is-dimmed'), false);
+      assert.equal(dom.solo.disabled, false);
     } finally {
       restore();
     }

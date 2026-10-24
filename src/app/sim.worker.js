@@ -32,6 +32,7 @@ import { bindDoors, serializeDoors, takeDoorUpdates } from '../sim/doorCombat.js
 import { serializeTech } from '../sim/tech.js';
 import { serializeResources } from '../sim/resources.js';
 import { serializeOwnerStats } from '../sim/ownerStats.js';
+import { exportMatchSnapshot } from '../sim/matchSnapshot.js';
 import { takeStorageOverflow } from '../sim/storage.js';
 import { takeTreeUpdates } from '../sim/trees.js';
 import { takeRockUpdates } from '../sim/scenery.js';
@@ -55,6 +56,10 @@ import {
   exportWorldCheckpoint,
   importWorldCheckpoint,
 } from '../sim/worldCheckpoint.js';
+
+// 4 Hz bounds stale presentation state even if a future mutation misses a
+// dirty bit, while avoiding three full structured-clone payloads every tick.
+const METADATA_SAFETY_REFRESH_TICKS = 5;
 
 function serializeKoth(k) {
   if (!k) return null;
@@ -250,12 +255,13 @@ self.onmessage = (e) => {
       const priestHealUpdates = takePriestHealUpdates(world);
       const sporeBloomUpdates = takeSporeBloomUpdates(world);
       const monkKickUpdates = takeMonkKickUpdates(world);
-      const buildingsChanged = !!world.buildingsDirty;
+      const safetyRefresh = world.tick % METADATA_SAFETY_REFRESH_TICKS === 0;
+      const buildingsChanged = !!world.buildingsDirty || safetyRefresh;
       const doorUpdates = takeDoorUpdates(world);
       if (world.buildingsDirty) world.buildingsDirty = 0;
-      const techChanged = !!world.techDirty;
+      const techChanged = !!world.techDirty || safetyRefresh;
       if (world.techDirty) world.techDirty = 0;
-      const resourcesChanged = !!world.resourcesDirty;
+      const resourcesChanged = !!world.resourcesDirty || safetyRefresh;
       if (world.resourcesDirty) world.resourcesDirty = 0;
       const storageOverflow = takeStorageOverflow(world);
       const metrics = { ...world.metrics };
@@ -276,15 +282,26 @@ self.onmessage = (e) => {
         kothMatchOver: world.kothMatchOver ?? 0,
         matchWinner: world.matchWinner ?? -1,
         koth: serializeKoth(world.koth),
-        buildings: serializeBuildings(world.buildings),
-        buildingsChanged,
+        ...(buildingsChanged
+          ? { buildings: serializeBuildings(world.buildings), buildingsChanged: true }
+          : null),
         doorUpdates,
         agoras: serializeAgoras(world.agoras),
-        tech: serializeTech(world),
-        techChanged,
-        resources: serializeResources(world),
-        resourcesChanged,
+        ...(techChanged ? { tech: serializeTech(world), techChanged: true } : null),
+        ...(resourcesChanged
+          ? { resources: serializeResources(world), resourcesChanged: true }
+          : null),
         ownerStats: serializeOwnerStats(world),
+        ...(function snapFrame() {
+          const bounty = world.koth?.bounty?.length | 0;
+          const ended = (world.matchWinner | 0) >= 0;
+          const send = world.snapSampled || bounty !== (world.snapBounty | 0) || (ended && !world.snapEnded);
+          if (!send) return null;
+          world.snapSampled = 0;
+          world.snapBounty = bounty;
+          if (ended) world.snapEnded = 1;
+          return { snap: exportMatchSnapshot(world) };
+        })(),
         storageOverflow,
         treeUpdates,
         rockUpdates,

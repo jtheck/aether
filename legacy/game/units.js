@@ -25,7 +25,7 @@ const UnitTypes = {
   villager: {
     name: "Villager",
     category: "civilian",
-    model: "assets/models/villager.glb",
+    model: "../assets/models/villager.glb",
     scale: 0.5,
     health: 50,
     speed: 80,
@@ -46,7 +46,7 @@ const UnitTypes = {
   brigand: {
     name: "Brigand",
     category: "civilian",
-    model: "assets/models/brigand.glb",
+    model: "../assets/models/brigand.glb",
     scale: 0.5,
     health: 65,
     speed: 58,
@@ -77,7 +77,7 @@ const UnitTypes = {
   engineer: {
     name: "Engineer",
     category: "worker",
-    model: "assets/models/engineer.glb",
+    model: "../assets/models/engineer.glb",
     scale: 0.5,
     health: 50,
     speed: 32,
@@ -99,7 +99,7 @@ const UnitTypes = {
   architect: {
     name: "Architect",
     category: "worker",
-    model: "assets/models/engineer.glb", // TODO: unique model
+    model: "../assets/models/engineer.glb", // TODO: unique model
     scale: 0.5,
     health: 60,
     speed: 34,
@@ -121,7 +121,7 @@ const UnitTypes = {
   monk: {
     name: "Monk",
     category: "support",
-    model: "assets/models/monk.glb",
+    model: "../assets/models/monk.glb",
     scale: 0.5,
     health: 45,
     speed: 52,
@@ -149,7 +149,7 @@ const UnitTypes = {
   paladin: {
     name: "Paladin",
     category: "support",
-    model: "assets/models/paladin.glb",
+    model: "../assets/models/paladin.glb",
     scale: 0.55,
     health: 80,
     speed: 46,
@@ -176,7 +176,7 @@ const UnitTypes = {
   wizard: {
     name: "Wizard",
     category: "caster",
-    model: "assets/models/wizard.glb",
+    model: "../assets/models/wizard.glb",
     scale: 0.5,
     health: 40,
     speed: 42,
@@ -205,7 +205,7 @@ const UnitTypes = {
   elemental: {
     name: "Elemental",
     category: "caster",
-    model: "assets/models/elemental.glb",
+    model: "../assets/models/elemental.glb",
     scale: 0.6,
     health: 70,
     speed: 50,
@@ -228,7 +228,7 @@ const UnitTypes = {
   warlock: {
     name: "Warlock",
     category: "caster",
-    model: "assets/models/warlock.glb",
+    model: "../assets/models/warlock.glb",
     scale: 0.5,
     health: 45,
     speed: 40,
@@ -255,7 +255,7 @@ const UnitTypes = {
   geomancer: {
     name: "Geomancer",
     category: "caster",
-    model: "assets/models/wizard.glb", // TODO: unique model
+    model: "../assets/models/wizard.glb", // TODO: unique model
     scale: 0.55,
     health: 65,
     speed: 42,
@@ -281,7 +281,7 @@ const UnitTypes = {
   warrior: {
     name: "Warrior",
     category: "military",
-    model: "assets/models/warrior.glb",
+    model: "../assets/models/warrior.glb",
     scale: 0.5,
     health: 80,
     speed: 44,
@@ -308,7 +308,7 @@ const UnitTypes = {
   champion: {
     name: "Champion",
     category: "military",
-    model: "assets/models/brigand.glb", // TODO: unique model
+    model: "../assets/models/brigand.glb", // TODO: unique model
     scale: 0.55,
     health: 120,
     speed: 48,
@@ -332,7 +332,7 @@ const UnitTypes = {
   archer: {
     name: "Archer",
     category: "military",
-    model: "assets/models/archer.glb",
+    model: "../assets/models/archer.glb",
     scale: 0.5,
     health: 45,
     speed: 54,
@@ -359,7 +359,7 @@ const UnitTypes = {
   marksman: {
     name: "Marksman",
     category: "military",
-    model: "assets/models/brigand.glb", // TODO: unique model
+    model: "../assets/models/brigand.glb", // TODO: unique model
     scale: 0.5,
     health: 55,
     speed: 48,
@@ -387,7 +387,7 @@ const UnitTypes = {
   wagon: {
     name: "Wagon",
     category: "vehicle",
-    model: "assets/models/wagon.glb",
+    model: "../assets/models/wagon.glb",
     scale: 0.4,
     health: 60,
     speed: 48,
@@ -408,7 +408,7 @@ const UnitTypes = {
   war_wagon: {
     name: "War Wagon",
     category: "vehicle",
-    model: "assets/models/frog.glb", // Placeholder until unique model exists
+    model: "../assets/models/frog.glb", // Placeholder until unique model exists
     scale: 0.45,
     health: 100,
     speed: 44,
@@ -434,7 +434,7 @@ const UnitTypes = {
     name: "Dirigible",
     category: "air",
     element: "air",
-    model: "assets/models/dirigible.glb",
+    model: "../assets/models/dirigible.glb",
     scale: 0.5,
     health: 70,
     speed: 100,
@@ -456,7 +456,7 @@ const UnitTypes = {
     name: "War Balloon",
     category: "air",
     element: "air",
-    model: "assets/models/frog.glb", // Placeholder until unique model exists
+    model: "../assets/models/frog.glb", // Placeholder until unique model exists
     scale: 0.55,
     health: 100,
     speed: 88,
@@ -483,7 +483,7 @@ const UnitTypes = {
     name: "APC",
     category: "vehicle",
     element: "fire",
-    model: "assets/models/apc.glb",
+    model: "../assets/models/apc.glb",
     scale: 0.5,
     health: 90,
     speed: 64,
@@ -510,7 +510,7 @@ const UnitTypes = {
     name: "Tank",
     category: "vehicle",
     element: "fire",
-    model: "assets/models/frog.glb", // Placeholder until unique model exists
+    model: "../assets/models/frog.glb", // Placeholder until unique model exists
     scale: 0.6,
     health: 150,
     speed: 46,
@@ -537,7 +537,7 @@ const UnitTypes = {
     name: "Priest",
     category: "support",
     element: "spirit",
-    model: "assets/models/priest.glb",
+    model: "../assets/models/priest.glb",
     scale: 0.5,
     health: 40,
     speed: 44,
@@ -565,7 +565,7 @@ const UnitTypes = {
     name: "Valkyrie",
     category: "support",
     element: "spirit",
-    model: "assets/models/monk.glb", // TODO: unique model
+    model: "../assets/models/monk.glb", // TODO: unique model
     scale: 0.55,
     health: 75,
     speed: 55,
@@ -594,7 +594,7 @@ const UnitTypes = {
     name: "Myco",
     category: "caster",
     element: "water",
-    model: "assets/models/myco.glb",
+    model: "../assets/models/myco.glb",
     scale: 0.5,
     health: 50,
     speed: 38,
@@ -633,7 +633,7 @@ const UnitTypes = {
     name: "Alchemist",
     category: "caster",
     element: "water",
-    model: "assets/models/wizard.glb", // TODO: unique model
+    model: "../assets/models/wizard.glb", // TODO: unique model
     scale: 0.5,
     health: 60,
     speed: 42,
@@ -655,7 +655,7 @@ const UnitTypes = {
     name: "Shaman",
     category: "caster",
     element: "earth",
-    model: "assets/models/shaman.glb",
+    model: "../assets/models/shaman.glb",
     scale: 0.5,
     health: 55,
     speed: 44,
@@ -678,7 +678,7 @@ const UnitTypes = {
     name: "Druid",
     category: "caster",
     element: "earth",
-    model: "assets/models/wizard.glb", // TODO: unique model
+    model: "../assets/models/wizard.glb", // TODO: unique model
     scale: 0.55,
     health: 75,
     speed: 48,
@@ -1003,7 +1003,7 @@ function getUnitsByCategory(category) {
     return Object.keys(UnitTypes).filter(type => UnitTypes[type].category === category);
 }
 
-const FALLBACK_UPGRADED_UNIT_MODEL = 'assets/models/frog.glb';
+const FALLBACK_UPGRADED_UNIT_MODEL = '../assets/models/frog.glb';
 
 function normalizeOwnerId(ownerId) {
     if (!ownerId) return '';
@@ -1491,7 +1491,7 @@ function spawnUnitModels(scene) {
     }
 }
 
-const SELECTION_COLLAR_MODEL = 'assets/models/collar.glb';
+const SELECTION_COLLAR_MODEL = '../assets/models/collar.glb';
 // World Y lift above unit mesh origin (feet). Lower = closer to ground / less “floating”.
 const SELECTION_INDICATOR_Y_OFFSET = 0.035;
 // Group 0: same pass as world geometry - normal depth test and occlusion.

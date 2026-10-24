@@ -9,6 +9,7 @@ import { stashSessionGarden, writeCampaignPack } from './gardenSession.js';
 import { formatWorkshopRef, isWorkshopRef, parseWorkshopRef } from './workshop.js';
 import { flattenCampaignChapters, formatPackRef, isCampaignBundle, normalizeCampaignIndex } from '../story/campaignPack.js';
 import { fetchOfficialHouseMaps } from '../houseMapCatalog.js';
+import { getLadderAssignment } from './ladderSession.js';
 
 /**
  * @param {object} lobby
@@ -65,10 +66,35 @@ export function namesForLockstepWaiters(seats, waiterIds) {
  * @param {object} state
  * @returns {{ title: string, meta: string }}
  */
+function ladderMatchTitle(mode) {
+  if (mode === 'teams') return '2v2 Ladder';
+  if (mode === 'koth') return 'KOTH Ladder';
+  return '1v1 Ladder';
+}
+
+function ladderRating(userId) {
+  const players = getLadderAssignment()?.players;
+  if (!Array.isArray(players) || !userId) return '';
+  const player = players.find((row) => sameUserId(row?.userId, userId));
+  const rating = player?.rating;
+  return Number.isFinite(rating) ? String(rating | 0) : '';
+}
+
 export function formatMatchStatus(state) {
   const mode = getMode(state.mode);
   const name = (state.hostName ?? '').trim();
   const seats = `${state.playerCount ?? 0}/${state.maxPlayers ?? mode?.maxPlayers ?? 0}`;
+  if (state.ranked) {
+    const title = ladderMatchTitle(state.mode);
+    if (state.mode === 'onevsone') {
+      const names = (state.seats || [])
+        .filter((seat) => seat?.kind === 'human')
+        .map((seat) => (seat.name || '').trim())
+        .filter(Boolean);
+      if (names.length >= 2) return { title, meta: `${names[0]} vs ${names[1]}` };
+    }
+    return { title, meta: seats };
+  }
   if (state.watching) return { title: name ? `Watching ${name}` : 'Watching', meta: seats };
   if (state.hosting) return { title: `Your ${mode?.name ?? 'lobby'}`, meta: seats };
   return { title: name ? `In ${name}'s ${mode?.name ?? 'lobby'}` : 'In lobby', meta: seats };
@@ -177,7 +203,7 @@ function paintMoves(row, userId, hostMoves) {
 }
 
 function paintSeats(container, seats, {
-  teams, localId, compact, spectators, hostMoves, followUserId, kingOwner = -1, laggingIds = null,
+  teams, localId, compact, spectators, hostMoves, followUserId, kingOwner = -1, laggingIds = null, ratings = false,
 }) {
   if (!container) return;
   const groups = teams
@@ -243,7 +269,8 @@ function paintSeats(container, seats, {
           && Number.isInteger(seat.index)
           && laggingIds.has(seat.index),
         );
-        setText(statusEl, rosterStatusLabel({ ...seat, lagging }));
+        const rating = ratings && !lagging && !seat.watching ? ladderRating(seat.userId) : '';
+        setText(statusEl, rating || rosterStatusLabel({ ...seat, lagging }));
         const canFollow = Boolean(seat.replay) && !sameUserId(seat.userId, localId);
         const following = canFollow && followUserId && sameUserId(seat.userId, followUserId);
         if (canFollow) row.dataset.replayUser = seat.userId;
@@ -588,6 +615,12 @@ export function setupLobbyUi({
     lastSig = sig;
     const busy = live || active;
     drawersRoot.classList.toggle('is-dimmed', busy);
+    const practice = document.getElementById('menu-solo');
+    practice?.classList.toggle('is-dimmed', busy);
+    for (const id of ['practice-toggle', 'solo_ai_b', 'open_replay_b', 'unit_tester_b', 'stressful_b']) {
+      const btn = document.getElementById(id);
+      if (btn) btn.disabled = busy;
+    }
     for (const id of ['koth-start', 'menu-koth-start']) {
       const btn = document.getElementById(id);
       if (btn) btn.disabled = active;
@@ -619,7 +652,7 @@ export function setupLobbyUi({
     if (overlayOpening) overlayParked = false;
     overlay?.classList.toggle('is-lag', Boolean(showOverlay && inPlay && stalled));
     overlay?.classList.toggle('is-parked', Boolean(showOverlay && overlayParked && !(inPlay && stalled)));
-    setHidden(sidebar, !active || ranked);
+    setHidden(sidebar, !active);
     setHidden(overlay, !showOverlay);
     setHidden(overlayPanel, !active && !scoreOnly);
     if (scoreOnly) setText(panelLeave, 'Play again');
@@ -653,13 +686,13 @@ export function setupLobbyUi({
     const followUserId = getFollowUser?.() ?? null;
     const kingOwner = state.mode === 'koth' ? (getKing?.() ?? -1) : -1;
     paintSeats(sideSeats, state.seats, {
-      teams: Boolean(mode?.teams), localId, compact: true, spectators: state.spectators, hostMoves, followUserId, kingOwner, laggingIds,
+      teams: Boolean(mode?.teams), localId, compact: true, spectators: state.spectators, hostMoves, followUserId, kingOwner, laggingIds, ratings: ranked,
     });
     paintSeats(panelSeats, state.seats, {
-      teams: Boolean(mode?.teams), localId, compact: false, spectators: state.spectators, hostMoves, followUserId, kingOwner, laggingIds,
+      teams: Boolean(mode?.teams), localId, compact: false, spectators: state.spectators, hostMoves, followUserId, kingOwner, laggingIds, ratings: ranked,
     });
 
-    setHidden(sideReady, state.hosting || state.watching);
+    setHidden(sideReady, ranked || state.hosting || state.watching);
     setHidden(panelReady, state.hosting || state.watching);
     if (sideReady) {
       sideReady.disabled = state.phase === 'starting' || inPlay;
@@ -670,7 +703,7 @@ export function setupLobbyUi({
       setText(panelReady, mySeat?.ready ? 'Unready' : 'Ready');
     }
 
-    setHidden(sideStart, !state.hosting || inPlay);
+    setHidden(sideStart, ranked || !state.hosting || inPlay);
     setHidden(panelStart, !state.hosting || inPlay);
     if (sideStart) {
       sideStart.disabled = !canClickStart;
@@ -680,6 +713,7 @@ export function setupLobbyUi({
       panelStart.disabled = !canClickStart;
       setText(panelStart, startLabel);
     }
+    if (sideLeave) setText(sideLeave, ranked && !state.watching ? 'Forfeit' : 'Leave lobby');
 
     const note = inPlay && stalled
       ? stallTitle

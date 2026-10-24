@@ -143,8 +143,10 @@ const LITE_PATCHES = [
 				staticVersion += (mesh.worldMatrixVersion || 0) + ((ti && ti._version) || 0);
 			}
 			const camKey = _cameraChangeKey(scene.camera);
-			if (sg._stillCamKey !== camKey || sg._stillCasters !== stillCasters || sg._stillStaticVersion !== staticVersion) {
+			const camAspect = getEffectiveAspectRatio(scene, scene.camera);
+			if (sg._stillCamKey !== camKey || sg._stillCamAspect !== camAspect || sg._stillCasters !== stillCasters || sg._stillStaticVersion !== staticVersion) {
 				sg._stillCamKey = camKey;
+				sg._stillCamAspect = camAspect;
 				sg._stillCasters = stillCasters;
 				sg._stillStaticVersion = staticVersion;
 				for (const t of stillTasks) draws += t.execute?.() ?? 0;

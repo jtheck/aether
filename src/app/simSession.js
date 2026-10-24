@@ -10,6 +10,7 @@ import { applyRockUpdatesToField } from '../sim/scenery.js';
 import { excludeHumanAiPlayers } from '../sim/ai.js';
 import { SimClient } from './simClient.js';
 import { cloneReplayFrame } from './replay.js';
+import { inputLatency } from './inputLatency.js';
 
 const TICK_HZ = 20;
 const TICK_MS = 1000 / TICK_HZ;
@@ -144,6 +145,7 @@ export function clearSessionTableState(session) {
   if (!session) return;
   session.koth = null;
   session.ownerStats = null;
+  session.snap = null;
   session.kothMatchOver = 0;
   session.matchWinner = -1;
   session._checkpoint = null;
@@ -243,6 +245,7 @@ export class SimSession {
     this._bgPumpTimer = null;
     this.koth = null;
     this.ownerStats = null;
+    this.snap = null;
     this.kothMatchOver = 0;
     this.matchWinner = -1;
     this.agoras = [];
@@ -322,6 +325,7 @@ export class SimSession {
     this.resources = resources ?? this.client._resources ?? [];
     this.koth = null;
     this.ownerStats = null;
+    this.snap = null;
     this.kothMatchOver = 0;
     this.matchWinner = -1;
     this._bindStepHandler();
@@ -369,6 +373,7 @@ export class SimSession {
     }
     this._seenFrameIds.add(commandId);
     this._recordFullFrame(frame);
+    inputLatency.submitted(frame);
     return frame;
   }
 
@@ -868,6 +873,7 @@ export class SimSession {
     this.resetting = false;
     this.koth = other.koth;
     this.ownerStats = other.ownerStats;
+    this.snap = other.snap;
     this.kothMatchOver = other.kothMatchOver;
     this._lastChecksum = other._lastChecksum;
     this.simMetrics = other.simMetrics;
@@ -944,8 +950,9 @@ export class SimSession {
       if (extra?.kothMatchOver != null) this.kothMatchOver = extra.kothMatchOver;
       if (extra?.matchWinner != null) this.matchWinner = extra.matchWinner;
       if (extra?.ownerStats) this.ownerStats = extra.ownerStats;
-      if (extra?.agoras) this.agoras = extra.agoras;
-      if (extra?.buildings) {
+      if (extra?.snap) this.snap = extra.snap;
+      if (extra?.agoras != null) this.agoras = extra.agoras;
+      if (extra?.buildings != null) {
         this.buildings = extra.buildings;
         if (extra.buildingsChanged) this.onBuildingsChanged?.(this.buildings);
       }
@@ -961,11 +968,11 @@ export class SimSession {
           this.onDoorsChanged?.(broken);
         }
       }
-      if (extra?.tech) {
+      if (extra?.tech != null) {
         this.tech = extra.tech;
         if (extra.techChanged) this.onTechChanged?.(this.tech);
       }
-      if (extra?.resources) {
+      if (extra?.resources != null) {
         this.resources = extra.resources;
         if (extra.resourcesChanged) this.onResourcesChanged?.(this.resources);
       }
@@ -1024,6 +1031,7 @@ export class SimSession {
       this.inFlightTick = 0;
       const committedFrames = this.inFlightFrames;
       this.inFlightFrames = [];
+      inputLatency.applied(committedFrames, tick, this.replayingCatchUp);
       this._recordCommittedTick(tick, committedFrames);
       this._captureSnapshot(tick);
       const now = performance.now();

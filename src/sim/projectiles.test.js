@@ -74,6 +74,8 @@ function archerTravelAndCooldown() {
   step(w, field);
   assert.equal(w.hp[target], hp, 'slower arrow remains in flight after one more tick');
   step(w, field);
+  assert.equal(w.hp[target], hp, 'arrow remains in flight through the third tick');
+  step(w, field);
   assert.equal(w.hp[target], hp - 8, 'arrow damage lands after travel');
   assert.equal(w.projectiles.activeCount, 0);
 }
@@ -240,6 +242,7 @@ function engagementSlotsAndRangedSpacing() {
   });
   const startX = ranged.px[archer];
   step(ranged, field, [{ type: CMD.ATTACK, entities: [archer], target: closeTarget }]);
+  step(ranged, field);
   assert.ok(ranged.px[archer] > startX, 'ranged units should move toward preferred spacing');
   assert.equal(ranged.projectiles.activeCount, 0, 'ranged units do not fire inside minimum range');
 }
@@ -531,11 +534,11 @@ function sporeStreamHitsOnlyTarget() {
   }
   assert.equal(w.hp[front], frontHp, 'head mushroom does not pierce the path');
   assert.ok(w.hp[back] < backHp, 'aimed target still takes the hit');
-  const fx = takeSporeBloomUpdates(w);
-  assert.ok(fx?.headCount >= 1, 'hit publishes a head mushroom');
-  assert.equal(fx.headKill[0], 0);
+  const bloomFx = takeSporeBloomUpdates(w);
+  assert.ok(bloomFx?.headCount >= 1, 'hit publishes a head mushroom');
+  assert.equal(bloomFx.headKill[0], 0);
   assert.ok(
-    Math.hypot(fx.headFromX[0], fx.headFromY[0]) < 1.5,
+    Math.hypot(bloomFx.headFromX[0], bloomFx.headFromY[0]) < 1.5,
     'attack line starts at the myco',
   );
 }
@@ -616,10 +619,10 @@ function sporeHeadKillSeedsATree() {
   }
   assert.equal(w.alive[foe], 0, 'killing blow drops the unit');
   assert.ok(w.treeGrowth.count >= 1, 'killing blow queues a tree seed');
-  const fx = takeSporeBloomUpdates(w);
-  assert.ok(fx?.headCount >= 1);
-  assert.equal(fx.headKill[0], 1);
-  assert.ok(fx.seedCount >= 1, 'death tile becomes a tree seed preview');
+  const bloomFx = takeSporeBloomUpdates(w);
+  assert.ok(bloomFx?.headCount >= 1);
+  assert.equal(bloomFx.headKill[0], 1);
+  assert.ok(bloomFx.seedCount >= 1, 'death tile becomes a tree seed preview');
 }
 
 function shadowBoltAppliesDot() {

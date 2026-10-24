@@ -169,7 +169,7 @@ PBody.prototype.integrate = function(dt, player, self) {
 // Method to load the frog mesh
 Player.prototype.loadFrogMesh = function() {
   const self = this;
-  gfx.getModel("assets/models/frog.glb", this.scene).then(function(model) {
+  gfx.getModel("../assets/models/frog.glb", this.scene).then(function(model) {
     self.frog = model;
     // Position the frog relative to the player
     model.root.position = new BABYLON.Vector3(0, 0, 0);

@@ -187,7 +187,7 @@ export function placementReleaseKind(s = {}) {
 }
 
 /** CSS pixels above a finger. The plot sits clear of the contact. */
-export const TOUCH_PLACE_LIFT_PX = 96;
+export const TOUCH_PLACE_LIFT_PX = 42;
 
 /**
  * Touch aims above the contact so the finger does not cover the ghost.

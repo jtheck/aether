@@ -3372,7 +3372,7 @@ function getRandomColor() {
     const scene = window.gfx.scene;
     
     // Load the target model
-    window.gfx.getModel("assets/models/target.glb", scene).then(model => {
+    window.gfx.getModel("../assets/models/target.glb", scene).then(model => {
       if (!model || !model.root) return;
       
       const targetMesh = model.root;

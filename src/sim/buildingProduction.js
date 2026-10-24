@@ -20,6 +20,7 @@ import {
 } from './buildings.js';
 import { grantTech, ownerHasTech, TECH } from './tech.js';
 import { noteOwnerTrained } from './ownerStats.js';
+import { noteMatchTech } from './matchSnapshot.js';
 
 /**
  * @param {object} w
@@ -191,6 +192,7 @@ export function buildingProductionSystem(w, field) {
           spawnTrainedUnit(w, field, b, t.unitType);
         } else if (t.kind === 'upgrade') {
           grantTech(w, b.owner | 0, t.id);
+          noteMatchTech(w, b.owner, t.id);
         }
         dirty = true;
       }

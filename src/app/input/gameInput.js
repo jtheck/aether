@@ -45,6 +45,7 @@ import { TILE_SIZE_F } from '../../sim/field.js';
 import { siloIsAttached } from '../../sim/storage.js';
 import { SCENERY, rockFootprintRadiusForStock } from '../../sim/scenery.js';
 import { USE_GPU_PICK } from '../../render/pickMode.js';
+import { inputLatency } from '../inputLatency.js';
 import {
   boxSelectWinner,
   inspectForeignOnClick,
@@ -2027,6 +2028,7 @@ export function createGameInput(opts) {
   function handlePointerDown(e) {
     if (!canUseInput()) return false;
     if (e.button !== 0) return false;
+    inputLatency.begin(e.pointerType || 'pointer');
     // Raw touch is owned by touchAdapter (pointerHub). Synthetic touch objects
     // from the adapter are intentional and must be accepted here.
 
@@ -2076,7 +2078,8 @@ export function createGameInput(opts) {
         onPlacementParked?.(false);
       }
       const g = placementGround(e.clientX, e.clientY, e.pointerType);
-      if (g) placeAnchor = posePlacement(g.x, g.z);
+      // Sitting ghost + touch: a tap confirms on up; do not re-aim on down.
+      if (g && !placeTouchConfirm) placeAnchor = posePlacement(g.x, g.z);
       return true;
     }
 
@@ -2107,8 +2110,18 @@ export function createGameInput(opts) {
         return true;
       }
 
+      if (
+        placeTouchConfirm &&
+        placeDownKind === 'preview' &&
+        e.pointerType === 'touch' &&
+        lmbDownPos &&
+        Math.hypot(e.clientX - lmbDownPos.x, e.clientY - lmbDownPos.y) > DRAG_THRESHOLD_PX
+      ) {
+        placeTouchConfirm = false;
+      }
       if (placementHoverFollowsPointer({
-        previewDragging: placeDownKind === 'preview',
+        confirming: placeTouchConfirm && placeDownKind === 'preview',
+        previewDragging: placeDownKind === 'preview' && !placeTouchConfirm,
         pointerType: e.pointerType,
       })) {
         placeParked = false;
@@ -2500,6 +2513,7 @@ export function createGameInput(opts) {
    */
   function attackMoveWith(aim, gpu) {
     if (!canIssueOrders() || isPlacing()) return false;
+    inputLatency.begin(gpu ? 'attack-move-pointer' : 'attack-move');
     if (hasRallySelection()) {
       lastTap = null;
       const g = aim.ground();
@@ -2637,6 +2651,7 @@ export function createGameInput(opts) {
   /** @param {OrderAim} aim */
   function forceMoveWith(aim) {
     if (!canIssueOrders() || isPlacing()) return false;
+    inputLatency.begin('force-move');
     if (hasRallySelection()) {
       lastTap = null;
       const g = aim.ground();

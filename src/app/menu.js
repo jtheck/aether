@@ -161,7 +161,7 @@ export function setupMenu({
     fxValue.textContent = FX_LABELS[mode];
     const st = renderer.particleStats?.();
     if (mode === 0) {
-      fxNote.textContent = 'Particles / socket fire off.';
+      fxNote.textContent = 'Particles off.';
       return;
     }
     if (st) {
@@ -219,36 +219,40 @@ export function setupMenu({
     paintAa(setAaEnabled(aaEnabled.checked));
   });
 
+  function practiceLocked() {
+    return Boolean(soloBtn.closest('.is-dimmed'));
+  }
+
   soloBtn.addEventListener('click', async () => {
-    if (!onStartSoloAi || soloBtn.disabled) return;
+    if (!onStartSoloAi || soloBtn.disabled || practiceLocked()) return;
     soloBtn.disabled = true;
     setOpen(false);
     try {
       await onStartSoloAi();
     } finally {
-      soloBtn.disabled = false;
+      soloBtn.disabled = practiceLocked();
     }
   });
 
   openReplayBtn?.addEventListener('click', async () => {
-    if (!onOpenReplay || openReplayBtn.disabled) return;
+    if (!onOpenReplay || openReplayBtn.disabled || practiceLocked()) return;
     openReplayBtn.disabled = true;
     setOpen(false);
     try {
       await onOpenReplay();
     } finally {
-      openReplayBtn.disabled = false;
+      openReplayBtn.disabled = practiceLocked();
     }
   });
 
   testerBtn?.addEventListener('click', async () => {
-    if (!onStartUnitTester || testerBtn.disabled) return;
+    if (!onStartUnitTester || testerBtn.disabled || practiceLocked()) return;
     testerBtn.disabled = true;
     setOpen(false);
     try {
       await onStartUnitTester();
     } finally {
-      testerBtn.disabled = false;
+      testerBtn.disabled = practiceLocked();
     }
   });
 
@@ -259,13 +263,13 @@ export function setupMenu({
   });
 
   stressBtn?.addEventListener('click', async () => {
-    if (!onStartStressful || stressBtn.disabled) return;
+    if (!onStartStressful || stressBtn.disabled || practiceLocked()) return;
     stressBtn.disabled = true;
     setOpen(false);
     try {
       await onStartStressful();
     } finally {
-      stressBtn.disabled = false;
+      stressBtn.disabled = practiceLocked();
     }
   });
 

@@ -15,12 +15,12 @@ const MSDFText = {
     
     try {
       // Load font metrics JSON
-      const response = await fetch('assets/fonts/roboto-regular.json');
+      const response = await fetch('../assets/fonts/roboto-regular.json');
       this.fontData = await response.json();
       
       // Load font atlas texture
       this.fontTexture = new BABYLON.Texture(
-        'assets/fonts/roboto-regular.png',
+        '../assets/fonts/roboto-regular.png',
         scene,
         false, // noMipmap
         false, // invertY

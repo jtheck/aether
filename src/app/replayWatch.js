@@ -177,12 +177,9 @@ function sleepMs(ms) {
 }
 
 function replayBlockedReason(ctx) {
-  const phase = ctx?.matchLobby?.getState?.()?.phase;
-  if (phase === 'playing' || phase === 'starting' || phase === 'countdown') {
-    return 'Leave or finish the match first';
-  }
+  if (ctx?.matchLobby?.isActive?.()) return 'Leave or finish the match first';
   const presence = ctx?.kothShard?.getLobbyPresence?.();
-  if (presence?.playing) return 'Leave the match first';
+  if (presence && presence.browsing === false) return 'Leave the match first';
   return null;
 }
 

@@ -34,7 +34,7 @@
   // Particle effect presets
   const ParticlePresets = {
     fire: {
-      texture: "assets/images/explosion.png",
+      texture: "../assets/images/explosion.png",
       emitRate: 40,
       minSize: 0.3,
       maxSize: 0.6,
@@ -61,7 +61,7 @@
       limitVelocityDamping: 0.8
     },
     smoke: {
-      texture: "assets/images/explosion.png",
+      texture: "../assets/images/explosion.png",
       emitRate: 20,
       minSize: 0.4,
       maxSize: 1.0,
@@ -87,7 +87,7 @@
       limitVelocityDamping: 0.7
     },
     burn_fire: {
-      texture: "assets/images/explosion.png",
+      texture: "../assets/images/explosion.png",
       emitRate: 64,
       minSize: 0.45,
       maxSize: 0.95,
@@ -113,7 +113,7 @@
       limitVelocityDamping: 0.82
     },
     burn_smoke: {
-      texture: "assets/images/explosion.png",
+      texture: "../assets/images/explosion.png",
       emitRate: 18,
       minSize: 0.7,
       maxSize: 1.7,
@@ -138,7 +138,7 @@
       limitVelocityDamping: 0.72
     },
     torch: {
-      texture: "assets/images/explosion.png",
+      texture: "../assets/images/explosion.png",
       emitRate: 25,
       minSize: 0.2,
       maxSize: 0.4,
@@ -163,7 +163,7 @@
       limitVelocityDamping: 0.75
     },
     magefire: {
-      texture: "assets/images/explosion.png",
+      texture: "../assets/images/explosion.png",
       emitRate: 30,
       minSize: 0.2,
       maxSize: 0.5,
@@ -189,7 +189,7 @@
       limitVelocityDamping: 0.85
     },
     particle: {
-      texture: "assets/images/explosion.png",
+      texture: "../assets/images/explosion.png",
       emitRate: 20,
       minSize: 0.1,
       maxSize: 0.2,
@@ -220,7 +220,7 @@
       limitVelocityDamping: 0.95
     },
     sparkle: {
-      texture: "assets/images/explosion.png",
+      texture: "../assets/images/explosion.png",
       emitRate: 60,  // Quick burst
       minSize: 0.3,
       maxSize: 0.6,
@@ -246,7 +246,7 @@
       limitVelocityDamping: 0.9
     },
     blessing: {
-      texture: "assets/images/explosion.png",
+      texture: "../assets/images/explosion.png",
       emitRate: 42,
       minSize: 0.16,
       maxSize: 0.42,
@@ -272,7 +272,7 @@
       limitVelocityDamping: 0.88
     },
     nature: {
-      texture: "assets/images/explosion.png",
+      texture: "../assets/images/explosion.png",
       emitRate: 28,
       minSize: 0.14,
       maxSize: 0.34,
@@ -299,7 +299,7 @@
     },
     // Ground-level sparks for Agora capture (emitter = scaled TransformNode on building)
     agoraCaptureSpark: {
-      texture: 'assets/images/explosion.png',
+      texture: '../assets/images/explosion.png',
       emitRate: 32,
       minSize: 0.1,
       maxSize: 0.36,
@@ -432,7 +432,7 @@
     fireBlast.maxInitialRotation = Math.PI / 2;
 
     // Texture
-    fireBlast.particleTexture = new BABYLON.Texture("assets/images/explosion.png", scene);
+    fireBlast.particleTexture = new BABYLON.Texture("../assets/images/explosion.png", scene);
     fireBlast.blendMode = BABYLON.ParticleSystem.BLENDMODE_MULTIPLYADD; 
 
     // Color over life
@@ -1087,7 +1087,7 @@
         fireSystem.blendMode = BABYLON.ParticleSystem.BLENDMODE_MULTIPLYADD;
         
         // Texture
-        fireSystem.particleTexture = new BABYLON.Texture("assets/images/explosion.png", scene);
+        fireSystem.particleTexture = new BABYLON.Texture("../assets/images/explosion.png", scene);
         
         // Color gradients for fire
         fireSystem.addColorGradient(0.0, new BABYLON.Color4(1, 1, 1, 0));
@@ -1154,7 +1154,7 @@
         smokeSystem.blendMode = BABYLON.ParticleSystem.BLENDMODE_STANDARD;
         
         // Texture
-        smokeSystem.particleTexture = new BABYLON.Texture("assets/images/explosion.png", scene);
+        smokeSystem.particleTexture = new BABYLON.Texture("../assets/images/explosion.png", scene);
         
         // Color gradients for smoke
         smokeSystem.addColorGradient(0.0, new BABYLON.Color4(0.8, 0.8, 0.8, 0));

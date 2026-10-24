@@ -39,7 +39,19 @@ import { localOwnedPacks, selectedSkins } from './dlcCatalog.js';
 import { aetherSteam } from './steam.js';
 import { loadGardenRef, parseWorkshopRef } from './workshop.js';
 import { CMD } from '../sim/commands.js';
+import { SIM_GENERATION, hasCurrentSimGeneration } from '../sim/generation.js';
+import { compactFrameForTransport, expandTransportFrame } from '../network/lockstepWire.js';
 import { LOCKSTEP_STALL_UI_MS } from './simSession.js';
+
+/** A closed tab often never fires a peer disconnect. Forfeit once confirms have been missing this long. */
+const LOCKSTEP_FORFEIT_MS = 8000;
+/** Ranked splash: give up if the other player never reaches the countdown. */
+const RANKED_CONNECT_MS = 12000;
+
+function unrefTimer(timer) {
+  timer?.unref?.();
+  return timer;
+}
 
 /**
  * @param {object} opts
@@ -56,6 +68,7 @@ import { LOCKSTEP_STALL_UI_MS } from './simSession.js';
  * @param {(active: boolean) => void} [opts.onActiveChange]
  * @param {(cfg: object) => void | Promise<void>} [opts.onStartMatch]
  * @param {() => void} [opts.onLeaveMatch]
+ * @param {() => void} [opts.onRankedPregameEnd] - opponent left before the match; requeue
  */
 export function createMatchLobby({
   getP2p,
@@ -72,6 +85,7 @@ export function createMatchLobby({
   onStartMatch,
   onLeaveMatch,
   onRankedLeave,
+  onRankedPregameEnd,
   onChapter,
   onChat,
   loadGarden,
@@ -100,6 +114,8 @@ export function createMatchLobby({
   let hostFromHint = null;
   /** peerId → userId. Disconnects arrive as peer ids; seats are keyed by userId. */
   const peerUser = new Map();
+  /** Player ids already forfeited this room. A drop during load still eliminates on attach. */
+  const forfeited = new Set();
   let session = null;
   let prevSubmit = null;
   let prevCommit = null;
@@ -109,6 +125,8 @@ export function createMatchLobby({
   let lockstepEpoch = 0;
   /** True after a match table was loaded - Leave must restore the sandbox. */
   let hadMatch = false;
+  /** When this ranked room entered waiting, before the first countdown. */
+  let rankedWaitSince = 0;
   const chatLog = createChatLog();
   let lastChatSendAt = 0;
   /** Raw garden JSON embedded on START so web guests can play Workshop maps. */
@@ -141,6 +159,7 @@ export function createMatchLobby({
     const userId = localId();
     return {
       v: LOBBY_PROTOCOL_VERSION,
+      sim: SIM_GENERATION,
       type: MSG.STATE,
       mode,
       roomId,
@@ -169,6 +188,7 @@ export function createMatchLobby({
     return {
       type,
       v: LOBBY_PROTOCOL_VERSION,
+      sim: SIM_GENERATION,
       mode,
       roomId,
       userId,
@@ -193,6 +213,7 @@ export function createMatchLobby({
       roomId,
       mode,
       ...msg,
+      sim: SIM_GENERATION,
       userId,
     };
   }
@@ -200,7 +221,11 @@ export function createMatchLobby({
   function sendData(msg, peerId = null) {
     const p2p = getP2p?.();
     if (!p2p?.sendData) return;
-    p2p.sendData(stamp(msg), peerId);
+    const payload =
+      msg?.type === MSG.FRAME && msg.frame
+        ? { ...msg, frame: compactFrameForTransport(msg.frame) }
+        : msg;
+    p2p.sendData(stamp(payload), peerId);
   }
 
   /** Waiting-room presence rides the type broadcast so seats do not wait on RTC. */
@@ -274,7 +299,7 @@ export function createMatchLobby({
   function startRankedHello() {
     stopRankedHello();
     if (!ranked || hosting) return;
-    rankedHelloTimer = setInterval(() => {
+    rankedHelloTimer = unrefTimer(setInterval(() => {
       if (!ranked || hosting || phase !== 'waiting') {
         stopRankedHello();
         return;
@@ -283,7 +308,7 @@ export function createMatchLobby({
       sendType(hello);
       sendData(hello);
       if (hostFromHint) dial(hostFromHint);
-    }, 500);
+    }, 500));
   }
 
   function stopAnnounce() {
@@ -300,7 +325,7 @@ export function createMatchLobby({
     if (ranked) return;
     const tick = () => gameLobby?.announce?.(announcePayload());
     tick();
-    announceTimer = setInterval(tick, ANNOUNCE_MS);
+    announceTimer = unrefTimer(setInterval(tick, ANNOUNCE_MS));
   }
 
   function clearCountdown() {
@@ -335,14 +360,14 @@ export function createMatchLobby({
     if (bootstrapTimer) clearInterval(bootstrapTimer);
     let tries = 0;
     sendTickConfirm((session?.confirmedTick ?? 0) + 1);
-    bootstrapTimer = setInterval(() => {
+    bootstrapTimer = unrefTimer(setInterval(() => {
       if (!lockstepOn || (session?.confirmedTick ?? 0) > 0 || ++tries > 16) {
         clearInterval(bootstrapTimer);
         bootstrapTimer = null;
         return;
       }
       sendTickConfirm((session?.confirmedTick ?? 0) + 1);
-    }, 300);
+    }, 300));
   }
 
   function attachSession(simSession) {
@@ -364,6 +389,7 @@ export function createMatchLobby({
     };
     dialSeatedPeers();
     if (session.role === 'player') kickstartLockstep();
+    for (const playerId of forfeited) submitForfeit(playerId, 0);
   }
 
   function detachSession() {
@@ -460,9 +486,9 @@ export function createMatchLobby({
         return;
       }
       emit();
-      countdownTimer = setTimeout(pulse, 200);
+      countdownTimer = unrefTimer(setTimeout(pulse, 200));
     };
-    countdownTimer = setTimeout(pulse, 0);
+    countdownTimer = unrefTimer(setTimeout(pulse, 0));
   }
 
   function abortCountdown(broadcast = false) {
@@ -574,6 +600,8 @@ export function createMatchLobby({
     ranked = false;
     rankedRoster = null;
     peerUser.clear();
+    forfeited.clear();
+    rankedWaitSince = 0;
     settings = defaultSettings('onevsone');
     hadMatch = false;
     startGarden = null;
@@ -674,17 +702,79 @@ export function createMatchLobby({
     if (!seat || seat.kind !== 'human') return false;
     const playerId = msg.playerId != null ? (msg.playerId | 0) : seat.index;
     seats = releaseSeat(seats, userId);
-    session?.removeHumanPlayer?.(playerId);
-    const tick = (msg.tick | 0) || ((session?.confirmedTick ?? 0) + 2);
+    queueForfeit(playerId, msg.tick | 0);
+    emit();
+    return true;
+  }
+
+  function queueForfeit(playerId, tickHint) {
+    const id = playerId | 0;
+    if (id < 0 || forfeited.has(id)) return;
+    forfeited.add(id);
+    submitForfeit(id, tickHint);
+  }
+
+  function submitForfeit(playerId, tickHint) {
+    if (!session) return;
+    session.removeHumanPlayer?.(playerId);
+    const tick = (tickHint | 0) || ((session.confirmedTick ?? 0) + 2);
     const eventId = `forfeit:${roomId}:${playerId}`;
-    const frame = session?.submitAtTick?.(
+    const frame = session.submitAtTick?.(
       tick,
       { type: CMD.FORCE_ELIMINATE, playerId },
       { commandId: eventId },
     );
     if (frame) sendData({ type: MSG.FRAME, frame, epoch: lockstepEpoch });
-    emit();
+  }
+
+  /** Ranked rooms do not refill. A missing player before the match ends the lobby. */
+  function abandonRankedIfShort() {
+    if (!ranked || phase === 'idle' || phase === 'playing' || phase === 'starting') return false;
+    const need = rankedRoster?.length || getMode(mode)?.maxPlayers || 0;
+    if (!need || countHumans(seats) >= need) return false;
+    if (hosting) gameLobby?.announce?.(announcePayload(MSG.CLOSED));
+    const restoreWorld = hadMatch;
+    const requeue = !hadMatch;
+    resetRoom();
+    if (restoreWorld) onLeaveMatch?.();
+    if (requeue) onRankedPregameEnd?.();
     return true;
+  }
+
+  function forfeitStalledPlayers() {
+    if (phase !== 'playing' || !lockstepOn || !session) return;
+    if ((session.lockstepBlockedMs?.() ?? 0) < LOCKSTEP_FORFEIT_MS) return;
+    const waiters = session.lockstepWaiters?.() ?? [];
+    for (const playerId of waiters) {
+      const id = playerId | 0;
+      const seat = seats.find((s) => s.kind === 'human' && (s.index | 0) === id);
+      if (seat?.userId) applyPlayLeave(seat.userId, { playerId: id });
+      else queueForfeit(id, 0);
+    }
+  }
+
+  function watchOpponents() {
+    if (phase === 'idle') {
+      rankedWaitSince = 0;
+      return;
+    }
+    if (ranked && !hadMatch && phase === 'waiting') {
+      if (!rankedWaitSince) rankedWaitSince = Date.now();
+      else if (Date.now() - rankedWaitSince >= RANKED_CONNECT_MS) {
+        resetRoom();
+        onRankedPregameEnd?.();
+      }
+      return;
+    }
+    rankedWaitSince = 0;
+    forfeitStalledPlayers();
+  }
+
+  function userIdForPeer(peerId) {
+    const mapped = peerUser.get(peerId);
+    if (mapped) return mapped;
+    if (seatOf(seats, peerId) || spectatorOf(spectators, peerId)) return String(peerId);
+    return '';
   }
 
   function leaveRoom() {
@@ -898,14 +988,22 @@ export function createMatchLobby({
   }
 
   subscribeBroadcast?.((data) => {
-    if (!data || data.v !== LOBBY_PROTOCOL_VERSION) return;
+    if (
+      !data ||
+      data.v !== LOBBY_PROTOCOL_VERSION ||
+      !hasCurrentSimGeneration(data.sim)
+    ) return;
     if (phase === 'idle' || !roomId || data.roomId !== roomId || data.mode !== mode) return;
     if (noteChat(data)) return;
     if (data.type === MSG.CLOSED && !hosting) {
-      if (phase === 'countdown' || phase === 'starting' || phase === 'playing') return;
+      if (phase === 'starting' || phase === 'playing') return;
+      // Match start also broadcasts CLOSED. That one carries phase playing.
+      if (phase === 'countdown' && (data.phase === 'playing' || data.phase === 'starting')) return;
+      const requeue = ranked && !hadMatch;
       const restoreWorld = hadMatch;
       resetRoom();
       if (restoreWorld) onLeaveMatch?.();
+      if (requeue) onRankedPregameEnd?.();
       return;
     }
     if (data.type === MSG.START && data.countdownEndsAt && !hosting) {
@@ -937,6 +1035,7 @@ export function createMatchLobby({
       }
       if (hostRelease(data)) {
         noteRankedLeave(senderUserId(data));
+        if (abandonRankedIfShort()) return;
         if (phase === 'countdown') abortCountdown(true);
         startAnnounce();
         sendData(snapshot());
@@ -1008,11 +1107,26 @@ export function createMatchLobby({
   });
 
   subscribePeerDisconnected?.((peerId) => {
-    if (phase === 'idle' || !hosting || !peerId) return;
-    if (phase === 'starting' || phase === 'playing') return;
-    const userId = peerUser.get(peerId);
+    if (phase === 'idle' || !peerId) return;
+    const userId = userIdForPeer(peerId);
     peerUser.delete(peerId);
-    if (!userId) return;
+    if (!userId || sameUserId(userId, localId())) return;
+    if (phase === 'starting' || phase === 'playing') {
+      if (seatOf(seats, userId)?.kind === 'human') noteRankedLeave(userId);
+      applyPlayLeave(userId);
+      return;
+    }
+    if (!hosting) {
+      if (sameUserId(userId, hostId) || sameUserId(userId, hostFromHint)) {
+        if (seatOf(seats, userId)?.kind === 'human') noteRankedLeave(userId);
+        const requeue = ranked && !hadMatch;
+        const restoreWorld = hadMatch;
+        resetRoom();
+        if (restoreWorld) onLeaveMatch?.();
+        if (requeue) onRankedPregameEnd?.();
+      }
+      return;
+    }
     if (spectatorOf(spectators, userId)) {
       spectators = removeSpectator(spectators, userId);
       startAnnounce();
@@ -1021,7 +1135,9 @@ export function createMatchLobby({
       return;
     }
     if (!seatOf(seats, userId)) return;
+    noteRankedLeave(userId);
     seats = releaseSeat(seats, userId);
+    if (abandonRankedIfShort()) return;
     if (phase === 'countdown') abortCountdown(true);
     startAnnounce();
     sendData(snapshot());
@@ -1029,7 +1145,11 @@ export function createMatchLobby({
   });
 
   subscribeDataMessage?.((msg, fromPeerId) => {
-    if (!msg || msg.v !== LOBBY_PROTOCOL_VERSION) return;
+    if (
+      !msg ||
+      msg.v !== LOBBY_PROTOCOL_VERSION ||
+      !hasCurrentSimGeneration(msg.sim)
+    ) return;
     if (phase === 'idle') return;
     if (msg.roomId !== roomId || msg.mode !== mode) return;
     if (noteChat(msg)) return;
@@ -1060,7 +1180,7 @@ export function createMatchLobby({
       return;
     }
     if (msg.type === MSG.FRAME && msg.frame) {
-      if (sameEpoch(msg)) session?.bufferRemoteFrame(msg.frame);
+      if (sameEpoch(msg)) session?.bufferRemoteFrame(expandTransportFrame(msg.frame));
       return;
     }
     if (msg.type === MSG.CONFIRM && msg.tick != null) {
@@ -1077,6 +1197,7 @@ export function createMatchLobby({
     }
     if (msg.type === MSG.LEAVE) {
       if (phase === 'starting' || phase === 'playing') {
+        noteRankedLeave(senderUserId(msg));
         applyPlayLeave(senderUserId(msg), msg);
         return;
       }
@@ -1089,6 +1210,8 @@ export function createMatchLobby({
         return;
       }
       if (hostRelease(msg)) {
+        noteRankedLeave(senderUserId(msg));
+        if (abandonRankedIfShort()) return;
         if (phase === 'countdown') abortCountdown(true);
         sendData(snapshot());
         startAnnounce();
@@ -1135,6 +1258,13 @@ export function createMatchLobby({
       }
     }
   });
+
+  unrefTimer(setInterval(watchOpponents, 500));
+  if (typeof window !== 'undefined') {
+    window.addEventListener('pagehide', () => {
+      if (phase !== 'idle') leaveRoom();
+    });
+  }
 
   return {
     createRoom,

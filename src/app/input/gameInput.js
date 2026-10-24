@@ -1125,9 +1125,9 @@ export function createGameInput(opts) {
   /**
    * Replace or shift-add buildings. Empty `list` is a no-op unless replacing
    * (`add` false), which clears. Shift-add refuses mixed owners.
-   * @param {{ kind: 'agora' | 'building', index: number }[]} list
+   * @param {{ kind: 'agora' | 'building' | 'rally', index: number, hop?: number }[]} list
    * @param {boolean} add
-   * @param {{ kind: 'agora' | 'building', index: number } | null | undefined} [primary]
+   * @param {{ kind: 'agora' | 'building' | 'rally', index: number, hop?: number } | null | undefined} [primary]
    * @param {{ clientX: number, clientY: number } | undefined} [ptr]
    */
   function setBuildingSelection(list, add, primary, ptr) {
@@ -1176,6 +1176,32 @@ export function createGameInput(opts) {
 
   function buildingsInScreenRect(minX, maxX, minY, maxY, proj) {
     return buildingsInScreenHits((p) => screenPosInRect(p, minX, maxX, minY, maxY), proj);
+  }
+
+  /**
+   * Planted rally flags whose stems project into the drag (visible only while
+   * their building or a hop is selected).
+   * @returns {{ kind: 'rally', index: number, hop: number }[]}
+   */
+  function flagsInScreenHits(hit, proj) {
+    const vis = visibleRallyFlags();
+    /** @type {{ kind: 'rally', index: number, hop: number }[]} */
+    const matched = [];
+    for (let i = 0; i < vis.length; i++) {
+      const f = vis[i];
+      const y = (renderer.groundYAt?.(f.x, f.z) ?? 0) + 2.5;
+      if (proj) {
+        if (!projectWorldToCanvas(proj.vp, f.x, y, f.z, proj.width, proj.height, screenScratch)) {
+          continue;
+        }
+        if (!hit(screenScratch)) continue;
+      } else {
+        const p = renderer.worldToScreen?.(f.x, y, f.z);
+        if (!hit(p)) continue;
+      }
+      matched.push({ kind: 'rally', index: f.index, hop: f.hop });
+    }
+    return matched;
   }
 
   function selectionOwnerForBuildingType(typeKey, primary) {
@@ -1453,12 +1479,17 @@ export function createGameInput(opts) {
     onSelectionChanged?.();
   }
 
-  function finishMarqueeSelect(unitHits, buildings, add) {
-    const winner = boxSelectWinner(unitHits, buildings.length);
+  function finishMarqueeSelect(unitHits, buildings, add, flags) {
+    const winner = boxSelectWinner(unitHits, buildings.length, flags?.length ?? 0);
     if (winner === 'units') {
       clearBuildingSelection();
       syncSelectionSquad();
       onSelectionChanged?.();
+      return;
+    }
+    if (winner === 'flags') {
+      clearUnitSelection();
+      setBuildingSelection(flags, add, flags[0]);
       return;
     }
     if (winner === 'buildings') {
@@ -1511,7 +1542,11 @@ export function createGameInput(opts) {
       unitHits++;
     }
     const buildings = unitHits > 0 ? [] : buildingsInScreenRect(minX, maxX, minY, maxY, proj);
-    finishMarqueeSelect(unitHits, buildings, add);
+    const flags = unitHits > 0 ? [] : flagsInScreenHits(
+      (p) => screenPosInRect(p, minX, maxX, minY, maxY),
+      proj,
+    );
+    finishMarqueeSelect(unitHits, buildings, add, flags);
   }
 
   function polySelect(clientPts, add) {
@@ -1565,7 +1600,8 @@ export function createGameInput(opts) {
       unitHits++;
     }
     const buildings = unitHits > 0 ? [] : buildingsInScreenHits(hit, proj);
-    finishMarqueeSelect(unitHits, buildings, add);
+    const flags = unitHits > 0 ? [] : flagsInScreenHits(hit, proj);
+    finishMarqueeSelect(unitHits, buildings, add, flags);
   }
 
   function marqueeSelect(x0, y0, x1, y1, add) {
@@ -1620,23 +1656,32 @@ export function createGameInput(opts) {
       selectEntity(i, false);
       unitHits++;
     }
-    /** @type {{ kind: 'agora' | 'building', index: number }[]} */
+    /** @type {{ kind: 'agora' | 'building' | 'rally', index: number, hop?: number }[]} */
     const buildings = [];
+    /** @type {{ kind: 'rally', index: number, hop: number }[]} */
+    const flags = [];
     if (unitHits === 0) {
       const n = fillBuildingPickCenters();
       for (let i = 0; i < n; i++) {
         const sp = buildingPickPool[i];
         if (hit(sp.x, sp.z)) buildings.push({ kind: sp.id.kind, index: sp.id.index });
       }
+      const vis = visibleRallyFlags();
+      for (let i = 0; i < vis.length; i++) {
+        const f = vis[i];
+        if (hit(f.x, f.z)) flags.push({ kind: 'rally', index: f.index, hop: f.hop });
+      }
     }
-    finishMarqueeSelect(unitHits, buildings, add);
+    finishMarqueeSelect(unitHits, buildings, add, flags);
     return true;
   }
 
   /**
    * Headset trigger tap along a world ray. Select-only: never issues orders.
    * A foreign unit only inspects when we hold no orderable troops (same as LMB).
-   * A ray that misses every unit and building falls back to the nearest
+   * A planted rally flag (visible on a selected trainer) beats a building
+   * behind it so a grip tap can extend the chain.
+   * A ray that misses every unit, flag, and building falls back to the nearest
    * selectable unit within `assist.slop` of the ground hit (hand aim is coarse).
    * An empty miss clears unless `add`.
    * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null} ray
@@ -1654,6 +1699,12 @@ export function createGameInput(opts) {
       const owner = world.owner[hits[0]];
       if (owner !== localPlayerId && !inspect) return false;
       applyUnitHits(hits, owner, add);
+      return true;
+    }
+    const flag = pickRallyFlagAtRay(ray);
+    if (flag) {
+      clearUnitSelection();
+      setBuildingSelection([flag], add, flag);
       return true;
     }
     const bld = pickBuildingAtRay(ray);

@@ -2,12 +2,17 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   XR_HUD_CHROME_TAN,
+  XR_HUD_DRIFT_FOLLOW,
+  XR_HUD_DRIFT_MAX,
   XR_HUD_EDGE_TAN,
   eyeReach,
   xrFitFov,
   xrHudChromeScale,
+  xrHudDriftPosition,
   xrHudEdgeScale,
   xrHudLayoutPoint,
+  xrHudOvalLayoutPoint,
+  xrHudOvalTopArcPoint,
   xrHudProjection,
   xrShadowCover,
 } from './xrEye.js';
@@ -44,6 +49,18 @@ describe('xrHudProjection', () => {
     assert.ok(Math.abs(p.aspect - 1.5) < 1e-6);
     assert.ok(Math.abs(Math.tan(p.fov / 2) - 0.8) < 1e-6);
     assert.ok(Math.abs(Math.tan(p.fov / 2) * p.aspect - 1.2) < 1e-6);
+  });
+});
+
+describe('xrHudDriftPosition', () => {
+  it('caps movement lag and then eases the HUD back onto the eye', () => {
+    const target = [1, 2, 3];
+    const first = xrHudDriftPosition([0, 2, 3], target, 0.016);
+    assert.ok(Math.abs((target[0] - first[0]) - XR_HUD_DRIFT_MAX) < 1e-9);
+    const settled = xrHudDriftPosition(first, target, 0.016);
+    assert.ok(target[0] - settled[0] < XR_HUD_DRIFT_MAX);
+    assert.ok(target[0] - settled[0] > 0);
+    assert.ok(XR_HUD_DRIFT_FOLLOW > 0);
   });
 });
 
@@ -90,6 +107,49 @@ describe('xrHudLayoutPoint', () => {
     const mid = xrHudLayoutPoint(100, 50, 200, 100, 0.5);
     assert.equal(mid.x, 100);
     assert.equal(mid.y, 50);
+  });
+});
+
+describe('xrHudOvalLayoutPoint', () => {
+  const eyes = { h: 1.4, v: 0.9 };
+  const w = 200;
+  const h = 100;
+
+  it('leaves the center alone', () => {
+    assert.deepEqual(xrHudOvalLayoutPoint(100, 50, w, h, eyes), { x: 100, y: 50 });
+  });
+
+  it('puts top-right on the oval, not the rectangular corner inset', () => {
+    const scale = xrHudChromeScale(eyes);
+    const rect = xrHudLayoutPoint(w, 0, w, h, scale);
+    const oval = xrHudOvalLayoutPoint(w, 0, w, h, eyes);
+    assert.ok(oval.x < rect.x);
+    assert.ok(oval.y > rect.y);
+    assert.ok(oval.x > 100);
+    assert.ok(oval.y < 50);
+  });
+});
+
+describe('xrHudOvalTopArcPoint', () => {
+  const eyes = { h: 1.4, v: 0.9 };
+  const w = 200;
+  const h = 100;
+  const rowY = 72;
+
+  it('keeps the center chip on the flat row height', () => {
+    const mid = xrHudOvalTopArcPoint(100, rowY, w, h, eyes);
+    assert.equal(mid.x, 100);
+    assert.equal(mid.y, rowY);
+  });
+
+  it('drops outer chips along the oval rim', () => {
+    const mid = xrHudOvalTopArcPoint(100, rowY, w, h, eyes);
+    const left = xrHudOvalTopArcPoint(40, rowY, w, h, eyes);
+    const right = xrHudOvalTopArcPoint(160, rowY, w, h, eyes);
+    assert.ok(left.y > mid.y);
+    assert.ok(right.y > mid.y);
+    assert.ok(left.x < mid.x);
+    assert.ok(right.x > mid.x);
   });
 });
 

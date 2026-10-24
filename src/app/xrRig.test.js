@@ -7,6 +7,12 @@ import {
   shapeStick,
   stickAxes,
   xrJumpHead,
+  lookDownOffset,
+  smoothFlatDirection,
+  yawBetween,
+  XR_LOOK_FOLLOW,
+  XR_LOOK_SNAP,
+  XR_LOOK_DOWN,
 } from './xrRig.js';
 
 describe('readQuestTouch', () => {
@@ -104,6 +110,59 @@ describe('xrJumpHead', () => {
   it('clamps into the play bounds', () => {
     const dest = xrJumpHead([0, 50, 0], [1, 0], { x: 500, z: 0 }, { floor: () => 0, maxY: 400, maxRange: 200 });
     assert.ok(Math.hypot(dest[0], dest[2]) <= 200.001);
+  });
+});
+
+describe('lookDownOffset', () => {
+  it('keeps the head in place while pitching the space down', () => {
+    const head = [10, 80, -4];
+    const t = lookDownOffset(head, [1, 0], XR_LOOK_DOWN);
+    const hx = head[0];
+    const hy = head[1];
+    const hz = -head[2];
+    const c = Math.cos(XR_LOOK_DOWN);
+    const s = Math.sin(XR_LOOK_DOWN);
+    const rx = hx;
+    const ry = hy * c - hz * s;
+    const rz = hy * s + hz * c;
+    assert.ok(Math.abs(t.position.x - (hx - rx)) < 1e-9);
+    assert.ok(Math.abs(t.position.y - (hy - ry)) < 1e-9);
+    assert.ok(Math.abs(t.position.z - (hz - rz)) < 1e-9);
+    assert.ok(t.orientation.x > 0);
+  });
+});
+
+describe('yawBetween', () => {
+  it('is zero when already aligned and ±π when opposite', () => {
+    assert.ok(Math.abs(yawBetween([0, 1], [0, 1])) < 1e-9);
+    assert.ok(Math.abs(Math.abs(yawBetween([0, 1], [0, -1])) - Math.PI) < 1e-9);
+  });
+});
+
+describe('smoothFlatDirection', () => {
+  const direction = (degrees) => {
+    const angle = degrees * Math.PI / 180;
+    return [Math.sin(angle), Math.cos(angle)];
+  };
+
+  it('follows the short arc across the angle wrap', () => {
+    const from = direction(179);
+    const target = direction(-179);
+    const next = smoothFlatDirection(from, target, 0.1);
+    assert.ok(next[1] < -0.99);
+    assert.ok(Math.abs(yawBetween(next, target)) < Math.abs(yawBetween(from, target)));
+  });
+
+  it('catches a large turn faster, then rides out the final adjustment', () => {
+    const from = direction(0);
+    const largeTarget = direction(90);
+    const smallTarget = direction(5);
+    const large = smoothFlatDirection(from, largeTarget, 0.016);
+    const small = smoothFlatDirection(from, smallTarget, 0.016);
+    const largeFraction = yawBetween(from, large) / yawBetween(from, largeTarget);
+    const smallFraction = yawBetween(from, small) / yawBetween(from, smallTarget);
+    assert.ok(XR_LOOK_SNAP > XR_LOOK_FOLLOW);
+    assert.ok(largeFraction > smallFraction * 2);
   });
 });
 

@@ -206,9 +206,11 @@ describe('xr controls: pie menu', () => {
     tap(h, h.left.trigger);
     assert.equal(h.of('confirmRadial').length, 0);
     assert.equal(h.of('attackMove').length, 0);
+    assert.equal(h.of('forceMove').length, 1);
     h.state.beamPick = { kind: 'building', id: 'wall' };
     tap(h, h.left.trigger);
     assert.deepEqual(h.of('confirmRadial').map((c) => c.args[0].id), ['wall']);
+    assert.equal(h.of('forceMove').length, 1);
   });
 
   it('a beam on a slice hovers and a grip on it picks without selecting', () => {
@@ -247,6 +249,18 @@ describe('xr controls: pie menu', () => {
     tap(h, h.right.secondary);
     assert.equal(h.of('cancelRadial').length, 1);
     assert.equal(h.of('cast').length, 0);
+  });
+
+  it('a trigger that misses the pie still force-moves and attack-moves', () => {
+    const h = harness();
+    h.state.radial = true;
+    h.left.aim(-20, 0);
+    h.right.aim(30, 0);
+    tap(h, h.left.trigger);
+    tap(h, h.right.trigger);
+    assert.deepEqual(h.kinds(), ['forceMove', 'attackMove']);
+    assert.ok(h.of('forceMove')[0].args[0].dx < 0);
+    assert.ok(h.of('attackMove')[0].args[0].dx > 0);
   });
 });
 

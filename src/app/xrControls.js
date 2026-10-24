@@ -5,6 +5,8 @@
 //                   Holding the other grip still makes a release additive.
 //   Left trigger    force-move at the left beam.
 //   Right trigger   attack-move at the right beam.
+//                   A selected production building plants a train rally
+//                   (force-move / attack-move) even while its action pie is open.
 //   X / A           unit ability at that hand's beam: cast, unload a
 //                   loaded transport, or found an agora.
 //   Y / B           cancel: back out of a pie or ghost-place, or clear the selection.
@@ -13,7 +15,9 @@
 // Control groups stay on the desktop and pad; the headset has no buttons for them.
 //
 // Pie menu open (agora build / building actions): point a beam at a slice.
-// A trigger or a grip on that slice picks it. The sticks keep flying and yawing.
+// A trigger or a grip on that slice picks it. A trigger that misses the pie
+// issues the same order as in play (rally when buildings are selected).
+// The sticks keep flying and yawing.
 // Ghost-place: the beam walks the ghost. Facing is where the beam sits
 // inside the plot. Either trigger stamps. Y / B backs out.
 // A hand's aim beam shows while a finger rests on its trigger, and always in
@@ -130,6 +134,14 @@ export function createXrControls({ renderer, getInput, jumps = {}, onJump }) {
         return;
       }
     }
+    issueTriggerOrders(input, hands);
+  }
+
+  /** Left force-moves, right attack-moves. Buildings turn those into rallies. */
+  function issueTriggerOrders(input, hands) {
+    const { left, right } = hands;
+    if (left.down.trigger && left.ray) input.forceMoveAtRay?.(left.ray);
+    if (right.down.trigger && right.ray) input.attackMoveAtRay?.(right.ray);
   }
 
   /** Ghost-place: the beam walks the ghost, either trigger stamps, Y / B backs out. */
@@ -150,9 +162,7 @@ export function createXrControls({ renderer, getInput, jumps = {}, onJump }) {
   }
 
   function stepPlay(input, hands) {
-    const { left, right } = hands;
-    if (left.down.trigger && left.ray) input.forceMoveAtRay?.(left.ray);
-    if (right.down.trigger && right.ray) input.attackMoveAtRay?.(right.ray);
+    issueTriggerOrders(input, hands);
     for (const hand of HANDS) {
       const h = hands[hand];
       if (h.down.secondary) {

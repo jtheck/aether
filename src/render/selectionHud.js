@@ -31,6 +31,7 @@ import {
   getBuildingDisplayName,
 } from '../sim/buildings.js';
 import { getUnitDef } from '../sim/unitTypes.js';
+import { xrEye, xrHudOvalTopArcPoint } from './xrEye.js';
 
 /** Distinct types the strip can show at once (typical selections use few). */
 const MAX_SLOTS = 14;
@@ -818,18 +819,15 @@ export async function createSelectionHud(engine, scene, screen = {}) {
     // Compress the row (and icons) when many types are selected so nothing
     // spills past the viewport edges.
     const toHud = screen.chromePoint || screen.hudPoint || ((x, y) => ({ x, y }));
+    const layoutPoint = (px, py) => (
+      xrEye() ? xrHudOvalTopArcPoint(px, py, vw, vh) : toHud(px, py)
+    );
     const usable = Math.max(1, vw - EDGE_MARGIN * 2);
     const pitch = n > 1 ? Math.min(SLOT_PX, usable / (n - 1)) : SLOT_PX;
     const compress = Math.min(1, pitch / SLOT_PX);
     const rowW = (n - 1) * pitch;
     const startX = vw * 0.5 - rowW * 0.5;
     const iconPy = TOP_MARGIN;
-    const anchor = toHud(vw * 0.5, iconPy);
-    const orient = spriteQuatFromRays(
-      screen.rayFromCanvas(anchor.x, anchor.y),
-      screen.rayFromCanvas(anchor.x + 1, anchor.y),
-      screen.rayFromCanvas(anchor.x, anchor.y + 1),
-    ) ?? spriteQuatFromCamera(camera);
 
     /** @type {Set<string>} */
     const shownKeys = new Set();
@@ -841,7 +839,7 @@ export async function createSelectionHud(engine, scene, screen = {}) {
       const slot = selectionHudSlot(g);
       if (slot) {
         const hitW = Math.min(HIT_W_PX, pitch * 0.7);
-        const base = toHud(px, iconPy);
+        const base = layoutPoint(px, iconPy);
         hitRects.push({
           slot,
           groupIndex: i,
@@ -881,11 +879,16 @@ export async function createSelectionHud(engine, scene, screen = {}) {
       const hoverT = batch
         ? (batch.hoverT += (target - batch.hoverT) * Math.min(1, dt * HOVER_LERP))
         : 0;
-      const base = toHud(px, iconPy);
+      const base = layoutPoint(px, iconPy);
       const hy = base.y - hoverT * HOVER_LIFT_PX;
 
       const ray = screen.rayFromCanvas(base.x, hy);
       const rayR = screen.rayFromCanvas(base.x + 1, hy);
+      const orient = spriteQuatFromRays(
+        ray,
+        rayR,
+        screen.rayFromCanvas(base.x, hy + 1),
+      ) ?? spriteQuatFromCamera(camera);
       if (ray && iconKey) {
         const wx = ray.ox + ray.dx * ICON_DEPTH;
         const wy = ray.oy + ray.dy * ICON_DEPTH;

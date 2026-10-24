@@ -1,5 +1,6 @@
-/** @param {{ kind: string, index: number }} s */
+/** @param {{ kind: string, index: number, hop?: number }} s */
 export function buildingSelKey(s) {
+  if (s.kind === 'rally') return `rally:${s.index}:${s.hop | 0}`;
   return `${s.kind}:${s.index}`;
 }
 
@@ -100,9 +101,13 @@ export function lassoStaysLoop(latched, pts) {
   return !!latched || lassoPrefersLoop(pts);
 }
 
-/** Units win a mixed drag box so boxing an army does not also grab an agora. */
-export function boxSelectWinner(unitHits, buildingHits) {
+/** Units win a mixed drag box so boxing an army does not also grab an agora.
+ *  Planted rally flags beat their parent building so a box around a flag
+ *  can select it to extend the chain.
+ */
+export function boxSelectWinner(unitHits, buildingHits, flagHits = 0) {
   if (unitHits > 0) return 'units';
+  if (flagHits > 0) return 'flags';
   if (buildingHits > 0) return 'buildings';
   return 'none';
 }
@@ -187,7 +192,7 @@ export function placementReleaseKind(s = {}) {
 }
 
 /** CSS pixels above a finger. The plot sits clear of the contact. */
-export const TOUCH_PLACE_LIFT_PX = 42;
+export const TOUCH_PLACE_LIFT_PX = 49;
 
 /**
  * Touch aims above the contact so the finger does not cover the ghost.

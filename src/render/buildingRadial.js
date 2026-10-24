@@ -29,6 +29,7 @@ import {
 } from '../sim/buildings.js';
 import {
   fitRadialInViewport,
+  fitRadialMenuXr,
   poseRadialFramingBuilding,
   stepRadialEdgeOpacity,
   RADIAL_EDGE_PICK_ALPHA,
@@ -1447,16 +1448,27 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       RIM_R,
       MENU_TILT,
     );
-    const fitted = fitRadialInViewport({
-      eye,
-      x: posed.x,
-      y: posed.y,
-      z: posed.z,
-      hudScale: posed.hudScale,
-      worldRadius: SCREEN_FIT_RADIUS,
-      worldToScreen: screen.worldToScreen,
-      getViewport: screen.getViewport,
-    });
+    const fitted = xrEye()
+      ? fitRadialMenuXr({
+          posed,
+          eye,
+          camera,
+          scaleForDist: scaleForPlaceDist,
+          placeDist: HUD_PLACE_DIST,
+          worldRadius: SCREEN_FIT_RADIUS,
+          worldToScreen: screen.worldToScreen,
+          getViewport: screen.getViewport,
+        })
+      : fitRadialInViewport({
+          eye,
+          x: posed.x,
+          y: posed.y,
+          z: posed.z,
+          hudScale: posed.hudScale,
+          worldRadius: SCREEN_FIT_RADIUS,
+          worldToScreen: screen.worldToScreen,
+          getViewport: screen.getViewport,
+        });
     applyViewportFit(fitted);
     updateBasis(camera);
   }

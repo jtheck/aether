@@ -614,6 +614,10 @@ async function toggleMatchXr(renderer, getInput, jumps) {
   }
   const cam = renderer.camera.worldMatrix;
   const eye = [cam[12], cam[13], cam[14]];
+  const target = renderer.camera.target;
+  const facing = target
+    ? [target.x - eye[0], target.z - eye[2]]
+    : [-cam[8], -cam[10]];
   const controls = createXrControls({
     renderer,
     getInput,
@@ -625,7 +629,7 @@ async function toggleMatchXr(renderer, getInput, jumps) {
     clearance: 6,
     maxY: Math.max(eye[1], renderer.camera.upperRadiusLimit ?? eye[1]),
     maxRange: renderer.camera.upperRadiusLimit ?? Math.hypot(eye[0], eye[2]),
-  });
+  }, { facing });
   matchXr = await enterXr(renderer.scene, {
     depthNear: 0.08,
     // Sky dome radius is 24000. A short far plane clips it to flat clear color.

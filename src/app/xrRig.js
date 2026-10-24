@@ -12,6 +12,13 @@ const STICK_DEAD = 0.35;
 const STICK_SMOOTH = 10;
 /** A jump stands this many head heights back from the target, so it sits ahead and below. */
 const JUMP_BACK = 0.8;
+/** Inherent look-down so a level visor sees the table, not the horizon. */
+export const XR_LOOK_DOWN = 0.36;
+/** Slow tail after the synthetic tilt has caught most of a head turn. */
+export const XR_LOOK_FOLLOW = 2.25;
+/** Initial catch-up rate while the tilt is well behind the viewer yaw. */
+export const XR_LOOK_SNAP = 12;
+const XR_LOOK_SNAP_ARC = Math.PI / 6;
 
 function buttonAt(gamepad, index) {
   const b = gamepad?.buttons?.[index];
@@ -120,6 +127,81 @@ function flatBasis(matrix) {
   return { forward: [fx / fl, fz / fl], right: [rx / rl, rz / rl] };
 }
 
+/**
+ * Pitch around the head so a level visor sees the table. `right` is Lite XZ.
+ * getOffsetReferenceSpace applies the inverse, so a +X offset looks the view down.
+ * @param {[number, number, number]} head
+ * @param {[number, number]} right
+ */
+export function lookDownOffset(head, right, lookDown = XR_LOOK_DOWN) {
+  const angle = lookDown;
+  let kx = right[0];
+  let kz = -right[1];
+  const kl = Math.hypot(kx, kz);
+  if (kl < 1e-5) {
+    kx = 1;
+    kz = 0;
+  } else {
+    kx /= kl;
+    kz /= kl;
+  }
+  const hx = head[0];
+  const hy = head[1];
+  const hz = -head[2];
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  const d = kx * hx + kz * hz;
+  const cx = -kz * hy;
+  const cy = kz * hx - kx * hz;
+  const cz = kx * hy;
+  const rx = hx * c + cx * s + kx * d * (1 - c);
+  const ry = hy * c + cy * s;
+  const rz = hz * c + cz * s + kz * d * (1 - c);
+  const half = angle / 2;
+  const qs = Math.sin(half);
+  return {
+    position: { x: hx - rx, y: hy - ry, z: hz - rz },
+    orientation: { x: kx * qs, y: 0, z: kz * qs, w: Math.cos(half) },
+  };
+}
+
+function lookDownSpace(ref, head, right) {
+  const t = lookDownOffset(head, right);
+  return ref.getOffsetReferenceSpace(new XRRigidTransform(t.position, t.orientation));
+}
+
+/** Signed yaw in XZ that takes unit `from` onto unit `to`. */
+export function yawBetween(from, to) {
+  const d = Math.atan2(to[0], to[1]) - Math.atan2(from[0], from[1]);
+  if (d > Math.PI) return d - Math.PI * 2;
+  if (d < -Math.PI) return d + Math.PI * 2;
+  return d;
+}
+
+/** Smooth a flat unit direction along the shortest yaw arc: quick catch, soft tail. */
+export function smoothFlatDirection(
+  current,
+  target,
+  dt,
+  tailRate = XR_LOOK_FOLLOW,
+  snapRate = XR_LOOK_SNAP,
+) {
+  const tl = Math.hypot(target?.[0] ?? 0, target?.[1] ?? 0);
+  if (tl < 1e-5) return current ? [current[0], current[1]] : [1, 0];
+  const to = [target[0] / tl, target[1] / tl];
+  const cl = Math.hypot(current?.[0] ?? 0, current?.[1] ?? 0);
+  if (cl < 1e-5) return to;
+  const from = [current[0] / cl, current[1] / cl];
+  const angle = Math.atan2(from[0], from[1]);
+  const turn = yawBetween(from, to);
+  const catchAmount = Math.min(1, Math.abs(turn) / XR_LOOK_SNAP_ARC);
+  const catchEase = catchAmount * catchAmount * (3 - 2 * catchAmount);
+  const rate = tailRate + (snapRate - tailRate) * catchEase;
+  const follow = 1 - Math.exp(-Math.max(0, dt) * Math.max(0, rate));
+  const next = angle + turn * follow;
+  return [Math.sin(next), Math.cos(next)];
+}
+
 function yawSpace(ref, head, angle) {
   const c = Math.cos(angle);
   const s = Math.sin(angle);
@@ -142,16 +224,21 @@ function hand(sources, handedness) {
 /**
  * Headset rig for the match. The first frame parks the head on the desktop
  * camera. After that the left stick slides and the right stick yaws and lifts.
+ * Look-down eases toward viewer yaw so every heading settles to the same pitch
+ * without attaching the synthetic adjustment rigidly to small head motion.
  * While `rightStickBusy()` is true only the left stick flies.
  * @param {[number, number, number]} eye desktop camera world position
  * @param {object | null} [bounds]
- * @param {{ rightStickBusy?: () => boolean }} [opts]
+ * @param {{ rightStickBusy?: () => boolean, facing?: [number, number] | null }} [opts]
  */
 export function createXrRig(eye, bounds = null, opts = {}) {
   const speed = Math.max(16, Math.hypot(eye[0], eye[2]) * 0.35);
+  const raw = opts.facing;
+  const fl = raw ? Math.hypot(raw[0], raw[1]) : 0;
   return {
     eye,
     bounds,
+    facing: fl > 1e-5 ? [raw[0] / fl, raw[1] / fl] : null,
     rightStickBusy: opts.rightStickBusy ?? null,
     speed,
     seeded: false,
@@ -159,6 +246,12 @@ export function createXrRig(eye, bounds = null, opts = {}) {
     hands: null,
     /** @type {{ x: number, z: number } | null} pending jumpXrRig target */
     jump: null,
+    /** Unpitched fly/yaw space. Look-down is applied on top each frame. */
+    locomotion: null,
+    /** Smoothed viewer-right axis used only by the synthetic look-down. */
+    lookRight: null,
+    lookLastTime: 0,
+    eyeLastTime: 0,
     logged: false,
     smooth: { mx: 0, my: 0, yaw: 0, lift: 0 },
   };
@@ -184,73 +277,101 @@ export function xrJumpHead(head, forward, target, bounds = null) {
 }
 
 export function stepXrRig(rig, ctx, frame, time) {
-  const pose = frame.getViewerPose(ctx.referenceSpace);
+  // Lite snapshots this reference space before onFrame and renders that pose
+  // afterward. Keep CPU/HUD work on the same pose instead of one locomotion
+  // step ahead during fast pan or lift.
+  const renderPose = frame.getViewerPose(ctx.referenceSpace);
+  const loco = rig.locomotion ?? ctx.referenceSpace;
+  const pose = frame.getViewerPose(loco);
   if (!pose) return;
   const head = poseHead(pose);
-  setXrEyeFromPose(pose.transform.matrix, pose.views);
+  const basis = flatBasis(pose.transform.matrix);
+  let next = loco;
+
   if (!rig.seeded) {
-    ctx._referenceSpace = ctx.referenceSpace.getOffsetReferenceSpace(
-      new XRRigidTransform(referenceOffset(head, rig.eye)),
+    const dest = rig.eye;
+    next = loco.getOffsetReferenceSpace(
+      new XRRigidTransform(referenceOffset(head, dest)),
     );
+    const facing = rig.facing;
+    if (facing) {
+      const yaw = yawBetween(basis.forward, facing);
+      if (Math.abs(yaw) > 1e-4) next = yawSpace(next, dest, yaw);
+    }
     rig.seeded = true;
     rig.lastTime = time;
-    return;
-  }
-  if (rig.jump) {
-    const dest = xrJumpHead(head, flatBasis(pose.transform.matrix).forward, rig.jump, rig.bounds);
+  } else if (rig.jump) {
+    const dest = xrJumpHead(head, basis.forward, rig.jump, rig.bounds);
     rig.jump = null;
-    ctx._referenceSpace = ctx.referenceSpace.getOffsetReferenceSpace(
+    next = loco.getOffsetReferenceSpace(
       new XRRigidTransform(referenceOffset(head, dest)),
     );
     const s = rig.smooth;
     s.mx = s.my = s.yaw = s.lift = 0;
     rig.lastTime = time;
-    return;
-  }
+  } else {
+    const sources = ctx.input?.inputSources ?? [];
+    const left = readQuestTouch(hand(sources, 'left')?.gamepad);
+    const right = readQuestTouch(hand(sources, 'right')?.gamepad);
+    rig.hands = { left, right };
+    if (!rig.logged && sources.length) {
+      rig.logged = true;
+      for (const src of sources) {
+        const pad = src.gamepad;
+        console.info(
+          `[xr] ${src.handedness} buttons ${pad?.buttons?.length ?? 0} axes ${pad?.axes?.length ?? 0}`,
+        );
+      }
+    }
 
-  const sources = ctx.input?.inputSources ?? [];
-  const left = readQuestTouch(hand(sources, 'left')?.gamepad);
-  const right = readQuestTouch(hand(sources, 'right')?.gamepad);
-  rig.hands = { left, right };
-  if (!rig.logged && sources.length) {
-    rig.logged = true;
-    for (const src of sources) {
-      const pad = src.gamepad;
-      console.info(
-        `[xr] ${src.handedness} buttons ${pad?.buttons?.length ?? 0} axes ${pad?.axes?.length ?? 0}`,
-      );
+    const dt = Math.min(0.05, Math.max(0, (time - rig.lastTime) / 1000));
+    rig.lastTime = time;
+    if (dt > 0) {
+      const [rawMx, rawMy] = shapeStick(left.stickX, -left.stickY);
+      const [rawYaw, rawLift] = rig.rightStickBusy?.() ? [0, 0] : shapeStick(right.stickX, -right.stickY);
+      const s = rig.smooth;
+      if (rawMx === 0 && rawMy === 0 && rawYaw === 0 && rawLift === 0) {
+        s.mx = s.my = s.yaw = s.lift = 0;
+      } else {
+        s.mx = damp(s.mx, rawMx, dt);
+        s.my = damp(s.my, rawMy, dt);
+        s.yaw = damp(s.yaw, rawYaw, dt);
+        s.lift = damp(s.lift, rawLift, dt);
+        const dist = rig.speed * dt;
+        const dest = clampXrHead([
+          head[0] + (basis.right[0] * s.mx + basis.forward[0] * s.my) * dist,
+          head[1] + s.lift * dist,
+          head[2] + (basis.right[1] * s.mx + basis.forward[1] * s.my) * dist,
+        ], rig.bounds);
+        next = loco.getOffsetReferenceSpace(
+          new XRRigidTransform(referenceOffset(head, dest)),
+        );
+        if (s.yaw !== 0) {
+          const yaw = s.yaw * dt * 1.4;
+          next = yawSpace(next, dest, yaw);
+        }
+      }
     }
   }
 
-  const dt = Math.min(0.05, Math.max(0, (time - rig.lastTime) / 1000));
-  rig.lastTime = time;
-  if (dt === 0) return;
-
-  const [rawMx, rawMy] = shapeStick(left.stickX, -left.stickY);
-  const [rawYaw, rawLift] = rig.rightStickBusy?.() ? [0, 0] : shapeStick(right.stickX, -right.stickY);
-  const s = rig.smooth;
-  if (rawMx === 0 && rawMy === 0 && rawYaw === 0 && rawLift === 0) {
-    s.mx = s.my = s.yaw = s.lift = 0;
-    return;
-  }
-  s.mx = damp(s.mx, rawMx, dt);
-  s.my = damp(s.my, rawMy, dt);
-  s.yaw = damp(s.yaw, rawYaw, dt);
-  s.lift = damp(s.lift, rawLift, dt);
-  const moveX = s.mx;
-  const moveY = s.my;
-  const yaw = s.yaw;
-  const lift = s.lift;
-
-  const basis = flatBasis(pose.transform.matrix);
-  const dist = rig.speed * dt;
-  const dest = clampXrHead([
-    head[0] + (basis.right[0] * moveX + basis.forward[0] * moveY) * dist,
-    head[1] + lift * dist,
-    head[2] + (basis.right[1] * moveX + basis.forward[1] * moveY) * dist,
-  ], rig.bounds);
-  let ref = ctx.referenceSpace;
-  ref = ref.getOffsetReferenceSpace(new XRRigidTransform(referenceOffset(head, dest)));
-  if (yaw !== 0) ref = yawSpace(ref, dest, yaw * dt * 1.4);
-  ctx._referenceSpace = ref;
+  rig.locomotion = next;
+  const grounded = next === loco ? pose : frame.getViewerPose(next) ?? pose;
+  const groundedBasis = flatBasis(grounded.transform.matrix);
+  const lookDt = rig.lookLastTime > 0
+    ? Math.min(0.05, Math.max(0, (time - rig.lookLastTime) / 1000))
+    : 0;
+  rig.lookLastTime = time;
+  rig.lookRight = smoothFlatDirection(rig.lookRight, groundedBasis.right, lookDt);
+  const look = lookDownSpace(
+    next,
+    poseHead(grounded),
+    rig.lookRight,
+  );
+  ctx._referenceSpace = look;
+  const view = renderPose ?? frame.getViewerPose(look) ?? grounded;
+  const eyeDt = rig.eyeLastTime > 0
+    ? Math.min(0.05, Math.max(0, (time - rig.eyeLastTime) / 1000))
+    : 0;
+  rig.eyeLastTime = time;
+  setXrEyeFromPose(view.transform.matrix, view.views, eyeDt);
 }

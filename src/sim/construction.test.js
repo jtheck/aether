@@ -192,6 +192,37 @@ function pullsAGathererWhenNoIdle() {
   assert.equal(w.buildings[1].built, 1, 'and the site got raised');
 }
 
+function carrierBanksBeforeJoiningTheSite() {
+  const field = openField(21);
+  const w = createWorld(21);
+  const treeTile = worldToTile(fx.fromFloat(10)) * field.width + worldToTile(fx.fromFloat(10));
+  growTreeAt(field, treeTile, 200);
+  w.buildings = [
+    { owner: 0, type: 'camp', x: 0, z: 0, built: 1, buildProgress: 1, buildTime: 1, hasRally: 0, rallyX: 0, rallyZ: 0, rallyOrder: ORDER.MOVE, prodPaused: 0, tracks: [] },
+  ];
+  const vill = spawn(w, { x: fx.fromFloat(10), y: fx.fromFloat(10), type: UNIT.VILLAGER, owner: 0 });
+  step(w, field, [{ type: CMD.GATHER, entities: [vill], tile: treeTile }]);
+  for (let t = 0; t < 40 && (w.carriedAmt[vill] | 0) <= 0; t++) step(w, field, []);
+  assert.ok((w.carriedAmt[vill] | 0) > 0, 'villager has a load in hand');
+  const woodAtCall = getResource(w, 0, 'wood');
+  w.buildings.push(siteBuilding('camp', 16, 0));
+
+  let builtWhileLoaded = false;
+  let bankedAt = -1;
+  let joinedAt = -1;
+  for (let t = 0; t < 400; t++) {
+    step(w, field, []);
+    const loaded = (w.carriedAmt[vill] | 0) > 0;
+    if (w.order[vill] === ORDER.BUILD && loaded) builtWhileLoaded = true;
+    if (bankedAt < 0 && getResource(w, 0, 'wood') > woodAtCall) bankedAt = t;
+    if (joinedAt < 0 && w.order[vill] === ORDER.BUILD) joinedAt = t;
+    if (bankedAt >= 0 && joinedAt >= 0) break;
+  }
+  assert.equal(builtWhileLoaded, false, 'does not walk onto the site still carrying');
+  assert.ok(bankedAt >= 0, 'the load is returned to a drop-off');
+  assert.ok(joinedAt >= 0 && bankedAt <= joinedAt, 'the drop-off happens before they build');
+}
+
 function siteDoesNotStripAStaffedFarm() {
   const field = openField(11);
   const w = createWorld(11);
@@ -221,6 +252,23 @@ function siteDoesNotStripAStaffedFarm() {
   assert.equal(farmerPulled, false, 'the farmer stays on the plot while someone else can build');
   assert.equal(chopperPulled, true, 'the chopper is the one pulled onto the site');
   assert.equal(w.gatherTile[farmer], farmTile, 'farm keeps its worker');
+}
+
+function farmCallsOneBuilder() {
+  const field = openField(16);
+  const w = createWorld(16);
+  w.buildings = [siteBuilding('farm', 0, 0)];
+  const a = spawn(w, { x: fx.fromFloat(6), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  const b = spawn(w, { x: fx.fromFloat(-6), y: 0, type: UNIT.VILLAGER, owner: 0 });
+
+  let calledA = false;
+  let calledB = false;
+  for (let t = 0; t < 80; t++) {
+    step(w, field, []);
+    if (w.order[a] === ORDER.BUILD) calledA = true;
+    if (w.order[b] === ORDER.BUILD) calledB = true;
+  }
+  assert.equal((calledA ? 1 : 0) + (calledB ? 1 : 0), 1, 'a farm calls one builder, not two');
 }
 
 function finishingTurnsOnTheFarm() {
@@ -375,7 +423,9 @@ engineerBuildsAtHalfSpeed();
 villagerPlusEngineerBeatsSoloVillager();
 twoBuildersBeatOne();
 pullsAGathererWhenNoIdle();
+carrierBanksBeforeJoiningTheSite();
 siteDoesNotStripAStaffedFarm();
+farmCallsOneBuilder();
 finishingTurnsOnTheFarm();
 deterministic();
 visualStagesAtStartAndTwoThirds();
@@ -384,4 +434,4 @@ cancelConstructionIgnoresFinished();
 twoOwnersRaiseIndependently();
 villageTricklesWithoutWorkers();
 campStaysIdleWithoutWorkers();
-console.log('construction.test.js: ok (site + auto-build + engineer + speed + pull + complete + cancel + stages + two-owner + idle-village + deterministic)');
+console.log('construction.test.js: ok (site + auto-build + engineer + speed + pull + return-load + complete + cancel + stages + two-owner + idle-village + deterministic)');

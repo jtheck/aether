@@ -5,6 +5,10 @@ import {
   poseRadialFramingBuilding,
   radialNearRingLift,
   fitRadialInViewport,
+  fitRadialMenuXr,
+  radialMenuViewDepth,
+  XR_RADIAL_HIDE_DEPTH,
+  XR_RADIAL_SCALE_MUL,
   apparentScreenRadius,
   stepRadialEdgeOpacity,
   radialHudFadeAlpha,
@@ -155,6 +159,23 @@ describe('fitRadialInViewport', () => {
     assert.equal(out.hidden, true);
   });
 
+  it('can shrink at the edge without sliding the center', () => {
+    const out = fitRadialInViewport({
+      eye: eyeAt(-144),
+      x: -144,
+      y: 0,
+      z: 0,
+      hudScale: 1,
+      worldRadius: 80,
+      worldToScreen,
+      getViewport,
+      marginPx: 10,
+      slide: false,
+    });
+    assert.equal(out.x, -144);
+    assert.ok(out.hudScale < 1);
+  });
+
   it('lets the disc hang past the viewport before sliding', () => {
     const tight = fitRadialInViewport({
       eye: eyeAt(-118),
@@ -242,6 +263,64 @@ describe('radial icon pose', () => {
     assert.equal(radialIconFitScale({ hx: 0, hy: 0, hz: 0 }, 6.7, 1.8), 1.8);
   });
 
+});
+
+describe('fitRadialMenuXr', () => {
+  const worldToScreen = (x, y) => ({ x: 200 + x * 0.5, y: 200 - y * 0.5 });
+  const getViewport = () => ({ width: 400, height: 400 });
+  const scaleForDist = (d) => Math.max(0.35, d / 110);
+  const eye = { x: -400, y: 80, z: -400 };
+  const posed = { x: -40, y: 12, z: -40, hudScale: 1.2 };
+  const wm = new Float32Array(16);
+  wm[0] = 1;
+  wm[5] = 1;
+  wm[10] = 1;
+  wm[15] = 1;
+  wm[12] = eye.x;
+  wm[13] = eye.y;
+  wm[14] = eye.z;
+  wm[8] = posed.x - eye.x;
+  wm[9] = posed.y - eye.y;
+  wm[10] = posed.z - eye.z;
+  const fl = Math.hypot(wm[8], wm[9], wm[10]);
+  wm[8] /= fl;
+  wm[9] /= fl;
+  wm[10] /= fl;
+  const camera = { worldMatrix: wm };
+
+  it('caps scale below the uncapped distance pose', () => {
+    const dist = Math.hypot(eye.x - posed.x, eye.y - posed.y, eye.z - posed.z);
+    const loose = scaleForDist(dist);
+    const out = fitRadialMenuXr({
+      posed,
+      eye,
+      camera,
+      scaleForDist,
+      placeDist: 70,
+      worldRadius: 80,
+      worldToScreen,
+      getViewport,
+    });
+    assert.ok(out.hudScale < loose * XR_RADIAL_SCALE_MUL + 1e-6);
+    assert.equal(out.x, posed.x);
+  });
+
+  it('hides when the menu is at or behind the eye along view', () => {
+    const behind = { x: eye.x + wm[8] * 1, y: eye.y + wm[9] * 1, z: eye.z + wm[10] * 1, hudScale: 1 };
+    assert.ok(radialMenuViewDepth(eye, camera, behind.x, behind.y, behind.z) <= XR_RADIAL_HIDE_DEPTH);
+    const out = fitRadialMenuXr({
+      posed: behind,
+      eye,
+      camera,
+      scaleForDist,
+      placeDist: 70,
+      worldRadius: 80,
+      worldToScreen,
+      getViewport,
+    });
+    assert.equal(out.hidden, true);
+    assert.equal(out.opacity, 0);
+  });
 });
 
 describe('menu overlay anchor', () => {

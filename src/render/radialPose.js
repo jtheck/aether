@@ -320,6 +320,7 @@ export function stepRadialEdgeOpacity(
  *   overflowFrac?: number,
  *   slideFrac?: number,
  *   slideOnlyFrac?: number,
+ *   slide?: boolean,
  * }} opts
  * @returns {{ x: number, y: number, z: number, hudScale: number, opacity: number, hidden: boolean }}
  */
@@ -339,6 +340,7 @@ export function fitRadialInViewport(opts) {
   const fadeOut = opts.fadeOut ?? RADIAL_EDGE_FADE_OUT;
   const slideFrac = opts.slideFrac ?? RADIAL_EDGE_SLIDE_FRAC;
   const slideOnlyFrac = opts.slideOnlyFrac ?? RADIAL_EDGE_SLIDE_ONLY_FRAC;
+  const allowSlide = opts.slide !== false;
   if (!w2s || vw < 8 || vh < 8 || !(worldR1 > 0) || !eye) {
     return { x, y, z, hudScale, opacity: 1, hidden: false };
   }
@@ -384,7 +386,7 @@ export function fitRadialInViewport(opts) {
     }
   }
 
-  if (slideLen > 1e-4 && need > 1e-4) {
+  if (allowSlide && slideLen > 1e-4 && need > 1e-4) {
     const k = slideLen / need;
     const w = screenToWorldDelta(eye, x, y, z, dx * k, dy * k, w2s);
     x += w.x;
@@ -394,6 +396,125 @@ export function fitRadialInViewport(opts) {
   hudScale = unconstrained * scaleMul;
 
   return { x, y, z, hudScale, opacity, hidden: opacity <= 0 };
+}
+
+/** Slightly smaller than desktop steady-state in the headset. */
+export const XR_RADIAL_SCALE_MUL = 0.86;
+/** Stop growing world scale beyond this eye distance (screen size falls off after). */
+export const XR_RADIAL_DIST_CAP_FRAC = 0.88;
+/** Max on-screen disc radius as a fraction of the shorter viewport axis. */
+export const XR_RADIAL_MAX_SCREEN_FRAC = 0.34;
+/** View depth at or behind the eye: menu is hidden (world units). */
+export const XR_RADIAL_HIDE_DEPTH = 2.5;
+/** Fade out while closer than this along the view axis (world units). */
+export const XR_RADIAL_APPROACH_FADE = 18;
+/** Smallest XR world scale; fade instead of shrinking further. */
+export const XR_RADIAL_MIN_HUD_SCALE = 0.14;
+
+/**
+ * Distance from the eye to a world point along the camera forward axis (+Z in
+ * view space). Negative when the point is behind the headset.
+ * @param {{ x: number, y: number, z: number }} eye
+ * @param {object | null | undefined} camera
+ * @param {number} x
+ * @param {number} y
+ * @param {number} z
+ */
+export function radialMenuViewDepth(eye, camera, x, y, z) {
+  const wm = camera?.worldMatrix;
+  if (wm && wm.length >= 11) {
+    let fx = wm[8];
+    let fy = wm[9];
+    let fz = wm[10];
+    const fl = Math.hypot(fx, fy, fz);
+    if (fl > 1e-6) {
+      fx /= fl;
+      fy /= fl;
+      fz /= fl;
+      return (x - eye.x) * fx + (y - eye.y) * fy + (z - eye.z) * fz;
+    }
+  }
+  return Math.hypot(x - eye.x, y - eye.y, z - eye.z);
+}
+
+/**
+ * World-pinned radial in XR: cap distance-driven scale, clamp apparent size,
+ * shrink at viewport edges without sliding off the building.
+ *
+ * @param {{
+ *   posed: { x: number, y: number, z: number, hudScale: number },
+ *   eye: { x: number, y: number, z: number },
+ *   camera?: object | null,
+ *   scaleForDist: (dist: number) => number,
+ *   placeDist: number,
+ *   worldRadius: number,
+ *   worldToScreen?: (x: number, y: number, z: number) => { x: number, y: number } | null,
+ *   getViewport?: () => { width: number, height: number } | null,
+ * }} opts
+ */
+export function fitRadialMenuXr(opts) {
+  const { posed, eye, scaleForDist, placeDist, worldRadius } = opts;
+  const depth = radialMenuViewDepth(eye, opts.camera, posed.x, posed.y, posed.z);
+  if (!(depth > XR_RADIAL_HIDE_DEPTH)) {
+    return {
+      x: posed.x,
+      y: posed.y,
+      z: posed.z,
+      hudScale: XR_RADIAL_MIN_HUD_SCALE,
+      opacity: 0,
+      hidden: true,
+    };
+  }
+
+  const cap = (Number.isFinite(placeDist) ? placeDist : 70) * XR_RADIAL_DIST_CAP_FRAC;
+  const dist = Math.min(Math.max(depth, XR_RADIAL_HIDE_DEPTH), cap);
+  let hudScale = scaleForDist(dist) * XR_RADIAL_SCALE_MUL;
+  let shrinkFade = 1;
+  const w2s = opts.worldToScreen;
+  const vp = opts.getViewport?.();
+  const vw = vp?.width ?? 0;
+  const vh = vp?.height ?? 0;
+  if (w2s && vw >= 8 && vh >= 8 && worldRadius > 0) {
+    const maxR = Math.min(vw, vh) * XR_RADIAL_MAX_SCREEN_FRAC;
+    const r = apparentScreenRadius(
+      eye,
+      posed.x,
+      posed.y,
+      posed.z,
+      worldRadius * hudScale,
+      w2s,
+    );
+    if (r > maxR && r > 1e-3) {
+      const scaled = hudScale * (maxR / r);
+      if (scaled < XR_RADIAL_MIN_HUD_SCALE) {
+        shrinkFade = Math.max(0, scaled / XR_RADIAL_MIN_HUD_SCALE);
+        hudScale = XR_RADIAL_MIN_HUD_SCALE;
+      } else {
+        hudScale = scaled;
+      }
+    }
+  }
+  hudScale = Math.max(XR_RADIAL_MIN_HUD_SCALE, hudScale);
+
+  const approachFade = depth < XR_RADIAL_APPROACH_FADE
+    ? smoothstep(XR_RADIAL_HIDE_DEPTH, XR_RADIAL_APPROACH_FADE, depth)
+    : 1;
+  const fade = approachFade * shrinkFade;
+
+  const fitted = fitRadialInViewport({
+    eye,
+    x: posed.x,
+    y: posed.y,
+    z: posed.z,
+    hudScale,
+    worldRadius,
+    worldToScreen: w2s,
+    getViewport: opts.getViewport,
+    slide: false,
+  });
+  fitted.opacity = (fitted.opacity ?? 1) * fade;
+  fitted.hidden = fitted.hidden || fitted.opacity <= 0;
+  return fitted;
 }
 
 /**

@@ -222,6 +222,7 @@ export function beginGather(w, field, i, tile, defensive = 0) {
   w.gatherCd[i] = 0;
   if (w.gatherDefensive) w.gatherDefensive[i] = defensive ? 1 : 0;
   if (w.gatherAct) w.gatherAct[i] = GATHER_ACT.NONE;
+  if (w.buildTarget) w.buildTarget[i] = -1;
   clearEngagement(w, i);
   clearPath(w, i);
   return true;
@@ -251,6 +252,7 @@ export function releaseGatherOrder(w, i) {
   if (w.gatherCd) w.gatherCd[i] = 0;
   if (w.gatherDefensive) w.gatherDefensive[i] = 0;
   if (w.manualHold) w.manualHold[i] = MANUAL_HOLD_PASSES;
+  if (w.buildTarget) w.buildTarget[i] = -1;
 }
 
 /**
@@ -277,6 +279,8 @@ export function beginDeposit(w, i, x, y) {
   w.gatherCd[i] = 0;
   if (w.gatherDefensive) w.gatherDefensive[i] = 0;
   if (w.gatherAct) w.gatherAct[i] = GATHER_ACT.HAUL;
+  // A build claim is restamped by construction when this haul is for a site.
+  if (w.buildTarget) w.buildTarget[i] = -1;
   clearEngagement(w, i);
   clearPath(w, i);
   return true;

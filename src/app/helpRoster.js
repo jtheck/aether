@@ -93,16 +93,16 @@ export const HELP_UNIT_ROWS = Object.freeze([
   [UNIT.VILLAGER, UNIT.BRIGAND],
   [UNIT.ENGINEER, null],
   [UNIT.MONK, null],
-  [UNIT.WIZARD, null],
-  [UNIT.WARLOCK, null],
   [UNIT.WARRIOR, UNIT.CHAMPION],
   [UNIT.ARCHER, null],
+  [UNIT.WIZARD, null],
+  [UNIT.WARLOCK, null],
+  [UNIT.MYCO, null],
+  [UNIT.PRIEST, null],
+  [UNIT.SHAMAN, null],
   [UNIT.WAGON, null],
   [UNIT.DIRIGIBLE, null],
   [UNIT.APC, null],
-  [UNIT.PRIEST, null],
-  [UNIT.MYCO, null],
-  [UNIT.SHAMAN, null],
 ]);
 
 /** v1 upgradeTo display names for help placeholders (not in sim yet). */

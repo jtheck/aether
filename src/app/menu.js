@@ -117,7 +117,7 @@ export function setupMenu({
   const menuMatchLeave = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#menu-match-leave'));
   const lobbyDrawerToggles = [...drawer.querySelectorAll('.lobby-drawer-toggle, .lobby-create')];
   const gear = /** @type {HTMLElement} */ (drawer.querySelector('#settings_b'));
-  const xrButton = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#xr_button'));
+  const xrButton = /** @type {HTMLButtonElement | null} */ (document.getElementById('xr_button'));
   if (xrButton) {
     xrButton.hidden = !xrSupported;
     xrButton.addEventListener('click', () => {

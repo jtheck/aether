@@ -37,9 +37,10 @@ import {
   xrEye,
   xrEyeVersion,
   xrFitFov,
-  xrHudChromeScale,
+  xrHudEye,
   xrHudEdgeScale,
   xrHudLayoutPoint,
+  xrHudOvalLayoutPoint,
   xrHudProjection,
   xrShadowCover,
 } from './xrEye.js';
@@ -920,6 +921,27 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     _vpVer: -1,
     _projAspect: -1,
   };
+  const xrFloatingHudWorld = new Float32Array(16);
+  let xrFloatingHudVer = 1;
+  let xrFloatingHudEyeVer = -1;
+  const xrFloatingHudCam = {
+    fov: camera.fov,
+    nearPlane: camera.nearPlane,
+    farPlane: camera.farPlane,
+    get worldMatrix() {
+      return xrFloatingHudWorld;
+    },
+    get worldMatrixVersion() {
+      return xrFloatingHudVer;
+    },
+    _viewCache: new Float32Array(16),
+    _projCache: new Float32Array(16),
+    _vpCache: new Float32Array(16),
+    _viewVer: -1,
+    _projVer: -1,
+    _vpVer: -1,
+    _projAspect: -1,
+  };
   function poseXrShadowCamera() {
     const xr = xrEye();
     if (!xr) return;
@@ -1249,6 +1271,22 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       worldMatrix: xr.worldMatrix,
       position: xr,
       radius,
+      lowerRadiusLimit: camera.lowerRadiusLimit,
+      upperRadiusLimit: camera.upperRadiusLimit,
+      nearPlane: camera.nearPlane,
+      farPlane: camera.farPlane,
+    };
+  }
+
+  /** Camera-locked HUD uses exact orientation with a tiny capped translation drift. */
+  function hudViewCamera() {
+    const hud = xrHudEye();
+    if (!hud) return camera;
+    const exact = xrEye() ?? hud;
+    return {
+      worldMatrix: hud.worldMatrix,
+      position: hud,
+      radius: xrViewRadius(exact),
       lowerRadiusLimit: camera.lowerRadiusLimit,
       upperRadiusLimit: camera.upperRadiusLimit,
       nearPlane: camera.nearPlane,
@@ -2341,8 +2379,33 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
     chromePoint(x, y) {
       const { width, height } = canvasCoords(0, 0);
-      const scale = xrEye() ? xrHudChromeScale() : 1;
-      return xrHudLayoutPoint(x, y, width, height, scale);
+      if (xrEye()) return xrHudOvalLayoutPoint(x, y, width, height);
+      return { x, y };
+    },
+  };
+  const floatingHudScreen = {
+    ...radialScreen,
+    worldToScreen(x, y, z) {
+      const { width, height } = canvasCoords(0, 0);
+      const c = matVec4(floatingHudViewProjection(width, height), x, y, z, 1);
+      if (Math.abs(c[3]) < 1e-8) return null;
+      let cx = c[0];
+      let cy = c[1];
+      let cw = c[3];
+      if (cw < 0) {
+        cx = -cx;
+        cy = -cy;
+        cw = -cw;
+      }
+      const iw = 1 / cw;
+      return {
+        x: (cx * iw * 0.5 + 0.5) * width,
+        y: (1 - cy * iw) * 0.5 * height,
+      };
+    },
+    rayFromCanvas(canvasX, canvasY) {
+      const { width, height } = canvasCoords(0, 0);
+      return pickingRay(canvasX, canvasY, floatingHudViewProjection(width, height), width, height);
     },
   };
   canvas.addEventListener('pointermove', (e) => {
@@ -2362,7 +2425,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     clear() {},
   };
   try {
-    controlGroupHud = createControlGroupHud(engine, scene, radialScreen);
+    controlGroupHud = createControlGroupHud(engine, scene, floatingHudScreen);
   } catch (err) {
     console.warn('[controlGroupHud] init failed', err);
   }
@@ -2370,7 +2433,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   /** @type {any} Resource piles, carried with the headset. */
   let resourcePileHud = { update() {}, clear() {} };
   try {
-    resourcePileHud = createResourcePileHud(engine, scene, radialScreen);
+    resourcePileHud = createResourcePileHud(engine, scene, floatingHudScreen);
   } catch (err) {
     console.warn('[resourcePileHud] init failed', err);
   }
@@ -2378,7 +2441,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   /** @type {any} Clock, pop, and spectator sheet carried with the headset. */
   let screenDomHud = { update() {}, clear() {} };
   try {
-    screenDomHud = createScreenDomHud(engine, scene, radialScreen);
+    screenDomHud = createScreenDomHud(engine, scene, floatingHudScreen);
   } catch (err) {
     console.warn('[screenDomHud] init failed', err);
   }
@@ -3907,10 +3970,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       if (actionRadial.isOpen()) {
         actionRadial.update?.(viewCamera());
       }
-      selectionHud.update?.(viewCamera());
-      controlGroupHud.update?.(viewCamera());
-      resourcePileHud.update?.(viewCamera(), !!xrEye());
-      screenDomHud.update?.(viewCamera(), !!xrEye());
+      const hudCamera = hudViewCamera();
+      selectionHud.update?.(hudCamera);
+      controlGroupHud.update?.(hudCamera);
+      resourcePileHud.update?.(hudCamera, !!xrEye());
+      screenDomHud.update?.(hudCamera, !!xrEye());
       sceneConfirm.update?.(viewCamera());
     }
     syncGamepadCursor();
@@ -4170,6 +4234,27 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       xrHudEyeVer = ver;
     }
     return getViewProjectionMatrix(xrHudCam, proj.aspect);
+  }
+
+  function floatingHudViewProjection(width, height) {
+    const w = width > 0 ? width : 1;
+    const h = height > 0 ? height : 1;
+    const xr = xrHudEye();
+    if (!xr) return getViewProjectionMatrix(camera, w / h);
+    const proj = xrHudProjection();
+    xrFloatingHudCam.fov = proj.fov;
+    xrFloatingHudCam.nearPlane = camera.nearPlane;
+    xrFloatingHudCam.farPlane = camera.farPlane;
+    const ver = xrEyeVersion();
+    if (ver !== xrFloatingHudEyeVer) {
+      xrFloatingHudWorld.set(xr.worldMatrix);
+      xrFloatingHudVer += 1;
+      xrFloatingHudCam._viewVer = -1;
+      xrFloatingHudCam._projVer = -1;
+      xrFloatingHudCam._vpVer = -1;
+      xrFloatingHudEyeVer = ver;
+    }
+    return getViewProjectionMatrix(xrFloatingHudCam, proj.aspect);
   }
 
   function viewProjection() {
@@ -4435,10 +4520,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         try {
           const font = await buildingMenuFontPromise;
           radialScreen.font = font;
+          floatingHudScreen.font = font;
           const [buildMenu, actionMenu, selHud] = await Promise.all([
             createBuildingRadialMenu(engine, scene, groundYAt, radialScreen),
             createBuildingActionRadial(engine, scene, groundYAt, radialScreen),
-            createSelectionHud(engine, scene, radialScreen),
+            createSelectionHud(engine, scene, floatingHudScreen),
           ]);
           buildingRadial = buildMenu;
           actionRadial = actionMenu;

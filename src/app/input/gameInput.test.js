@@ -23,6 +23,7 @@ import {
 import { ABILITY_HOLD_MS, createGameInput } from './gameInput.js';
 import { CONTROL_GROUP_BLACK } from './controlGroups.js';
 import { CMD } from '../../sim/commands.js';
+import { ORDER } from '../../sim/world.js';
 
 describe('building multi / box select helpers', () => {
   it('shift-add merges buildings without duplicating keys', () => {
@@ -39,10 +40,18 @@ describe('building multi / box select helpers', () => {
       { kind: 'agora', index: 0 },
       { kind: 'building', index: 2 },
     ]);
+    assert.deepEqual(
+      mergeBuildingSels(
+        [{ kind: 'rally', index: 0, hop: 0 }],
+        [{ kind: 'rally', index: 0, hop: 0 }, { kind: 'rally', index: 0, hop: 1 }],
+      ),
+      [{ kind: 'rally', index: 0, hop: 0 }, { kind: 'rally', index: 0, hop: 1 }],
+    );
   });
 
-  it('units win a mixed box; buildings win when no units hit', () => {
-    assert.equal(boxSelectWinner(2, 3), 'units');
+  it('units win a mixed box; flags beat buildings; empty is none', () => {
+    assert.equal(boxSelectWinner(2, 3, 1), 'units');
+    assert.equal(boxSelectWinner(0, 2, 1), 'flags');
     assert.equal(boxSelectWinner(0, 2), 'buildings');
     assert.equal(boxSelectWinner(0, 0), 'none');
   });
@@ -1087,6 +1096,138 @@ describe('headset select', () => {
     setRayHits([2]);
     assert.equal(input.selectAtRay(ray), false);
     assert.deepEqual([...selected.subarray(0, 3)], [1, 0, 0]);
+  });
+});
+
+describe('headset rally', () => {
+  it('trigger rays plant force-move and attack-move rallies on a selected barracks', () => {
+    const cmds = [];
+    const input = createGameInput({
+      canvas: {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      },
+      renderer: {
+        pickSelectionHud: () => null,
+        pickControlGroupHud: () => null,
+        groundYAt: () => 0,
+        setSelectionBox: () => {},
+        rayToGround: (ray) => {
+          const t = -ray.oy / ray.dy;
+          return { x: ray.ox + ray.dx * t, y: 0, z: ray.oz + ray.dz * t };
+        },
+      },
+      world: { count: 0, alive: [], owner: [], type: [], carriedBy: [] },
+      selected: new Uint8Array(4),
+      localPlayerId: 0,
+      getUnitWorldPos: () => ({ x: 0, y: 0, z: 0 }),
+      enqueueCommand: (cmd) => cmds.push(cmd),
+      getAgoras: () => [],
+      getBuildings: () => [{ owner: 0, type: 'barracks', x: 0, z: 0, hp: 100 }],
+    });
+    input.setSelectedBuilding({ kind: 'building', index: 0 });
+    const aim = { ox: 40, oy: 50, oz: 0, dx: 0, dy: -1, dz: 0 };
+    assert.equal(input.forceMoveAtRay(aim), true);
+    assert.equal(input.attackMoveAtRay(aim), true);
+    assert.equal(cmds.length, 2);
+    assert.equal(cmds[0].type, CMD.SET_RALLY);
+    assert.equal(cmds[0].order, ORDER.MOVE);
+    assert.equal(cmds[1].type, CMD.SET_RALLY);
+    assert.equal(cmds[1].order, ORDER.ATTACK_MOVE);
+    assert.equal(cmds[0].buildingIndex, 0);
+  });
+
+  it('a lasso around a planted flag selects it so the next order extends', () => {
+    const cmds = [];
+    const input = createGameInput({
+      canvas: {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      },
+      renderer: {
+        pickSelectionHud: () => null,
+        pickControlGroupHud: () => null,
+        groundYAt: () => 0,
+        setSelectionBox: () => {},
+        rayToGround: (ray) => {
+          const t = -ray.oy / ray.dy;
+          return { x: ray.ox + ray.dx * t, y: 0, z: ray.oz + ray.dz * t };
+        },
+      },
+      world: { count: 0, alive: [], owner: [], type: [], carriedBy: [] },
+      selected: new Uint8Array(4),
+      localPlayerId: 0,
+      getUnitWorldPos: () => ({ x: 0, y: 0, z: 0 }),
+      enqueueCommand: (cmd) => cmds.push(cmd),
+      getAgoras: () => [],
+      getBuildings: () => [{
+        owner: 0,
+        type: 'barracks',
+        x: 0,
+        z: 0,
+        hp: 100,
+        hasRally: 1,
+        rallyX: 20,
+        rallyZ: 0,
+      }],
+    });
+    input.setSelectedBuilding({ kind: 'building', index: 0 });
+    const aroundFlag = [
+      { x: 16, z: -4 },
+      { x: 24, z: -4 },
+      { x: 24, z: 4 },
+      { x: 16, z: 4 },
+    ];
+    assert.equal(input.groundLoopSelect(aroundFlag), true);
+    assert.deepEqual(input.getSelectedBuilding(), { kind: 'rally', index: 0, hop: 0 });
+    const aroundBoth = [
+      { x: -4, z: -4 },
+      { x: 24, z: -4 },
+      { x: 24, z: 4 },
+      { x: -4, z: 4 },
+    ];
+    assert.equal(input.groundLoopSelect(aroundBoth), true);
+    assert.deepEqual(input.getSelectedBuilding(), { kind: 'rally', index: 0, hop: 0 });
+    const aim = { ox: 40, oy: 50, oz: 0, dx: 0, dy: -1, dz: 0 };
+    assert.equal(input.forceMoveAtRay(aim), true);
+    const rally = cmds.find((c) => c.type === CMD.SET_RALLY);
+    assert.ok(rally);
+    assert.equal(rally.hopFrom, 0);
+  });
+
+  it('a grip tap on a planted flag selects it', () => {
+    const input = createGameInput({
+      canvas: {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      },
+      renderer: {
+        pickSelectionHud: () => null,
+        pickControlGroupHud: () => null,
+        groundYAt: () => 0,
+        setSelectionBox: () => {},
+      },
+      world: { count: 0, alive: [], owner: [], type: [], carriedBy: [] },
+      selected: new Uint8Array(4),
+      localPlayerId: 0,
+      getUnitWorldPos: () => ({ x: 0, y: 0, z: 0 }),
+      enqueueCommand: () => {},
+      getAgoras: () => [],
+      getBuildings: () => [{
+        owner: 0,
+        type: 'barracks',
+        x: 0,
+        z: 0,
+        hp: 100,
+        hasRally: 1,
+        rallyX: 20,
+        rallyZ: 0,
+      }],
+    });
+    input.setSelectedBuilding({ kind: 'building', index: 0 });
+    const ray = { ox: 20, oy: 50, oz: 0, dx: 0, dy: -1, dz: 0 };
+    assert.equal(input.selectAtRay(ray), true);
+    const sel = input.getSelectedBuilding();
+    assert.equal(sel?.kind, 'rally');
+    assert.equal(sel?.index, 0);
+    assert.equal(sel?.hop, 0);
   });
 });
 

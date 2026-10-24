@@ -1,12 +1,13 @@
 // Building construction - placed buildings start as inert sites (built = 0) and
 // are raised by villagers and engineers. Mirrors the gather loop: a per-tick
 // driver walks builders to the site and holds them in reach; progress accrues
-// from on-site workers (capped at MAX_BUILDERS slots). A villager is one
-// builder-tick; an engineer is half. Unattended villages still trickle at
+// from on-site workers (capped at the site's builder slots; farms take one).
+// A villager is one builder-tick; an engineer is half. Unattended villages still trickle at
 // IDLE_VILLAGE_DEN (0.1× one villager) so a site can finish with no hands.
 // A separate assign pass fills those slots - nearest first, idle preferred,
-// pulling gatherers / repairing engineers when no idle hand is free. All
-// state lives on the building object / SoA.
+// pulling gatherers / repairing engineers when no idle hand is free. A
+// villager still holding a load walks it to a drop-off before taking a slot.
+// All state lives on the building object / SoA.
 
 import * as fx from './fixed.js';
 import { ORDER } from './world.js';
@@ -18,16 +19,21 @@ import { revertBrigand } from './brigand.js';
 import { isCarried } from './transport.js';
 import { getBuildingFootprint, applyStructureOccupancyAt } from './buildings.js';
 import { createAgora } from './agora.js';
-import { DROP_OFF_TYPES } from './gather.js';
+import { DROP_OFF_TYPES, beginDeposit, nearestDropOff } from './gather.js';
 import { noteMatchBuilding } from './matchSnapshot.js';
 
 /** Most workers that can claim a single site. */
 export const MAX_BUILDERS = 2;
+/** Farms are a one-hand raise; the assign pass must not call a second worker. */
+const FARM_BUILDERS = 1;
+
+function maxBuildersFor(type) {
+  return type === 'farm' ? FARM_BUILDERS : MAX_BUILDERS;
+}
 /** Half-ticks of work a villager contributes each tick on-site. */
 const VILLAGER_BUILD_HALVES = 2;
 /** Engineers take a slot but add half a villager's speed. */
 const ENGINEER_BUILD_HALVES = 1;
-const MAX_BUILD_HALVES = MAX_BUILDERS * VILLAGER_BUILD_HALVES;
 /** Idle village trickle: one villager-tick every N ticks with no on-site builders. */
 export const IDLE_VILLAGE_DEN = 10;
 /** Re-scan cadence for builder recruitment (deterministic on world.tick). */
@@ -71,11 +77,12 @@ function buildHalvesFor(type) {
   return type === UNIT.ENGINEER ? ENGINEER_BUILD_HALVES : VILLAGER_BUILD_HALVES;
 }
 
-/** Assign combo / selected crew to a site, capped at MAX_BUILDERS. */
+/** Assign combo / selected crew to a site, capped at that building's builder slots. */
 export function assignBuildersToSite(w, bi, ids) {
   if (bi < 0 || !ids?.length) return 0;
+  const cap = maxBuildersFor(w.buildings?.[bi]?.type);
   let n = 0;
-  for (let k = 0; k < ids.length && n < MAX_BUILDERS; k++) {
+  for (let k = 0; k < ids.length && n < cap; k++) {
     if (beginBuild(w, ids[k], bi)) n++;
   }
   return n;
@@ -153,6 +160,8 @@ export function constructionSystem(w, field) {
   for (let i = 0; i < w.count; i++) {
     if (!w.alive[i] || w.order[i] !== ORDER.BUILD) continue;
     const bi = w.buildTarget[i];
+    // A build order issued while a load is in hand walks that load home first.
+    if ((bi | 0) >= 0 && holdingReturnableLoad(w, i) && sendLoadHomeThenBuild(w, i, bi)) continue;
     const b = bi >= 0 && bi < buildings.length ? buildings[bi] : null;
     // Only explicit sites (built === 0) are under construction; undefined = done.
     if (!b || (b.hp != null && (b.hp | 0) <= 0) || b.built !== 0 || !canBuild(w.type[i]) || w.owner[i] !== b.owner) {
@@ -179,7 +188,8 @@ export function constructionSystem(w, field) {
     const prevProg = b.buildProgress | 0;
     const time = b.buildTime | 0;
     if (halves > 0) {
-      const total = (b.buildHalfAcc | 0) + Math.min(halves, MAX_BUILD_HALVES);
+      const capHalves = maxBuildersFor(b.type) * VILLAGER_BUILD_HALVES;
+      const total = (b.buildHalfAcc | 0) + Math.min(halves, capHalves);
       b.buildProgress = prevProg + (total >> 1);
       b.buildHalfAcc = total & 1;
     } else if (b.type === 'village') {
@@ -235,10 +245,18 @@ function candidateRank(w, field, i) {
   return 1;
 }
 
+/** True when this villager is holding a load and has somewhere to bank it. */
+function holdingReturnableLoad(w, i) {
+  if ((w.carriedAmt?.[i] | 0) <= 0) return false;
+  return nearestDropOff(w, w.owner[i], w.px[i], w.py[i]) != null;
+}
+
 /** Rank key for a build candidate: idle beats gathering, then nearest, then id. */
 function candidateEligible(w, i, owner) {
   if (!w.alive[i] || !canBuild(w.type[i]) || w.owner[i] !== owner) return false;
   if (isCarried(w, i)) return false;
+  // Hands full: finish the drop-off before walking onto a site.
+  if (holdingReturnableLoad(w, i)) return false;
   const order = w.order[i];
   if (order === ORDER.IDLE) return true;
   if (w.type[i] === UNIT.VILLAGER && order === ORDER.GATHER) return true;
@@ -247,10 +265,63 @@ function candidateEligible(w, i, owner) {
 }
 
 /**
- * Recruit up to MAX_BUILDERS villagers/engineers per unfinished site. Nearest
- * first, idle preferred; will pull wood/rock gatherers or repairing engineers
- * when no idle hand is free. A farmer is pulled only when the site would
- * otherwise get nobody. Runs on a fixed cadence.
+ * Gatherer or idle villager who would have been pulled to build, except they
+ * still have a load. Not already claimed by a site, and not player-parked.
+ */
+function returnCandidate(w, i, owner) {
+  if (!w.alive[i] || w.type[i] !== UNIT.VILLAGER || w.owner[i] !== owner) return false;
+  if (isCarried(w, i) || w.manualHold?.[i]) return false;
+  if ((w.buildTarget[i] | 0) >= 0) return false;
+  if (!holdingReturnableLoad(w, i)) return false;
+  const order = w.order[i];
+  return order === ORDER.IDLE || order === ORDER.GATHER;
+}
+
+/** Builders on the site, plus haulers sent home to free a slot for it. */
+function siteCrew(w, bi) {
+  let n = 0;
+  for (let i = 0; i < w.count; i++) {
+    if (!w.alive[i] || (w.buildTarget[i] | 0) !== bi) continue;
+    if (w.order[i] === ORDER.BUILD) n++;
+    else if (w.order[i] === ORDER.GATHER && (w.carriedAmt[i] | 0) > 0) n++;
+  }
+  return n;
+}
+
+function bestCandidate(w, field, b, owner, crew, mode) {
+  let best = -1;
+  let bestRank = 3;
+  let bestD = 0x7fffffffffff;
+  for (let i = 0; i < w.count; i++) {
+    if (mode === 'build') {
+      if (!candidateEligible(w, i, owner)) continue;
+    } else if (!returnCandidate(w, i, owner)) continue;
+    const rank = candidateRank(w, field, i);
+    if (rank >= 2 && crew > 0) continue;
+    const d = fx.dist2(w.px[i], w.py[i], b.x, b.z);
+    if (rank < bestRank || (rank === bestRank && d < bestD)) {
+      bestRank = rank;
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/** Bank the load, then stand so the next pass can put them on the site. */
+function sendLoadHomeThenBuild(w, i, bi) {
+  const drop = nearestDropOff(w, w.owner[i], w.px[i], w.py[i]);
+  if (!drop || !beginDeposit(w, i, drop.x, drop.y)) return false;
+  w.buildTarget[i] = bi | 0;
+  return true;
+}
+
+/**
+ * Recruit up to the site's builder cap (one for a farm, MAX_BUILDERS otherwise).
+ * Nearest first, idle preferred; will pull wood/rock gatherers or repairing
+ * engineers when no idle hand is free. A farmer is pulled only when the site
+ * would otherwise get nobody. A villager holding wood or stone is sent to bank
+ * it first and keeps the slot until their hands are empty. Runs on a fixed cadence.
  * @param {object} w
  * @param {object} field
  */
@@ -263,31 +334,21 @@ export function constructionAssignSystem(w, field) {
     if (b.built !== 0 || (b.hp != null && (b.hp | 0) <= 0)) continue;
     const owner = b.owner;
 
-    let builders = 0;
-    for (let i = 0; i < w.count; i++) {
-      if (w.alive[i] && w.order[i] === ORDER.BUILD && w.buildTarget[i] === bi) builders++;
-    }
-
-    for (let slot = builders; slot < MAX_BUILDERS; slot++) {
+    let crew = siteCrew(w, bi);
+    const cap = maxBuildersFor(b.type);
+    for (let slot = crew; slot < cap; slot++) {
       // Idle, then other workers, nearest within a rank. Farmers only if the
       // site still has nobody - a second slot must not strip the farm.
-      let best = -1;
-      let bestRank = 3;
-      let bestD = 0x7fffffffffff;
-      for (let i = 0; i < w.count; i++) {
-        if (!candidateEligible(w, i, owner)) continue;
-        const rank = candidateRank(w, field, i);
-        if (rank >= 2 && builders > 0) continue;
-        const d = fx.dist2(w.px[i], w.py[i], b.x, b.z);
-        if (rank < bestRank || (rank === bestRank && d < bestD)) {
-          bestRank = rank;
-          bestD = d;
-          best = i;
-        }
+      const best = bestCandidate(w, field, b, owner, crew, 'build');
+      if (best >= 0) {
+        beginBuild(w, best, bi);
+        crew++;
+        continue;
       }
-      if (best < 0) break; // no free hands anywhere
-      beginBuild(w, best, bi);
-      builders++;
+      // Nobody empty-handed. The nearest loaded villager banks first.
+      const haul = bestCandidate(w, field, b, owner, crew, 'return');
+      if (haul < 0 || !sendLoadHomeThenBuild(w, haul, bi)) break;
+      crew++;
     }
   }
 }

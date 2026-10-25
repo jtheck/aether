@@ -625,10 +625,17 @@
       overflow: auto;
     }
     #match-over[hidden] { display: none; }
+    #match-over-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
     #match-over-sub {
       margin-top: 2px;
       font: 500 12px/1.3 system-ui, sans-serif;
       opacity: .75;
+    }
+    #match-over-title { min-width: 0; }
+    #match-over-meta {
+      flex: 0 1 auto; min-width: 0; margin-top: 3px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font: 500 11px/1.3 system-ui, sans-serif; color: #e0b050;
     }
     #match-lobby-overlay:not(.is-parked):has(#match-over:not([hidden])) .match-lobby-panel {
       width: min(680px, 96vw);
@@ -1042,7 +1049,10 @@
     <div class="match-lobby-panel">
       <button type="button" class="btn match-lobby-min" id="match-lobby-min" aria-label="Minimize lobby">−</button>
       <div id="match-over" hidden>
-        <div id="match-over-title"></div>
+        <div id="match-over-head">
+          <div id="match-over-title"></div>
+          <div id="match-over-meta"></div>
+        </div>
         <div id="match-over-sub"></div>
         <div id="match-snap"></div>
         <table id="match-stats" hidden></table>

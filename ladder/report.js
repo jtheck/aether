@@ -25,6 +25,10 @@ function uint32(value) {
   return value >>> 0;
 }
 
+function mapLabel(value) {
+  return String(value ?? '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 48);
+}
+
 function seatOf(value) {
   if (typeof value !== 'number' || !Number.isInteger(value)) return null;
   if (value < 0 || value > 15) return null;
@@ -102,6 +106,8 @@ export function parseReport(body) {
     winnerSeat,
     players,
   };
+  const map = mapLabel(body.map);
+  if (map) report.map = map;
   return { ok: true, report, canonical: canonicalOf(report) };
 }
 
@@ -240,5 +246,7 @@ export function parseKothReport(body) {
     survivorIds,
     playerId,
   };
+  const map = mapLabel(body.map);
+  if (map) report.map = map;
   return { ok: true, report, canonical: kothCanonical(report) };
 }

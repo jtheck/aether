@@ -145,6 +145,7 @@ function matchEntries(report, rated, at) {
       delta: row.delta,
       rating: row.rating,
       matchId: report.matchId,
+      ...(report.map ? { map: report.map } : null),
     };
   }
   return entries;
@@ -164,6 +165,7 @@ function kothEntries(report, rated, names, at) {
       delta: row.delta,
       rating: row.rating,
       matchId: report.matchId,
+      ...(report.map ? { map: report.map } : null),
     };
   }
   return entries;

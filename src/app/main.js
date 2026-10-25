@@ -2,7 +2,7 @@
 
 import { livingByOwner, ORDER, MAX_ENTITIES } from '../sim/world.js';
 import { shownKing } from '../sim/kothMeta.js';
-import { mountMatchSnapshot, snapshotDocFromSession } from './matchSnapshotView.js';
+import { mountMatchSnapshot, snapCaption, snapshotDocFromSession } from './matchSnapshotView.js';
 import { getUnitDef, isFlyer, isTransport, FLY_HEIGHT } from '../sim/unitTypes.js';
 import {
   DROP_OFF_TYPES,
@@ -5397,10 +5397,12 @@ function clearMatchScore(opts = {}) {
   if (!opts.keepReplay) {
     const titleEl = document.getElementById('match-over-title');
     const subEl = document.getElementById('match-over-sub');
+    const metaEl = document.getElementById('match-over-meta');
     const table = document.getElementById('match-stats');
     const snap = document.getElementById('match-snap');
     if (titleEl) titleEl.textContent = '';
     if (subEl) subEl.textContent = '';
+    if (metaEl) metaEl.textContent = '';
     if (table) {
       table.replaceChildren();
       table.hidden = true;
@@ -5431,11 +5433,13 @@ function paintMatchStats(board = session) {
     table.replaceChildren();
     table.hidden = true;
   }
-  if (!host) return;
   const doc = snapshotDocFromSession(board, ownerName);
+  const meta = document.getElementById('match-over-meta');
+  if (meta) meta.textContent = doc ? snapCaption(doc) : '';
+  if (!host) return;
   host.replaceChildren();
   if (!doc) return;
-  mountMatchSnapshot(host, doc);
+  mountMatchSnapshot(host, doc, { caption: false });
 }
 
 function ownerName(owner) {

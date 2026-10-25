@@ -1,5 +1,5 @@
 import { postLadderIncident, postLadderKoth, postLadderReport, postLadderSnapshot } from './ladderApi.js';
-import { mapLabels } from './matchSnapshotView.js';
+import { mapLabels, mapLine } from './matchSnapshotView.js';
 
 let assignment = null;
 let finished = false;
@@ -97,6 +97,7 @@ function postMatchSnapshot(session, match, playerId) {
     };
   });
   const map = mapLabels(session?.replayGarden, session?.replayConfig);
+  const line = mapLine(session?.replayGarden, session?.replayConfig);
   void postLadderSnapshot({
     matchId: match.matchId,
     playerId,
@@ -105,7 +106,7 @@ function postMatchSnapshot(session, match, playerId) {
     samples,
     tech,
     stats,
-    ...(map.name ? { map: map.name } : null),
+    ...(line ? { map: line } : null),
     ...(map.type ? { mapType: map.type } : null),
     ...(map.size ? { mapSize: map.size } : null),
     ...(map.seed ? { mapSeed: map.seed } : null),
@@ -121,6 +122,7 @@ export function noteLadderResult(session, playerId) {
   const players = reportPlayers(match);
   if (!players) return;
   finished = true;
+  const line = mapLine(session?.replayGarden, session?.replayConfig);
   void postLadderReport({
     board: match.board === 'teams' ? 'teams' : '1v1',
     matchId: match.matchId,
@@ -129,6 +131,7 @@ export function noteLadderResult(session, playerId) {
     checksum: session._lastChecksum ?? 0,
     winnerSeat: session.matchWinner | 0,
     players,
+    ...(line ? { map: line } : null),
   }).catch(() => {});
   postMatchSnapshot(session, match, playerId);
 }
@@ -160,6 +163,7 @@ export function noteHillBounties(session) {
     }
     if (missing || !survivorIds.length) continue;
     postedBounties.add(key);
+    const line = mapLine(session?.replayGarden, session?.replayConfig);
     noteKothElimination({
       matchId: match.matchId,
       tick: event.tick | 0,
@@ -168,6 +172,7 @@ export function noteHillBounties(session) {
       survivorIds,
       points: event.points | 0,
       playerId: match.you,
+      ...(line ? { map: line } : null),
     });
     postMatchSnapshot(session, match, match.you);
   }

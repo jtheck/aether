@@ -37,6 +37,8 @@ export function matchRecent(entry) {
   const opponent = String(entry?.opponent || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 80) || 'Player';
   const at = String(entry?.at || '');
   const row = { at, mode, result, opponent, delta, rating };
+  const map = String(entry?.map || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 48);
+  if (map) row.map = map;
   const replay = String(entry?.replay ?? '').trim();
   if (REPLAY_ID.test(replay)) row.replay = replay;
   const matchId = String(entry?.matchId ?? '').toLowerCase();

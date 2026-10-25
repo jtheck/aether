@@ -65,11 +65,26 @@ export function lobbyOptionsFromHouseIndex(index, modeId) {
   return out;
 }
 
+let catalog = null;
 let catalogInflight = null;
 
+/** Last successful skirmish index. Null until the first fetch settles. */
+export function peekSkirmishCatalog() {
+  return catalog;
+}
+
+/** In-flight catalog read, or null when idle. */
+export function skirmishCatalogInflight() {
+  return catalogInflight;
+}
+
 async function fetchSkirmishCatalog() {
+  if (catalog) return catalog;
   if (!catalogInflight) {
-    catalogInflight = readSkirmishCatalog().finally(() => { catalogInflight = null; });
+    catalogInflight = readSkirmishCatalog().then((next) => {
+      catalog = next;
+      return next;
+    }).finally(() => { catalogInflight = null; });
   }
   return catalogInflight;
 }

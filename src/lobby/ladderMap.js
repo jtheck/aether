@@ -1,9 +1,18 @@
-// Ranked board. The queue seed picks the size. The host then walks the starts
-// and, when one is an agora sitting in open water, steps the seed until every
-// start can leave. 1v1 checks two pads. Teams checks the four lanes. The start
-// message carries the result, so every guest builds that same table.
+// Ranked board. The queue seed picks one slot from the official maps that fit
+// this mode, then the auto sizes. An auto slot walks the starts and, when one
+// is an agora sitting in open water, steps the seed until every start can
+// leave. 1v1 checks two pads. Teams checks the four lanes. The start message
+// carries the result, so every guest builds that same table.
 
-import { KOTH_LADDER_FIELD_SIZES, LADDER_FIELD_SIZES, TEAMS_LADDER_FIELD_SIZES, mapTilesForField } from './modes.js';
+import { spawnsFitLobby } from '../houseMapCatalog.js';
+import {
+  KOTH_LADDER_FIELD_SIZES,
+  LADDER_FIELD_SIZES,
+  TEAMS_LADDER_FIELD_SIZES,
+  cleanMapName,
+  mapTilesForField,
+  mapTypeFitsLobby,
+} from './modes.js';
 import {
   TILE_SIZE_F,
   activeMapH,
@@ -18,13 +27,15 @@ export { LADDER_FIELD_SIZES };
 
 const LADDER_SEED_TRIES = 8;
 
+function fieldSizesFor(mode) {
+  if (mode === 'teams') return TEAMS_LADDER_FIELD_SIZES;
+  if (mode === 'koth') return KOTH_LADDER_FIELD_SIZES;
+  return LADDER_FIELD_SIZES;
+}
+
 /** Size is fixed by the queue seed, so a later reroll does not reshuffle it. */
 export function ladderFieldSize(seed, mode = 'onevsone') {
-  const sizes = mode === 'teams'
-    ? TEAMS_LADDER_FIELD_SIZES
-    : mode === 'koth'
-      ? KOTH_LADDER_FIELD_SIZES
-      : LADDER_FIELD_SIZES;
+  const sizes = fieldSizesFor(mode);
   return sizes[(seed >>> 0) % sizes.length];
 }
 
@@ -64,18 +75,47 @@ export function ladderPadsPlayable(seed, fieldSize, mode = 'onevsone') {
   }
 }
 
+/** Official rows that can host this mode, in the order they were given. */
+export function ladderOfficialMaps(maps, mode) {
+  const out = [];
+  const seen = new Set();
+  for (const row of maps || []) {
+    const id = String(row?.id || '').trim();
+    const name = cleanMapName(row?.name);
+    if (!id || !name || seen.has(id)) continue;
+    if (!spawnsFitLobby(row?.spawns, mode)) continue;
+    if (row?.mapType && !mapTypeFitsLobby(row.mapType, mode)) continue;
+    seen.add(id);
+    out.push({ id, name });
+  }
+  return out;
+}
+
 /**
+ * One slot per fitting official map, then one slot per auto size.
  * @param {number} seed Queue seed.
- * @param {'onevsone' | 'teams'} [mode]
- * @returns {{ seed: number, fieldSize: string }}
+ * @param {'onevsone' | 'teams' | 'koth'} [mode]
+ * @param {{ id?: string, name?: string, spawns?: number, mapType?: string }[]} [maps]
+ * @returns {{ seed: number, fieldSize: string, chapter: string, mapName: string }}
  */
-export function ladderMatchDeal(seed, mode = 'onevsone') {
+export function ladderMatchDeal(seed, mode = 'onevsone', maps = []) {
   const base = seed >>> 0;
-  const fieldSize = ladderFieldSize(base, mode);
+  const sizes = fieldSizesFor(mode);
+  const official = ladderOfficialMaps(maps, mode);
+  const pool = [
+    ...official.map((row) => ({ chapter: row.id, mapName: row.name, fieldSize: sizes[0] })),
+    ...sizes.map((fieldSize) => ({ chapter: '', mapName: '', fieldSize })),
+  ];
+  const pick = pool[base % pool.length];
+  if (pick.chapter) {
+    return { seed: base, fieldSize: pick.fieldSize, chapter: pick.chapter, mapName: pick.mapName };
+  }
   let next = base;
   for (let i = 0; i < LADDER_SEED_TRIES; i++) {
-    if (ladderPadsPlayable(next, fieldSize, mode)) return { seed: next, fieldSize };
+    if (ladderPadsPlayable(next, pick.fieldSize, mode)) {
+      return { seed: next, fieldSize: pick.fieldSize, chapter: '', mapName: '' };
+    }
     next = nextSeed(next);
   }
-  return { seed: next, fieldSize };
+  return { seed: next, fieldSize: pick.fieldSize, chapter: '', mapName: '' };
 }

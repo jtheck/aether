@@ -3,6 +3,7 @@
 import { sameUserId, senderUserId } from '../lobby/ids.js';
 import { cleanMapName, defaultSettings, getMode, chapterRefNeedsHostGarden, lobbyAllowsSpectators } from '../lobby/modes.js';
 import { ladderMatchDeal } from '../lobby/ladderMap.js';
+import { lobbyOptionsFromHouseIndex, peekSkirmishCatalog, skirmishCatalogInflight } from '../houseMapCatalog.js';
 import {
   ANNOUNCE_MS,
   COUNTDOWN_MS,
@@ -89,6 +90,7 @@ export function createMatchLobby({
   onChapter,
   onChat,
   loadGarden,
+  ladderMaps,
 } = {}) {
   let mode = null;
   let roomId = null;
@@ -966,22 +968,63 @@ export function createMatchLobby({
     emit();
   }
 
-  /** Ranked: mix the board size and drop a seed that strands a start. */
+  function rankedMapRows() {
+    if (typeof ladderMaps === 'function') {
+      const rows = ladderMaps(mode);
+      return Array.isArray(rows) ? rows : [];
+    }
+    const cat = peekSkirmishCatalog();
+    if (!cat || (mode !== 'onevsone' && mode !== 'teams')) return [];
+    return lobbyOptionsFromHouseIndex(cat, mode);
+  }
+
+  /** Hold the ranked start until the official list is in, then deal once. */
+  function awaitingLadderMaps() {
+    if (!ranked || settings.chapter) return false;
+    if (mode !== 'onevsone' && mode !== 'teams') return false;
+    if (typeof ladderMaps === 'function') return false;
+    return !peekSkirmishCatalog() && Boolean(skirmishCatalogInflight());
+  }
+
+  /** Ranked: official maps and auto sizes share the queue seed. */
   function prepareRankedLadder() {
     if (!ranked || (mode !== 'onevsone' && mode !== 'teams' && mode !== 'koth')) return;
     if (settings.chapter) return;
-    const deal = ladderMatchDeal(settings.seed, mode);
+    const deal = ladderMatchDeal(settings.seed, mode, rankedMapRows());
     settings.fieldSize = deal.fieldSize;
     settings.seed = deal.seed;
+    settings.chapter = deal.chapter || '';
+    settings.mapName = deal.mapName || '';
   }
 
   function requestStart() {
     if (!hosting || phase !== 'waiting' || startBusy) return false;
     if (!canStart(mode, seats)) return false;
+    if (awaitingLadderMaps()) {
+      const pending = skirmishCatalogInflight();
+      const room = roomId;
+      startBusy = true;
+      emit();
+      void pending.then(() => {
+        if (!hosting || phase !== 'waiting' || roomId !== room) {
+          startBusy = false;
+          emit();
+          return;
+        }
+        startBusy = false;
+        requestStart();
+      }).catch(() => {
+        startBusy = false;
+        if (hosting && phase === 'waiting' && roomId === room) requestStart();
+        else emit();
+      });
+      return true;
+    }
     prepareRankedLadder();
     // The garden file's own seed never changes, so a custom map would deal the
     // same pads forever. Roll a match seed and send it with the start.
-    if (settings.chapter) settings.seed = (Math.random() * 0xffffffff) >>> 0;
+    // Ranked already dealt its seed, including an official map.
+    if (settings.chapter && !ranked) settings.seed = (Math.random() * 0xffffffff) >>> 0;
     if (chapterRefNeedsHostGarden(settings.chapter)) {
       const room = roomId;
       startBusy = true;

@@ -1,3 +1,4 @@
+import { fetchOfficialHouseMaps } from '../houseMapCatalog.js';
 import { ladderSlices } from './ladderBoard.js';
 import { seasonInfo } from './ladderSeason.js';
 import { ladderLooking, ladderQueueReady, leaveLadder, loadLadderBoard, loadLadderRecent, loadLadderSnapshot, queueLadder, touchLadderName } from './ladderApi.js';
@@ -152,6 +153,7 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPl
   const goCount = document.getElementById('ladder_go_count');
   const goCancel = document.getElementById('ladder_go_cancel');
   if (!openBtn || !pop || !matchLobby) return { refresh() {}, close() {} };
+  void fetchOfficialHouseMaps('onevsone');
 
   let page = 0;
   let shownId = '';
@@ -461,7 +463,7 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPl
     }
     const table = document.createElement('table');
     const head = document.createElement('tr');
-    for (const label of ['Date', 'Mode', 'Opponent', 'Result', 'MMR']) {
+    for (const label of ['Date', 'Mode', 'Map', 'Opponent', 'Result', 'MMR']) {
       const th = document.createElement('th');
       th.textContent = label;
       head.append(th);
@@ -478,6 +480,7 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPl
       const cells = [
         [recentWhen(entry.at), 'when'],
         [entry.mode || '', ''],
+        [entry.map || '', ''],
         [entry.opponent || '', ''],
         [win ? 'Win' : 'Loss', win ? 'is-win' : 'is-loss'],
         [delta > 0 ? `+${delta}` : String(delta), 'num'],

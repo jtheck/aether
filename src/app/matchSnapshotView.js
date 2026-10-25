@@ -8,6 +8,7 @@ import {
   UPGRADE_MODEL_URLS,
   getBuildingDisplayName,
 } from '../sim/buildings.js';
+import { FIELD_CHUNKS } from '../lobby/modes.js';
 import { mapTypeById } from '../sim/mapType.js';
 import { matchStatOwners, matchStatRows } from './matchStats.js';
 
@@ -47,6 +48,16 @@ function sizeWord(fieldSize, tiles) {
   return w > 0 ? `${w}×${w}` : '';
 }
 
+function chunksOf(fieldSize, tiles) {
+  const named = String(fieldSize || '').trim().toLowerCase();
+  if (FIELD_CHUNKS[named]) return FIELD_CHUNKS[named];
+  const w = tiles | 0;
+  for (const n of Object.values(FIELD_CHUNKS)) {
+    if (n * 16 === w) return n;
+  }
+  return 0;
+}
+
 /** Custom gardens keep their title. A generated field is its size and seed. */
 export function mapLabels(garden, replay) {
   const type = mapTypeById(garden?.mt)?.name || mapTypeById(replay?.mode)?.name || '';
@@ -62,6 +73,28 @@ export function mapLabels(garden, replay) {
     size: sizeWord(replay?.fieldSize, garden?.w || replay?.mapW),
     seed: seedText,
   };
+}
+
+/** Official maps use their title. A generated field is `Auto 9x9`. */
+export function mapLine(garden, replay) {
+  const labels = mapLabels(garden, replay);
+  if (labels.name) return labels.name;
+  const chunks = chunksOf(replay?.fieldSize, garden?.w || replay?.mapW);
+  return chunks ? `Auto ${chunks}x${chunks}` : '';
+}
+
+/** Saved snapshot line. A bare size word becomes `Auto 9x9`. */
+export function snapMapLine(doc) {
+  const name = cleanLabel(doc?.map);
+  if (name) return name;
+  const size = cleanLabel(doc?.mapSize).toLowerCase();
+  if (FIELD_CHUNKS[size]) return `Auto ${FIELD_CHUNKS[size]}x${FIELD_CHUNKS[size]}`;
+  const tiles = size.match(/(\d+)/);
+  if (tiles) {
+    const n = chunksOf('', Number(tiles[1]));
+    if (n) return `Auto ${n}x${n}`;
+  }
+  return '';
 }
 
 function bankAverage(samples, playerIndex) {
@@ -307,13 +340,9 @@ function kindTitle(split) {
 }
 
 export function snapCaption(doc) {
-  const bits = [];
-  if (doc?.map) bits.push(doc.map);
-  if (doc?.mapType) bits.push(doc.mapType);
-  if (doc?.mapSize) bits.push(doc.mapSize);
-  if (doc?.mapSeed) bits.push(`seed ${doc.mapSeed}`);
-  bits.push(snapClock(doc?.tick));
-  return bits.join(' · ');
+  const line = snapMapLine(doc);
+  const clock = snapClock(doc?.tick);
+  return line ? `${clock} · ${line}` : clock;
 }
 
 export function mountMatchSnapshot(parent, doc, opts) {
@@ -322,7 +351,12 @@ export function mountMatchSnapshot(parent, doc, opts) {
   if (opts?.caption !== false) {
     const meta = document.createElement('p');
     meta.className = 'snap-meta';
-    meta.textContent = snapCaption(doc);
+    meta.append(snapClock(doc?.tick));
+    const line = snapMapLine(doc);
+    if (line) {
+      meta.append(document.createElement('br'));
+      meta.append(line);
+    }
     root.append(meta);
   }
   const stage = document.createElement('div');
@@ -405,7 +439,7 @@ export function snapshotDocFromSession(session, nameOf) {
   const map = mapLabels(session?.replayGarden, session?.replayConfig);
   return {
     tick: snap?.tick | 0 || session?.confirmedTick | 0,
-    map: map.name,
+    map: mapLine(session?.replayGarden, session?.replayConfig),
     mapType: map.type,
     mapSize: map.size,
     mapSeed: map.seed,

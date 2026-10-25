@@ -578,8 +578,8 @@ test('one player list holds 1v1, 2v2, and koth together', async () => {
     { playerId: A, seat: 0, name: 'Ann' },
     { playerId: B, seat: 1, name: 'Bea' },
   ];
-  await handler(post(duel(A, { players })));
-  await handler(post(duel(B, { players })));
+  await handler(post(duel(A, { players, map: 'Auto 9x9' })));
+  await handler(post(duel(B, { players, map: 'Auto 9x9' })));
   const team = (playerId) => post({
     board: 'teams',
     matchId: 'lobby-teams-9',
@@ -617,6 +617,8 @@ test('one player list holds 1v1, 2v2, and koth together', async () => {
   assert.equal(recent.recent[2].result, 'win');
   assert.equal(recent.recent[2].opponent, 'Bea');
   assert.equal(recent.recent[2].delta, 16);
+  assert.equal(recent.recent[2].map, 'Auto 9x9');
+  assert.equal(recent.recent[0].map, undefined);
   assert.equal(recent.recent[0].matchId, 'hill-9');
 
   const pub = JSON.parse(store.objects.get(`ladder/players/${A}.json`));

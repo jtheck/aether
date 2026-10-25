@@ -285,6 +285,39 @@ describe('match lobby', () => {
     hostRoom.leaveRoom();
   });
 
+  it('deals an official map into a ranked start', () => {
+    const maps = [
+      { id: '/maps/skirmish/ford.garden', name: 'Ford', spawns: 2, mapType: 'skirmish' },
+      { id: '/maps/skirmish/bowl.garden', name: 'Knife Bowl', spawns: 4, mapType: 'skirmish' },
+    ];
+    const hostP2p = fakeP2p('host-id');
+    let hostBroadcast = null;
+    const hostRoom = createMatchLobby({
+      getP2p: () => hostP2p,
+      getUserId: () => 'host-id',
+      gameLobby: createGameLobby({ getP2p: () => hostP2p }),
+      subscribeBroadcast: (fn) => { hostBroadcast = withSim(fn); return () => {}; },
+      ladderMaps: () => maps,
+    });
+    hostRoom.createRoom('onevsone', { roomId: 'lobby-ranked', seed: 0, ranked: true });
+    hostBroadcast({
+      v: 1,
+      type: MSG.JOIN,
+      userId: 'guest-id',
+      name: 'Guest',
+      color: '#00f',
+      ready: true,
+      roomId: 'lobby-ranked',
+      mode: 'onevsone',
+    });
+    const deal = ladderMatchDeal(0, 'onevsone', maps);
+    assert.equal(hostRoom.getState().phase, 'countdown');
+    assert.equal(hostRoom.getState().settings.chapter, '/maps/skirmish/ford.garden');
+    assert.equal(hostRoom.getState().settings.mapName, 'Ford');
+    assert.equal(hostRoom.getState().settings.seed, deal.seed);
+    hostRoom.leaveRoom();
+  });
+
   it('does not claim a seat from signaling from alone', () => {
     const p2p = fakeP2p('host');
     let dataFn = null;

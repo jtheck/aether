@@ -1,4 +1,4 @@
-// Official 1v1 / teams gardens (v4). Run: node scripts/generate-map.mjs
+// Official skirmish gardens (v4). Run: node scripts/generate-map.mjs
 //
 // Match start still plants the opening agoras and villagers. These files only
 // author the table: terrain, a mirrored wood/stone camp at each start, and
@@ -22,7 +22,7 @@ import {
 } from '../src/sim/field.js';
 import { applyTableSilhouette } from '../src/sim/tableShape.js';
 import { decodeGarden, encodeGarden, fieldFromGarden, GARDEN_VERSION } from '../src/sim/garden.js';
-import { buildWorldFromConfig, spawnPadsForMapType } from '../src/sim/worldSetup.js';
+import { buildWorldFromConfig, laneBases, sideBases } from '../src/sim/worldSetup.js';
 import { SCENERY, defaultTreeStock } from '../src/sim/scenery.js';
 
 const TILES = 144;
@@ -94,14 +94,24 @@ function nearPad(tx, tz, pads, radius) {
   return false;
 }
 
-function padsFor(mapType) {
+function tilePads(points) {
   const half = worldHalfFFromMap(TILES);
-  return spawnPadsForMapType(mapType, half, TILES, half).map(([x, z]) => ({
+  return points.map(([x, z]) => ({
     x,
     z,
     tx: Math.floor((x + half) / TILE_SIZE_F),
     tz: Math.floor((z + half) / TILE_SIZE_F),
   }));
+}
+
+function duoPads() {
+  const half = worldHalfFFromMap(TILES);
+  return tilePads(sideBases(half, half).slice(0, 2));
+}
+
+function lanePads() {
+  const half = worldHalfFFromMap(TILES);
+  return tilePads(laneBases(half, half));
 }
 
 function inward(pad) {
@@ -208,19 +218,19 @@ function finishField(field, pads) {
 
 function buildFord() {
   const field = blankField(0x5f04d);
-  const pads = padsFor('onevsone');
+  const pads = duoPads();
   const fords = [[40, 52], [92, 104]];
   paintBand(field.terrainTypes, TILES, TILES, true, (z) => (TILES - 1) / 2 + Math.sin(z * 0.075) * 5, 6, fords);
   paintBanks(field.terrainTypes, TILES, TILES, pads, fords, true);
   paintDisc(field.terrainTypes, TILES, TILES, 16, 16, 8, TERRAIN.WATER);
   paintDisc(field.terrainTypes, TILES, TILES, TILES - 17, TILES - 17, 8, TERRAIN.WATER);
   finishField(field, pads);
-  return { field, pads, mapType: 'onevsone', links: [[0, 1]] };
+  return { field, pads, lanes: false, links: [[0, 1]] };
 }
 
 function buildBowl() {
   const field = blankField(0xb041);
-  const pads = padsFor('onevsone');
+  const pads = duoPads();
   const c = (TILES - 1) / 2;
   paintDisc(field.terrainTypes, TILES, TILES, c, c, 11, TERRAIN.WATER);
   for (let z = 0; z < TILES; z++) {
@@ -236,22 +246,22 @@ function buildBowl() {
   paintDisc(field.terrainTypes, TILES, TILES, 14, TILES - 15, 10, TERRAIN.WATER);
   paintDisc(field.terrainTypes, TILES, TILES, TILES - 15, TILES - 15, 10, TERRAIN.WATER);
   finishField(field, pads);
-  return { field, pads, mapType: 'onevsone', links: [[0, 1]] };
+  return { field, pads, lanes: false, links: [[0, 1]] };
 }
 
 function buildDivide() {
   const field = blankField(0xd171de);
-  const pads = padsFor('teams');
+  const pads = lanePads();
   const fords = [[34, 48], [96, 110]];
   paintBand(field.terrainTypes, TILES, TILES, false, (x) => (TILES - 1) / 2 + Math.sin(x * 0.07) * 4, 6, fords);
   paintBanks(field.terrainTypes, TILES, TILES, pads, fords, false);
   finishField(field, pads);
-  return { field, pads, mapType: 'teams', links: [[0, 2], [0, 3], [1, 2], [1, 3], [0, 1], [2, 3]] };
+  return { field, pads, lanes: true, links: [[0, 2], [0, 3], [1, 2], [1, 3], [0, 1], [2, 3]] };
 }
 
 function buildCorners() {
   const field = blankField(0xc04e45);
-  const pads = padsFor('teams');
+  const pads = lanePads();
   const c = (TILES - 1) / 2;
   for (const p of pads) {
     const steps = Math.ceil(Math.hypot(c - p.tx, c - p.tz));
@@ -264,7 +274,7 @@ function buildCorners() {
   }
   paintDisc(field.terrainTypes, TILES, TILES, c, c, 8, TERRAIN.DIRT);
   finishField(field, pads);
-  return { field, pads, mapType: 'teams', links: [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]] };
+  return { field, pads, lanes: true, links: [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]] };
 }
 
 function countNear(field, pad, radius, kind) {
@@ -287,11 +297,7 @@ function assertPlayable(name, data, spec) {
     throw new Error(`${name} encoded v${decoded.version}`);
   }
   const field = fieldFromGarden(data);
-  const half = worldHalfFFromMap(field.width);
-  const pads = spawnPadsForMapType(spec.mapType, half, field.width, half).map(([x, z]) => ({
-    tx: Math.floor((x + half) / TILE_SIZE_F),
-    tz: Math.floor((z + half) / TILE_SIZE_F),
-  }));
+  const pads = spec.pads;
   for (const p of pads) {
     const i = p.tz * field.width + p.tx;
     if (field.terrainTypes[i] === TERRAIN.WATER || !isPassable(field, p.tx, p.tz)) {
@@ -318,13 +324,13 @@ function assertPlayable(name, data, spec) {
     );
     if (n <= 0) throw new Error(`${name} has no path between starts ${a} and ${b}`);
   }
-  const slots = spec.mapType === 'teams' ? [0, 1, 2, 3] : [0, 1];
+  const slots = pads.map((_, i) => i);
   const world = buildWorldFromConfig({
     seed: decoded.seed,
     mode: 'skirmish',
     mapW: field.width,
     mapH: field.height,
-    laneBases: spec.mapType === 'teams',
+    laneBases: !!spec.lanes,
     activeSlots: slots,
   });
   if (world.agoras.length !== slots.length) {
@@ -340,17 +346,21 @@ function assertPlayable(name, data, spec) {
   return { trees: pads.map((p) => countNear(field, p, 40, SCENERY.TREE)) };
 }
 
+const SKIRMISH_DIR = 'skirmish';
+
 const MAPS = [
-  { dir: '1v1', file: 'ford.garden', name: 'The Ford', mapType: 'onevsone', build: buildFord },
-  { dir: '1v1', file: 'bowl.garden', name: 'The Bowl', mapType: 'onevsone', build: buildBowl },
-  { dir: 'teams', file: 'divide.garden', name: 'The Divide', mapType: 'teams', build: buildDivide },
-  { dir: 'teams', file: 'corners.garden', name: 'Four Corners', mapType: 'teams', build: buildCorners },
+  { file: 'ford.garden', name: 'The Ford', mapType: 'skirmish', build: buildFord },
+  { file: 'bowl.garden', name: 'The Bowl', mapType: 'skirmish', build: buildBowl },
+  { file: 'divide.garden', name: 'The Divide', mapType: 'skirmish', build: buildDivide },
+  { file: 'corners.garden', name: 'Four Corners', mapType: 'skirmish', build: buildCorners },
 ];
 
 const retired = [
   ['1v1', 'island.garden'],
   ['1v1', 'arena.garden'],
   ['teams', 'arena.garden'],
+  ['skirmish', 'island.garden'],
+  ['skirmish', 'arena.garden'],
 ];
 
 for (const [dir, file] of retired) {
@@ -366,38 +376,44 @@ for (const map of MAPS) {
     authoredScenery: true,
   });
   const stats = assertPlayable(map.name, data, spec);
-  const dir = join(mapsRoot, map.dir);
+  const dir = join(mapsRoot, SKIRMISH_DIR);
   mkdirSync(dir, { recursive: true });
   const path = join(dir, map.file);
   writeFileSync(path, JSON.stringify(data));
   written.push({ ...map, bytes: JSON.stringify(data).length, trees: stats.trees });
 }
 
+function indexRow(file, data) {
+  return {
+    file,
+    name: String(data.n || file.replace(/\.garden$/i, '')).replace(/\s+/g, ' ').trim(),
+    spawns: Array.isArray(data.g) ? data.g.length : 0,
+  };
+}
+
 function writeIndex(dir, rows) {
   const index = {
-    maps: rows.map((row) => ({ file: row.file, name: row.name, mapType: row.mapType })),
+    maps: rows.map((row) => ({ file: row.file, name: row.name, spawns: row.spawns | 0 })),
   };
   writeFileSync(join(mapsRoot, dir, 'index.json'), `${JSON.stringify(index, null, 2)}\n`);
 }
 
 function handAuthored(dir) {
-  const generated = new Set(MAPS.filter((m) => m.dir === dir).map((m) => m.file));
+  const generated = new Set(MAPS.map((m) => m.file));
   const rows = [];
   for (const file of readdirSync(join(mapsRoot, dir))) {
     if (!file.endsWith('.garden') || generated.has(file)) continue;
     const data = JSON.parse(readFileSync(join(mapsRoot, dir, file), 'utf8'));
-    rows.push({
-      file,
-      name: data.n || file.replace(/\.garden$/i, ''),
-      mapType: data.mt || (dir === '1v1' ? 'onevsone' : 'teams'),
-    });
+    rows.push(indexRow(file, data));
   }
   return rows;
 }
 
-writeIndex('1v1', [...written.filter((m) => m.dir === '1v1'), ...handAuthored('1v1')]);
-writeIndex('teams', [...written.filter((m) => m.dir === 'teams'), ...handAuthored('teams')]);
+writeIndex(SKIRMISH_DIR, [
+  ...written.map((row) => indexRow(row.file, JSON.parse(readFileSync(join(mapsRoot, SKIRMISH_DIR, row.file), 'utf8')))),
+  ...handAuthored(SKIRMISH_DIR),
+]);
 
 for (const row of written) {
-  console.log(`${row.dir}/${row.file}  ${row.name}  ${row.bytes} bytes  trees/start ${row.trees.join(',')}`);
+  console.log(`${SKIRMISH_DIR}/${row.file}  ${row.name}  ${row.bytes} bytes  trees/start ${row.trees.join(',')}`);
 }

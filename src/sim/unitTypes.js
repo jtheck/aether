@@ -22,6 +22,8 @@ export const UNIT = {
   BRIGAND: 13,
   /** Warrior who has wounded five enemies that then fell. */
   CHAMPION: 14,
+  /** Workshop artillery - lobbed fireballs at long range. */
+  SIEGE_WAGON: 15,
 };
 
 export const ATTACK_DELIVERY = {
@@ -377,6 +379,32 @@ export const UNIT_DEFS = [
     preferredRange: fx.fromFloat(2.0),
     primaryAbility: null,
   },
+  {
+    id: UNIT.SIEGE_WAGON,
+    name: 'Siege Wagon',
+    category: 'military',
+    hp: 100,
+    speed: fx.fromFloat(2.0),
+    size: 9.5,
+    footprint: 2.8,
+    steer: 0.18,
+    accel: 0.24,
+    decel: 0.32,
+    pickRadius: 4.8,
+    pickHeight: 1.3,
+    color: [0.58, 0.38, 0.22],
+    attackDamage: 12,
+    attackRange: fx.fromFloat(78),
+    attackCooldown: 52,
+    aggroRange: fx.fromFloat(70),
+    attackDelivery: ATTACK_DELIVERY.PROJECTILE,
+    projectileType: PROJECTILE.FIREBALL,
+    minRange: fx.fromFloat(8),
+    preferredRange: fx.fromFloat(65),
+    primaryAbility: null,
+    mechanical: true,
+    slowMul: 0.78,
+  },
 ];
 
 export function getUnitDef(typeId) {
@@ -404,6 +432,7 @@ export const UNIT_COST = Object.freeze({
   [UNIT.MONK]: { food: 20, wood: 10 },
   [UNIT.ENGINEER]: { food: 35, stone: 20 },
   [UNIT.WAGON]: { wood: 40, stone: 10 },
+  [UNIT.SIEGE_WAGON]: { wood: 70, stone: 25 },
   [UNIT.DIRIGIBLE]: { wood: 70, mineral: 5 },
   [UNIT.APC]: { wood: 30, stone: 40 },
 });

@@ -3,7 +3,7 @@
 import { sameUserId } from '../lobby/ids.js';
 import { rosterStatusLabel } from './viewFollow.js';
 import { observerSheetIndexFromCode } from './observerData.js';
-import { FIELD_SIZES, MODE_IDS, getMode, mapTypeFitsLobby, selectableAdventureChapters } from '../lobby/modes.js';
+import { cleanMapName, FIELD_SIZES, MODE_IDS, getMode, mapTypeFitsLobby, selectableAdventureChapters } from '../lobby/modes.js';
 import { aetherSteam } from './steam.js';
 import { stashSessionGarden, writeCampaignPack } from './gardenSession.js';
 import { formatWorkshopRef, isWorkshopRef, parseWorkshopRef } from './workshop.js';
@@ -19,7 +19,10 @@ export function formatTypeLobbyRow(lobby) {
   const title = (lobby.hostName ?? '').trim() || 'Open lobby';
   const seats = `${lobby.playerCount ?? 0}/${lobby.maxPlayers ?? 0}`;
   const chapter = String(lobby.settings?.chapter || '');
-  const field = lobby.mode !== 'adventure' && chapter ? 'custom map' : lobby.settings?.fieldSize;
+  const mapName = cleanMapName(lobby.settings?.mapName);
+  const field = lobby.mode !== 'adventure' && chapter
+    ? (mapName || 'custom map')
+    : lobby.settings?.fieldSize;
   const watching = lobby.spectatorCount
     ?? (Array.isArray(lobby.spectators) ? lobby.spectators.length : 0);
   const bits = [seats];
@@ -443,7 +446,7 @@ export function chapterSelectOptions(workshopItems, current, search, hostname, l
 }
 
 /** Workshop, official house maps, and loaded gardens for 1v1 / teams. Empty chapter = auto field. */
-export function customMapSelectOptions(workshopItems, current, localMaps, modeId, officialMaps) {
+export function customMapSelectOptions(workshopItems, current, localMaps, modeId, officialMaps, currentName = '') {
   const official = (Array.isArray(officialMaps) ? officialMaps : [])
     .filter((row) => row?.id && mapTypeFitsLobby(row.mapType, modeId));
   const local = (Array.isArray(localMaps) ? localMaps : [])
@@ -463,9 +466,11 @@ export function customMapSelectOptions(workshopItems, current, localMaps, modeId
   const cur = String(current || '');
   const known = [...official, ...local, ...extra];
   if (cur && !known.some((row) => row.id === cur)) {
+    const named = cleanMapName(currentName);
     extra.unshift({
       id: cur,
-      name: cur === 'session' ? 'Custom map' : isWorkshopRef(cur) ? 'Workshop map' : 'Custom map',
+      name: named || (cur === 'session' ? 'Custom map' : isWorkshopRef(cur) ? 'Workshop map' : 'Custom map'),
+      placeholder: !named,
     });
   }
   return [...official, ...local, ...extra];
@@ -547,6 +552,7 @@ export function setupLobbyUi({
   let localChapters = [];
   let adventureSources = [];
   let localMaps = [];
+  let mapChoices = [];
   /** @type {Record<string, { id: string, name: string, group?: string, mapType?: string }[]>} */
   let officialHouseMaps = { onevsone: [], teams: [] };
   let lastWorkshopPull = 0;
@@ -560,8 +566,9 @@ export function setupLobbyUi({
       fetchOfficialHouseMaps('onevsone'),
       fetchOfficialHouseMaps('teams'),
     ]).then(([onevsone, teams]) => {
-      const sig = `${onevsone.map((r) => r.id).join()}|${teams.map((r) => r.id).join()}`;
-      const prev = `${officialHouseMaps.onevsone.map((r) => r.id).join()}|${officialHouseMaps.teams.map((r) => r.id).join()}`;
+      const stamp = (rows) => rows.map((r) => `${r.id}\0${r.name}`).join();
+      const sig = `${stamp(onevsone)}|${stamp(teams)}`;
+      const prev = `${stamp(officialHouseMaps.onevsone)}|${stamp(officialHouseMaps.teams)}`;
       if (sig === prev) return;
       officialHouseMaps = { onevsone, teams };
       lastSig = '';
@@ -598,11 +605,11 @@ export function setupLobbyUi({
       (matchLobby.lockstepWaiters?.() ?? []).join(','),
       Math.ceil((matchLobby.countdownMs?.() ?? 0) / 200),
       state?.settings?.fieldSize, state?.settings?.seed, state?.settings?.chapter,
-      state?.settings?.allowSpectators,
+      state?.settings?.mapName, state?.settings?.allowSpectators,
       state?.loadingMap,
       workshopItems.flatMap((item) => (item.gardens || []).map((g) => `${item.id}:${g.file}:${g.mapType || ''}`)).join(),
       localChapters.map((row) => row.id).join(),
-      localMaps.map((row) => row.id).join(),
+      localMaps.map((row) => `${row.id}:${row.name || ''}`).join(),
       officialHouseMaps.onevsone.map((row) => row.id).join(),
       officialHouseMaps.teams.map((row) => row.id).join(),
       JSON.stringify(state?.seats ?? []),
@@ -748,7 +755,16 @@ export function setupLobbyUi({
       localMaps,
       state.mode,
       officialHouseMaps[state.mode] || [],
+      state.settings.mapName,
     );
+    mapChoices = mapOptions;
+    if (hostControls && mode?.customMap && state.settings.chapter && matchLobby.setMap) {
+      const known = mapOptions.find((row) => row.id === state.settings.chapter && !row.placeholder);
+      const name = cleanMapName(known?.name);
+      if (name && name !== cleanMapName(state.settings.mapName)) {
+        matchLobby.setMap(state.settings.chapter, name);
+      }
+    }
     fillSelect(
       mapSelect,
       [{ id: '', name: 'Auto' }, ...mapOptions],
@@ -864,7 +880,11 @@ export function setupLobbyUi({
     const first = src?.chapters[0];
     if (first) matchLobby.setSetting('chapter', first.id);
   });
-  mapSelect?.addEventListener('change', () => matchLobby.setSetting('chapter', mapSelect.value));
+  mapSelect?.addEventListener('change', () => {
+    const chapter = mapSelect.value;
+    const known = mapChoices.find((row) => row.id === chapter && !row.placeholder);
+    matchLobby.setMap(chapter, known?.name || '');
+  });
   spectatorInput?.addEventListener('change', () => {
     matchLobby.setSetting('allowSpectators', spectatorInput.checked);
   });
@@ -892,16 +912,24 @@ export function setupLobbyUi({
       if (isCampaignBundle(data)) {
         await writeCampaignPack(text);
         const rows = rowsFromCampaign();
-        if (mode?.customMap) localMaps = rows;
-        else localChapters = rows;
-        if (rows[0]) matchLobby.setSetting('chapter', rows[0].id);
+        if (mode?.customMap) {
+          localMaps = rows;
+          if (rows[0]) matchLobby.setMap(rows[0].id, rows[0].name);
+        } else {
+          localChapters = rows;
+          if (rows[0]) matchLobby.setSetting('chapter', rows[0].id);
+        }
       } else if (data && typeof data === 'object' && (data.v | 0) >= 3 && (data.w | 0) > 0) {
         await stashSessionGarden(text);
         const name = String(data.n || data.name || file.name || 'Custom map');
         const row = { id: 'session', name, campaign: name };
-        if (mode?.customMap) localMaps = [row];
-        else localChapters = [row];
-        matchLobby.setSetting('chapter', 'session');
+        if (mode?.customMap) {
+          localMaps = [row];
+          matchLobby.setMap('session', name);
+        } else {
+          localChapters = [row];
+          matchLobby.setSetting('chapter', 'session');
+        }
       } else {
         throw new Error('unrecognized map');
       }

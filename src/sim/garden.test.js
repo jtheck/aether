@@ -38,7 +38,7 @@ import {
   tileInTable,
   tileCenterWorld,
 } from './tableShape.js';
-import { encodeGarden, decodeCelestial, decodeGarden, encodeRle, fieldFromGarden, applyGardenPlacements } from './garden.js';
+import { encodeGarden, decodeCelestial, decodeGarden, encodeRle, fieldFromGarden, applyGardenPlacements, placementOwnersToKeep } from './garden.js';
 import { clearAllScenery, paintSceneryBrush, populateScenery, rockYield, SCENERY } from './scenery.js';
 import { buildTesterGarden, TESTER_STARTING_RESOURCES } from './testerGarden.js';
 import {
@@ -415,9 +415,10 @@ describe('garden codec', () => {
   it('stores the map type and defaults a missing one to blank', () => {
     const field = buildField(3, { width: 32, height: 32 });
     const json = encodeGarden(field, { mapType: 'teams' });
-    assert.equal(json.mt, 'teams');
-    assert.equal(decodeGarden(json).mapType, 'teams');
-    assert.equal(encodeGarden(field, { mapType: '1v1' }).mt, 'onevsone');
+    assert.equal(json.mt, 'skirmish');
+    assert.equal(decodeGarden(json).mapType, 'skirmish');
+    assert.equal(encodeGarden(field, { mapType: '1v1' }).mt, 'skirmish');
+    assert.equal(decodeGarden({ v: 4, w: 32, h: 32, s: 1, mt: 'onevsone' }).mapType, 'skirmish');
     assert.equal(decodeGarden({ v: 4, w: 32, h: 32, s: 1, mt: 'koth' }).mapType, 'koth');
     assert.equal(decodeGarden({ v: 4, w: 32, h: 32, s: 1 }).mapType, '');
   });
@@ -474,6 +475,54 @@ describe('garden codec', () => {
     assert.equal(getResource(world, 0, 'mineral'), 12);
   });
 
+  it('deals a 1v1 onto a random pair of authored agoras', () => {
+    const field = buildField(7, { width: 32, height: 32 });
+    applyTableSilhouette(field, {
+      cellSize: 16,
+      cellMask: createFullCellMask(32, 32, 16),
+      cellRadius: createFullCellRadius(32, 32, 16, 0),
+    });
+    const pads = [
+      { owner: 0, x: -30, z: -30 },
+      { owner: 1, x: -10, z: 10 },
+      { owner: 2, x: 10, z: -10 },
+      { owner: 3, x: 30, z: 30 },
+    ];
+    const g = decodeGarden(encodeGarden(field, {
+      mapType: 'teams',
+      agoras: pads,
+      units: [{ owner: 2, type: 1, tx: 4, tz: 4 }],
+    }));
+    const keep = placementOwnersToKeep(g, { humanPlayers: [0, 1] });
+    const place = (spawnSeed) => {
+      const world = createWorld(7);
+      applyGardenPlacements(world, field, g, { keep, spawnSeed });
+      return world;
+    };
+    const padX = new Set(pads.map((p) => p.x));
+    const seen = new Set();
+    for (let seed = 1; seed <= 24; seed++) {
+      const world = place(seed);
+      const owners = world.agoras.map((a) => a.owner).sort((a, b) => a - b);
+      assert.deepEqual(owners, [0, 1]);
+      for (const a of world.agoras) assert.ok(padX.has(fx.toFloat(a.x)));
+      const counts = [0, 0];
+      for (let i = 0; i < world.count; i++) counts[world.owner[i]]++;
+      assert.ok(counts[0] >= 1 && counts[1] >= 1);
+      assert.equal(getResource(world, 0, 'wood'), STARTING_RESOURCES.wood);
+      assert.equal(getResource(world, 1, 'wood'), STARTING_RESOURCES.wood);
+      seen.add(world.agoras.map((a) => fx.toFloat(a.x)).sort((a, b) => a - b).join(','));
+    }
+    assert.ok(seen.size > 1);
+    const again = place(4);
+    const once = place(4);
+    assert.deepEqual(
+      again.agoras.map((a) => fx.toFloat(a.x)),
+      once.agoras.map((a) => fx.toFloat(a.x)),
+    );
+    assert.equal(placementOwnersToKeep({ mapType: 'adventure' }, { humanPlayers: [0] }), null);
+  });
+
   it('keeps a cleared scenery map empty', () => {
     const field = buildField(7, { width: 32, height: 32 });
     applyTableSilhouette(field, {
@@ -507,6 +556,12 @@ describe('garden codec', () => {
     field.terrainTypes.fill(TERRAIN.GRASS);
     field.pass.fill(1);
     assert.ok(paintSceneryBrush(field, 8, 8, SCENERY.ROCK_PLAIN, 0, { tight: true }).length > 0);
+    const planted = field.rockStock[8 * 32 + 8];
+    assert.ok(planted > 0 && planted < rockYield(SCENERY.ROCK_PLAIN), 'a painted rock starts small');
+    const small = encodeGarden(field);
+    assert.ok(small.rk, 'a small rock is saved');
+    assert.equal(fieldFromGarden(small).rockStock[8 * 32 + 8], planted);
+    field.rockStock[8 * 32 + 8] = rockYield(SCENERY.ROCK_PLAIN);
     const alone = encodeGarden(field);
     assert.equal(alone.rk, undefined);
     field.rockStock[8 * 32 + 8] = rockYield(SCENERY.ROCK_PLAIN) * 2;
@@ -867,6 +922,10 @@ describe('garden codec', () => {
     assert.deepEqual(json.sr, [9999, 9999, 9999, 9999]);
     assert.equal(getResource(world, 0, 'wood'), TESTER_STARTING_RESOURCES.wood);
     assert.equal(getResource(world, 1, 'mineral'), TESTER_STARTING_RESOURCES.mineral);
+
+    const here = dirname(fileURLToPath(import.meta.url));
+    const onDisk = JSON.parse(readFileSync(join(here, '../../maps/dev/tester.garden'), 'utf8'));
+    assert.deepEqual(onDisk, json);
   });
 
   it('builds a stress garden that mirrors the menu FFA', () => {

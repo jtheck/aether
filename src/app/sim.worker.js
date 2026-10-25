@@ -11,7 +11,7 @@ import {
 } from '../sim/field.js';
 import { applyTableSilhouette } from '../sim/tableShape.js';
 import { populateScenery } from '../sim/scenery.js';
-import { applyGardenPlacements, decodeGarden, fieldFromGarden } from '../sim/garden.js';
+import { applyGardenPlacements, decodeGarden, fieldFromGarden, placementOwnersToKeep } from '../sim/garden.js';
 import { setupWaveSpawners } from '../sim/waveSpawner.js';
 import { setTeamAssignments, setTeamNeutralPairs, teamsFromGarden } from '../sim/teams.js';
 import { armStoryProtectFromGarden } from '../sim/storyProtect.js';
@@ -125,6 +125,13 @@ self.onmessage = (e) => {
         msg.config.humanPlayers ?? [],
       );
       const garden = msg.config.garden ? decodeGarden(msg.config.garden) : null;
+      const keepOwners = garden
+        ? placementOwnersToKeep(garden, {
+          humanPlayers: msg.config.humanPlayers,
+          activeSlots: msg.config.activeSlots,
+          aiPlayers,
+        })
+        : null;
       const size = garden
         ? { mapW: garden.width, mapH: garden.height }
         : mapSizeForConfig(msg.config);
@@ -152,6 +159,7 @@ self.onmessage = (e) => {
           || garden?.units?.length
           || garden?.story
           || garden?.objectives?.length
+          || (keepOwners && garden?.agoras?.length)
         ),
         agoraOccupyEndsMatch: msg.config.agoraOccupyEndsMatch != null
           ? msg.config.agoraOccupyEndsMatch
@@ -161,7 +169,14 @@ self.onmessage = (e) => {
       world.profileSim = msg.config.profileSim === true
         || (msg.config.stressPerSide | 0) > 0
         || (msg.config.animStressPerSide | 0) > 0;
-      if (garden) applyGardenPlacements(world, field, garden);
+      if (garden) {
+        applyGardenPlacements(world, field, garden, {
+          keep: keepOwners,
+          spawnSeed: msg.config.spawnSeed != null
+            ? msg.config.spawnSeed >>> 0
+            : (msg.config.seed ?? 0) >>> 0,
+        });
+      }
       if (garden?.objectives?.length) setupWaveSpawners(world, field, garden.objectives);
       const teams = teamsFromGarden(garden);
       if (teams) setTeamAssignments(teams);

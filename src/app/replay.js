@@ -122,6 +122,7 @@ export function replayConfigFromLive(cfg) {
   /** @type {Record<string, unknown>} */
   const out = {
     seed: (cfg.seed ?? 0) >>> 0,
+    spawnSeed: (cfg.spawnSeed ?? cfg.seed ?? 0) >>> 0,
     mode: cfg.mode ?? '',
     fieldSize: cfg.fieldSize ? String(cfg.fieldSize) : '',
     chapter: cfg.chapter ? String(cfg.chapter) : '',

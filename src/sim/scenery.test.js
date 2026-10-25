@@ -14,6 +14,7 @@ import {
   damageRock,
   defaultTreeStock,
   paintSceneryBrush,
+  stepSceneryBrush,
   clearAllScenery,
   clearOffTableScenery,
   placeRockAt,
@@ -22,6 +23,7 @@ import {
   rockFootprintRadius,
   rockFootprintRadiusForStock,
   rockStageFromStock,
+  rockStockPerStage,
   rockYield,
   takeRockUpdates,
   treeEdgeBonusStages,
@@ -148,6 +150,7 @@ snowFootprintShrinksWithStock();
 damageRockPublishesAndShrinks();
 clearEmptiesTheMap();
 paintBrushRespectsFootprints();
+ageBrushStepsTreesAndRocks();
 rocksPack();
 sceneryDensityThinsTheBrush();
 archerAndApcKeepMoreTreeSpeed();
@@ -164,6 +167,39 @@ function blankLand() {
   field.pass.fill(1);
   field.terrainTypes.fill(TERRAIN.GRASS);
   return field;
+}
+
+function ageBrushStepsTreesAndRocks() {
+  const field = blankLand();
+  assert.ok(paintSceneryBrush(field, 20, 20, SCENERY.TREE, 0).length > 0);
+  const tree = tileAt(field, 20, 20);
+  assert.equal(field.treeStock[tree], TREE_WOOD_PER_STAGE, 'a painted tree starts as a sapling');
+  assert.equal(stepSceneryBrush(field, 20, 20, 1, 0).length, 1);
+  assert.equal(field.treeStock[tree], TREE_WOOD_PER_STAGE * 2);
+  field.treeStock[tree] = TREE_WOOD_PER_STAGE * TREE_STAGE_GROVE_MAX;
+  assert.equal(stepSceneryBrush(field, 20, 20, 1, 0).length, 0, 'age stops at a grove giant');
+  assert.equal(stepSceneryBrush(field, 20, 20, -1, 0).length, 1);
+  assert.equal(field.treeStock[tree], TREE_WOOD_PER_STAGE * (TREE_STAGE_GROVE_MAX - 1));
+  field.treeStock[tree] = TREE_WOOD_PER_STAGE;
+  assert.equal(stepSceneryBrush(field, 20, 20, -1, 0).length, 0, 'de-age leaves the sapling');
+
+  assert.ok(paintSceneryBrush(field, 30, 30, SCENERY.ROCK_SNOW, 0, { tight: true }).length > 0);
+  const rock = tileAt(field, 30, 30);
+  const step = rockStockPerStage(SCENERY.ROCK_SNOW);
+  const full = rockYield(SCENERY.ROCK_SNOW);
+  assert.equal(field.rockStock[rock], step, 'a painted rock starts at one stage');
+  assert.equal(passAt(field, 30, 30), 0, 'the nub occupies its tile');
+  assert.equal(passAt(field, 32, 30), 1, 'a sapling snow rock does not block the outer ring');
+  for (let n = step; n < full; n += step) {
+    assert.ok(stepSceneryBrush(field, 30, 30, 1, 0).length > 0);
+  }
+  assert.equal(field.rockStock[rock], full);
+  assert.equal(passAt(field, 32, 30), 0, 'a full snow rock blocks the outer ring');
+  assert.equal(stepSceneryBrush(field, 30, 30, 1, 0).length, 0, 'age stops at one full rock');
+  assert.ok(stepSceneryBrush(field, 32, 30, -1, 0).length > 0, 'de-age finds the rock from its disc');
+  assert.ok(stepSceneryBrush(field, 32, 30, -1, 0).length > 0);
+  assert.equal(field.rockStock[rock], full - step * 2);
+  assert.equal(passAt(field, 32, 30), 1, 'dropping below the outer stage opens that ring');
 }
 
 function rocksPack() {
@@ -187,17 +223,19 @@ function rocksPack() {
   assert.ok(paintSceneryBrush(pile, tx, tz, SCENERY.ROCK_PLAIN, 0, tight).length > 0);
   const i = tileAt(pile, tx, tz);
   const unit = rockYield(SCENERY.ROCK_PLAIN);
-  assert.equal(pile.rockStock[i], unit);
+  const sapling = rockStockPerStage(SCENERY.ROCK_PLAIN);
+  assert.equal(pile.rockStock[i], sapling);
   assert.equal(paintSceneryBrush(pile, tx, tz, SCENERY.ROCK_PLAIN, 0, tight).length, 0, 'painting the same rock does not stack it');
-  assert.equal(pile.rockStock[i], unit);
+  assert.equal(pile.rockStock[i], sapling);
   applyAuthoredScenery(pile);
-  assert.equal(pile.rockStock[i], unit, 'a scenery refresh keeps the single rock');
+  assert.equal(pile.rockStock[i], sapling, 'a scenery refresh keeps the painted stage');
 
   const grown = blankLand();
   paintSceneryBrush(grown, 12, 12, SCENERY.ROCK_PLAIN, 0, tight);
   paintSceneryBrush(grown, 12, 12, SCENERY.ROCK_PLAIN, 0, tight);
   populateScenery(grown, null, [], { keepExisting: true });
-  assert.equal(grown.rockStock[tileAt(grown, 12, 12)], unit, 'generate leaves a painted rock as one');
+  assert.equal(grown.rockStock[tileAt(grown, 12, 12)], sapling, 'generate leaves a painted rock at its stage');
+  assert.ok(unit > sapling);
 }
 
 function sceneryDensityThinsTheBrush() {

@@ -28,6 +28,7 @@ const ZOOM_BY_STEM = {
   derrick: 1.4,
   grove: 1.4,
   wagon: 1.3,
+  siegewagon: 1.3,
   dirigible: 1.3,
   apc: 1.3,
 };

@@ -544,6 +544,8 @@
       cursor: pointer;
     }
     #replay-watch button:disabled { opacity: .45; cursor: default; }
+    #replay-watch button:focus-visible,
+    #replay-watch input:focus-visible { border-color: aqua; color: aqua; outline: 1px solid aqua; outline-offset: 1px; }
     #replay-watch .replay-transport button {
       flex: 0 0 auto;
       min-width: 1.8em;
@@ -792,6 +794,7 @@
       font: inherit; cursor: pointer;
     }
     .snap-key[aria-pressed="true"] { border-color: #e0b050; color: #e0b050; }
+    .snap-key:focus-visible { border-color: aqua; color: aqua; outline: none; }
     .snap-view { flex: 1; min-width: 0; position: relative; overflow: hidden; }
     .snap-chart, .snap-build { position: absolute; inset: 0; width: 100%; height: 100%; }
     .snap-chart { display: block; }
@@ -1445,10 +1448,10 @@
             <summary>Gamepad</summary>
             <div class="help-body">
               <dl class="help-keys">
-                <dt>Sticks</dt><dd>Look</dd>
+                <dt>Sticks</dt><dd>Move Cursor</dd>
+                <dt>Sticks, together</dt><dd>Pan Field</dd>
                 <dt>Sticks, opposite up and down</dt><dd>Rotate</dd>
-                <dt>Sticks, pinch</dt><dd>Zoom out</dd>
-                <dt>Sticks, open</dt><dd>Zoom in</dd>
+                <dt>Sticks, pinch and spread</dt><dd>Zoom in / out</dd>
                 <dt>L3 or R3</dt><dd>Sticks rotate and zoom</dd>
                 <dt>LT</dt><dd>Attack-move</dd>
                 <dt>RT</dt><dd>Move</dd>
@@ -1459,7 +1462,9 @@
                 <dt>B</dt><dd>Cast</dd>
                 <dt>D-pad left</dt><dd>Cast</dd>
                 <dt>A, in a menu</dt><dd>Confirm</dd>
-                <dt>B, in a menu</dt><dd>Back</dd>
+                <dt>B, in a menu</dt><dd>Back. On the score card this minimizes, or leaves when it cannot. While watching a replay this returns to the score card</dd>
+                <dt>Start, score card parked</dt><dd>Expand the score card. Start again opens the menu</dd>
+                <dt>Replay</dt><dd>D-pad moves the transport. Left and right change a slider. Sticks still move the camera</dd>
               </dl>
             </div>
           </details>

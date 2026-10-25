@@ -1,0 +1,195 @@
+{
+  "sourceUrl": "/assets/models/siegewagon.glb",
+  "version": 3,
+  "sockets": [
+    {
+      "name": "particle_anchor",
+      "x": -0.3160458207130432,
+      "y": 4.410111427307129,
+      "z": 1.758104920387268,
+      "scale": 0.5232384204864502,
+      "yaw": 0,
+      "pitch": 0,
+      "roll": 0
+    }
+  ],
+  "materials": [
+    {
+      "name": "Material",
+      "baseColorFactor": [
+        0.013457173481583595,
+        0.013457173481583595,
+        0.013457173481583595,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material.002",
+      "baseColorFactor": [
+        0.09564603865146637,
+        0.08058822154998779,
+        0.07628828287124634,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "TeamColor",
+      "baseColorFactor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "Material",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "boundMin": [
+        -2.277971029281616,
+        -0.1675882786512375,
+        -2.735185384750366
+      ],
+      "boundMax": [
+        2.2714500427246094,
+        4.426139831542969,
+        3.0903098583221436
+      ],
+      "positions": {
+        "offset": 0,
+        "length": 3879,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 15516,
+        "length": 3879,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 31032,
+        "length": 2091,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 39396,
+        "length": 2586,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.002",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "boundMin": [
+        -2.0898306369781494,
+        0.5569954514503479,
+        -3.1315016746520996
+      ],
+      "boundMax": [
+        2.0558018684387207,
+        2.5918633937835693,
+        3.3965134620666504
+      ],
+      "positions": {
+        "offset": 49740,
+        "length": 216,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 50604,
+        "length": 216,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 51468,
+        "length": 108,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 51900,
+        "length": 144,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "TeamColor",
+      "materialIndex": 2,
+      "reverseWinding": true,
+      "boundMin": [
+        -2.277971029281616,
+        -0.1675882786512375,
+        -2.735185384750366
+      ],
+      "boundMax": [
+        2.2714500427246094,
+        4.4712324142456055,
+        3.0903098583221436
+      ],
+      "positions": {
+        "offset": 52476,
+        "length": 384,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 54012,
+        "length": 384,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 55548,
+        "length": 264,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 56604,
+        "length": 256,
+        "type": "f32"
+      }
+    }
+  ]
+}

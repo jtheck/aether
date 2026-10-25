@@ -185,6 +185,8 @@ import { sameUserId } from '../lobby/ids.js';
 import { noteReplayCam } from './replayCam.js';
 import { createViewFollow, unpackBuildings, unwrapView } from './viewFollow.js';
 import { chapterIdForGardenUrl, chapterLabelFor, gardenUrlForChapter, getMode, isLobbyPlayMode, lobbyAllowsSpectators } from '../lobby/modes.js';
+import { attachKothAuthoredGarden } from '../koth/authoredMap.js';
+import { defaultCelestialState } from '../render/celestial.js';
 import { liveConfigFromLobby } from '../lobby/startConfig.js';
 import { createMatchStory } from '../story/matchPlay.js';
 import { castIndexFromUnits, normalizeSpeaker } from '../story/cast.js';
@@ -461,6 +463,13 @@ async function main() {
 
   async function handleLiveStart(cfg) {
     if (shouldIgnoreLiveConfig({ cfg, localSoloHold: !!ctx?.localSoloHold })) return;
+    try {
+      cfg = await attachKothAuthoredGarden(cfg, loadGardenJson);
+    } catch (err) {
+      console.error('[KOTH] map failed', err);
+      setStatusText('KOTH map failed to load');
+      throw err;
+    }
     if (!ctx) {
       pendingLiveCfg = cfg;
       return;
@@ -503,6 +512,11 @@ async function main() {
       onPresentationSync: handlePresentationSync,
       onLeaveSolo: () => leaveLoadingScreenSolo(ctx),
       armyPerSide,
+      loadGarden: loadGardenJson,
+      onAuthoredMap: (garden) => {
+        if (garden) applyGardenLighting(ctx?.renderer, garden);
+        else ctx?.renderer?.applyCelestial?.(defaultCelestialState());
+      },
     });
     bootCfg = await kothShard.waitForBoot();
     if (bootCfg.armyPerSide == null) bootCfg.armyPerSide = armyPerSide;
@@ -4966,6 +4980,8 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
     worldReset = true;
     await ctx.session.reset({
       seed: cfg.seed,
+      // Terrain keeps the garden file seed. Pad deal uses the per-match roll.
+      ...(cfg.spawnSeed != null ? { spawnSeed: cfg.spawnSeed >>> 0 } : {}),
       mode: simMode,
       activeSlots,
       armyPerSide: cfg.armyPerSide ?? 0,
@@ -5034,6 +5050,9 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
   }
   ctx.session._pendingWorldGen = null;
   applyGardenLighting(ctx.renderer, cfg.garden);
+  if (cfg.mode === 'koth' && !cfg.garden) {
+    ctx.renderer?.applyCelestial?.(defaultCelestialState());
+  }
   ctx.session.setHumanPlayers(humanPlayers);
   ctx.session.replayConfig = replayConfigFromLive(cfg);
   ctx.session.replayGarden = cfg.garden ?? null;
@@ -5758,6 +5777,7 @@ async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
     await applyLiveConfig(ctx, {
       ...cfg,
       garden,
+      spawnSeed: (cfg.seed ?? 0) >>> 0,
       ...(garden ? {
         seed: (garden.s ?? garden.seed ?? cfg.seed) >>> 0,
         mapW: garden.w ?? garden.width,

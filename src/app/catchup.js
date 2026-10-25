@@ -4,6 +4,7 @@
 import { collectFramesForTick } from '../sim/commandFrame.js';
 import { formatMatchTime, matchSecondsFromTick } from './simSession.js';
 import { catchupReplayPlayerIds, sameCatchupChecksum } from './spectatorAttach.js';
+import { replayConfigFromLive } from './replay.js';
 
 /** Sim ticks committed per display frame during visible catch-up.
  *  Higher = faster catch-up (less rAF overhead). Large armies still pay per-tick
@@ -78,7 +79,19 @@ export async function replayCatchUp(session, matchConfig, ledgerFrames, targetTi
       aiPlayers: matchConfig.aiPlayers ?? [],
       humanPlayers: matchConfig.humanPlayers ?? [],
       keepPaused: true,
+      // Terrain is not in the checkpoint. Joiners have to build the same board
+      // the host did, or the field size and checksum will not match.
+      ...(matchConfig.garden ? { garden: matchConfig.garden } : {}),
+      ...(matchConfig.mapW ? { mapW: matchConfig.mapW | 0 } : {}),
+      ...(matchConfig.mapH ? { mapH: matchConfig.mapH | 0 } : {}),
     });
+    if (matchConfig.garden || matchConfig.gardenUrl) {
+      session.replayGarden = matchConfig.garden ?? null;
+      session.replayConfig = replayConfigFromLive({
+        ...matchConfig,
+        mode: matchConfig.mode || 'koth',
+      });
+    }
     session.pauseLockstep = true;
     session.replayingCatchUp = true;
     session.setHumanPlayers(matchConfig.humanPlayers ?? []);

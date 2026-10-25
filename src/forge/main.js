@@ -82,7 +82,7 @@ import {
   workshopPageUrl,
 } from '../app/workshop.js';
 import { RESOURCE_KINDS, STARTING_RESOURCES } from '../sim/resources.js';
-import { applyAuthoredScenery, clearAllScenery, clearOffTableScenery, clearSceneryCoveringTiles, clearSceneryOnWater, populateScenery, paintSceneryBrush, SCENERY } from '../sim/scenery.js';
+import { applyAuthoredScenery, clearAllScenery, clearOffTableScenery, clearSceneryCoveringTiles, clearSceneryOnWater, populateScenery, paintSceneryBrush, stepSceneryBrush, SCENERY } from '../sim/scenery.js';
 import { DOODAD, paintDoodadBrush } from '../sim/doodads.js';
 import { UNIT_DEFS } from '../sim/unitTypes.js';
 import { BUILDING_FOOTPRINTS, BUILDING_YAW_SNAP, PLACEABLE_BUILDINGS, forEachFootprintTile, snapBuildingWorld, snapBuildingYaw } from '../sim/buildings.js';
@@ -188,6 +188,8 @@ const state = {
   terrain: TERRAIN.GRASS,
   lift: 0,
   scenery: SCENERY.TREE,
+  /** 'place' stamps a sapling. 'age' and 'deage' step trees and rocks. */
+  sceneryOp: 'place',
   stamp: 'scenery',
   doodad: DOODAD.WAGON,
   placeKind: '',
@@ -307,6 +309,36 @@ let placeBox = null;
 let ringGesture = null;
 /** New value each scenery stroke, so another pass can hit different tiles. */
 let scenerySalt = 1;
+/** Bumps while an age brush is held, so the same tiles can step again. */
+let sceneryStepGen = 0;
+let sceneryStepTimer = 0;
+const SCENERY_STEP_MS = 180;
+
+function scenerySteps() {
+  return state.layer === 'scenery' && state.stamp === 'scenery'
+    && (state.sceneryOp === 'age' || state.sceneryOp === 'deage');
+}
+
+function stopSceneryStep() {
+  if (!sceneryStepTimer) return;
+  clearInterval(sceneryStepTimer);
+  sceneryStepTimer = 0;
+}
+
+function beginSceneryStepHold(pos) {
+  stopSceneryStep();
+  if (!scenerySteps()) return;
+  if (pos) lastBrushWorld = pos;
+  sceneryStepTimer = setInterval(() => {
+    if (!state.painting || !scenerySteps()) {
+      stopSceneryStep();
+      return;
+    }
+    sceneryStepGen = (sceneryStepGen + 1) >>> 0;
+    lastPaintKey = '';
+    if (lastBrushWorld) applyAt(lastBrushWorld);
+  }, SCENERY_STEP_MS);
+}
 const hist = createHistory();
 let commitTimer = 0;
 
@@ -2161,13 +2193,13 @@ function updatePlaceMarkers() {
       built: 1,
       hp: 1,
     })),
+    agoras: state.agoras.map((g) => ({
+      owner: g.owner | 0,
+      x: g.x,
+      z: g.z,
+      ...(Number.isFinite(Number(g.yaw)) ? { yaw: Number(g.yaw) } : {}),
+    })),
   });
-  const gPos = [];
-  const gIdx = [];
-  for (const g of state.agoras) {
-    pushBoxMarker(gPos, gIdx, g.x, groundY(g.x, g.z, 0.4), g.z, 16, 4, 16);
-  }
-  addMarker('forge-agoras', gPos, gIdx, [0.95, 0.85, 0.25]);
   if (field) {
     state.objectives.forEach((obj, i) => {
       const c = ringCenter(obj);
@@ -2424,6 +2456,8 @@ function brushColor() {
     if (state.doodad === DOODAD.WAGON) return [0.72, 0.52, 0.28];
     return [0.78, 0.58, 0.22];
   }
+  if (state.sceneryOp === 'age') return [0.95, 0.82, 0.28];
+  if (state.sceneryOp === 'deage') return [0.45, 0.62, 0.95];
   if (state.scenery === SCENERY.NONE) return [0.95, 0.32, 0.28];
   if (state.scenery === SCENERY.ROCK_PLAIN) return [0.78, 0.74, 0.68];
   if (state.scenery === SCENERY.ROCK_MOSS) return [0.48, 0.78, 0.42];
@@ -2462,7 +2496,7 @@ function updateBrushCursor(pos) {
   const halfZ = worldHalfZFFromField(field);
   const tx = Math.floor((pos.x + half) / TILE_SIZE_F);
   const tz = Math.floor((pos.z + halfZ) / TILE_SIZE_F);
-  const key = `${tx},${tz},${state.brush},${state.layer},${state.lift},${state.terrain},${state.stamp},${state.scenery},${state.doodad}`;
+  const key = `${tx},${tz},${state.brush},${state.layer},${state.lift},${state.terrain},${state.stamp},${state.scenery},${state.doodad},${state.sceneryOp}`;
   if (key === brushKey && brushMesh) return;
   brushKey = key;
 
@@ -3161,11 +3195,26 @@ function applyAt(pos, { add = false } = {}) {
     const halfZ = worldHalfZFFromField(field);
     const tx = Math.floor((pos.x + half) / TILE_SIZE_F);
     const tz = Math.floor((pos.z + halfZ) / TILE_SIZE_F);
+    const stepping = state.stamp !== 'doodad' && (state.sceneryOp === 'age' || state.sceneryOp === 'deage');
     const stamp = state.stamp === 'doodad' ? state.doodad : state.scenery;
-    const key = `scenery:${tx}:${tz}:${state.brush}:${state.stamp}:${stamp}:${state.sceneryDensity}`;
+    const key = stepping
+      ? `step:${tx}:${tz}:${state.brush}:${state.sceneryOp}:${sceneryStepGen}`
+      : `scenery:${tx}:${tz}:${state.brush}:${state.stamp}:${stamp}:${state.sceneryDensity}`;
     if (key === lastPaintKey) return;
     lastPaintKey = key;
     if (state.stamp !== 'doodad') stampStructureClaim();
+    if (stepping) {
+      const dirty = stepSceneryBrush(field, tx, tz, state.sceneryOp === 'age' ? 1 : -1, state.brush);
+      if (dirty.length) {
+        field.sceneryAuthored = true;
+        if (terrain?.applyAuthoredSceneryTiles) {
+          terrain.applyAuthoredSceneryTiles(field, dirty);
+          if (sceneRegistered) invalidateRenderBundles(engine);
+        }
+        queueSceneryPaint(dirty);
+      }
+      return;
+    }
     const dirty = state.stamp === 'doodad'
       ? paintDoodadBrush(field, tx, tz, state.doodad, state.brush, {
         density: state.sceneryDensity / 10,
@@ -4537,7 +4586,12 @@ function handLabel() {
     return 'Grass';
   }
   if (state.layer === 'table') return state.tableTool === 'props' ? 'Prop' : 'Table';
-  if (state.layer === 'scenery') return state.stamp === 'doodad' ? 'Doodad' : 'Trees';
+  if (state.layer === 'scenery') {
+    if (state.stamp === 'doodad') return 'Doodad';
+    if (state.sceneryOp === 'age') return 'Age';
+    if (state.sceneryOp === 'deage') return 'De-age';
+    return 'Trees';
+  }
   if (state.layer === 'walls') return 'Wall';
   if (state.layer === 'place') {
     const picks = livePicks().filter((p) => p.kind !== 'objective');
@@ -5020,6 +5074,8 @@ function mountUi() {
         <button data-scenery="${SCENERY.ROCK_MOSS}"><i class="swatch" style="background:#5d7354"></i>Moss rock</button>
         <button data-scenery="${SCENERY.ROCK_SNOW}"><i class="swatch" style="background:#d5d8df"></i>Big rock</button>
         <button data-scenery="${SCENERY.NONE}">Erase trees</button>
+        <button data-scenery-op="age" type="button" title="Grow trees and rocks one stage. Hold to keep growing.">Age</button>
+        <button data-scenery-op="deage" type="button" title="Shrink trees and rocks one stage. Hold to keep shrinking.">De-age</button>
         <button data-doodad="${DOODAD.MUSHROOM}"><i class="swatch" style="background:#c4563a"></i>Mushroom</button>
         <button data-doodad="${DOODAD.WAGON}"><i class="swatch" style="background:#6a5340"></i>Wagon</button>
         <button data-doodad="${DOODAD.NONE}">Erase doodads</button>
@@ -5327,11 +5383,26 @@ function mountUi() {
   ui.querySelectorAll('[data-scenery]').forEach((b) => {
     b.addEventListener('click', () => {
       state.stamp = 'scenery';
+      state.sceneryOp = 'place';
       state.scenery = Number(b.dataset.scenery);
       ui.querySelectorAll('[data-scenery]').forEach((x) => {
         x.classList.toggle('active', Number(x.dataset.scenery) === state.scenery);
       });
+      ui.querySelectorAll('[data-scenery-op]').forEach((x) => x.classList.remove('active'));
       ui.querySelectorAll('[data-doodad]').forEach((x) => x.classList.remove('active'));
+      refreshBrushCursor();
+      syncHand();
+    });
+  });
+  ui.querySelectorAll('[data-scenery-op]').forEach((b) => {
+    b.addEventListener('click', () => {
+      state.stamp = 'scenery';
+      state.sceneryOp = b.dataset.sceneryOp;
+      ui.querySelectorAll('[data-scenery]').forEach((x) => x.classList.remove('active'));
+      ui.querySelectorAll('[data-doodad]').forEach((x) => x.classList.remove('active'));
+      ui.querySelectorAll('[data-scenery-op]').forEach((x) => {
+        x.classList.toggle('active', x.dataset.sceneryOp === state.sceneryOp);
+      });
       refreshBrushCursor();
       syncHand();
     });
@@ -5340,10 +5411,12 @@ function mountUi() {
     b.addEventListener('click', () => {
       state.stamp = 'doodad';
       state.doodad = Number(b.dataset.doodad);
+      state.sceneryOp = 'place';
       ui.querySelectorAll('[data-doodad]').forEach((x) => {
         x.classList.toggle('active', Number(x.dataset.doodad) === state.doodad);
       });
       ui.querySelectorAll('[data-scenery]').forEach((x) => x.classList.remove('active'));
+      ui.querySelectorAll('[data-scenery-op]').forEach((x) => x.classList.remove('active'));
       refreshBrushCursor();
       syncHand();
     });
@@ -5968,6 +6041,7 @@ async function main() {
         placeOrGrabProp(pos);
       } else if (state.layer === 'table' || state.layer === 'terrain' || state.layer === 'scenery' || state.layer === 'story') {
         applyAt(pos, { add: e.shiftKey });
+        beginSceneryStepHold(pos);
       }
     }
   });
@@ -6034,6 +6108,7 @@ async function main() {
     if (state.layer !== 'select') restHand();
   });
   window.addEventListener('pointerup', () => {
+    stopSceneryStep();
     ringGesture = null;
     const draggedPlacement = !!placeDrag?.armed;
     finishPlaceBox();

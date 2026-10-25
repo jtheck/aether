@@ -915,7 +915,7 @@ describe('building production pause', () => {
 describe('village and workshop menus', () => {
   it('trains engineers and monks at the village, wagons at the workshop', () => {
     assert.deepEqual(BUILDING_MENUS.village.units, ['engineer', 'monk']);
-    assert.deepEqual(BUILDING_MENUS.workshop.units, ['wagon']);
+    assert.deepEqual(BUILDING_MENUS.workshop.units, ['wagon', 'siege_wagon']);
     assert.ok(!BUILDING_MENUS.village.units.includes('villager'));
     assert.ok(!BUILDING_MENUS.workshop.units.includes('engineer'));
   });

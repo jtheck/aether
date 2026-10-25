@@ -29,7 +29,7 @@ Warrior         🟨
 Archer          🟨
     Marksman       🟪
 Wagon           🟩
-    War Wagon       🟨
+    Siege Wagon       🟨
 Dirigible       🟩
     War Balloon     🟨
 APC             🟩
@@ -134,7 +134,7 @@ Wagon
     Wheels fall off / repair fantasy (design note - verify); passengers spill via destroyUnit if implemented
 
     ◯🟪
-    War Wagon
+    Siege Wagon
         Vehicle + attack, idle
         transport, deploy, ranged
         Crew bails (design note - verify)

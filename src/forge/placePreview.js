@@ -14,6 +14,11 @@ import { UNIT_MODEL_URLS, loadBakedUnitMeshParts } from '../render/unitModels.js
 import { VAT_UNIT_DEFS } from '../render/vatUnits.js';
 import { ownerTint } from '../render/ownerTints.js';
 import { isTeamColorMaterial, prepareTeamColorMaterial, sceneTeamRgb } from '../render/teamColor.js';
+import { agoraWalkYaw } from '../render/agoraWalk.js';
+import { FLAG_BASE_SCALE } from '../render/flagScale.js';
+
+const AGORA_MODEL_URL = '/assets/models/agora.glb';
+const FLAG_MODEL_URL = '/assets/models/flag.glb';
 
 const FOOT_CLEARANCE = 0.06;
 
@@ -76,6 +81,10 @@ export function createPlacePreview(engine, scene, groundYAt, onReady) {
   const unitBatches = new Map();
   /** @type {Map<number, Promise<{ mesh: object, team: boolean }[] | null>>} */
   const unitLoads = new Map();
+  /** @type {{ body: { mesh: object, team: boolean, matrices: Float32Array, colors: Float32Array, capacity: number }[], flag: { mesh: object, team: boolean, matrices: Float32Array, colors: Float32Array, capacity: number }[] } | null} */
+  let agoraProps = null;
+  /** @type {Promise<typeof agoraProps> | null} */
+  let agoraLoad = null;
 
   function ensureBuildings() {
     if (!buildingPromise) {
@@ -137,6 +146,84 @@ export function createPlacePreview(engine, scene, groundYAt, onReady) {
     return pending;
   }
 
+  function adoptPropMeshes(meshes) {
+    return meshes.map((mesh) => {
+      mesh.pickable = false;
+      const team = isTeamColorMaterial(mesh.material);
+      if (team) prepareTeamColorMaterial(engine, mesh);
+      const layer = {
+        mesh,
+        team,
+        matrices: new Float32Array(4 * 16),
+        colors: new Float32Array(4 * 4),
+        capacity: 4,
+      };
+      layer.colors.fill(1);
+      setThinInstances(mesh, layer.matrices, 4);
+      setThinInstanceColors(mesh, layer.colors);
+      setCount(mesh, 0);
+      addToScene(scene, mesh);
+      return layer;
+    });
+  }
+
+  function ensureAgoras() {
+    if (!agoraLoad) {
+      agoraLoad = Promise.all([
+        loadBakedUnitMeshParts(engine, AGORA_MODEL_URL),
+        loadBakedUnitMeshParts(engine, FLAG_MODEL_URL),
+      ]).then(([body, flag]) => {
+        if (disposed) return null;
+        agoraProps = { body: adoptPropMeshes(body), flag: adoptPropMeshes(flag) };
+        return agoraProps;
+      }).catch((err) => {
+        console.warn('[forge] agora model failed', err);
+        return null;
+      });
+    }
+    return agoraLoad;
+  }
+
+  function writePropLayers(layers, list, poseAt) {
+    if (!layers?.length) return;
+    const needed = list.length;
+    const cap = needed === 0 ? layers[0].capacity : growCap(needed, layers[0].capacity);
+    for (const layer of layers) {
+      if (cap > layer.capacity) {
+        layer.matrices = new Float32Array(cap * 16);
+        layer.colors = new Float32Array(cap * 4);
+        layer.colors.fill(1);
+        setThinInstances(layer.mesh, layer.matrices, cap);
+        setThinInstanceColors(layer.mesh, layer.colors);
+        layer.capacity = cap;
+      }
+      for (let i = 0; i < needed; i++) {
+        const pose = poseAt(list[i]);
+        writePose(layer.matrices, i, pose.x, pose.y, pose.z, pose.yaw, pose.scale);
+        const tint = layer.team ? sceneTeamRgb(ownerTint(pose.owner)) : [1, 1, 1];
+        const o = i * 4;
+        layer.colors[o] = tint[0];
+        layer.colors[o + 1] = tint[1];
+        layer.colors[o + 2] = tint[2];
+        layer.colors[o + 3] = 1;
+      }
+      setCount(layer.mesh, needed);
+      setThinInstanceColors(layer.mesh, layer.colors);
+      flushThinInstances(layer.mesh);
+    }
+  }
+
+  function writeAgoras(list) {
+    if (!agoraProps) return;
+    const poseAt = (a) => {
+      const yaw = agoraWalkYaw(a.x, a.z, a.yaw);
+      const y = groundYAt(a.x, a.z);
+      return { x: a.x, y, z: a.z, yaw, owner: a.owner | 0 };
+    };
+    writePropLayers(agoraProps.body, list, (a) => ({ ...poseAt(a), scale: MODEL_BASE_SCALE }));
+    writePropLayers(agoraProps.flag, list, (a) => ({ ...poseAt(a), scale: FLAG_BASE_SCALE }));
+  }
+
   function writeUnits(type, list) {
     const batch = unitBatches.get(type | 0);
     if (!batch?.layers.length) return;
@@ -171,32 +258,43 @@ export function createPlacePreview(engine, scene, groundYAt, onReady) {
     }
   }
 
+  function punchLayerColors(layers) {
+    let dirty = false;
+    for (const layer of layers) {
+      const mesh = layer.mesh;
+      if (!mesh?.thinInstances || !layer.colors?.length) continue;
+      const mat = mesh.material;
+      if (mat) {
+        mesh.material = null;
+        mesh.material = mat;
+      }
+      setThinInstanceColors(mesh, layer.colors);
+      flushThinInstances(mesh);
+      dirty = true;
+    }
+    return dirty;
+  }
+
   function punchUnitColors() {
     let dirty = false;
     for (const batch of unitBatches.values()) {
-      for (const layer of batch.layers) {
-        const mesh = layer.mesh;
-        if (!mesh.thinInstances || !layer.colors?.length) continue;
-        const mat = mesh.material;
-        if (mat) {
-          mesh.material = null;
-          mesh.material = mat;
-        }
-        setThinInstanceColors(mesh, layer.colors);
-        flushThinInstances(mesh);
-        dirty = true;
-      }
+      if (punchLayerColors(batch.layers)) dirty = true;
+    }
+    if (agoraProps) {
+      if (punchLayerColors(agoraProps.body)) dirty = true;
+      if (punchLayerColors(agoraProps.flag)) dirty = true;
     }
     if (dirty) onReady?.();
   }
 
   /**
-   * @param {{ units: { owner: number, type: number, x: number, z: number }[], buildings: object[] }} payload
+   * @param {{ units: { owner: number, type: number, x: number, z: number }[], buildings: object[], agoras?: { owner: number, x: number, z: number, yaw?: number }[] }} payload
    */
   function sync(payload) {
     const token = ++gen;
     const units = payload.units ?? [];
     const buildings = payload.buildings ?? [];
+    const agoras = payload.agoras ?? [];
     const byType = new Map();
     for (const u of units) {
       const type = u.type | 0;
@@ -211,11 +309,12 @@ export function createPlacePreview(engine, scene, groundYAt, onReady) {
     for (const type of unitBatches.keys()) {
       if (!byType.has(type)) writeUnits(type, []);
     }
-    const jobs = [ensureBuildings()];
+    const jobs = [ensureBuildings(), ensureAgoras()];
     for (const type of byType.keys()) jobs.push(ensureUnit(type));
     return Promise.all(jobs).then(() => {
       if (disposed || token !== gen) return;
       buildingProps?.place(buildings);
+      writeAgoras(agoras);
       for (const [type, list] of byType) writeUnits(type, list);
       onReady?.();
       // The first recorded pass can run before the color buffer is filled.

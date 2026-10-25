@@ -305,6 +305,10 @@ describe('menu focus helpers', () => {
     assert.equal(isMenuFocusable(dimBtn, root), false);
     assert.equal(isMenuFocusable(off, root), false);
     assert.deepEqual(listMenuFocusables(root), [ok]);
+    const collapsed = el('button', { getClientRects: () => [] });
+    attach(live, collapsed);
+    assert.equal(isMenuFocusable(collapsed, root), false);
+    assert.deepEqual(listMenuFocusables(root), [ok]);
   });
 
   it('wraps tab focus and activates / adjusts controls', () => {
@@ -367,6 +371,20 @@ describe('menu focus helpers', () => {
     assert.equal(activeMenuRoot(doc), lobby);
     lobby.classList.add('is-parked');
     assert.equal(activeMenuRoot(doc), null);
+    const replay = el('div', { id: 'replay-watch', hidden: false });
+    const go = el('div', { id: 'ladder_go', hidden: true });
+    const withReplay = {
+      getElementById(id) {
+        if (id === 'replay-watch') return replay;
+        if (id === 'ladder_go') return go;
+        return doc.getElementById(id);
+      },
+    };
+    assert.equal(activeMenuRoot(withReplay), replay);
+    side.classList.add('is-open');
+    assert.equal(activeMenuRoot(withReplay), side);
+    go.hidden = false;
+    assert.equal(activeMenuRoot(withReplay), go);
   });
 });
 
@@ -632,6 +650,153 @@ describe('createGamepadAdapter', () => {
     pads = [stdPad({ axes: [1, 0, 0, 0], buttons: start })];
     pad.tick();
     assert.deepEqual(pans, []);
+    pad.dispose();
+  });
+
+  it('tabs the score card past controls that are not on screen', () => {
+    const { doc } = menuDoc();
+    const lobby = doc.getElementById('match-lobby-overlay');
+    lobby.hidden = false;
+    const min = el('button', { id: 'match-lobby-min', getClientRects: () => [] });
+    const watch = el('button', { id: 'match-replay-watch', getClientRects: () => [{ width: 1 }] });
+    const leave = el('button', { id: 'match-lobby-leave', getClientRects: () => [{ width: 1 }] });
+    attach(lobby, min);
+    attach(lobby, watch);
+    attach(lobby, leave);
+    watch.doc = doc;
+    leave.doc = doc;
+    const pad = createGamepadAdapter({
+      camera: { nudgeLookPan() {} },
+      active: () => true,
+      root: doc,
+      getGamepads: () => [stdPad({ axes: [0, 0.9, 0, 0], buttons: [] })],
+      now: () => 1000,
+      autoStart: false,
+    });
+    pad.tick();
+    assert.equal(doc.activeElement, watch);
+    pad.dispose();
+  });
+
+  it('B minimizes the lobby, or leaves when minimize is not shown', () => {
+    const { doc } = menuDoc();
+    const lobby = doc.getElementById('match-lobby-overlay');
+    lobby.hidden = false;
+    const min = el('button', { id: 'match-lobby-min', getClientRects: () => [{ width: 1 }] });
+    const leave = el('button', { id: 'match-lobby-leave', getClientRects: () => [{ width: 1 }] });
+    attach(lobby, min);
+    attach(lobby, leave);
+    const ids = {
+      'match-lobby-overlay': lobby,
+      'match-lobby-min': min,
+      'match-lobby-leave': leave,
+    };
+    const prev = doc.getElementById;
+    doc.getElementById = (id) => ids[id] ?? prev(id);
+    const b = [];
+    b[PAD.B] = btn(true);
+    let pads = [stdPad({ buttons: b })];
+    const pad = createGamepadAdapter({
+      camera: { nudgeLookPan() {} },
+      active: () => true,
+      root: doc,
+      getGamepads: () => pads,
+      now: () => 1000,
+      autoStart: false,
+    });
+    pad.tick();
+    assert.equal(min.clicks, 1);
+    assert.equal(leave.clicks || 0, 0);
+
+    min.getClientRects = () => [];
+    pads = [stdPad({ buttons: [] })];
+    pad.tick();
+    pads = [stdPad({ buttons: b })];
+    pad.tick();
+    assert.equal(leave.clicks, 1);
+    pad.dispose();
+  });
+
+  it('B closes the replay bar back to the result', () => {
+    const { doc } = menuDoc();
+    const replay = el('div', { id: 'replay-watch', hidden: false });
+    const close = el('button', { id: 'replay-close' });
+    const play = el('button', { id: 'replay-play' });
+    attach(replay, play);
+    attach(replay, close);
+    play.doc = doc;
+    const prev = doc.getElementById;
+    doc.getElementById = (id) => (id === 'replay-watch' ? replay : id === 'replay-close' ? close : prev(id));
+    const b = [];
+    b[PAD.B] = btn(true);
+    const pad = createGamepadAdapter({
+      camera: { nudgeLookPan() {} },
+      active: () => true,
+      root: doc,
+      getGamepads: () => [stdPad({ buttons: b })],
+      now: () => 1000,
+      autoStart: false,
+    });
+    pad.tick();
+    assert.equal(close.clicks, 1);
+    pad.dispose();
+  });
+
+  it('D-pad tabs the replay bar while a stick still moves the camera', () => {
+    const pans = [];
+    const { doc } = menuDoc();
+    const replay = el('div', { id: 'replay-watch', hidden: false });
+    const play = el('button', { id: 'replay-play' });
+    const fwd = el('button', { id: 'replay-fwd' });
+    attach(replay, play);
+    attach(replay, fwd);
+    play.doc = doc;
+    fwd.doc = doc;
+    const prev = doc.getElementById;
+    doc.getElementById = (id) => (id === 'replay-watch' ? replay : prev(id));
+    const down = [];
+    down[PAD.DOWN] = btn(true);
+    const pad = createGamepadAdapter({
+      camera: { nudgeLookPan(x) { pans.push(x); } },
+      active: () => true,
+      root: doc,
+      getGamepads: () => [stdPad({ axes: [0.9, 0, 0.9, 0], buttons: down })],
+      getViewport: () => ({ width: 800, height: 600 }),
+      now: () => 1000,
+      autoStart: false,
+    });
+    pad.tick();
+    assert.equal(doc.activeElement, play);
+    assert.ok(pans.length > 0);
+    pad.dispose();
+  });
+
+  it('Start expands a parked score card instead of opening the menu', () => {
+    const { doc, side } = menuDoc();
+    const lobby = doc.getElementById('match-lobby-overlay');
+    lobby.hidden = false;
+    lobby.classList.add('is-parked');
+    const over = el('div', { id: 'match-over', hidden: false });
+    const min = el('button', { id: 'match-lobby-min' });
+    const prev = doc.getElementById;
+    doc.getElementById = (id) => {
+      if (id === 'match-over') return over;
+      if (id === 'match-lobby-min') return min;
+      return prev(id);
+    };
+    const start = [];
+    start[PAD.START] = btn(true);
+    const pad = createGamepadAdapter({
+      camera: { nudgeLookPan() {} },
+      active: () => true,
+      root: doc,
+      getGamepads: () => [stdPad({ buttons: start })],
+      now: () => 1000,
+      autoStart: false,
+    });
+    pad.tick();
+    assert.equal(min.clicks, 1);
+    assert.equal(side.classList.contains('is-open'), false);
     pad.dispose();
   });
 

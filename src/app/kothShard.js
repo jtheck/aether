@@ -54,6 +54,7 @@ import {
 } from './kothCheckpointWire.js';
 import { CMD } from '../sim/commands.js';
 import { SIM_GENERATION, hasCurrentSimGeneration } from '../sim/generation.js';
+import { attachKothAuthoredGarden } from '../koth/authoredMap.js';
 import { compactFrameForTransport, expandTransportFrame } from '../network/lockstepWire.js';
 import { kothWipedOwners } from '../sim/kothMeta.js';
 import {
@@ -240,6 +241,8 @@ export function createKothShard(options = {}) {
   const onLiveStart = options.onLiveStart ?? (() => {});
   const onPresentationSync = options.onPresentationSync ?? (() => {});
   const onLeaveSolo = options.onLeaveSolo ?? (() => {});
+  const loadGarden = options.loadGarden ?? null;
+  const onAuthoredMap = options.onAuthoredMap ?? (() => {});
   let armyPerSide = (options.armyPerSide | 0) || 0;
 
   if (typeof globalThis.GETFIREP2P !== 'function') {
@@ -4501,9 +4504,11 @@ export function createKothShard(options = {}) {
     const attachLive = !!(checkpoint && !(ledger?.length));
     onStatus(attachLive ? 'Attaching to live match…' : 'Replaying catch-up…');
     try {
+      const playConfig = await attachKothAuthoredGarden(msg.matchConfig, loadGarden ?? undefined);
+      onAuthoredMap(playConfig.garden ?? null);
       await replayCatchUp(
         session,
-        msg.matchConfig,
+        playConfig,
         ledger,
         msg.tick,
         msg.checksum,

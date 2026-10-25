@@ -1087,7 +1087,11 @@ describe('match lobby', () => {
       loadGarden: async (settings) => (settings.chapter === 'workshop:10/map.garden' ? garden : null),
     });
     room.createRoom('onevsone');
-    room.setSetting('chapter', 'workshop:10/map.garden');
+    room.setMap('workshop:10/map.garden', 'Duel');
+    assert.equal(room.getState().settings.mapName, 'Duel');
+    const listing = p2p.broadcasts.filter((row) => row.data.type === MSG.ANNOUNCE).at(-1);
+    assert.equal(listing.data.settings.mapName, 'Duel');
+    assert.equal(listing.data.settings.chapter, 'workshop:10/map.garden');
     const { roomId, mode } = room.getState();
     dataFn({ v: 1, type: MSG.JOIN, userId: 'guest', name: 'Guest', roomId, mode });
     dataFn({ v: 1, type: MSG.READY, userId: 'guest', ready: true, roomId, mode });

@@ -7,7 +7,7 @@ import { existsSync } from 'fs';
 import { readFile, access } from 'fs/promises';
 import { extname, join, normalize } from 'path';
 import { fileURLToPath } from 'url';
-import { resolveMapsUrl } from './mapsResolve.js';
+import { readSkirmishCatalog, resolveMapsUrl } from './mapsResolve.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const REPO = fileURLToPath(new URL('..', import.meta.url));
@@ -87,13 +87,26 @@ createServer(async (req, res) => {
     if (path === '/axiom/') path = '/axiom/index.html';
     if (path === '/forge/') path = '/forge/index.html';
     if (path === '/xr-probe/') path = '/xr-probe/index.html';
-    const file = resolvePath(path.replace(/^\//, ''));
-    const body = await readFile(file);
-    res.writeHead(200, {
-      'Content-Type': MIME[extname(file)] || 'application/octet-stream',
+    const headers = {
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'require-corp',
       'Cross-Origin-Resource-Policy': 'same-origin',
+    };
+    if (path === '/maps/skirmish/index.json') {
+      res.writeHead(200, {
+        ...headers,
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+      });
+      res.end(JSON.stringify(readSkirmishCatalog(REPO)));
+      return;
+    }
+    const file = resolvePath(path.replace(/^\//, ''));
+    const body = await readFile(file);
+    if (path.startsWith('/maps/')) headers['Cache-Control'] = 'no-store';
+    res.writeHead(200, {
+      ...headers,
+      'Content-Type': MIME[extname(file)] || 'application/octet-stream',
     });
     res.end(body);
   } catch {

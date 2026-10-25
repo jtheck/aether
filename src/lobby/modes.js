@@ -2,6 +2,7 @@
 
 import { adventureChapters } from './adventureCampaign.js';
 import { networkChannel } from '../network/namespace.js';
+import { normalizeMapType } from '../sim/mapType.js';
 
 export const FIELD_SIZES = ['tiny', 'small', 'medium', 'large', 'huge'];
 
@@ -169,14 +170,16 @@ export function isLobbyPlayMode(modeId) {
 
 /**
  * A declared garden type may sit in this lobby. Blank matches either competitive mode.
- * Adventure and King of the Hill maps stay out of 1v1 and teams.
+ * Skirmish maps (including older 1v1 and teams labels) sit in both 1v1 and teams.
+ * Adventure and King of the Hill maps stay out of both.
  * @param {unknown} mapType
  * @param {string} modeId
  */
 export function mapTypeFitsLobby(mapType, modeId) {
-  const raw = String(mapType || '').trim().toLowerCase();
+  const raw = String(mapType || '').trim();
   if (!raw) return true;
-  const id = raw === '1v1' || raw === '1vs1' || raw === 'ffa' ? 'onevsone' : raw;
+  const id = normalizeMapType(raw, '');
+  if (modeId === 'onevsone' || modeId === 'teams') return id === 'skirmish';
   return id === modeId;
 }
 
@@ -186,14 +189,20 @@ export function lobbyAllowsSpectators(modeId, settings) {
   return settings?.allowSpectators !== false;
 }
 
+/** Display name carried on a lobby listing. Blank for a generated field. */
+export function cleanMapName(name) {
+  return String(name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+}
+
 /** @param {string} modeId */
 export function defaultSettings(modeId, fieldSize) {
   const mode = getMode(modeId);
-  if (!mode) return { fieldSize: 'small', seed: 0, chapter: '', allowSpectators: false };
+  if (!mode) return { fieldSize: 'small', seed: 0, chapter: '', mapName: '', allowSpectators: false };
   return {
     fieldSize: fieldSize && FIELD_SIZES.includes(fieldSize) ? fieldSize : mode.defaultFieldSize,
     seed: (Math.random() * 0xffffffff) >>> 0,
     chapter: mode.hasChapter ? (adventureChapters()[0]?.id || '') : '',
+    mapName: '',
     allowSpectators: Boolean(mode.spectators),
   };
 }

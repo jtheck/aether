@@ -422,7 +422,9 @@ export function setupKothLobby({
     btn.disabled = true;
     if (start) start.disabled = true;
     if (menuStart) menuStart.disabled = true;
-    Promise.resolve(kothShard.startLiveLobby?.()).finally(() => {
+    Promise.resolve(kothShard.startLiveLobby?.()).catch((err) => {
+      console.error('[KOTH] lobby start failed', err);
+    }).finally(() => {
       if (start) start.disabled = false;
       if (menuStart) menuStart.disabled = false;
       refresh();

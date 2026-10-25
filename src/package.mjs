@@ -19,7 +19,7 @@ import {
 import { gzipSync } from 'zlib';
 import { join, extname } from 'path';
 import { fileURLToPath } from 'url';
-import { listHouseMapRelPaths, resolveMapsUrl } from './mapsResolve.js';
+import { listHouseMapRelPaths, readSkirmishCatalog, resolveMapsUrl } from './mapsResolve.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const REPO = fileURLToPath(new URL('..', import.meta.url));
@@ -181,6 +181,10 @@ cpSync(join(REPO, 'assets'), join(DEPLOY, 'assets'), { recursive: true });
     const dst = join(mapsDst, rel);
     mkdirSync(join(dst, '..'), { recursive: true });
     cpSync(src, dst);
+  }
+  const skirmishIndex = join(mapsDst, 'skirmish', 'index.json');
+  if (existsSync(join(mapsDst, 'skirmish'))) {
+    writeFileSync(skirmishIndex, `${JSON.stringify(readSkirmishCatalog(REPO), null, 2)}\n`);
   }
   const readme = join(REPO, 'maps', 'README.md');
   if (existsSync(readme)) {

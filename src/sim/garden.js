@@ -1,6 +1,6 @@
 // .garden v4 - table + terrain + optional scenery / doodads / backdrops / placements.
-// Optional `mt` is the map type (onevsone, teams, koth, adventure). Missing means
-// the old generator, which dries every 1v1 and team start.
+// Optional `mt` is the map type (skirmish, koth, adventure). Older 1v1 and teams
+// labels read as skirmish. Missing means the old generator, which dries every start.
 // v3 files still decode (no scenery / doodads / backdrops / placements).
 // Optional `dd` is a doodadType RLE (visual-only stamps).
 // Optional `bd` is a list of off-board backdrop poses.
@@ -23,7 +23,7 @@ import { normalizeNeutralTeams, normalizeTeamByOwner } from './teams.js';
 import { applyWallOccupancy, decodeWalls, encodeWalls } from './walls.js';
 import { normalizeMapType } from './mapType.js';
 import { isNamedUnit } from './namedUnit.js';
-import { spawnPadsForMapType } from './worldSetup.js';
+import { spawnOpeningVillagers, spawnPadsForMapType } from './worldSetup.js';
 
 export const GARDEN_VERSION = 4;
 export const GARDEN_VERSION_MIN = 3;
@@ -628,11 +628,125 @@ export function fieldFromGarden(data) {
   return field;
 }
 
-export function applyGardenPlacements(world, field, garden) {
+/**
+ * Seat indexes that are actually playing. Null keeps every authored owner.
+ * Skirmish gardens drop empty slots. Adventure stays as written.
+ * @param {{ mapType?: string } | null | undefined} garden
+ * @param {{ humanPlayers?: number[], activeSlots?: number[], aiPlayers?: Array<number | { owner?: number }> } | null | undefined} config
+ * @returns {Set<number> | null}
+ */
+export function placementOwnersToKeep(garden, config) {
+  const mt = normalizeMapType(garden?.mapType, '');
+  if (mt !== 'skirmish') return null;
+  if (!config) return null;
+  const owners = new Set();
+  const humans = config.humanPlayers ?? config.activeSlots;
+  if (Array.isArray(humans)) {
+    for (const id of humans) {
+      const n = Number(id);
+      if (Number.isFinite(n)) owners.add(n | 0);
+    }
+  }
+  if (Array.isArray(config.aiPlayers)) {
+    for (const ai of config.aiPlayers) {
+      const n = Number(typeof ai === 'number' ? ai : ai?.owner);
+      if (Number.isFinite(n)) owners.add(n | 0);
+    }
+  }
+  return owners.size ? owners : null;
+}
+
+function keptPlacement(keep, owner) {
+  return !keep || keep.has(owner | 0);
+}
+
+function placementDeal(arg) {
+  if (arg instanceof Set) return { keep: arg, spawnSeed: 0 };
+  if (arg && typeof arg === 'object') {
+    const spawnSeed = Number(arg.spawnSeed);
+    return {
+      keep: arg.keep instanceof Set ? arg.keep : null,
+      spawnSeed: Number.isFinite(spawnSeed) ? spawnSeed >>> 0 : 0,
+    };
+  }
+  return { keep: null, spawnSeed: 0 };
+}
+
+function shufflePads(pads, seed) {
+  const out = pads.slice();
+  let s = seed >>> 0;
+  for (let i = out.length - 1; i > 0; i--) {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    const j = s % (i + 1);
+    const swap = out[i];
+    out[i] = out[j];
+    out[j] = swap;
+  }
+  return out;
+}
+
+/**
+ * Seat the players who showed up onto authored agoras.
+ * The pad list is shuffled by the lobby seed. Owner ids stay the seat indexes,
+ * so a 1v1 on a 4-pad map is a different pair each match, and each player
+ * still controls their own seat.
+ * @param {{ owner: number, x: number, z: number }[]} agoras
+ * @param {Set<number> | null} keep
+ * @param {number} spawnSeed
+ */
+function dealAgoras(agoras, keep, spawnSeed) {
+  if (!keep || !agoras.length) return null;
+  const players = [...keep].filter((id) => id >= 0).sort((a, b) => a - b);
+  if (!players.length) return null;
+  const pads = shufflePads(agoras, spawnSeed);
+  const n = Math.min(players.length, pads.length);
+  /** @type {Map<number, number>} painted owner → seated player */
+  const ownerMap = new Map();
+  const dealt = [];
+  for (let i = 0; i < n; i++) {
+    const pad = pads[i];
+    const player = players[i];
+    dealt.push({ owner: player, x: pad.x, z: pad.z });
+    if (!ownerMap.has(pad.owner | 0)) ownerMap.set(pad.owner | 0, player);
+  }
+  return { agoras: dealt, ownerMap };
+}
+
+function remapOwner(deal, owner) {
+  const next = deal.ownerMap.get(owner | 0);
+  return next == null ? null : next;
+}
+
+export function applyGardenPlacements(world, field, garden, keepOwners = null) {
   if (!world || !garden) return world;
   if (!world.buildings) world.buildings = [];
   if (!world.agoras) world.agoras = [];
+  const { keep, spawnSeed } = placementDeal(keepOwners);
+  const deal = dealAgoras(garden.agoras ?? [], keep, spawnSeed);
+  const units = [];
   for (const u of garden.units ?? []) {
+    if (deal) {
+      const owner = remapOwner(deal, u.owner);
+      if (owner == null) continue;
+      units.push({ ...u, owner });
+    } else if (keptPlacement(keep, u.owner)) {
+      units.push(u);
+    }
+  }
+  const buildings = [];
+  for (const b of garden.buildings ?? []) {
+    if (deal) {
+      const owner = remapOwner(deal, b.owner);
+      if (owner == null) continue;
+      buildings.push({ ...b, owner });
+    } else if (keptPlacement(keep, b.owner)) {
+      buildings.push(b);
+    }
+  }
+  const agoras = deal
+    ? deal.agoras
+    : (garden.agoras ?? []).filter((g) => keptPlacement(keep, g.owner));
+  for (const u of units) {
     const hasWorld = Number.isFinite(u.x) && Number.isFinite(u.z);
     spawn(world, {
       owner: u.owner,
@@ -644,7 +758,7 @@ export function applyGardenPlacements(world, field, garden) {
       ...fixedFaceFromYaw(u.yaw),
     });
   }
-  for (const b of garden.buildings ?? []) {
+  for (const b of buildings) {
     const snapped = snapBuildingWorld(b.type, fx.fromFloat(b.x), fx.fromFloat(b.z));
     world.buildings.push(createBuilding({
       owner: b.owner,
@@ -654,19 +768,27 @@ export function applyGardenPlacements(world, field, garden) {
       yaw: b.yaw,
     }));
   }
-  if (garden.agoras?.length) {
-    world.agoras = createAgoras(garden.agoras.map((g) => ({ owner: g.owner, x: g.x, z: g.z })));
+  if (agoras.length) {
+    world.agoras = createAgoras(agoras.map((g) => ({ owner: g.owner, x: g.x, z: g.z })));
   }
-  if ((garden.buildings?.length || garden.agoras?.length) && field) {
+  if ((buildings.length || agoras.length) && field) {
     applyWorldStructureOccupancy(field, world);
   }
   const owners = new Set();
-  for (const u of garden.units ?? []) owners.add(u.owner | 0);
-  for (const b of garden.buildings ?? []) owners.add(b.owner | 0);
-  for (const g of garden.agoras ?? []) owners.add(g.owner | 0);
+  for (const u of units) owners.add(u.owner | 0);
+  for (const b of buildings) owners.add(b.owner | 0);
+  for (const g of agoras) owners.add(g.owner | 0);
   const bank = garden.startingResources || STARTING_RESOURCES;
   for (const owner of owners) {
     if (owner >= 0) grantStartingResources(world, owner, bank);
+  }
+  if (keep && world.agoras.length) {
+    const withUnits = new Set(units.map((u) => u.owner | 0));
+    for (const a of world.agoras) {
+      const owner = a.owner | 0;
+      if (withUnits.has(owner)) continue;
+      spawnOpeningVillagers(world, owner, fx.toFloat(a.x), fx.toFloat(a.z));
+    }
   }
   return world;
 }

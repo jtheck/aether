@@ -406,9 +406,9 @@ const UnitTypes = {
   },
 
   war_wagon: {
-    name: "War Wagon",
+    name: "Siege Wagon",
     category: "vehicle",
-    model: "../assets/models/frog.glb", // Placeholder until unique model exists
+    model: "../assets/models/siegewagon.glb",
     scale: 0.45,
     health: 100,
     speed: 44,

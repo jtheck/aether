@@ -3,7 +3,7 @@
  * replay files. Bump when the same command tape can build a different world.
  * Presentation, fog, and camera-only changes do not bump this number.
  */
-export const SIM_GENERATION = 1;
+export const SIM_GENERATION = 3;
 
 /** Live peers must explicitly advertise this exact generation. */
 export function hasCurrentSimGeneration(value, current = SIM_GENERATION) {

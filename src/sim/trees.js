@@ -21,7 +21,7 @@ const SCENERY_TREE = 1;
 /** Wood removed per visual stage (matches a single legacy gather bite). */
 export const TREE_WOOD_PER_STAGE = 7;
 export const TREE_STAGE_MIN = 2;
-/** Natural populate / paint cap (no grove). */
+/** Natural populate cap (no grove). The forge brush plants stage 1 and ages up. */
 export const TREE_STAGE_MAX = 6;
 /** Grove-fed trees may keep growing past the natural canopy. */
 export const TREE_STAGE_GROVE_MAX = 12;
@@ -239,6 +239,23 @@ export function addTreeStock(field, tileIndex, amount, cap = TREE_STOCK_MAX) {
   mixStockHash(field, tileIndex, next);
   markTreeDirty(field, tileIndex);
   return added;
+}
+
+/**
+ * Set a living tree's wood. Stays between one stage and the grove cap.
+ * @returns {boolean} whether stock changed
+ */
+export function setTreeStock(field, tileIndex, stock) {
+  ensureTreeArrays(field);
+  if (tileIndex < 0 || tileIndex >= field.treeStock.length) return false;
+  const cur = field.treeStock[tileIndex] | 0;
+  if (cur <= 0) return false;
+  const next = Math.max(TREE_WOOD_PER_STAGE, Math.min(TREE_STOCK_GROVE_MAX, stock | 0));
+  if (next === cur) return false;
+  field.treeStock[tileIndex] = next;
+  mixStockHash(field, tileIndex, next);
+  markTreeDirty(field, tileIndex);
+  return true;
 }
 
 /** Instantly fell a living tree (full stock wipe). */

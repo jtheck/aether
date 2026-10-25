@@ -1,7 +1,7 @@
 // Match-channel waiting room: host snapshot, ready, RTC mesh, countdown.
 
 import { sameUserId, senderUserId } from '../lobby/ids.js';
-import { defaultSettings, getMode, chapterRefNeedsHostGarden, lobbyAllowsSpectators } from '../lobby/modes.js';
+import { cleanMapName, defaultSettings, getMode, chapterRefNeedsHostGarden, lobbyAllowsSpectators } from '../lobby/modes.js';
 import { ladderMatchDeal } from '../lobby/ladderMap.js';
 import {
   ANNOUNCE_MS,
@@ -881,6 +881,7 @@ export function createMatchLobby({
     else if (key === 'fieldSize') settings.fieldSize = String(value);
     else if (key === 'chapter') {
       settings.chapter = String(value);
+      settings.mapName = '';
       startGarden = null;
     }
     else if (key === 'allowSpectators') {
@@ -888,7 +889,25 @@ export function createMatchLobby({
       if (!settings.allowSpectators) spectators = [];
     }
     else return;
-    sendData({ type: MSG.SETTING, key, value: settings[key] });
+    const msg = { type: MSG.SETTING, key, value: settings[key] };
+    if (key === 'chapter') msg.mapName = settings.mapName;
+    sendData(msg);
+    startAnnounce();
+    emit();
+  }
+
+  /** Chapter plus the name the lobby browser should show. */
+  function setMap(chapter, mapName = '') {
+    if (!hosting || phase === 'idle' || phase === 'starting' || phase === 'playing') return;
+    settings.chapter = String(chapter ?? '');
+    settings.mapName = settings.chapter ? cleanMapName(mapName) : '';
+    startGarden = null;
+    sendData({
+      type: MSG.SETTING,
+      key: 'chapter',
+      value: settings.chapter,
+      mapName: settings.mapName,
+    });
     startAnnounce();
     emit();
   }
@@ -960,6 +979,9 @@ export function createMatchLobby({
     if (!hosting || phase !== 'waiting' || startBusy) return false;
     if (!canStart(mode, seats)) return false;
     prepareRankedLadder();
+    // The garden file's own seed never changes, so a custom map would deal the
+    // same pads forever. Roll a match seed and send it with the start.
+    if (settings.chapter) settings.seed = (Math.random() * 0xffffffff) >>> 0;
     if (chapterRefNeedsHostGarden(settings.chapter)) {
       const room = roomId;
       startBusy = true;
@@ -1160,6 +1182,7 @@ export function createMatchLobby({
       else if (msg.key === 'fieldSize') settings.fieldSize = String(msg.value);
       else if (msg.key === 'chapter') {
         settings.chapter = String(msg.value);
+        settings.mapName = msg.mapName != null ? cleanMapName(msg.mapName) : '';
         startGarden = null;
       } else if (msg.key === 'allowSpectators') {
         settings.allowSpectators = Boolean(msg.value);
@@ -1276,6 +1299,7 @@ export function createMatchLobby({
     sendView,
     movePerson,
     setSetting,
+    setMap,
     requestStart,
     attachSession,
     detachSession,

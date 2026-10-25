@@ -145,7 +145,7 @@ export function defaultMatchAgoras(worldHalfF, mapW, count = 2, worldHalfZF = wo
 
 /**
  * Start pads a generated map keeps clear for this type.
- * 1v1 uses the first two match bases. Teams uses the four lanes.
+ * Skirmish uses the four match bases (sides, or corners on the tiny board).
  * King of the Hill uses the five drop pads. Adventure leaves the land alone.
  * @param {string} mapType
  */
@@ -485,6 +485,11 @@ function spawnArmyOriented(w, layout, owner, baseX, baseZ, forward0) {
 /** Ring of villagers around the agora (AI cold start). */
 function spawnVillagersAround(w, owner, baseX, baseZ, count) {
   spawnRing(w, owner, UNIT.VILLAGER, baseX, baseZ, 16, count);
+}
+
+/** Opening workers at an authored agora when that slot has no saved army. */
+export function spawnOpeningVillagers(w, owner, baseX, baseZ) {
+  spawnVillagersAround(w, owner, baseX, baseZ, SKIRMISH_START_VILLAGERS);
 }
 
 function spawnRing(w, owner, type, baseX, baseZ, radius, count, angle0 = 0.35) {

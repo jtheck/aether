@@ -35,6 +35,7 @@ export const UNIT_MODEL_URLS = {
   [UNIT.MONK]: '/assets/models/monk.glb',
   [UNIT.ENGINEER]: '/assets/models/engineer.glb',
   [UNIT.WAGON]: '/assets/models/wagon.glb',
+  [UNIT.SIEGE_WAGON]: '/assets/models/siegewagon.glb',
   [UNIT.DIRIGIBLE]: '/assets/models/dirigible.glb',
   [UNIT.APC]: '/assets/models/apc.glb',
 };

@@ -130,7 +130,11 @@ describe('lobby map and spectator defaults', () => {
     assert.equal(lobbyAllowsSpectators('adventure', { allowSpectators: true }), false);
     assert.equal(mapTypeFitsLobby('', 'teams'), true);
     assert.equal(mapTypeFitsLobby('1v1', 'onevsone'), true);
-    assert.equal(mapTypeFitsLobby('teams', 'onevsone'), false);
+    assert.equal(mapTypeFitsLobby('skirmish', 'onevsone'), true);
+    assert.equal(mapTypeFitsLobby('skirmish', 'teams'), true);
+    assert.equal(mapTypeFitsLobby('teams', 'onevsone'), true);
+    assert.equal(mapTypeFitsLobby('onevsone', 'teams'), true);
+    assert.equal(mapTypeFitsLobby('koth', 'onevsone'), false);
     assert.equal(mapTypeFitsLobby('adventure', 'teams'), false);
   });
 });

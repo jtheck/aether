@@ -5,12 +5,11 @@ Served at `/maps/…` from repo root (same idea as `/assets/`).
 | Folder | Gametype / use |
 |--------|----------------|
 | `adventure/` | Shipped `.campaign` bundle (Forge export → `adventure.campaign`) |
-| `1v1/` | Official 1 vs 1 gardens + `index.json` (lobby map picker) |
-| `teams/` | Official Teams gardens + `index.json` |
+| `skirmish/` | Official skirmish gardens + `index.json` (1v1 and teams lobby map picker) |
 | `koth/` | Authored KOTH garden (optional URL load) |
 | `dev/` | Internal tools - unit tester, stress snapshot |
 
-Each competitive folder’s `index.json` lists `{ "file", "name", "mapType" }` entries. Gardens are loaded as `/maps/<folder>/<file>`.
+`skirmish/index.json` is the file list. The lobby reads each `.garden` for its name (`n`) and agora count (`g`). Two or more starts show in 1v1. More than two also show in Teams. Gardens are loaded as `/maps/skirmish/<file>`.
 
-Regenerate official 1v1/teams gardens: `node scripts/generate-map.mjs`  
+Regenerate official skirmish gardens: `node scripts/generate-map.mjs`  
 Regenerate `dev/*.garden` from `src/sim/testerGarden.js` and `src/sim/stressGarden.js`.

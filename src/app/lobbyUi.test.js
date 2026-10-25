@@ -34,9 +34,18 @@ describe('lobby ui copy', () => {
       mode: 'teams',
       playerCount: 2,
       maxPlayers: 4,
+      settings: { fieldSize: 'small', chapter: 'session', mapName: 'The Ford' },
+    });
+    assert.equal(row.meta, '2/4  ·  The Ford');
+    const unnamed = formatTypeLobbyRow({
+      roomId: 'lobby-abc-deadbeef',
+      hostName: 'Blind',
+      mode: 'teams',
+      playerCount: 2,
+      maxPlayers: 4,
       settings: { fieldSize: 'small', chapter: 'session' },
     });
-    assert.equal(row.meta, '2/4  ·  custom map');
+    assert.equal(unnamed.meta, '2/4  ·  custom map');
     const story = formatTypeLobbyRow({
       roomId: 'lobby-abc-deadbeef',
       hostName: 'Blind',
@@ -412,7 +421,7 @@ function waitingState(mode = 'adventure') {
 
 describe('custom map picker', () => {
   it('lists loaded and fitting maps, not a generated field', () => {
-    const opts = customMapSelectOptions([
+    const items = [
       {
         id: '10',
         title: 'Duel',
@@ -437,9 +446,12 @@ describe('custom map picker', () => {
         title: 'Open',
         gardens: [{ file: 'map.garden', name: 'Open' }],
       },
-    ], 'session', [{ id: 'session', name: 'My map' }], 'onevsone', []);
-    assert.deepEqual(opts.map((row) => row.name), ['My map', 'Duel', 'Open']);
+    ];
+    const opts = customMapSelectOptions(items, 'session', [{ id: 'session', name: 'My map' }], 'onevsone', []);
+    assert.deepEqual(opts.map((row) => row.name), ['My map', 'Duel', 'Lanes', 'Open']);
     assert.equal(opts[0].id, 'session');
+    const teams = customMapSelectOptions(items, '', [], 'teams', []);
+    assert.deepEqual(teams.map((row) => row.name), ['Duel', 'Lanes', 'Open']);
   });
 });
 

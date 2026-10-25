@@ -428,6 +428,7 @@ export const BUILDING_MENU_UNITS = {
   monk: UNIT.MONK,
   engineer: UNIT.ENGINEER,
   wagon: UNIT.WAGON,
+  siege_wagon: UNIT.SIEGE_WAGON,
   dirigible: UNIT.DIRIGIBLE,
   apc: UNIT.APC,
 };
@@ -488,7 +489,7 @@ export const BUILDING_MENUS = {
   tavern: { units: ['warlock'], upgrades: ['patronage'] },
   lab: { upgrades: ['artillery'] },
   barracks: { units: ['warrior', 'archer'], upgrades: ['drayage'] },
-  workshop: { units: ['wagon'], upgrades: ['armor', 'scribes'] },
+  workshop: { units: ['wagon', 'siege_wagon'], upgrades: ['armor', 'scribes'] },
   factory: { units: ['apc'] },
   church: { units: ['priest'] },
   moonwell: { upgrades: ['prospecting', 'stewardship'] },

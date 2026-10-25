@@ -67,7 +67,8 @@ describe('workshop refs', () => {
     }, 'Campaign 80');
     assert.match(campaign, /Next/);
     assert.deepEqual(workshopListingTags({ obj: [{ next: 'maps/02.garden' }] }), ['Campaign', 'Adventure']);
-    assert.deepEqual(workshopListingTags({ ...garden, mt: 'teams' }), ['Map', 'Teams']);
+    assert.deepEqual(workshopListingTags({ ...garden, mt: 'teams' }), ['Map', 'Skirmish']);
+    assert.deepEqual(workshopListingTags({ ...garden, mt: 'skirmish' }), ['Map', 'Skirmish']);
     assert.match(workshopDescriptionFor({ ...garden, mt: 'koth' }, 'Hill'), /King of the Hill/);
   });
 

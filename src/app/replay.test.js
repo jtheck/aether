@@ -19,6 +19,7 @@ import {
   replaySimProblem,
   REPLAY_KIND,
   REPLAY_SIM_OLD,
+  REPLAY_SIM_UNSTAMPED,
   REPLAY_SIM_UPDATE,
   SIM_GENERATION,
 } from './replay.js';
@@ -233,15 +234,18 @@ describe('parseReplayFile', () => {
     assert.equal(parsed.config.mode, 'onevsone');
     assert.equal(parsed.frames[0].tick, 3);
     assert.equal(parsed.sim, SIM_GENERATION);
-    const unstamped = parseReplayFile({
-      v: 1,
-      kind: REPLAY_KIND,
-      tick: 10,
-      checksum: 4,
-      config: { seed: 1, mode: 'koth' },
-      frames: [],
-    });
-    assert.equal(unstamped.sim, replaySimOf(null));
+    assert.equal(replaySimOf(null), REPLAY_SIM_UNSTAMPED);
+    assert.throws(
+      () => parseReplayFile({
+        v: 1,
+        kind: REPLAY_KIND,
+        tick: 10,
+        checksum: 4,
+        config: { seed: 1, mode: 'koth' },
+        frames: [],
+      }),
+      new RegExp(REPLAY_SIM_OLD),
+    );
     assert.equal(replaySimProblem(SIM_GENERATION + 1), REPLAY_SIM_UPDATE);
     assert.equal(replaySimProblem(SIM_GENERATION, SIM_GENERATION + 1), REPLAY_SIM_OLD);
     assert.throws(
@@ -271,6 +275,7 @@ describe('liveConfigFromReplay', () => {
     const file = parseReplayFile({
       v: 1,
       kind: REPLAY_KIND,
+      sim: SIM_GENERATION,
       tick: 40,
       config: { seed: 9, mode: 'teams', humanPlayers: [0, 2], activeSlots: [0, 2] },
       frames: [],

@@ -491,6 +491,9 @@ export function isMenuFocusable(el, root) {
   if (!el || el.disabled) return false;
   if (el.hidden) return false;
   if (el.tagName === 'INPUT' && (el.type === 'hidden' || el.type === 'file')) return false;
+  // Ranked and solo results hide Ready / Start / minimize with CSS, not [hidden].
+  // Those rows still match the focus selector and swallow the stick.
+  if (typeof el.getClientRects === 'function' && el.getClientRects().length === 0) return false;
   let n = el;
   while (n) {
     if (n !== el && n.hidden) return false;
@@ -517,12 +520,16 @@ export function activeMenuRoot(doc) {
   if (skins && !skins.hidden) return skins;
   const hist = doc.getElementById('ladder_hist');
   if (hist && !hist.hidden) return hist;
+  const go = doc.getElementById('ladder_go');
+  if (go && !go.hidden) return go;
   const ladder = doc.getElementById('ladder_pop');
   if (ladder && !ladder.hidden) return ladder;
   const help = doc.getElementById('help_pop');
   if (help && !help.hidden) return help;
   const side = doc.getElementById('side_menu');
   if (side?.classList?.contains('is-open')) return side;
+  const replay = doc.getElementById('replay-watch');
+  if (replay && !replay.hidden) return replay;
   const lobby = doc.getElementById('match-lobby-overlay');
   if (lobby && !lobby.hidden && !lobby.classList?.contains('is-parked')) return lobby;
   return null;
@@ -839,6 +846,12 @@ export function createGamepadAdapter(opts = {}) {
     );
   }
 
+  /** Replay transport is a corner bar. D-pad and A drive it; sticks keep the camera. */
+  function replayHudRead(menuRoot, read) {
+    if (menuRoot?.id !== 'replay-watch') return read;
+    return { ...read, lx: 0, ly: 0, rx: 0, ry: 0 };
+  }
+
   function holdMenu(menuRoot, read) {
     cancelPadSelect();
     cancelPadGroup();
@@ -877,18 +890,32 @@ export function createGamepadAdapter(opts = {}) {
       }
       return;
     }
-    if ((menuRoot?.id === 'help_pop' || menuRoot?.id === 'skins_pop' || menuRoot?.id === 'ladder_pop' || menuRoot?.id === 'ladder_hist') && (edges[PAD.B] || edges[PAD.START] || edges[PAD.BACK])) {
+    if ((menuRoot?.id === 'help_pop' || menuRoot?.id === 'skins_pop' || menuRoot?.id === 'ladder_pop' || menuRoot?.id === 'ladder_hist' || menuRoot?.id === 'ladder_go') && (edges[PAD.B] || edges[PAD.START] || edges[PAD.BACK])) {
       blurInside(menuRoot, root);
       const closeId = menuRoot.id === 'skins_pop' ? 'skins_close'
         : menuRoot.id === 'ladder_hist' ? 'ladder_hist_close'
+        : menuRoot.id === 'ladder_go' ? 'ladder_go_cancel'
         : menuRoot.id === 'ladder_pop' ? 'ladder_close'
         : 'help_close';
       root.getElementById(closeId)?.click?.();
       return;
     }
+    if (menuRoot?.id === 'replay-watch' && edges[PAD.B]) {
+      blurInside(menuRoot, root);
+      root.getElementById('replay-close')?.click?.();
+      return;
+    }
+    if (menuRoot?.id === 'match-lobby-overlay' && edges[PAD.B]) {
+      blurInside(menuRoot, root);
+      const min = root.getElementById('match-lobby-min');
+      if (isMenuFocusable(min, menuRoot)) min.click?.();
+      else root.getElementById('match-lobby-leave')?.click?.();
+      return;
+    }
     if (edges[PAD.START] || edges[PAD.BACK]) {
       blurInside(menuRoot, root);
-      clickMenuToggle(root, false);
+      const openMenu = menuRoot?.id === 'replay-watch' || menuRoot?.id === 'match-lobby-overlay';
+      clickMenuToggle(root, openMenu ? true : false);
       return;
     }
     if (edges[PAD.B]) {
@@ -1007,8 +1034,8 @@ export function createGamepadAdapter(opts = {}) {
         const t = now();
         const menuRoot = resolveMenuRoot(root);
         if (menuRoot) {
-          handleMenu(menuRoot, read, edges, t);
-          if (menuExclusive) holdMenu(menuRoot, read);
+          handleMenu(menuRoot, replayHudRead(menuRoot, read), edges, t);
+          if (menuExclusive && menuRoot.id !== 'replay-watch') holdMenu(menuRoot, read);
         }
         return;
       }
@@ -1020,14 +1047,36 @@ export function createGamepadAdapter(opts = {}) {
     const menuRoot = resolveMenuRoot(root);
 
     if (menuRoot) {
-      handleMenu(menuRoot, read, edges, t);
-      if (menuExclusive) {
+      const replayHud = menuRoot.id === 'replay-watch';
+      handleMenu(menuRoot, replayHud ? replayHudRead(menuRoot, read) : read, edges, t);
+      if (replayHud) {
+        // The bar owns confirm, back, and the D-pad. Sticks and bumpers stay on the field.
+        edges[PAD.A] = false;
+        edges[PAD.B] = false;
+        edges[PAD.LT] = false;
+        edges[PAD.RT] = false;
+        edges[PAD.UP] = false;
+        edges[PAD.DOWN] = false;
+        edges[PAD.LEFT] = false;
+        edges[PAD.RIGHT] = false;
+        edges[PAD.START] = false;
+        edges[PAD.BACK] = false;
+      } else if (menuExclusive) {
         holdMenu(menuRoot, read);
         return;
       }
     }
 
     if (!menuRoot && (edges[PAD.START] || edges[PAD.BACK])) {
+      const lobby = root.getElementById('match-lobby-overlay');
+      const over = root.getElementById('match-over');
+      if (
+        lobby && !lobby.hidden && lobby.classList?.contains('is-parked')
+        && over && !over.hidden
+      ) {
+        root.getElementById('match-lobby-min')?.click?.();
+        return;
+      }
       const opened = clickMenuToggle(root, true);
       if (opened) {
         const openedRoot = resolveMenuRoot(root);

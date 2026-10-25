@@ -1,0 +1,40 @@
+{
+  "maps": [
+    {
+      "file": "bloodbath.garden",
+      "name": "Bloodbath",
+      "spawns": 4,
+      "mapType": "teams"
+    },
+    {
+      "file": "bowl.garden",
+      "name": "Knife Bowl",
+      "spawns": 4,
+      "mapType": "teams"
+    },
+    {
+      "file": "corners.garden",
+      "name": "Four Corners",
+      "spawns": 0,
+      "mapType": "teams"
+    },
+    {
+      "file": "divide.garden",
+      "name": "The Divide",
+      "spawns": 0,
+      "mapType": "teams"
+    },
+    {
+      "file": "ford.garden",
+      "name": "Ford",
+      "spawns": 0,
+      "mapType": "onevsone"
+    },
+    {
+      "file": "temple.garden",
+      "name": "Temple",
+      "spawns": 4,
+      "mapType": "teams"
+    }
+  ]
+}

@@ -479,13 +479,32 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       doodadsReady,
       backdropsReady,
     ]),
-    update(activeCamera, deltaMs) {
+    update(activeCamera, deltaMs, profile = false) {
       if (disposed) return;
+      const t0 = profile ? performance.now() : 0;
       specGlint.update(activeCamera, deltaMs);
+      const tGlint = profile ? performance.now() : 0;
       backdrop.update();
-      scenery.update(activeCamera, deltaMs);
+      const tBackdrop = profile ? performance.now() : 0;
+      const sceneryTiming = scenery.update(activeCamera, deltaMs, false, profile);
+      const tScenery = profile ? performance.now() : 0;
       terrainLod?.update(activeCamera, deltaMs);
+      const tLod = profile ? performance.now() : 0;
       doodads.update(activeCamera, deltaMs);
+      if (profile) {
+        const tEnd = performance.now();
+        return {
+          glintMs: tGlint - t0,
+          backdropMs: tBackdrop - tGlint,
+          sceneryMs: tScenery - tBackdrop,
+          sceneryAnimationMs: sceneryTiming?.animationMs ?? 0,
+          sceneryLodMs: sceneryTiming?.lodMs ?? 0,
+          sceneryHarvestMs: sceneryTiming?.harvestMs ?? 0,
+          sceneryShownMs: sceneryTiming?.shownMs ?? 0,
+          lodMs: tLod - tScenery,
+          doodadsMs: tEnd - tLod,
+        };
+      }
     },
     forEachBurningTree(fn) {
       if (!disposed) scenery.forEachBurningTree?.(fn);

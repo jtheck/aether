@@ -394,6 +394,9 @@ export function liveConfigFromReplay(file, extra = {}) {
     skipSplash: extra.skipSplash === true,
     loadingLabel: extra.loadingLabel ?? 'Loading replay…',
     garden,
+    rosterNames: file?.names && typeof file.names === 'object' && !Array.isArray(file.names)
+      ? { ...file.names }
+      : null,
     skipDefaultSpawns: config.skipDefaultSpawns
       ?? Boolean(garden?.story || garden?.obj || (garden?.u && garden.u.length)),
   };

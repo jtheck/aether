@@ -4,6 +4,7 @@ import { AI_OWNER } from '../sim/worldSetup.js';
 import {
   collectObserverOwners,
   namesFromLobbySeats,
+  sheetOwnerNames,
   observerOwnerName,
   observerSheetIndexFromCode,
   observerSheetOwners,
@@ -59,6 +60,29 @@ describe('observer data', () => {
     assert.equal(observerSheetIndexFromCode('Digit0'), 9);
     assert.equal(observerSheetIndexFromCode('Numpad0'), 9);
     assert.equal(observerSheetIndexFromCode('KeyA'), null);
+  });
+
+  it('keeps a leaver name from the match-start roster', () => {
+    const started = { 0: 'Blind', 1: 'Nexus' };
+    const live = [
+      { index: 0, kind: 'human', name: 'Blind' },
+      { index: 1, kind: 'empty', name: '' },
+    ];
+    const names = sheetOwnerNames({ started, seats: live });
+    assert.deepEqual(names, { 0: 'Blind', 1: 'Nexus' });
+    assert.equal(observerOwnerName(1, names, []), 'Nexus');
+    assert.equal(observerOwnerName(1, namesFromLobbySeats(live), []), 'Auto');
+  });
+
+  it('uses the replay tape when it recorded a name', () => {
+    assert.deepEqual(
+      sheetOwnerNames({
+        started: { 0: 'Blind', 1: 'Nexus' },
+        seats: [{ index: 0, kind: 'human', name: 'Blind' }],
+        replay: { 1: 'Nexus' },
+      }),
+      { 1: 'Nexus' },
+    );
   });
 
   it('falls back to P# / Auto when a seat has no name', () => {

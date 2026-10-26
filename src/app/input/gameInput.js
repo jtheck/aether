@@ -2079,7 +2079,7 @@ export function createGameInput(opts) {
   function handlePointerDown(e) {
     if (!canUseInput()) return false;
     if (e.button !== 0) return false;
-    inputLatency.begin(e.pointerType || 'pointer');
+    if (inputLatency.enabled) inputLatency.begin(e.pointerType || 'pointer');
     // Raw touch is owned by touchAdapter (pointerHub). Synthetic touch objects
     // from the adapter are intentional and must be accepted here.
 
@@ -2564,7 +2564,9 @@ export function createGameInput(opts) {
    */
   function attackMoveWith(aim, gpu) {
     if (!canIssueOrders() || isPlacing()) return false;
-    inputLatency.begin(gpu ? 'attack-move-pointer' : 'attack-move');
+    if (inputLatency.enabled) {
+      inputLatency.begin(gpu ? 'attack-move-pointer' : 'attack-move');
+    }
     if (hasRallySelection()) {
       lastTap = null;
       const g = aim.ground();
@@ -2702,7 +2704,7 @@ export function createGameInput(opts) {
   /** @param {OrderAim} aim */
   function forceMoveWith(aim) {
     if (!canIssueOrders() || isPlacing()) return false;
-    inputLatency.begin('force-move');
+    if (inputLatency.enabled) inputLatency.begin('force-move');
     if (hasRallySelection()) {
       lastTap = null;
       const g = aim.ground();

@@ -1007,6 +1007,7 @@ export function createGamepadAdapter(opts = {}) {
   }
 
   function tick() {
+    if (parked) return;
     if (shouldPark()) {
       parkPad();
       return;

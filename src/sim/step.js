@@ -152,61 +152,90 @@ export function step(world, field, commands) {
   if (profile) world.metrics.timing = timing;
   else world.metrics.timing = null;
   const tAll = profile ? performance.now() : 0;
+  let phaseAt = tAll;
+  const markPhase = profile
+    ? (name) => {
+        const now = performance.now();
+        timing[name] = now - phaseAt;
+        phaseAt = now;
+      }
+    : null;
 
-  const phase = (name, fn) => {
-    if (!profile) {
-      fn();
-      return;
-    }
-    const t0 = performance.now();
-    fn();
-    timing[name] = performance.now() - t0;
-  };
-
-  phase('commands', () => applyCommands(world, field, commands));
-  phase('buildings', () => buildingProductionSystem(world, field));
+  applyCommands(world, field, commands);
+  markPhase?.('commands');
+  buildingProductionSystem(world, field);
+  markPhase?.('buildings');
   // Scripted reinforcements land before combat so they fight the same tick.
-  phase('waves', () => waveSpawnerSystem(world, field));
-  phase('transport', () => transportAutoLoadSystem(world));
-  phase('repair', () => repairSystem(world));
-  phase('engineerAssist', () => refreshEngineerAssists(world));
-  phase('autoGather', () => campAutoAssignSystem(world, field));
-  phase('gatherDefense', () => gatherDefenseSystem(world, field));
-  phase('gather', () => gatherSystem(world, field));
-  phase('foodUpkeep', () => tickFoodUpkeep(world));
-  phase('constructAssign', () => constructionAssignSystem(world, field));
-  phase('construct', () => constructionSystem(world, field));
-  phase('morph', () => tickBuildingMorphs(world));
-  phase('combat', () => combatSystem(world, field));
-  phase('brigandIdle', () => brigandIdleSystem(world));
-  phase('idleWander', () => idleWanderSystem(world, field));
-  phase('lightning', () => {
-    pendingLightningSystem(world, field);
-    tickBuildingFires(world, field);
-  });
-  phase('towers', () => towerCombatSystem(world));
-  phase('projectiles', () => projectileSystem(world, field));
-  phase('status', () => tickCombatStatus(world, field));
-  phase('frogs', () => frogSystem(world, field));
-  phase('monkKick', () => monkKickSystem(world, field));
-  phase('trees', () => treeBurnSystem(field));
-  phase('grove', () => groveGrowthSystem(world, field));
-  phase('spore', () => sporeGrowthSystem(world, field));
-  phase('koth', () => kothMetaStep(world));
-  phase('matchEnd', () => matchWipeStep(world));
-  phase('agora', () => agoraCaptureSystem(world));
-  phase('pathBudget', () => planPathBudget(world, field));
-  phase('movement', () => movementSystem(world, field));
-  phase('carried', () => syncCarriedPositions(world));
-  phase('avoidance', () => movingAvoidanceSystem(world, field));
-  phase('separation', () => separationSystem(world, field));
+  waveSpawnerSystem(world, field);
+  markPhase?.('waves');
+  transportAutoLoadSystem(world);
+  markPhase?.('transport');
+  repairSystem(world);
+  markPhase?.('repair');
+  refreshEngineerAssists(world);
+  markPhase?.('engineerAssist');
+  campAutoAssignSystem(world, field);
+  markPhase?.('autoGather');
+  gatherDefenseSystem(world, field);
+  markPhase?.('gatherDefense');
+  gatherSystem(world, field);
+  markPhase?.('gather');
+  tickFoodUpkeep(world);
+  markPhase?.('foodUpkeep');
+  constructionAssignSystem(world, field);
+  markPhase?.('constructAssign');
+  constructionSystem(world, field);
+  markPhase?.('construct');
+  tickBuildingMorphs(world);
+  markPhase?.('morph');
+  combatSystem(world, field);
+  markPhase?.('combat');
+  brigandIdleSystem(world);
+  markPhase?.('brigandIdle');
+  idleWanderSystem(world, field);
+  markPhase?.('idleWander');
+  pendingLightningSystem(world, field);
+  tickBuildingFires(world, field);
+  markPhase?.('lightning');
+  towerCombatSystem(world);
+  markPhase?.('towers');
+  projectileSystem(world, field);
+  markPhase?.('projectiles');
+  tickCombatStatus(world, field);
+  markPhase?.('status');
+  frogSystem(world, field);
+  markPhase?.('frogs');
+  monkKickSystem(world, field);
+  markPhase?.('monkKick');
+  treeBurnSystem(field);
+  markPhase?.('trees');
+  groveGrowthSystem(world, field);
+  markPhase?.('grove');
+  sporeGrowthSystem(world, field);
+  markPhase?.('spore');
+  kothMetaStep(world);
+  markPhase?.('koth');
+  matchWipeStep(world);
+  markPhase?.('matchEnd');
+  agoraCaptureSystem(world);
+  markPhase?.('agora');
+  planPathBudget(world, field);
+  markPhase?.('pathBudget');
+  movementSystem(world, field);
+  markPhase?.('movement');
+  syncCarriedPositions(world);
+  markPhase?.('carried');
+  movingAvoidanceSystem(world, field);
+  markPhase?.('avoidance');
+  separationSystem(world, field);
+  markPhase?.('separation');
   // After movement so standing/walking through the patch uses current positions.
-  phase('fireZones', () => {
-    fireZoneSystem(world);
-    pulseFireZoneBuildings(world, field);
-  });
+  fireZoneSystem(world);
+  pulseFireZoneBuildings(world, field);
+  markPhase?.('fireZones');
   // Late deaths (fire, etc.) after the spore phase still plant this tick.
   flushMycoDeathBursts(world, field);
+  markPhase?.('mycoFlush');
   world.tick++;
   if ((world.tick % SNAP_SAMPLE_TICKS) === 0) sampleMatch(world);
   if (profile) timing.step = performance.now() - tAll;

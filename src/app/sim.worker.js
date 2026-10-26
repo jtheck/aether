@@ -43,6 +43,7 @@ import { takeHolyArmorUpdates } from '../sim/holyArmor.js';
 import { takePriestHealUpdates } from '../sim/priestHeal.js';
 import { takeSporeBloomUpdates } from '../sim/sporeBloom.js';
 import { takeMonkKickUpdates } from '../sim/monkKick.js';
+import { takeDeathNotes } from '../sim/deathFlee.js';
 import {
   beginSharedPublish,
   endSharedPublish,
@@ -165,10 +166,8 @@ self.onmessage = (e) => {
           ? msg.config.agoraOccupyEndsMatch
           : (garden?.story || garden?.objectives?.length ? 0 : undefined),
       });
-      // Stress / explicit flag - timing never feeds gameplay.
-      world.profileSim = msg.config.profileSim === true
-        || (msg.config.stressPerSide | 0) > 0
-        || (msg.config.animStressPerSide | 0) > 0;
+      // Explicit diagnostics only - timing never feeds gameplay.
+      world.profileSim = msg.config.profileSim === true;
       if (garden) {
         applyGardenPlacements(world, field, garden, {
           keep: keepOwners,
@@ -239,11 +238,12 @@ self.onmessage = (e) => {
       if (expect > 0 && expect !== world.tick + 1) {
         throw new Error(`commitTick expect ${expect}, world.tick=${world.tick}`);
       }
-      const tTick = performance.now();
+      const profile = !!world.profileSim;
+      const tTick = profile ? performance.now() : 0;
       let cmds;
       let mergeMs = 0;
       let aiMs = 0;
-      if (world.profileSim) {
+      if (profile) {
         const timed = commandsForTickTimed(msg.frames);
         cmds = timed.cmds;
         mergeMs = timed.mergeMs;
@@ -252,7 +252,7 @@ self.onmessage = (e) => {
         cmds = commandsForTick(msg.frames);
       }
       step(world, field, cmds);
-      const tPub0 = performance.now();
+      const tPub0 = profile ? performance.now() : 0;
       beginSharedPublish(views);
       publishWorld(world, views);
       // Type changes in place (villager → brigand, warrior → champion). New
@@ -260,7 +260,7 @@ self.onmessage = (e) => {
       publishType(world, views);
       publishProjectiles(world, views);
       endSharedPublish(views);
-      const publishMs = performance.now() - tPub0;
+      const publishMs = profile ? performance.now() - tPub0 : 0;
       const treeUpdates = takeTreeUpdates(field);
       const rockUpdates = takeRockUpdates(field);
       const fireZoneUpdates = takeFireZoneUpdates(world);
@@ -270,6 +270,7 @@ self.onmessage = (e) => {
       const priestHealUpdates = takePriestHealUpdates(world);
       const sporeBloomUpdates = takeSporeBloomUpdates(world);
       const monkKickUpdates = takeMonkKickUpdates(world);
+      const deathNotes = takeDeathNotes(world);
       const safetyRefresh = world.tick % METADATA_SAFETY_REFRESH_TICKS === 0;
       const buildingsChanged = !!world.buildingsDirty || safetyRefresh;
       const doorUpdates = takeDoorUpdates(world);
@@ -280,16 +281,16 @@ self.onmessage = (e) => {
       if (world.resourcesDirty) world.resourcesDirty = 0;
       const storageOverflow = takeStorageOverflow(world);
       const metrics = { ...world.metrics };
-      if (world.profileSim) {
+      if (profile) {
         metrics.timing = {
           ...(world.metrics.timing ?? {}),
           merge: mergeMs,
           ai: aiMs,
           publish: publishMs,
-          tick: performance.now() - tTick,
         };
       }
-      postMessage({
+      const tResponse = profile ? performance.now() : 0;
+      const response = {
         type: 'stepDone',
         tick: world.tick,
         checksum: checksum(world, field),
@@ -327,7 +328,15 @@ self.onmessage = (e) => {
         priestHealUpdates,
         sporeBloomUpdates,
         monkKickUpdates,
-      });
+        deathNotes,
+      };
+      if (profile) {
+        metrics.timing.response = performance.now() - tResponse;
+        // Full worker work through response construction. Structured clone and
+        // delivery happen inside/after postMessage and are measured by the client.
+        metrics.timing.tick = performance.now() - tTick;
+      }
+      postMessage(response);
     } else if (msg.type === 'exportCheckpoint') {
       if (!world || !field) throw new Error('exportCheckpoint before init');
       const cs = checksum(world, field);

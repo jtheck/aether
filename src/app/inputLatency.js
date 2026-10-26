@@ -32,8 +32,26 @@ export function summarizeInputLatency(samples) {
 export function createInputLatencyProbe({
   enabled = false,
   sampleEvery = 4,
-  now = () => performance.now(),
+  now,
 } = {}) {
+  if (!enabled) {
+    const noop = () => {};
+    return {
+      enabled: false,
+      begin: noop,
+      submitted: noop,
+      applied: noop,
+      eligible: noop,
+      rendered: noop,
+      dump: () => ({
+        sampleCount: 0,
+        pendingCount: 0,
+        summary: summarizeInputLatency([]),
+        samples: [],
+      }),
+    };
+  }
+  now ??= () => performance.now();
   let intentCount = 0;
   let latestIntent = null;
   const byCommand = new Map();

@@ -10,6 +10,7 @@ import { onMycoDeath } from './sporeBloom.js';
 import { armChaseLeash } from './leash.js';
 import { creditDamagedBy, noteWarriorDamage } from './champion.js';
 import { noteOwnerKill, noteOwnerLoss } from './ownerStats.js';
+import { noteDeathFlee } from './deathFlee.js';
 
 /**
  * @param {object} w
@@ -41,7 +42,7 @@ export function applyDamage(w, target, amount, source = -1) {
   if (w.hp[target] <= 0) {
     const victimOwner = w.owner[target] | 0;
     const killerOwner = source >= 0 && source < w.count ? w.owner[source] | 0 : -1;
-    kill(w, target);
+    kill(w, target, source);
     if (killerOwner >= 0 && killerOwner !== victimOwner && isHostile(killerOwner, victimOwner)) {
       noteOwnerKill(w, killerOwner);
     }
@@ -71,8 +72,10 @@ function tryRetaliate(w, victim, attacker) {
   queuePath(w, victim, stand.x, stand.y);
 }
 
-export function kill(w, i) {
+export function kill(w, i, source = -1) {
   if (i < 0 || i >= w.count || !w.alive[i]) return;
+  // Heading for the flee exit. Captured before the target is cleared.
+  noteDeathFlee(w, i, source);
   const deathType = w.type[i];
   const deathX = w.px[i];
   const deathY = w.py[i];

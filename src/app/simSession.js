@@ -373,7 +373,7 @@ export class SimSession {
     }
     this._seenFrameIds.add(commandId);
     this._recordFullFrame(frame);
-    inputLatency.submitted(frame);
+    if (inputLatency.enabled) inputLatency.submitted(frame);
     return frame;
   }
 
@@ -1027,11 +1027,17 @@ export class SimSession {
         if (!this.pendingMonkKickUpdates) this.pendingMonkKickUpdates = [];
         this.pendingMonkKickUpdates.push(extra.monkKickUpdates);
       }
+      if (extra?.deathNotes) {
+        if (!this.pendingDeathNotes) this.pendingDeathNotes = [];
+        this.pendingDeathNotes.push(extra.deathNotes);
+      }
       this.waitingForWorker = false;
       this.inFlightTick = 0;
       const committedFrames = this.inFlightFrames;
       this.inFlightFrames = [];
-      inputLatency.applied(committedFrames, tick, this.replayingCatchUp);
+      if (inputLatency.enabled) {
+        inputLatency.applied(committedFrames, tick, this.replayingCatchUp);
+      }
       this._recordCommittedTick(tick, committedFrames);
       this._captureSnapshot(tick);
       const now = performance.now();
@@ -1122,6 +1128,13 @@ export class SimSession {
   takePendingMonkKickUpdates() {
     const out = this.pendingMonkKickUpdates;
     this.pendingMonkKickUpdates = null;
+    return out;
+  }
+
+  /** Drain villager/brigand flee headings for the death exit. */
+  takePendingDeathNotes() {
+    const out = this.pendingDeathNotes;
+    this.pendingDeathNotes = null;
     return out;
   }
 

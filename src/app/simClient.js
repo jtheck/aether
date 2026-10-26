@@ -190,6 +190,7 @@ export class SimClient {
         priestHealUpdates: msg.priestHealUpdates ?? null,
         sporeBloomUpdates: msg.sporeBloomUpdates ?? null,
         monkKickUpdates: msg.monkKickUpdates ?? null,
+        deathNotes: msg.deathNotes ?? null,
       };
       const wait = this._tickWait;
       if (wait) {

@@ -46,7 +46,7 @@ const UNIT_NOTE = {
   [UNIT.WARLOCK]: 'Ranged. Fireball. Trained at the Tavern.',
   [UNIT.PRIEST]: 'Ranged. Holy armor. Does not attack buildings. Trained at the Church.',
   [UNIT.MYCO]: 'Ranged. Spore bloom. Trained at the Camp.',
-  [UNIT.SHAMAN]: 'Ranged. Plague of frogs. Trained at the Grove.',
+  [UNIT.SHAMAN]: 'Ranged. Plague of frogs, locusts. Trained at the Grove.',
   [UNIT.WIZARD]: 'Ranged. Lightning. Trained at the Tower.',
   [UNIT.MONK]: 'Melee. Does not attack buildings. Trained at the Village.',
   [UNIT.ENGINEER]: 'Builds. Does not fight. Trained at the Village.',

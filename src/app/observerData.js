@@ -77,6 +77,40 @@ export function namesFromLobbySeats(seats) {
   return out;
 }
 
+/** @param {Record<number | string, string> | null | undefined} names */
+export function normalizeOwnerNames(names) {
+  /** @type {Record<number, string>} */
+  const out = {};
+  if (!names || typeof names !== 'object' || Array.isArray(names)) return out;
+  for (const [id, name] of Object.entries(names)) {
+    const text = String(name || '').trim();
+    if (!text) continue;
+    const owner = Number(id);
+    if (!Number.isInteger(owner) || owner < 0) continue;
+    out[owner] = text;
+  }
+  return out;
+}
+
+/**
+ * Names for the spectator sheet. A seat released on leave keeps the
+ * name it had when the match started. A name still in the live roster wins.
+ * A replay tape replaces both when it recorded anyone.
+ * @param {{
+ *   started?: Record<number | string, string> | null,
+ *   seats?: { index?: number, kind?: string, name?: string }[] | null,
+ *   replay?: Record<number | string, string> | null,
+ * }} [spec]
+ */
+export function sheetOwnerNames(spec = {}) {
+  const taped = normalizeOwnerNames(spec.replay);
+  if (spec.replay != null && Object.keys(taped).length) return taped;
+  return {
+    ...normalizeOwnerNames(spec.started),
+    ...namesFromLobbySeats(spec.seats),
+  };
+}
+
 /**
  * @param {number} owner
  * @param {Array<number | { owner?: number }> | null | undefined} computers

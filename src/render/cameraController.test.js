@@ -542,6 +542,25 @@ function wheel(partial = {}) {
 }
 
 describe('zoom toward cursor', () => {
+  it('shares one canvas layout read across high-rate events until the next frame', () => {
+    let reads = 0;
+    const canvas = {
+      getBoundingClientRect() {
+        reads++;
+        return { left: 0, top: 0, width: 800, height: 600, right: 800, bottom: 600 };
+      },
+    };
+    const cam = fakeCamera();
+    const ctrl = createCameraController(cam, canvas, { worldHalfF: 200 });
+    ctrl.handleWheel(wheel({ clientX: 700, clientY: 300 }));
+    ctrl.handleWheel(wheel({ clientX: 690, clientY: 300 }));
+    assert.equal(reads, 1);
+
+    ctrl.tick(16);
+    ctrl.handleWheel(wheel({ clientX: 680, clientY: 300 }));
+    assert.equal(reads, 2);
+  });
+
   it('eases the look target toward the cursor while zooming in, without snapping', () => {
     const cam = fakeCamera();
     const ctrl = createCameraController(cam, fakeCanvas(), { worldHalfF: 200 });

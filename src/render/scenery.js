@@ -41,6 +41,13 @@ const CELL_INSET = 0.0015;
 const PLANE_SIZE = 3;
 const LOD_UPDATE_MS = 120;
 const LOD_MOVE_THRESHOLD_SQ = 16;
+/** Let wheel / orbit input settle before rewriting every scenery instance. */
+const LOD_ORBIT_IDLE_MS = 100;
+const LOD_RADIUS_MOVE_EPS = 0.05;
+const LOD_ALPHA_MOVE_EPS = 0.0002;
+const RENDER_HIDDEN = 0;
+const RENDER_MODEL = 1;
+const RENDER_BILLBOARD = 2;
 /** Initial scenery batch size; grows by powers of two. */
 const SCENERY_INITIAL = 32;
 /** Grow-in from sapling (spore / revive). */
@@ -464,6 +471,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       modelParts,
       freeSlots,
       dirty: true,
+      animationDirty: [],
       capacity,
     };
     uploadBillboardColors(batch);
@@ -788,6 +796,9 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
   let lastCameraX = Infinity;
   let lastCameraY = Infinity;
   let lastCameraZ = Infinity;
+  let lastSampleRadius = NaN;
+  let lastSampleAlpha = NaN;
+  let orbitIdleMs = LOD_ORBIT_IDLE_MS;
 
   function beginScaleAnim(p, nextTarget, durationMs, mode = 'lerp') {
     // Compare against visible scale - targetScale may already be set during fell delay.
@@ -900,8 +911,9 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     return ref;
   }
 
-  function update(activeCamera = camera, deltaMs = LOD_UPDATE_MS, force = false) {
+  function update(activeCamera = camera, deltaMs = LOD_UPDATE_MS, force = false, profile = false) {
     if (!activeCamera) return;
+    const t0 = profile ? performance.now() : 0;
     elapsed += deltaMs;
     growElapsed += deltaMs;
 
@@ -911,21 +923,24 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       growElapsed = 0;
       for (let b = 0; b < batches.length; b++) {
         const batch = batches[b];
-        let moved = false;
         const tintTrees = batch.variant.kind === SCENERY.TREE;
         const rocks = batch.variant.kind >= SCENERY.ROCK_PLAIN;
         let tinted = false;
         const release = [];
         for (let i = 0; i < batch.instances.length; i++) {
           const p = batch.instances[i];
-          const scaled = advanceInstanceScale(p, dt);
-          const burned = tintTrees && advanceBurnVisual(p, dt);
-          const sunk = tintTrees && advanceTreeSink(p, dt);
+          const scaleActive = p.fellDelayMs > 0 || p.scaling;
+          const burnActive = tintTrees && (treeDoomed(p) || (p.char ?? 0) > 0);
+          const sinkActive = tintTrees && p.sinking;
+          if (!scaleActive && !burnActive && !sinkActive) continue;
+          const scaled = scaleActive && advanceInstanceScale(p, dt);
+          const burned = burnActive && advanceBurnVisual(p, dt);
+          const sunk = sinkActive && advanceTreeSink(p, dt);
           if (rocks && (p.stock | 0) <= 0 && (p.stockScale ?? 0) <= 0 && !p.scaling && p.tileIndex >= 0) {
             release.push(i);
           }
           if (!scaled && !burned && !sunk) continue;
-          moved = true;
+          markAnimationDirty(batch, i);
           if (tintTrees && (scaled || burned)) {
             writeFogColor(batch, i);
             tinted = true;
@@ -933,47 +948,70 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
         }
         for (let r = 0; r < release.length; r++) {
           releaseAuthoredInstance({ batch, index: release[r] });
-          moved = true;
         }
-        if (moved) batch.dirty = true;
         if (tinted) flushBatchColors(batch);
       }
     }
+    const tAnimation = profile ? performance.now() : 0;
+
+    const radius = activeCamera.radius;
+    const alpha = activeCamera.alpha;
+    const orbitMoved =
+      (Number.isFinite(radius) &&
+        Number.isFinite(lastSampleRadius) &&
+        Math.abs(radius - lastSampleRadius) >= LOD_RADIUS_MOVE_EPS) ||
+      (Number.isFinite(alpha) &&
+        Number.isFinite(lastSampleAlpha) &&
+        Math.abs(alpha - lastSampleAlpha) >= LOD_ALPHA_MOVE_EPS);
+    if (orbitMoved) orbitIdleMs = 0;
+    else orbitIdleMs += Math.max(0, Number(deltaMs) || 0);
+    lastSampleRadius = radius;
+    lastSampleAlpha = alpha;
 
     const cameraPos = cameraPosition(activeCamera);
     // Drop ring is measured from the look-at point (same reference terrain uses
     // to cull chunks) so resources vanish exactly where the tiles do.
     const lookXZ = cameraLookAt(activeCamera);
     // Refresh the mesh/billboard split when the camera moves. A full thin-instance
-    // flush is the expensive part, so it waits out the interval. A move check
-    // without that wait rewrites every tree while panning.
-    let anyDirty = false;
-    for (let b = 0; b < batches.length; b++) {
-      if (batches[b].dirty) { anyDirty = true; break; }
-    }
+    // rewrite is expensive, so orbit input waits until idle. Scale / burn animation
+    // only rewrites the slots that moved; it must not force every tree through LOD.
     const movedSq =
       (cameraPos.x - lastCameraX) ** 2 +
       (cameraPos.y - lastCameraY) ** 2 +
       (cameraPos.z - lastCameraZ) ** 2;
     const lodDue = force || (
       elapsed >= LOD_UPDATE_MS &&
+      orbitIdleMs >= LOD_ORBIT_IDLE_MS &&
       (lastCameraX === Infinity || movedSq >= LOD_MOVE_THRESHOLD_SQ)
     );
-    if (lodDue || anyDirty) {
-      if (lodDue) {
-        elapsed = 0;
-        lastCameraX = cameraPos.x;
-        lastCameraY = cameraPos.y;
-        lastCameraZ = cameraPos.z;
-      }
-      for (const batch of batches) {
-        if (!batch.dirty && !lodDue) continue;
+    if (lodDue) {
+      elapsed = 0;
+      lastCameraX = cameraPos.x;
+      lastCameraY = cameraPos.y;
+      lastCameraZ = cameraPos.z;
+    }
+    for (const batch of batches) {
+      if (batch.dirty || lodDue) {
         updateBatchLod(batch, cameraPos, lookXZ, resourceDropSq, resourceMeshSq);
         batch.dirty = false;
+      } else if (batch.animationDirty.length > 0) {
+        updateAnimatedBatchMatrices(batch);
       }
+      clearAnimationDirty(batch);
     }
+    const tLod = profile ? performance.now() : 0;
     tickHarvestPings();
+    const tHarvest = profile ? performance.now() : 0;
     applyShown();
+    if (profile) {
+      const tEnd = performance.now();
+      return {
+        animationMs: tAnimation - t0,
+        lodMs: tLod - tAnimation,
+        harvestMs: tHarvest - tLod,
+        shownMs: tEnd - tHarvest,
+      };
+    }
   }
 
   function applyTreeUpdates(updates) {
@@ -1048,7 +1086,8 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       } else {
         p.targetScale = nextTarget;
       }
-      ref.batch.dirty = true;
+      if (wasDead && nextStock > 0) ref.batch.dirty = true;
+      else markAnimationDirty(ref.batch, ref.index);
     }
   }
 
@@ -1297,6 +1336,8 @@ function makeEmptyTreeInstance() {
     burnDurMs: 0,
     fogT: 0,
     edgeDim: 0,
+    renderBucket: 0,
+    matrixDirty: false,
   };
 }
 
@@ -1635,6 +1676,68 @@ function collectInstances(field, variant, surfaceHeightAt) {
 // Fallback if an older snapshot omits treeStock (full-size tree).
 const TREE_STAGE_FALLBACK_STOCK = 42;
 
+function markAnimationDirty(batch, index) {
+  const p = batch.instances[index];
+  if (!p || p.matrixDirty) return;
+  p.matrixDirty = true;
+  batch.animationDirty.push(index);
+}
+
+function clearAnimationDirty(batch) {
+  for (let i = 0; i < batch.animationDirty.length; i++) {
+    const p = batch.instances[batch.animationDirty[i]];
+    if (p) p.matrixDirty = false;
+  }
+  batch.animationDirty.length = 0;
+}
+
+function updateAnimatedBatchMatrices(batch) {
+  const { variant, instances, billboardMesh, billboardMatrices, modelParts, animationDirty } = batch;
+  for (let d = 0; d < animationDirty.length; d++) {
+    const i = animationDirty[d];
+    const p = instances[i];
+    const stockScale = p.stockScale ?? 1;
+    if (stockScale <= 0 || p.renderBucket === RENDER_HIDDEN) {
+      for (const part of modelParts) writeHiddenMatrix(part.matrices, i);
+      writeHiddenMatrix(billboardMatrices, i);
+      continue;
+    }
+    const y = p.y - (p.sink ?? 0);
+    if (p.renderBucket === RENDER_MODEL && modelParts.length) {
+      const modelScale = variant.modelScale * stockScale;
+      for (const part of modelParts) {
+        writeModelInstanceMatrix(
+          part.matrices,
+          i,
+          p.x,
+          y,
+          p.z,
+          p.yaw,
+          modelScale,
+          part.baseMatrix,
+          p.lean ?? 0,
+        );
+      }
+      writeHiddenMatrix(billboardMatrices, i);
+      continue;
+    }
+    for (const part of modelParts) writeHiddenMatrix(part.matrices, i);
+    const billboardScale = variant.billboardScale * stockScale;
+    writeInstanceMatrix(
+      billboardMatrices,
+      i,
+      p.x,
+      y + variant.billboardYOffset * billboardScale,
+      p.z,
+      p.yaw,
+      billboardScale,
+      p.lean ?? 0,
+    );
+  }
+  for (const part of modelParts) flushThinInstances(part.mesh);
+  flushThinInstances(billboardMesh);
+}
+
 function updateBatchLod(batch, cameraPos, lookXZ, dropSq = Infinity, meshSq = Infinity) {
   const {
     variant,
@@ -1663,6 +1766,7 @@ function updateBatchLod(batch, cameraPos, lookXZ, dropSq = Infinity, meshSq = In
     if (stockScale <= 0) {
       for (const part of modelParts) writeHiddenMatrix(part.matrices, i);
       writeHiddenMatrix(billboardMatrices, i);
+      p.renderBucket = RENDER_HIDDEN;
       noteEdge(p, 0);
       continue;
     }
@@ -1676,6 +1780,7 @@ function updateBatchLod(batch, cameraPos, lookXZ, dropSq = Infinity, meshSq = In
       if (dropSq !== Infinity && lookDistSq > dropSq) {
         for (const part of modelParts) writeHiddenMatrix(part.matrices, i);
         writeHiddenMatrix(billboardMatrices, i);
+        p.renderBucket = RENDER_HIDDEN;
         noteEdge(p, 0);
         continue;
       }
@@ -1703,6 +1808,7 @@ function updateBatchLod(batch, cameraPos, lookXZ, dropSq = Infinity, meshSq = In
         );
       }
       writeHiddenMatrix(billboardMatrices, i);
+      p.renderBucket = RENDER_MODEL;
       noteEdge(p, 0);
       lastModelSlot = i;
     } else {
@@ -1719,6 +1825,7 @@ function updateBatchLod(batch, cameraPos, lookXZ, dropSq = Infinity, meshSq = In
         billboardScale,
         p.lean ?? 0,
       );
+      p.renderBucket = RENDER_BILLBOARD;
       lastBillboardSlot = i;
     }
   }

@@ -96,8 +96,12 @@ export const UNIT_ZOOM_SCALE_MAX = 2.28;
 export const VEHICLE_ZOOM_SCALE_MAX = 1.48;
 /** Closest zoom stays at base - first 14% of the radius range. */
 export const UNIT_ZOOM_SCALE_HOLD = 0.14;
-/** Normalized zoom where the mul hits the cap (0 = closest, 1 = farthest). */
-export const UNIT_ZOOM_SCALE_CAP = 0.55;
+/**
+ * Normalized zoom where the mul hits the cap (0 = closest, 1 = farthest).
+ * Keep the mid-zoom band below full size so projected unit fill does not peak
+ * while the camera is still closing from the normal play radius.
+ */
+export const UNIT_ZOOM_SCALE_CAP = 0.75;
 export function unitZoomScale(normalizedZoom, max = UNIT_ZOOM_SCALE_MAX) {
   const n = Math.max(0, Math.min(1, normalizedZoom));
   if (n <= UNIT_ZOOM_SCALE_HOLD) return 1;
@@ -293,6 +297,8 @@ export function createCameraController(camera, canvas, opts = {}) {
   let followBrokenByPan = false;
   /** @type {{ x?: number, z?: number, radius?: number, alpha?: number, unclamped?: boolean, left: number, rate: number } | null} */
   let ease = null;
+  let inputObserver = typeof opts.onInput === 'function' ? opts.onInput : null;
+  let canvasRectCache = null;
 
   let rmbPanActive = false;
   let rmbDidPan = false;
@@ -336,6 +342,17 @@ export function createCameraController(camera, canvas, opts = {}) {
 
   function markNudged() {
     nudged = true;
+  }
+
+  function noteInput(kind, eventAt) {
+    inputObserver?.(kind, eventAt);
+  }
+
+  function canvasRect() {
+    if (canvasRectCache) return canvasRectCache;
+    if (typeof canvas.getBoundingClientRect !== 'function') return null;
+    canvasRectCache = canvas.getBoundingClientRect();
+    return canvasRectCache;
   }
 
   function noteUserAim() {
@@ -525,6 +542,7 @@ export function createCameraController(camera, canvas, opts = {}) {
 
   function nudgePan(dx, dz) {
     if (!dx && !dz) return;
+    noteInput('pan');
     noteUserAim();
     breakFollowForPan();
     markNudged();
@@ -534,6 +552,7 @@ export function createCameraController(camera, canvas, opts = {}) {
 
   /** Camera-relative analog pan (WASD / left stick). right = screen-right, forward = into the map. */
   function nudgeLookPan(right, forward) {
+    if (right || forward) noteInput('analog-pan');
     applyLookPan(right, forward);
   }
 
@@ -683,8 +702,8 @@ export function createCameraController(camera, canvas, opts = {}) {
    */
   function screenToGround(clientX, clientY) {
     if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
-    if (typeof canvas.getBoundingClientRect !== 'function') return null;
-    const rect = canvas.getBoundingClientRect();
+    const rect = canvasRect();
+    if (!rect) return null;
     const w = rect.width || 1;
     const h = rect.height || 1;
     const ndcX = (2 * (clientX - (rect.left || 0))) / w - 1;
@@ -777,6 +796,7 @@ export function createCameraController(camera, canvas, opts = {}) {
   }
 
   function nudgeZoom(delta, screen) {
+    if (delta) noteInput('analog-zoom');
     applyZoomInput(delta, screen);
   }
 
@@ -787,12 +807,14 @@ export function createCameraController(camera, canvas, opts = {}) {
   }
 
   function nudgeRotate(deltaAlpha) {
+    if (deltaAlpha) noteInput('analog-rotate');
     applyRotateInput(deltaAlpha);
   }
 
   /** Immediate yaw - rim drag tracks the finger. Does not bank coast velocity. */
   function rotateBy(deltaAlpha) {
     if (!deltaAlpha) return;
+    noteInput('direct-rotate');
     noteUserAim();
     camera.alpha += deltaAlpha;
   }
@@ -800,6 +822,7 @@ export function createCameraController(camera, canvas, opts = {}) {
   /** Immediate radius - rim drag tracks the finger. Does not bank coast velocity. */
   function zoomBy(delta) {
     if (!delta) return;
+    noteInput('direct-zoom');
     noteUserAim();
     zoomTend = false;
     zoomIdleMs = 0;
@@ -823,6 +846,7 @@ export function createCameraController(camera, canvas, opts = {}) {
 
   function handleWheel(e) {
     if (!camera) return;
+    noteInput((e.buttons & 2) !== 0 || e.shiftKey ? 'wheel-rotate' : 'wheel-zoom', e.timeStamp);
     markNudged();
     e.preventDefault();
     const delta = e.deltaY;
@@ -858,7 +882,8 @@ export function createCameraController(camera, canvas, opts = {}) {
   /** Screen-space px delta → ground-plane world delta (camera-relative axes, current zoom). */
   function screenDeltaToGroundPan(screenDx, screenDy) {
     const cam = camera;
-    const rect = canvas.getBoundingClientRect();
+    const rect = canvasRect();
+    if (!rect) return { wx: 0, wz: 0 };
     const fov = cam.fov ?? CAMERA_BASE_FOV;
     const pixelsToWorld =
       (2 * (cam.radius || DEFAULT_RADIUS) * Math.tan(fov / 2)) / Math.max(1, rect.height);
@@ -879,6 +904,7 @@ export function createCameraController(camera, canvas, opts = {}) {
   /** Shared by RMB drag and touch centroid-pan - same feel, one formula. */
   function panByScreenDelta(screenDx, screenDy, sensBase) {
     if (!screenDx && !screenDy) return;
+    noteInput('pointer-pan');
     noteUserAim();
     breakFollowForPan();
     const { wx, wz } = screenDeltaToGroundPan(screenDx, screenDy);
@@ -969,6 +995,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     if (active && ['INPUT', 'SELECT', 'TEXTAREA'].includes(active.tagName)) return;
     const key = e.key.toLowerCase();
     if (!CAMERA_KEYS.has(key)) return;
+    noteInput('keyboard', e.timeStamp);
     e.preventDefault();
     keyStates[key] = true;
     noteUserAim();
@@ -1029,6 +1056,8 @@ export function createCameraController(camera, canvas, opts = {}) {
   }
 
   function tick(dtMs) {
+    // Reuse layout geometry across high-rate events, never across rendered frames.
+    canvasRectCache = null;
     if (!nudged && !followActive && !anyKeyHeld() && !ease && !fovCatching()) {
       pinZoomFloor();
       return;
@@ -1256,5 +1285,8 @@ export function createCameraController(camera, canvas, opts = {}) {
     reset,
     markNudged,
     takeUserAim,
+    setInputObserver(observer) {
+      inputObserver = typeof observer === 'function' ? observer : null;
+    },
   };
 }

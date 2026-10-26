@@ -5,6 +5,13 @@ import { shownKing } from '../sim/kothMeta.js';
 import { mountMatchSnapshot, snapCaption, snapshotDocFromSession } from './matchSnapshotView.js';
 import { getUnitDef, isFlyer, isTransport, FLY_HEIGHT } from '../sim/unitTypes.js';
 import {
+  DEATH_KIND,
+  deathDurationMs,
+  deathKindForType,
+  sampleBalloon,
+  sampleFlee,
+} from '../render/deathBehavior.js';
+import {
   DROP_OFF_TYPES,
   GATHER_ACT,
   campWorkRadiusWorld,
@@ -74,10 +81,18 @@ import { ownerResourcesFrom } from '../sim/resources.js';
 import { formatGameNumber } from '../sim/formatGameNumber.js';
 import { createResourceBank } from './resourceBank.js';
 import { inputLatency } from './inputLatency.js';
+import { cameraLatency } from './cameraLatency.js';
+import {
+  addFrameProfileSample,
+  createFrameProfile,
+  summarizeFrameProfile,
+} from './frameProfile.js';
 import {
   createObserverData,
   kothNameRoster,
   namesFromLobbySeats,
+  normalizeOwnerNames,
+  sheetOwnerNames,
   observerSheetIndexFromCode,
   observerSheetOwners,
 } from './observerData.js';
@@ -230,6 +245,7 @@ let replayCtl = {
   togglePlay() { return false; },
   nudgeSpeed() { return false; },
   isWatching() { return false; },
+  ownerNames() { return null; },
 };
 
 /** `?fog=0` keeps the old no-overlay look; omit to use the scene default. */
@@ -287,7 +303,6 @@ async function loadGardenFromSearch(search) {
   }
 }
 
-const DEATH_FADE_MS = 450;
 /** Select flourish → idle spin (distance-gated in overlay LOD). */
 const SEL_SPIN_STEADY = 0.006 * 60;
 const SEL_SPIN_START = 2.8;
@@ -308,8 +323,14 @@ const GROUND_XZ_EPS = 0.03;
 const POSE_YAW_EPS = 0.03;
 const POSE_SIZE_EPS = 0.002;
 const POSE_LOFT_EPS = 0.02;
-/** Rewrite idle unit matrices when camera-radius scale moves this much. */
-const UNIT_ZOOM_EPS = 0.002;
+/**
+ * Camera-radius unit scale is visual-only. Quantize it so a smooth wheel coast
+ * does not invalidate every idle unit matrix on every rendered frame.
+ */
+const UNIT_ZOOM_STEP = 0.025;
+function quantizedUnitZoomScale(scale) {
+  return Math.round((Number.isFinite(scale) ? scale : 1) / UNIT_ZOOM_STEP) * UNIT_ZOOM_STEP;
+}
 const DEBUG_KOTH = new URLSearchParams(location.search).get('debug') === 'koth';
 
 /** Drops stale applyLiveConfig completions (solo reset finishing after join reset). */
@@ -779,7 +800,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   const fog = createFogOfWar();
   /**
    * Set by dumpFrameProfile. Fog used to run on worker onCommit (outside rAF),
-   * so `frame` ignored the hitch. Stamp is now once-per-frame after pump.
+   * so the app callback ignored the hitch. Stamp is now once-per-frame after pump.
    */
   let frameProf = null;
   let fogStampDue = false;
@@ -856,16 +877,25 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     const ema = session.simTimingEma;
     const last = session.simTimingLast ?? session.simMetrics?.timing;
     if (!ema && !last) {
-      console.warn('[dumpSimProfile] no timing yet - stress, ?profileSim=1, or setProfileSim(true)');
+      console.warn('[dumpSimProfile] no timing yet - use ?profileSim=1 or setProfileSim(true)');
       return null;
     }
     const keys = new Set([
       ...Object.keys(ema ?? {}),
       ...Object.keys(last ?? {}),
     ]);
+    const workerPhases = new Set(['tick', 'merge', 'ai', 'publish', 'response']);
     const rows = [...keys]
       .map((phase) => ({
         phase,
+        scope:
+          phase === 'tick'
+            ? 'worker total'
+            : phase === 'step'
+              ? 'sim total'
+              : workerPhases.has(phase)
+                ? 'worker phase'
+                : 'sim phase',
         emaMs: ema?.[phase] != null ? +ema[phase].toFixed(2) : null,
         lastMs: last?.[phase] != null ? +Number(last[phase]).toFixed(2) : null,
         pct: ema?.tick > 0 && ema?.[phase] != null
@@ -880,6 +910,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       tick: session.confirmedTick,
       emaTickMs: ema?.tick != null ? +ema.tick.toFixed(2) : null,
       budgetMs: 50,
+      overBudget: ema?.tick != null ? ema.tick > 50 : null,
+      note:
+        'tick includes merge + AI + step + shared publish + response construction. step and sim-phase rows are nested inside tick; postMessage clone/delivery is outside worker timing.',
       counters: m
         ? {
             combatCandidates: m.combatCandidates,
@@ -894,16 +927,14 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     return { rows, ema, last, metrics: m };
   };
   window.dumpFrameProfile = (frames = 40) => {
-    frameProf = {
-      left: Math.max(1, frames | 0),
-      acc: Object.create(null),
-      n: 0,
-      nFog: 0,
-      inFrame: false,
-      pendingOutside: 0,
-    };
+    frameProf = createFrameProfile(frames);
+    renderer.setFrameCpuTimingEnabled?.(true);
     renderer.armGpuTiming?.();
-    console.log('[dumpFrameProfile] sampling', frameProf.left, 'frames… then console.table');
+    console.log(
+      '[dumpFrameProfile] sampling',
+      frameProf.left,
+      'frames… then reporting p50/p95/p99',
+    );
     return frameProf;
   };
   window.dumpRenderCost = () => {
@@ -917,36 +948,60 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   };
   function profAdd(phase, ms) {
     if (!frameProf || !Number.isFinite(ms)) return;
-    frameProf.acc[phase] = (frameProf.acc[phase] ?? 0) + ms;
+    addFrameProfileSample(frameProf, phase, ms);
     if (!frameProf.inFrame) frameProf.pendingOutside = (frameProf.pendingOutside ?? 0) + ms;
   }
   function finishFrameProf(t0) {
     if (!frameProf) return;
-    frameProf.inFrame = false;
     const now = performance.now();
     const outside = frameProf.pendingOutside ?? 0;
     frameProf.pendingOutside = 0;
-    frameProf.acc.frame = (frameProf.acc.frame ?? 0) + (now - t0);
-    frameProf.acc.main = (frameProf.acc.main ?? 0) + (now - t0) + outside;
+    addFrameProfileSample(frameProf, 'appTotal', now - t0);
+    addFrameProfileSample(frameProf, 'appWithOutside', now - t0 + outside);
+    const rendererCpu = renderer.frameCpuTiming?.();
+    if (rendererCpu) {
+      addFrameProfileSample(frameProf, 'rendererPreApp', rendererCpu.preAppMs);
+      addFrameProfileSample(frameProf, 'rendererScenePrep', rendererCpu.scenePrepMs);
+      addFrameProfileSample(frameProf, 'rendererShadow', rendererCpu.shadowMs);
+      addFrameProfileSample(frameProf, 'rendererCelestial', rendererCpu.celestialMs);
+      addFrameProfileSample(frameProf, 'rendererTerrain', rendererCpu.terrainMs);
+      addFrameProfileSample(frameProf, 'terrainGlint', rendererCpu.terrainGlintMs);
+      addFrameProfileSample(frameProf, 'terrainBackdrop', rendererCpu.terrainBackdropMs);
+      addFrameProfileSample(frameProf, 'terrainScenery', rendererCpu.terrainSceneryMs);
+      addFrameProfileSample(frameProf, 'sceneryAnimation', rendererCpu.sceneryAnimationMs);
+      addFrameProfileSample(frameProf, 'sceneryLod', rendererCpu.sceneryLodMs);
+      addFrameProfileSample(frameProf, 'sceneryHarvest', rendererCpu.sceneryHarvestMs);
+      addFrameProfileSample(frameProf, 'sceneryShown', rendererCpu.sceneryShownMs);
+      addFrameProfileSample(frameProf, 'terrainLod', rendererCpu.terrainLodMs);
+      addFrameProfileSample(frameProf, 'terrainDoodads', rendererCpu.terrainDoodadsMs);
+      addFrameProfileSample(frameProf, 'rendererFogLod', rendererCpu.fogLodMs);
+      addFrameProfileSample(frameProf, 'rendererAmbientFx', rendererCpu.ambientFxMs);
+      addFrameProfileSample(frameProf, 'rendererBuildingFx', rendererCpu.buildingFxMs);
+      addFrameProfileSample(frameProf, 'rendererEmitFx', rendererCpu.emitFxMs);
+      addFrameProfileSample(frameProf, 'rendererParticles', rendererCpu.particlesMs);
+      addFrameProfileSample(frameProf, 'rendererAuraUpdate', rendererCpu.auraUpdateMs);
+      addFrameProfileSample(frameProf, 'rendererWorldFx', rendererCpu.worldFxMs);
+      addFrameProfileSample(frameProf, 'rendererVat', rendererCpu.vatMs);
+      addFrameProfileSample(frameProf, 'rendererPostApp', rendererCpu.postAppMs);
+      addFrameProfileSample(frameProf, 'beforeRenderHook', rendererCpu.hookTotalMs);
+    }
     const gpu = renderer.gpuFrameMs?.();
-    if (gpu > 0) frameProf.acc.gpu = (frameProf.acc.gpu ?? 0) + gpu;
+    if (gpu > 0) addFrameProfileSample(frameProf, 'gpuFrame', gpu);
+    frameProf.inFrame = false;
     frameProf.n++;
     frameProf.left--;
     if (frameProf.left > 0) return;
     const n = Math.max(1, frameProf.n);
-    const rows = Object.entries(frameProf.acc)
-      .map(([phase, ms]) => ({
-        phase,
-        meanMs: +(ms / n).toFixed(2),
-      }))
-      .sort((a, b) => b.meanMs - a.meanMs);
+    const rows = summarizeFrameProfile(frameProf);
     console.table(rows);
     console.log('[dumpFrameProfile]', {
       frames: n,
       fogStamps: frameProf.nFog,
       fps: fpsDisplay,
-      note: 'means are per display frame. fog* nest inside frame when stamped after pump.',
+      note:
+        'perFrameMs includes sparse work averaged across all sampled frames; mean/p50/p95/p99 are per occurrence. renderer*, terrain*, and scenery* detail rows are nested; renderer*/beforeRenderHook and gpuFrame describe the previous frame.',
     });
+    renderer.setFrameCpuTimingEnabled?.(false);
     frameProf = null;
   }
   /**
@@ -1085,6 +1140,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     wasSelected: new Uint8Array(CAP),
     wasAlive: new Uint8Array(CAP),
     deathFade: new Float32Array(CAP),
+    /** Shrink, balloon, or flee. See render/deathBehavior.js. */
+    deathKind: new Uint8Array(CAP),
+    deathDirX: new Float32Array(CAP),
+    deathDirZ: new Float32Array(CAP),
+    deathSeed: new Uint32Array(CAP),
     facingYaw: new Float32Array(CAP),
     selSpinYaw: new Float32Array(CAP),
     selSpinVel: new Float32Array(CAP),
@@ -1376,6 +1436,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.placeAgoras?.(fog.filterAgoras(list));
   }
 
+  /** Opacity for a unit that is already dead. Full size until a behavior's fade. */
+  function visualDeathAlpha(i) {
+    const fade = bufs.deathFade[i];
+    if (!(fade > 0)) return 0;
+    const u = 1 - fade;
+    const kind = bufs.deathKind[i];
+    if (kind === DEATH_KIND.BALLOON) return sampleBalloon(u, bufs.deathSeed[i]).alpha;
+    if (kind === DEATH_KIND.FLEE) return sampleFlee(u, bufs.deathDirX[i], bufs.deathDirZ[i]).alpha;
+    return fade;
+  }
+
   const updateColors = () => {
     const world = session.state;
     const { deathFade, colors } = bufs;
@@ -1388,7 +1459,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       // TeamColor parts read this as a solid owner swatch; other parts stay white.
       // Encode so the mesh grade displays the same hex as the name and health bar.
       const c = sceneTeamRgb(ownerTint(world.owner[i]));
-      const alpha = world.alive[i] ? 1 : fade;
+      const alpha = world.alive[i] ? 1 : visualDeathAlpha(i);
       colors[i * 4] = c[0];
       colors[i * 4 + 1] = c[1];
       colors[i * 4 + 2] = c[2];
@@ -1426,6 +1497,18 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     bufs.wasSelected.fill(0);
     bufs.wasAlive.fill(1);
     bufs.deathFade.fill(0);
+    bufs.deathKind.fill(0);
+    bufs.deathDirX.fill(0);
+    bufs.deathDirZ.fill(0);
+    bufs.deathSeed.fill(0);
+    // A rebuild is not a fresh death. Corpses already on the table stay gone
+    // instead of replaying a balloon or a sprint.
+    const aliveNow = session.state?.alive;
+    const nNow = (session.state?.count ?? session.count) | 0;
+    if (aliveNow) {
+      for (let i = 0; i < nNow; i++) bufs.wasAlive[i] = aliveNow[i] ? 1 : 0;
+    }
+    session.takePendingDeathNotes?.();
     bufs.facingYaw.fill(0);
     bufs.selSpinYaw.fill(0);
     bufs.selSpinVel.fill(0);
@@ -1594,6 +1677,19 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   });
   let observerLobby = null;
 
+  /**
+   * Lobby seats name the match they are playing. A waiting room shares owner
+   * indexes with the menu AI, so those seats must not relabel that sheet.
+   */
+  function rosterNamesNow() {
+    const state = observerLobby?.getState?.();
+    return sheetOwnerNames({
+      started: matchRosterNames,
+      seats: state?.phase === 'playing' ? state.seats : null,
+      replay: session.watchingReplay ? replayCtl.ownerNames?.() : null,
+    });
+  }
+
   function formatResourceBank(r) {
     return `Wood ${formatGameNumber(r.wood)}  ·  Stone ${formatGameNumber(r.stone)}  ·  Mineral ${formatGameNumber(r.mineral)}  ·  Food ${formatGameNumber(r.food)}`;
   }
@@ -1632,7 +1728,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         koth: session.koth,
       });
     }
-    const lobbyNames = namesFromLobbySeats(observerLobby?.getState?.()?.seats);
+    const lobbyNames = rosterNamesNow();
     observerData.paint({
       hidden: namesOnly ? roster.owners.length === 0 : !showSheet,
       namesOnly,
@@ -3831,6 +3927,36 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
   }
 
+  const deathNoteMap = new Map();
+  function armUnitDeath(i, world) {
+    const kind = deathKindForType(world.type[i]);
+    bufs.deathKind[i] = kind;
+    bufs.deathFade[i] = 1;
+    if (kind === DEATH_KIND.FLEE) {
+      const note = deathNoteMap.get(i);
+      if (note && Math.hypot(note.x, note.z) > 1e-4) {
+        bufs.deathDirX[i] = note.x;
+        bufs.deathDirZ[i] = note.z;
+      } else {
+        const fxv = fx.toFloat(world.faceX?.[i] || 0);
+        const fzv = fx.toFloat(world.faceY?.[i] || 0);
+        const len = Math.hypot(fxv, fzv);
+        if (len > 1e-4) {
+          bufs.deathDirX[i] = -fxv / len;
+          bufs.deathDirZ[i] = -fzv / len;
+        } else {
+          const ang = ((i * 47) % 360) * Math.PI / 180;
+          bufs.deathDirX[i] = Math.sin(ang);
+          bufs.deathDirZ[i] = Math.cos(ang);
+        }
+      }
+    } else if (kind === DEATH_KIND.BALLOON) {
+      bufs.deathSeed[i] = (
+        Math.imul(i + 1, 374761393) ^ Math.imul(world.px[i] | 0, 668265263) ^ (world.py[i] | 0)
+      ) >>> 0;
+    }
+  }
+
   const prevCommit = session.onCommit;
   session.onCommit = (tick, checksum) => {
     prevCommit?.(tick, checksum);
@@ -3847,10 +3973,30 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     // would shrink units that are alive again in the pose being shown.
     if (!session.replayPoseHold) {
       const world = session.state;
-      const { wasAlive, deathFade } = bufs;
+      const { wasAlive, deathFade, deathKind } = bufs;
+      const notes = session.takePendingDeathNotes?.();
+      deathNoteMap.clear();
+      if (notes) {
+        for (let b = 0; b < notes.length; b++) {
+          const batch = notes[b];
+          if (!batch) continue;
+          for (let k = 0; k < batch.length; k++) {
+            const note = batch[k];
+            deathNoteMap.set(note.id | 0, note);
+          }
+        }
+      }
       for (let i = 0; i < session.count; i++) {
-        if (wasAlive[i] && !world.alive[i]) deathFade[i] = 1;
-        wasAlive[i] = world.alive[i];
+        if (world.alive[i]) {
+          if (deathFade[i] > 0) {
+            deathFade[i] = 0;
+            deathKind[i] = DEATH_KIND.SHRINK;
+          }
+          wasAlive[i] = 1;
+          continue;
+        }
+        if (wasAlive[i]) armUnitDeath(i, world);
+        wasAlive[i] = 0;
       }
     }
     if (session.count !== renderEntityCount || unitTypesChanged()) {
@@ -3874,7 +4020,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       else {
         showMatchOver(session);
         if (!observerLobby?.getState?.()?.ranked) observerLobby?.returnToWaiting?.();
-        armReplaySave(session, namesFromLobbySeats(observerLobby?.getState?.()?.seats));
+        armReplaySave(session, rosterNamesNow());
       }
       const shareWith = enterPostGameObserve(session);
       renderer.setFxPaused?.(true);
@@ -3910,18 +4056,22 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   renderer.onFrame((deltaMs) => {
     const frameT0 = frameProf ? performance.now() : 0;
     if (frameProf) frameProf.inFrame = true;
+    if (frameProf) profAdd('frameInterval', deltaMs);
     let profT = frameT0;
-    const profSplit = (name) => {
-      if (!frameProf) return;
-      const now = performance.now();
-      profAdd(name, now - profT);
-      profT = now;
-    };
+    const profSplit = frameProf
+      ? (name) => {
+          const now = performance.now();
+          profAdd(name, now - profT);
+          profT = now;
+        }
+      : null;
+    inputApi.pollGamepad?.();
     // Keep FX clocks in sync with pause (catch-up / KOTH also toggle pauseLockstep).
     renderer.setFxPaused?.(session.pauseLockstep);
     matchStory.tick(deltaMs);
     exitMarks.tick();
     renderer.cameraController?.tick?.(deltaMs);
+    if (cameraLatency.enabled) cameraLatency.integrated();
     if (!document.hidden && renderer.cameraController?.takeUserAim?.()) {
       viewFollow?.userSteered?.();
       if (replayCamOwner != null) {
@@ -3945,7 +4095,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         setStatusText('Adventure complete');
       }
     }
-    profSplit('pump');
+    profSplit?.('inputCameraSim');
     stampFogIfDue();
     if (frameProf) profT = performance.now();
     syncWorkRadiusRing();
@@ -3976,8 +4126,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
     const alpha = session.displayAlpha;
     const { prev, cur, displayTick } = session.displaySnapshots();
-    inputLatency.eligible(displayTick);
+    if (inputLatency.enabled) inputLatency.eligible(displayTick);
     if (!prev || !cur) {
+      if (cameraLatency.enabled) cameraLatency.rendered();
       finishFrameProf(frameT0);
       return;
     }
@@ -3986,7 +4137,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (renderer.getUnitsEnabled && !renderer.getUnitsEnabled()) {
       pushSelectionFollow();
       renderer.commit();
-      inputLatency.rendered(displayTick);
+      if (inputLatency.enabled) inputLatency.rendered(displayTick);
+      if (cameraLatency.enabled) cameraLatency.rendered();
       finishFrameProf(frameT0);
       return;
     }
@@ -4000,7 +4152,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     const n = session.count;
     const world = session.state;
     const {
-      selected, wasSelected, deathFade, facingYaw, selSpinYaw, selSpinVel,
+      selected, wasSelected, deathFade, deathKind, deathDirX, deathDirZ, deathSeed, facingYaw, selSpinYaw, selSpinVel,
       ringX, ringZ, ringSize, ringTint,
       colors, renderX, renderY, renderZ,
       poseX, poseZ, poseYaw, poseSize, poseLoft, poseMoving, poseCarrying, poseChopping, poseAttacking, poseWalkQ, poseValid,
@@ -4024,13 +4176,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (fog.hidesHostile(owner, hx, hz)) fogHidden[i] = 1;
     }
 
-    const zoomS = renderer.unitZoomScale?.() ?? 1;
-    if (Math.abs(zoomS - lastUnitZoomS) >= UNIT_ZOOM_EPS) {
+    const zoomS = quantizedUnitZoomScale(renderer.unitZoomScale?.() ?? 1);
+    if (zoomS !== lastUnitZoomS) {
       lastUnitZoomS = zoomS;
       poseValid.fill(0);
       ringX.fill(NaN);
     }
-    const zoomFor = (d) => renderer.unitZoomScale?.(d) ?? zoomS;
+    const zoomFor = (d) => quantizedUnitZoomScale(renderer.unitZoomScale?.(d) ?? zoomS);
 
     const groundYCached = (i, x, z) => {
       if (
@@ -4170,6 +4322,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
     }
 
+    profSplit?.('posePrep');
     const hideDrawnUnit = (i) => {
       // Always rewrite - rebuild/sync can stomp GPU slots while pose still says hidden.
       if (!renderer.writeInstance(i, world.type[i], world.owner[i], 0, 0, 0)) drawStats.unmapped++;
@@ -4188,13 +4341,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (fogHidden[i]) {
         // Keep the fade running while hidden. Skipping it leaves a unit that died in
         // fog at deathFade 1 forever, so it never becomes eligible for compaction.
-        if (deathFade[i] > 0) deathFade[i] = Math.max(0, deathFade[i] - deltaMs / DEATH_FADE_MS);
+        if (deathFade[i] > 0) deathFade[i] = Math.max(0, deathFade[i] - deltaMs / deathDurationMs(deathKind[i]));
         if (!world.alive[i] && deathFade[i] <= 0) corpses++;
         hideDrawnUnit(i);
         continue;
       }
       if (deathFade[i] > 0) {
-        deathFade[i] = Math.max(0, deathFade[i] - deltaMs / DEATH_FADE_MS);
+        deathFade[i] = Math.max(0, deathFade[i] - deltaMs / deathDurationMs(deathKind[i]));
         if (deathFade[i] <= 0 && !world.alive[i]) {
           corpses++;
           if (poseDirty(i, 0, 0, 0, 0, 0, 0)) {
@@ -4325,9 +4478,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (turning) facingYaw[i] = Math.atan2(faceDx, faceDz);
       else if (displacing && orderedMove) facingYaw[i] = Math.atan2(dx, dz);
       const flyLoft = isFlyer(world.type[i]) ? FLY_HEIGHT : 0;
-      const loft = (renderer.monkLobHeight?.(i) ?? 0) + flyLoft;
-      const pitch = renderer.monkLobPitch?.(i) ?? 0;
-      const roll = renderer.monkLobRoll?.(i) ?? 0;
+      let loft = (renderer.monkLobHeight?.(i) ?? 0) + flyLoft;
+      let pitch = renderer.monkLobPitch?.(i) ?? 0;
+      let roll = renderer.monkLobRoll?.(i) ?? 0;
       const yawTwist = renderer.monkLobYawTwist?.(i) ?? 0;
       // Face along flight path while tumbling; twist spins on top.
       let yaw = facingYaw[i];
@@ -4336,24 +4489,60 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       const hero = world.named?.[i] ? NAMED_UNIT_SCALE : 1;
       let size = def.size * hero;
       const fade = deathFade[i];
-      if (fade > 0) size *= fade;
+      let deathAlpha = fade;
+      let deathExit = false;
+      if (fade > 0 && !world.alive[i]) {
+        const kind = deathKind[i];
+        const u = 1 - fade;
+        if (kind === DEATH_KIND.BALLOON) {
+          const b = sampleBalloon(u, deathSeed[i]);
+          x += b.x;
+          z += b.z;
+          loft = FLY_HEIGHT + b.y;
+          yaw = b.yaw;
+          pitch = b.pitch;
+          roll = b.roll;
+          size *= b.scale;
+          deathAlpha = b.alpha;
+          deathExit = true;
+        } else if (kind === DEATH_KIND.FLEE) {
+          const f = sampleFlee(u, deathDirX[i], deathDirZ[i]);
+          x += f.x;
+          z += f.z;
+          yaw = f.yaw;
+          facingYaw[i] = f.yaw;
+          size *= f.scale;
+          deathAlpha = f.alpha;
+          deathExit = true;
+        } else {
+          size *= fade;
+        }
+      } else if (fade > 0) {
+        size *= fade;
+      }
       // Pick sphere center at chest height over terrain (not sim `size`, which is spacing).
       const gy = groundYCached(i, x, z);
       renderX[i] = x;
       renderY[i] = gy + loft + (def.pickHeight ?? 1.1) * hero * zoomFor(def);
       renderZ[i] = z;
       if (fade > 0) {
-        colors[i * 4 + 3] = fade;
+        colors[i * 4 + 3] = deathAlpha;
         colorsDirty = true;
       }
-      const movingBit = moving && world.alive[i] ? 1 : 0;
+      let movingBit = moving && world.alive[i] ? 1 : 0;
       const gatherAct = world.gatherAct?.[i] | 0;
-      const carryingBit = gatherAct === GATHER_ACT.HAUL ? 1 : 0;
-      const choppingBit = gatherAct === GATHER_ACT.CHOP ? 1 : 0;
-      const attackingBit = ord === ORDER.ATTACK && !displacing ? 1 : 0;
+      let carryingBit = gatherAct === GATHER_ACT.HAUL ? 1 : 0;
+      let choppingBit = gatherAct === GATHER_ACT.CHOP ? 1 : 0;
+      let attackingBit = ord === ORDER.ATTACK && !displacing ? 1 : 0;
+      if (deathExit) {
+        movingBit = deathKind[i] === DEATH_KIND.FLEE && deathAlpha > 0.05 ? 1 : 0;
+        carryingBit = 0;
+        choppingBit = 0;
+        attackingBit = 0;
+      }
       const stepLen = Math.hypot(dx, dz);
       const nominal = fx.toFloat(def.speed) || 2;
-      const walkRate = movingBit ? Math.min(1, stepLen / nominal) : 1;
+      const walkRate = deathExit && movingBit ? 1 : (movingBit ? Math.min(1, stepLen / nominal) : 1);
       const walkQ = Math.round(Math.max(0, Math.min(1, walkRate)) * 20);
       const forcePose = followSmooth || fade > 0 || loft > 0.01 || pitch !== 0 || roll !== 0;
       if (forcePose || poseDirty(i, x, z, yaw, size, loft, movingBit, carryingBit, choppingBit, walkQ, attackingBit)) {
@@ -4448,7 +4637,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         const o = slot * 4;
         buf[o] = x;
         buf[o + 1] = z;
-        buf[o + 2] = unitChipLift(loft, (def.pickHeight ?? 1.1) * hero * zoomFor(def));
+        buf[o + 2] =
+          gy + unitChipLift(loft, (def.pickHeight ?? 1.1) * hero * zoomFor(def));
         buf[o + 3] = hp / maxHp;
         owners[slot] = world.owner[i];
         hps[slot] = hp | 0;
@@ -4464,10 +4654,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         }
       }
     }
-    profSplit('pose');
+    profSplit?.('unitPose');
     for (let s = 0; s < hbSelCount; s++) {
       const o = s * 4;
-      renderer.writeHealthBar?.(hbSel[o], hbSel[o + 1], hbSel[o + 2], hbSel[o + 3], {
+      renderer.writeHealthBarAtY?.(hbSel[o], hbSel[o + 1], hbSel[o + 2], hbSel[o + 3], {
         armor: false,
         holy: false,
         owner: hbSelOwner[s],
@@ -4478,7 +4668,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     for (let s = 0; s < hbHurtCount; s++) {
       const o = s * 4;
-      renderer.writeHealthBar?.(hbHurt[o], hbHurt[o + 1], hbHurt[o + 2], hbHurt[o + 3], {
+      renderer.writeHealthBarAtY?.(hbHurt[o], hbHurt[o + 1], hbHurt[o + 2], hbHurt[o + 3], {
         armor: false,
         holy: false,
         owner: hbHurtOwner[s],
@@ -4576,6 +4766,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
     }
     renderer.endHealthBars?.();
+    profSplit?.('healthBars');
     if (session.agoras?.length) {
       const ringAgoras = [];
       for (let ai = 0; ai < session.agoras.length; ai++) {
@@ -4609,7 +4800,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
     }
     inputApi.syncControlGroupMarks?.();
-    profSplit('overlay');
+    profSplit?.('selectionOverlay');
     if (renderer.syncUnitAuras) {
       renderer.syncUnitAuras(
         n,
@@ -4681,7 +4872,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       for (let s = take; s < OVERLAY_MAX_SHIELDS; s++) shieldSlots[s].r = 0;
       renderer.syncHolyShields(take > 0 ? shieldSlots : null);
     }
-    profSplit('fx');
+    profSplit?.('statusFx');
     if (DEBUG_KOTH && matchMeta.mode === 'koth' && performance.now() - lastRenderDebugAt > 3000) {
       lastRenderDebugAt = performance.now();
       console.info('[KOTH] render frame', {
@@ -4759,10 +4950,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     syncActionRadialTracksFromSim();
     pushSelectionFollow();
-    profSplit('worldFx');
+    profSplit?.('worldFxSync');
     renderer.commit();
-    inputLatency.rendered(displayTick);
-    profSplit('commit');
+    if (inputLatency.enabled) inputLatency.rendered(displayTick);
+    if (cameraLatency.enabled) cameraLatency.rendered();
+    profSplit?.('batchFlush');
     finishFrameProf(frameT0);
   });
 
@@ -4988,8 +5180,6 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
       stressPerSide: cfg.stressPerSide ?? 0,
       animStressPerSide: cfg.animStressPerSide ?? 0,
       profileSim: cfg.profileSim === true
-        || (cfg.stressPerSide | 0) > 0
-        || (cfg.animStressPerSide | 0) > 0
         || new URLSearchParams(location.search).has('profileSim'),
       garden: cfg.garden,
       skipDefaultSpawns: cfg.skipDefaultSpawns
@@ -5055,6 +5245,11 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
   }
   ctx.session.setHumanPlayers(humanPlayers);
   ctx.session.replayConfig = replayConfigFromLive(cfg);
+  if (!cfg.watchingReplay) matchRosterNames = {};
+  else {
+    const taped = normalizeOwnerNames(cfg.rosterNames);
+    if (Object.keys(taped).length) matchRosterNames = taped;
+  }
   ctx.session.replayGarden = cfg.garden ?? null;
   if (cfg.watchingReplay) {
     ctx.session.watchingReplay = true;
@@ -5371,6 +5566,8 @@ function ownerStats(world) {
 }
 
 let lobbyResultSeats = null;
+/** Owner names from the seats that started the current match. Survives a leave. */
+let matchRosterNames = {};
 
 function winnerName(winner) {
   const seats = lobbyResultSeats;
@@ -5801,6 +5998,7 @@ async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
     }
     if (!cfg.localSolo) matchLobby?.attachSession?.(ctx.session);
     lobbyResultSeats = Array.isArray(snapshot.seats) ? snapshot.seats : [];
+    matchRosterNames = namesFromLobbySeats(lobbyResultSeats);
     sideMenu?.close?.();
     ctx.matchStory?.playIntro(garden?.story);
     const label = snapshot.mode === 'teams'

@@ -1143,5 +1143,10 @@ export function createReplayController(deps) {
     getHead,
     followRemote,
     camPose: (owner, tick) => replayCamPose(state.file?.cams, owner, tick),
+    ownerNames() {
+      const names = state.file?.names;
+      if (!names || typeof names !== 'object' || Array.isArray(names)) return null;
+      return names;
+    },
   };
 }

@@ -2959,6 +2959,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   applyShadowState();
 
   let frameCb = null;
+  let frameCpuTimingEnabled = false;
+  let frameCpuTimingLast = null;
   /** @type {Map<number, { x: number, z: number, radius: number, generation: number, endsAtMs: number }>} */
   const groundFires = new Map();
   // Continuous FX intervals come from fxQuality (settings slider); see applyFxQuality.
@@ -2984,6 +2986,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
 
   onBeforeRender(scene, (deltaMs) => {
+    const timeCpuFrame = frameCpuTimingEnabled;
+    const hookT0 = timeCpuFrame ? performance.now() : 0;
     if (xrEye()) {
       poseXrShadowCamera();
       scene.camera = xrFit;
@@ -2991,17 +2995,24 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     } else if (scene.camera !== camera) scene.camera = camera;
     // Stepped on large boards, fixed on normal ones. A still camera does not write.
     syncShadowCoverage();
+    const shadowT1 = timeCpuFrame ? performance.now() : 0;
     // Celestial spin demo (no-op unless toggled). Uses wall-clock delta so the
     // sun keeps sweeping even when the sim is paused.
     celestial.update(deltaMs);
-    terrain?.update?.(viewCamera(), deltaMs);
+    const celestialT1 = timeCpuFrame ? performance.now() : 0;
+    const terrainTiming = terrain?.update?.(viewCamera(), deltaMs, timeCpuFrame);
+    const terrainT1 = timeCpuFrame ? performance.now() : 0;
     fogApi?.updateLod?.(viewCamera(), deltaMs);
+    const scenePrepT1 = timeCpuFrame ? performance.now() : 0;
     // Freeze FX aging while sim is paused so bolts/trails don't burn out.
     const fxDt = fxPaused ? 0 : deltaMs;
     buildingProps.update?.(fxDt);
     const fxStep = Math.min(100, Math.max(0, fxDt));
     particleClockMs += fxStep;
     if (fxStep > 0) buildingFire.tick(fxStep / 1000);
+    const buildingFxT1 = timeCpuFrame ? performance.now() : 0;
+    let emitFxT1 = buildingFxT1;
+    let particlesT1 = buildingFxT1;
     if (fxEnabled) {
       // Quality slider scales all socket cadences (default unitFxIntervalMs=80 → 1×).
       const cadenceScale = Math.max(0.5, (unitFxIntervalMs || 80) / 80);
@@ -3026,9 +3037,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         emitBurningTreeFires(fxStep);
         emitGroundFirePatches(fxStep);
       }
+      emitFxT1 = timeCpuFrame ? performance.now() : 0;
       particles.update(fxDt);
+      particlesT1 = timeCpuFrame ? performance.now() : 0;
       unitAuras.update(fxDt);
     }
+    const ambientFxT1 = timeCpuFrame ? performance.now() : 0;
     agoraProps.update?.(viewCamera());
     monkLobFx.update(fxDt);
     sporeBloomFx.update(fxDt, fxSimTick);
@@ -3048,6 +3062,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       lightningFlash = 0;
       sky.intensity = skyBaseIntensity;
     }
+    const worldFxT1 = timeCpuFrame ? performance.now() : 0;
     if (vatEnabled && !fxPaused) {
       const dt = Math.min(0.1, Math.max(0, deltaMs / 1000));
       for (const batch of typeBatches.values()) {
@@ -3058,9 +3073,41 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         }
       }
     }
+    const appT0 = timeCpuFrame ? performance.now() : 0;
     if (frameCb) frameCb(deltaMs);
+    const appT1 = timeCpuFrame ? performance.now() : 0;
     // After sync so helix puffs spawn on this frame's orb, not last frame's.
     fireballFx.update(fxDt);
+    if (timeCpuFrame) {
+      const hookT1 = performance.now();
+      frameCpuTimingLast = {
+        preAppMs: appT0 - hookT0,
+        scenePrepMs: scenePrepT1 - hookT0,
+        shadowMs: shadowT1 - hookT0,
+        celestialMs: celestialT1 - shadowT1,
+        terrainMs: terrainT1 - celestialT1,
+        terrainGlintMs: terrainTiming?.glintMs ?? 0,
+        terrainBackdropMs: terrainTiming?.backdropMs ?? 0,
+        terrainSceneryMs: terrainTiming?.sceneryMs ?? 0,
+        sceneryAnimationMs: terrainTiming?.sceneryAnimationMs ?? 0,
+        sceneryLodMs: terrainTiming?.sceneryLodMs ?? 0,
+        sceneryHarvestMs: terrainTiming?.sceneryHarvestMs ?? 0,
+        sceneryShownMs: terrainTiming?.sceneryShownMs ?? 0,
+        terrainLodMs: terrainTiming?.lodMs ?? 0,
+        terrainDoodadsMs: terrainTiming?.doodadsMs ?? 0,
+        fogLodMs: scenePrepT1 - terrainT1,
+        ambientFxMs: ambientFxT1 - scenePrepT1,
+        buildingFxMs: buildingFxT1 - scenePrepT1,
+        emitFxMs: emitFxT1 - buildingFxT1,
+        particlesMs: particlesT1 - emitFxT1,
+        auraUpdateMs: ambientFxT1 - particlesT1,
+        worldFxMs: worldFxT1 - ambientFxT1,
+        vatMs: appT0 - worldFxT1,
+        appMs: appT1 - appT0,
+        postAppMs: hookT1 - appT1,
+        hookTotalMs: hookT1 - hookT0,
+      };
+    }
   });
 
   /** First-sight bursts so new tree / ground fires don't trickle in. */
@@ -6082,6 +6129,20 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       healthBars.write(x, y, z, lift, ratio, flags);
     },
 
+    /** Unit-chip path when pose sync already resolved terrain height. */
+    writeHealthBarAtY(x, z, y, ratio, flags) {
+      if (screenshotHudHidden) return;
+      if (LOD_ENABLED) {
+        const eye = cameraEyePos();
+        const dx = eye.x - x;
+        const dy = eye.y - y;
+        const dz = eye.z - z;
+        if (dx * dx + dz * dz > FX_DISTANCE_SQ) return;
+        if (dx * dx + dy * dy + dz * dz > FX_DISTANCE_SQ) return;
+      }
+      healthBars.write(x, y, z, 0, ratio, flags);
+    },
+
     buildingChipHeight(typeId) {
       return buildingProps.chipHeight?.(typeId) ?? roofChipLift(0, DEFAULT_BUILDING_ROOF) * MODEL_BASE_SCALE;
     },
@@ -6197,6 +6258,16 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     onFrame(cb) {
       frameCb = cb;
+    },
+
+    setFrameCpuTimingEnabled(on) {
+      frameCpuTimingEnabled = !!on;
+      frameCpuTimingLast = null;
+    },
+
+    /** Previous onBeforeRender hook; actual WebGPU execution is reported separately. */
+    frameCpuTiming() {
+      return frameCpuTimingLast ? { ...frameCpuTimingLast } : null;
     },
 
     captureScreenProjection(width, height) {

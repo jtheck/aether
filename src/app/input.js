@@ -13,6 +13,7 @@ import { canvasAimClient, setPadOsCursorHidden, shouldYieldPadToPointer } from '
 import { createGamepadAdapter } from './input/gamepad.js';
 import { openOsKbd } from './osKbd.js';
 import { aetherSteam, createSteamOverlayGuard } from './steam.js';
+import { cameraLatency } from './cameraLatency.js';
 
 /**
  * @param {object} opts
@@ -59,8 +60,14 @@ export function setupInput(opts) {
     window: win,
     root: win ?? globalThis,
   });
+  if (cameraLatency.enabled) {
+    camera.setInputObserver?.((kind, eventAt) => cameraLatency.begin(kind, eventAt));
+  }
   const pad = createGamepadAdapter({
     camera,
+    // Sample immediately before cameraController.tick in the renderer callback.
+    // A second rAF registered after the engine can otherwise add one full frame.
+    autoStart: false,
     active: opts.inputActive,
     yieldPad: () => overlay.isActive(),
     getViewport: () => canvas.getBoundingClientRect?.(),
@@ -160,6 +167,7 @@ export function setupInput(opts) {
   });
 
   return {
+    pollGamepad: () => pad.tick(),
     setLocalPlayerId: (id) => game.setLocalPlayerId(id),
     setSelectedBuffer: (buf) => game.setSelectedBuffer(buf),
     setInputEnabled: (enabled) => game.setInputEnabled(enabled),
@@ -202,6 +210,7 @@ export function setupInput(opts) {
       overlay.dispose();
       showOsCursor();
       renderer.setGamepadCursorFollow?.(false);
+      camera.setInputObserver?.(null);
       pad.dispose();
       hub.dispose();
     },

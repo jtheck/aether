@@ -37,6 +37,7 @@ describe('death behavior', () => {
       assert.equal(origin.y, 0);
       assert.equal(origin.z, 0);
       assert.equal(origin.alpha, 1);
+      assert.equal(origin.scale, 1);
 
       const shot = sampleBalloon(0.10, seed);
       const shotH = Math.hypot(shot.x, shot.z);
@@ -56,28 +57,40 @@ describe('death behavior', () => {
       assert.equal(sky.alpha, 1);
 
       assert.ok(sampleBalloon(0.5, seed).y > -0.01);
+      assert.ok(Math.abs(sampleBalloon(0.5, seed).scale - 0.625) < 1e-6, `seed ${seed} mid shrink`);
       assert.ok(sampleBalloon(0.97, seed).alpha < 0.5);
+      assert.ok(sampleBalloon(0.97, seed).scale > 0.25);
       assert.equal(sampleBalloon(1, seed).alpha, 0);
-      assert.equal(sampleBalloon(1, seed).scale, 0);
+      assert.equal(sampleBalloon(1, seed).scale, 0.25);
     }
   });
 
-  it('bolts villagers off the map at a steady run', () => {
-    const early = sampleFlee(0.2, -1, 0);
+  it('sprints villagers off the map on a seeded bow', () => {
+    const early = sampleFlee(0.2, -1, 0, 1);
     assert.ok(early.x < -140);
-    assert.ok(Math.abs(early.z) < 1e-6);
+    assert.ok(Math.abs(early.z) > 15, `lateral ${early.z}`);
     assert.equal(early.alpha, 1);
     assert.equal(early.moving, true);
-    assert.equal(early.yaw, Math.atan2(-1, 0));
+    assert.ok(Math.abs(early.yaw - Math.atan2(-1, 0)) > 0.12, `yaw ${early.yaw}`);
 
-    const a = sampleFlee(0.4, 0, 1);
-    const b = sampleFlee(0.8, 0, 1);
+    const laterals = [1, 11, 42, 99].map((seed) => sampleFlee(0.35, 0, 1, seed).x);
+    const spread = Math.max(...laterals) - Math.min(...laterals);
+    assert.ok(spread > 60, `seed spread ${spread}`);
+    assert.ok(laterals.some((v) => v > 20) && laterals.some((v) => v < -20));
+
+    const a = sampleFlee(0.4, 0, 1, 3);
+    const b = sampleFlee(0.8, 0, 1, 3);
     const first = a.z;
     const second = b.z - a.z;
     assert.ok(Math.abs(first - second) / first < 0.15, `speed dipped ${first} then ${second}`);
     assert.ok(b.z > 600);
+    assert.ok(Math.abs(b.x) > 20, `bow flattened ${b.x}`);
 
-    const gone = sampleFlee(1, 0, 1);
+    const origin = sampleFlee(0, 0, 1, 3);
+    assert.equal(origin.x, 0);
+    assert.equal(origin.z, 0);
+
+    const gone = sampleFlee(1, 0, 1, 3);
     assert.equal(gone.alpha, 0);
     assert.equal(gone.scale, 0);
     assert.ok(gone.z > 800);

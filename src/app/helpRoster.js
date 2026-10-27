@@ -57,13 +57,13 @@ const UNIT_NOTE = {
 };
 
 const BUILDING_NOTE = {
-  camp: 'Wood. Trains Myco.',
+  camp: 'Gathers Wood. Trains Myco.',
   village: 'Villagers gather here. Trains Engineers and Monks.',
   silo: 'Extra storage beside a camp, mine, or farm.',
-  farm: 'Food.',
-  mine: 'Stone and mineral. Upgradable to a Well.',
+  farm: 'Harvests Food.',
+  mine: 'Collects Stone and Minerals. Upgradable to a Well.',
   derrick: 'Drills a Well under a mine.',
-  well: 'Steady mineral income.',
+  well: 'Provides steady mineral income.',
   tower: 'Trains Wizards. Needs a Camp.',
   tavern: 'Recruits Warlocks. Researches Patronage. Needs a Camp.',
   lab: 'Researches Artillery. Needs a Camp.',
@@ -75,6 +75,17 @@ const BUILDING_NOTE = {
   perch: 'Harbor Dirigibles.',
   grove: 'Train Shaman.',
 };
+
+const HELP_RESOURCES = Object.freeze([
+  { id: 'tree', name: 'Tree', urls: ['/assets/models/trees.glb'], note: 'Chop for Wood.' },
+  {
+    id: 'rock-stone',
+    name: 'Mossy and snowy rocks',
+    urls: ['/assets/models/rocks_moss.glb', '/assets/models/rocks_snow.glb'],
+    note: 'Mine for Stone.',
+  },
+  { id: 'rock-plain', name: 'Small rock', urls: ['/assets/models/rocks_plain.glb'], note: 'Mine for Minerals.' },
+]);
 
 const UPGRADE_NOTE = {
   patronage: 'Researched at the Tavern.',
@@ -182,6 +193,16 @@ export function helpBuildingCards() {
       { label: 'Health', pips: helpPips(BUILDING_HP[id] ?? 0, maxHp) },
       { label: 'Time', pips: helpPips(BUILD_TIME[id] ?? 0, maxTime) },
     ],
+  }));
+}
+
+export function helpResourceCards() {
+  return HELP_RESOURCES.map((entry) => ({
+    id: entry.id,
+    name: entry.name,
+    sprites: entry.urls.map(portraitUrl),
+    note: entry.note,
+    stats: [],
   }));
 }
 
@@ -317,11 +338,8 @@ function entryStatsRow(card, statAbbr) {
 function entryRow(card, statAbbr, { compact = false } = {}) {
   const row = document.createElement('div');
   row.className = 'help-entry-row';
-  const portrait = portraitImg(card.sprite, compact);
-  if (portrait) {
-    row.classList.add('help-entry-row--pic');
-    row.append(portrait);
-  }
+  const srcs = card.sprites?.length ? card.sprites : (card.sprite ? [card.sprite] : []);
+  const imgs = srcs.map((src) => portraitImg(src, compact)).filter(Boolean);
   const main = document.createElement('div');
   main.className = 'help-entry-main';
   const name = document.createElement('span');
@@ -334,6 +352,15 @@ function entryRow(card, statAbbr, { compact = false } = {}) {
     note.className = 'help-entry-note';
     note.textContent = card.note;
     main.append(note);
+  }
+  if (imgs.length > 1) {
+    row.classList.add('help-entry-row--pic', 'help-entry-row--ends');
+    row.append(imgs[0], main, ...imgs.slice(1));
+    return row;
+  }
+  if (imgs.length === 1) {
+    row.classList.add('help-entry-row--pic');
+    row.append(imgs[0]);
   }
   row.append(main);
   return row;
@@ -366,6 +393,7 @@ export function mountHelpRoster(root) {
   const units = root.querySelector('#help-units');
   const buildings = root.querySelector('#help-buildings');
   const upgrades = root.querySelector('#help-upgrades');
+  const resources = root.querySelector('#help-resources');
   if (units) {
     fillPairRoster(
       units,
@@ -373,6 +401,10 @@ export function mountHelpRoster(root) {
       helpUnitCards(),
       UNIT_STAT_ABBR,
     );
+  }
+  if (resources) {
+    const cards = helpResourceCards();
+    fillEntryRoster(resources, cards.map((c) => c.id), cards, {});
   }
   if (buildings) fillEntryRoster(buildings, HELP_BUILDING_ORDER, helpBuildingCards(), BUILDING_STAT_ABBR);
   if (upgrades) fillEntryRoster(upgrades, HELP_UPGRADE_ORDER, helpUpgradeCards(), {}, { compact: true });

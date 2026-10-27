@@ -1443,7 +1443,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     const u = 1 - fade;
     const kind = bufs.deathKind[i];
     if (kind === DEATH_KIND.BALLOON) return sampleBalloon(u, bufs.deathSeed[i]).alpha;
-    if (kind === DEATH_KIND.FLEE) return sampleFlee(u, bufs.deathDirX[i], bufs.deathDirZ[i]).alpha;
+    if (kind === DEATH_KIND.FLEE) return sampleFlee(u, bufs.deathDirX[i], bufs.deathDirZ[i], bufs.deathSeed[i]).alpha;
     return fade;
   }
 
@@ -3932,6 +3932,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     const kind = deathKindForType(world.type[i]);
     bufs.deathKind[i] = kind;
     bufs.deathFade[i] = 1;
+    bufs.deathSeed[i] = (
+      Math.imul(i + 1, 374761393) ^ Math.imul(world.px[i] | 0, 668265263) ^ (world.py[i] | 0)
+    ) >>> 0;
     if (kind === DEATH_KIND.FLEE) {
       const note = deathNoteMap.get(i);
       if (note && Math.hypot(note.x, note.z) > 1e-4) {
@@ -3950,10 +3953,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           bufs.deathDirZ[i] = Math.cos(ang);
         }
       }
-    } else if (kind === DEATH_KIND.BALLOON) {
-      bufs.deathSeed[i] = (
-        Math.imul(i + 1, 374761393) ^ Math.imul(world.px[i] | 0, 668265263) ^ (world.py[i] | 0)
-      ) >>> 0;
     }
   }
 
@@ -4506,7 +4505,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           deathAlpha = b.alpha;
           deathExit = true;
         } else if (kind === DEATH_KIND.FLEE) {
-          const f = sampleFlee(u, deathDirX[i], deathDirZ[i]);
+          const f = sampleFlee(u, deathDirX[i], deathDirZ[i], deathSeed[i]);
           x += f.x;
           z += f.z;
           yaw = f.yaw;

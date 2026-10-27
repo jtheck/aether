@@ -177,7 +177,11 @@ try {
     ? `&vat=${encodeURIComponent(process.env.PREBAKE_VAT)}`
     : '';
   // PREBAKE_SPRITES=only skips mesh/VAT and writes portraits alone.
-  const spriteQuery = process.env.PREBAKE_SPRITES === 'only' ? '&sprites=1' : '';
+  // PREBAKE_SPRITE is a comma-separated URL list and also skips mesh/VAT.
+  const spriteList = process.env.PREBAKE_SPRITE
+    ? `&sprite=${encodeURIComponent(process.env.PREBAKE_SPRITE)}`
+    : '';
+  const spriteQuery = (process.env.PREBAKE_SPRITES === 'only' || spriteList) ? `&sprites=1${spriteList}` : '';
   await page.goto(`http://localhost:${PORT}/prebake/prebake.html?auto=1${vatQuery}${spriteQuery}`, {
     waitUntil: 'networkidle',
     timeout: 120_000,

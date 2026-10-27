@@ -231,12 +231,18 @@ function onlyVatUrls() {
   return raw.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
+function onlySpriteUrls() {
+  const raw = new URLSearchParams(location.search).get('sprite');
+  if (!raw) return null;
+  return raw.split(',').map((s) => s.trim()).filter(Boolean);
+}
+
 /** @returns {Promise<object>} */
 export async function runPrebake() {
   const spritesOnly = new URLSearchParams(location.search).has('sprites');
   if (spritesOnly) {
     setStatus('Baking sprites…');
-    const files = await bakeSprites(setStatus);
+    const files = await bakeSprites(setStatus, onlySpriteUrls());
     setStatus(`Done - ${Object.keys(files).length} sprite files`);
     window.__PREBAKE_RESULT__ = { ok: true, files };
     return window.__PREBAKE_RESULT__;

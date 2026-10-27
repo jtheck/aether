@@ -15,13 +15,15 @@ export const DEATH_SHRINK_MS = 450;
 /** Untied-balloon flight, including the fade at the end. */
 export const BALLOON_MS = 3200;
 /**
- * Bolt away from the fight, then the fade. Short on purpose: they should be
- * off the board before the eye settles.
+ * Sprint away from the fight, then the fade. Long enough that the line off
+ * the board can be read, still short of a walk.
  */
-export const FLEE_MS = 1100;
+export const FLEE_MS = 1400;
 
 /** Last slice of the balloon is the fade, after the shot into the sky. */
 const BALLOON_FADE_AT = 0.88;
+/** Hull scale at the moment the mesh is dropped. Shrinks the whole flight. */
+const BALLOON_END_SCALE = 0.25;
 /** Last slice of the bolt is the fade. They are already gone. */
 const FLEE_FADE_AT = 0.84;
 /**
@@ -140,16 +142,36 @@ export function sampleBalloon(u, seed) {
     pitch: Math.sin(t * 16 + s * 0.017) * 0.22 * wobble - sky * 0.65,
     roll: Math.sin(t * 21 + s * 0.013) * 0.48 * wobble,
     alpha,
-    scale: alpha,
+    scale: 1 - (1 - BALLOON_END_SCALE) * t,
   };
 }
 
 /**
- * Run straight along `dirX, dirZ` (already "away from the fight"), full speed
- * the whole way, then fade. No ease-out — easing is what made it look like a walk.
+ * Sideways bow along the sprint, in world units. Zero at the start so the
+ * peel comes out of the death spot. `slope` is d(lat)/d(along).
+ */
+function fleeBow(along, seed) {
+  const s = seed | 0;
+  const sign = hash01(s + 1) < 0.5 ? -1 : 1;
+  const amp = 48 + hash01(s + 4) * 48;
+  const freq = 1.15 + hash01(s + 8) * 0.5;
+  const amp2 = 16 + hash01(s + 12) * 20;
+  const freq2 = 2.2 + hash01(s + 16) * 0.6;
+  const w1 = Math.PI * freq * along;
+  const w2 = Math.PI * freq2 * along;
+  return {
+    lat: sign * (amp * Math.sin(w1) + amp2 * Math.sin(w2)),
+    slope: sign * Math.PI * (amp * freq * Math.cos(w1) + amp2 * freq2 * Math.cos(w2)),
+  };
+}
+
+/**
+ * Run along `dirX, dirZ` (already "away from the fight") at a steady sprint,
+ * with a seeded bow so it is not a ruler line, then fade. No ease-out —
+ * easing is what made it look like a walk.
  * @returns {{ x: number, z: number, yaw: number, alpha: number, scale: number, moving: boolean }}
  */
-export function sampleFlee(u, dirX, dirZ) {
+export function sampleFlee(u, dirX, dirZ, seed) {
   const t = clamp01(u);
   let x = dirX;
   let z = dirZ;
@@ -161,14 +183,18 @@ export function sampleFlee(u, dirX, dirZ) {
   }
   x /= len;
   z /= len;
+  const px = z;
+  const pz = -x;
   const sprintU = Math.min(t, FLEE_FADE_AT) / FLEE_FADE_AT;
   let dist = FLEE_DISTANCE * sprintU;
   if (t > FLEE_FADE_AT) dist += FLEE_FADE_DISTANCE * ((t - FLEE_FADE_AT) / (1 - FLEE_FADE_AT));
+  const bow = fleeBow(dist / FLEE_DISTANCE, seed);
+  const side = bow.slope / FLEE_DISTANCE;
   const alpha = tailAlpha(t, FLEE_FADE_AT);
   return {
-    x: x * dist,
-    z: z * dist,
-    yaw: Math.atan2(x, z),
+    x: x * dist + px * bow.lat,
+    z: z * dist + pz * bow.lat,
+    yaw: Math.atan2(x + px * side, z + pz * side),
     alpha,
     scale: alpha,
     moving: alpha > 0.05,

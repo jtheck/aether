@@ -955,6 +955,7 @@
       padding: 6px 8px; border: 1px solid #232936; border-radius: 3px; background: #10141c;
     }
     #help_pop .help-entry-row--pic { grid-template-columns: auto minmax(0, 1fr); }
+    #help_pop .help-entry-row--ends { grid-template-columns: auto minmax(0, 1fr) auto; }
     #help_pop .help-entry-row > .help-sprite { width: 72px; height: 72px; margin: 0; }
     #help_pop .help-entry-row > .help-sprite.help-sprite-sm { width: 32px; height: 32px; }
     #help_pop .help-entry-main { min-width: 0; }
@@ -1383,6 +1384,7 @@
         <summary>General</summary>
         <div class="help-body">
           <img class="help-hud-diagram" src="/assets/aether-hud.svg" alt="HUD layout diagram" width="297" height="210" decoding="async" />
+          <div id="help-resources" class="help-detail"></div>
           <dl class="help-keys">
             <dt>Combo abilities</dt><dd>With only 4+ villagers and an engineer selected, cast to plant an agora. In King of the Hill you must plant one to survive.</dd>
           </dl>

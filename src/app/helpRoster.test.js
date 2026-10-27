@@ -1,9 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { UNIT } from '../sim/unitTypes.js';
+import { bakedSpriteUrl } from '../render/bakedAssets.js';
 import {
   helpBuildingCards,
   helpPips,
+  helpResourceCards,
   helpUnitCards,
   helpUnitLayout,
   HELP_PIPS,
@@ -48,6 +50,19 @@ describe('help roster cards', () => {
     assert.deepEqual(layout[engineerIdx + 1], { kind: 'gap' });
     const warriorIdx = layout.findIndex((s) => s.kind === 'unit' && s.id === String(UNIT.WARRIOR));
     assert.deepEqual(layout[warriorIdx + 1], { kind: 'unit', id: String(UNIT.CHAMPION) });
+  });
+
+  it('shows the tree, the small rock, and moss with snow on one note', () => {
+    const cards = helpResourceCards();
+    assert.deepEqual(cards.map((c) => c.name), ['Tree', 'Mossy and snowy rocks', 'Small rock']);
+    assert.equal(cards.find((c) => c.name === 'Tree').note, 'Chop for Wood.');
+    assert.equal(cards.find((c) => c.name === 'Small rock').note, 'Mine for Minerals.');
+    const stone = cards.find((c) => c.name === 'Mossy and snowy rocks');
+    assert.deepEqual(stone.sprites, [
+      bakedSpriteUrl('/assets/models/rocks_moss.glb'),
+      bakedSpriteUrl('/assets/models/rocks_snow.glb'),
+    ]);
+    assert.equal(stone.note, 'Mine for Stone.');
   });
 
   it('rates the factory as the toughest, longest building', () => {

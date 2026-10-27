@@ -48,12 +48,14 @@ export const STICK_DEADZONE = 0.18;
 export const STICK_DEADZONE_LEAVE = 0.1;
 /** Remapped |axis| - about a half throw after the look deadzone. */
 export const STICK_SPLIT_HALF = 0.28;
-/** Speed at the half gate; late throw opens up (squared). */
-export const STICK_SPLIT_MIN = 0.32;
-/** Yaw rad/frame once both sticks oppose on Y. */
-export const STICK_SPLIT_YAW = 0.09;
-/** Fraction of camera radius per frame once both sticks oppose on X. */
-export const STICK_SPLIT_ZOOM = 0.024;
+/** Speed fraction at the half gate. Late throw opens up (cubed). */
+export const STICK_SPLIT_MIN = 0.14;
+/** Power on the half-to-full ramp. Higher stays slower longer, then hits the cap. */
+export const STICK_SPLIT_CURVE = 3;
+/** Yaw rad/frame at full oppose. */
+export const STICK_SPLIT_YAW = 0.105;
+/** Fraction of camera radius per frame at full oppose. */
+export const STICK_SPLIT_ZOOM = 0.04;
 /** Look/aim scale while a split yaw or zoom is live. */
 export const STICK_SPLIT_LOOK = 0.18;
 /** Remain per frame while a split homes the field target. */
@@ -307,7 +309,7 @@ export function playSelectBoth(buttons) {
 
 /**
  * Both sticks live, opposite on one axis, each about half out → −1..1.
- * Speed uses both throws (mean |axis|), squared from the half gate to full.
+ * Speed uses both throws (mean |axis|), cubed from the half gate to full.
  * `dir` is sign(b − a).
  * @param {number} a
  * @param {number} b
@@ -325,7 +327,8 @@ export function stickSplitOppose(a, b, live) {
   if (!dir) return 0;
   const t = ((aa + bb) * 0.5 - STICK_SPLIT_HALF) / (1 - STICK_SPLIT_HALF);
   const u = t > 1 ? 1 : t < 0 ? 0 : t;
-  return dir * (STICK_SPLIT_MIN + (1 - STICK_SPLIT_MIN) * u * u);
+  const eased = u ** STICK_SPLIT_CURVE;
+  return dir * (STICK_SPLIT_MIN + (1 - STICK_SPLIT_MIN) * eased);
 }
 
 /**

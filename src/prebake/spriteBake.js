@@ -466,9 +466,11 @@ async function pngBytes(imageData) {
 
 /**
  * @param {(msg: string) => void} setStatus
+ * @param {string[] | null} [onlyUrls] bake these roster URLs and merge them
+ *   into the existing sprite index. Null bakes the full roster.
  * @returns {Promise<Record<string, string | ArrayBuffer>>}
  */
-export async function bakeSprites(setStatus) {
+export async function bakeSprites(setStatus, onlyUrls = null) {
   const canvas = document.getElementById('spriteCanvas');
   if (!canvas) throw new Error('missing #spriteCanvas');
   canvas.width = RENDER;
@@ -515,6 +517,7 @@ export async function bakeSprites(setStatus) {
   const files = {};
   /** @type {Record<string, string>} */
   const byUrl = {};
+  const want = onlyUrls?.length ? new Set(onlyUrls) : null;
 
   async function shot(clearByte) {
     scene.clearColor = { r: clearByte, g: clearByte, b: clearByte, a: 1 };
@@ -527,7 +530,12 @@ export async function bakeSprites(setStatus) {
   }
 
   try {
-    const entries = spriteBakeEntries();
+    const entries = spriteBakeEntries().filter((entry) => !want || want.has(entry.url));
+    if (want && entries.length !== want.size) {
+      const have = new Set(entries.map((entry) => entry.url));
+      const missing = [...want].filter((url) => !have.has(url));
+      throw new Error(`sprite bake list missing ${missing.join(', ')}`);
+    }
     for (let i = 0; i < entries.length; i++) {
       const entry = entries[i];
       const stem = bakedMeshStem(entry.url);
@@ -536,6 +544,8 @@ export async function bakeSprites(setStatus) {
       const roots = container.entities ?? [];
       lite.addToScene(scene, container);
       scene.camera = camera;
+      camera.alpha = entry.alpha;
+      camera.beta = entry.beta;
       // Lite's glTF root mirrors X, so this camera sits behind the mesh.
       // A half turn brings the front around to the lit three-quarter view.
       for (const root of roots) facePortrait(root);
@@ -597,6 +607,18 @@ export async function bakeSprites(setStatus) {
     lite.disposeEngine(engine);
   }
 
-  files['sprites/index.json'] = JSON.stringify({ cellPx: CELL, byUrl }, null, 2);
+  let indexByUrl = byUrl;
+  if (want) {
+    try {
+      const res = await fetch('/assets/baked/sprites/index.json');
+      if (res.ok) {
+        const existing = await res.json();
+        indexByUrl = { ...(existing.byUrl ?? {}), ...byUrl };
+      }
+    } catch {
+      // First bake: the new portraits are the whole index.
+    }
+  }
+  files['sprites/index.json'] = JSON.stringify({ cellPx: CELL, byUrl: indexByUrl }, null, 2);
   return files;
 }

@@ -1,5 +1,13 @@
-// Models that get a portrait sprite: units, buildings, upgrades, and DLC skins.
-// Scenery and props stay out — those are not selection or help icons.
+// Models that get a portrait sprite: units, buildings, upgrades, DLC skins,
+// and the field resources shown in the manual. Other props stay out.
+
+/** Trees and the three rocks. Portraits are for the manual. */
+export const RESOURCE_SPRITE_URLS = Object.freeze([
+  '/assets/models/trees.glb',
+  '/assets/models/rocks_plain.glb',
+  '/assets/models/rocks_moss.glb',
+  '/assets/models/rocks_snow.glb',
+]);
 
 import { allDlcMeshUrls, allDlcVatDefs } from '../app/dlcCatalog.js';
 import { bakedMeshStem } from '../render/bakedAssets.js';
@@ -33,18 +41,33 @@ const ZOOM_BY_STEM = {
   apc: 1.3,
 };
 
-/** @returns {{ url: string, zoom: number }[]} */
+/** Three-quarter portrait. Alpha is the orbit, beta is the height (π/2 is level). */
+const VIEW_ALPHA = -Math.PI * 0.75;
+const VIEW_BETA = Math.PI / 3;
+
+/**
+ * Upgrades are flat icons. Eighteen degrees off the face, and the same above
+ * the horizon, so the front reads instead of the edge.
+ */
+const UPGRADE_ALPHA = -Math.PI / 2 - Math.PI / 10;
+const UPGRADE_BETA = Math.PI / 2 - Math.PI / 10;
+
+/** @returns {{ url: string, zoom: number, alpha: number, beta: number }[]} */
 export function spriteBakeEntries() {
+  const upgradeUrls = new Set(Object.values(UPGRADE_MODEL_URLS));
   const urls = new Set([
     ...Object.values(UNIT_MODEL_URLS),
     ...Object.values(VAT_UNIT_DEFS).map((def) => def.url),
     ...Object.values(BUILDING_MODEL_URLS),
-    ...Object.values(UPGRADE_MODEL_URLS),
+    ...upgradeUrls,
     ...allDlcMeshUrls(),
     ...allDlcVatDefs().map((def) => def.url),
+    ...RESOURCE_SPRITE_URLS,
   ]);
   return [...urls].sort().map((url) => ({
     url,
     zoom: ZOOM_BY_STEM[bakedMeshStem(url)] ?? 1,
+    alpha: upgradeUrls.has(url) ? UPGRADE_ALPHA : VIEW_ALPHA,
+    beta: upgradeUrls.has(url) ? UPGRADE_BETA : VIEW_BETA,
   }));
 }

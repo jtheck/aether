@@ -43,6 +43,10 @@
     "/assets/models/warrior.glb": "warrior.png",
     "/assets/models/well.glb": "well.png",
     "/assets/models/wizard.glb": "wizard.png",
-    "/assets/models/workshop.glb": "workshop.png"
+    "/assets/models/workshop.glb": "workshop.png",
+    "/assets/models/rocks_moss.glb": "rocks_moss.png",
+    "/assets/models/rocks_plain.glb": "rocks_plain.png",
+    "/assets/models/rocks_snow.glb": "rocks_snow.png",
+    "/assets/models/trees.glb": "trees.png"
   }
 }

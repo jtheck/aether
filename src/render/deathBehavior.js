@@ -142,7 +142,8 @@ export function sampleBalloon(u, seed) {
     pitch: Math.sin(t * 16 + s * 0.017) * 0.22 * wobble - sky * 0.65,
     roll: Math.sin(t * 21 + s * 0.013) * 0.48 * wobble,
     alpha,
-    scale: 1 - (1 - BALLOON_END_SCALE) * t,
+    // Quarter size while the hull is still opaque. The last slice only fades.
+    scale: 1 - (1 - BALLOON_END_SCALE) * smoothstep(0, BALLOON_FADE_AT, t),
   };
 }
 

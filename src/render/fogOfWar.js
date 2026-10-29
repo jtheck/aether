@@ -1,5 +1,8 @@
 // Client-only fog of war. Vision is a 20 Hz tile stamp - not in lockstep/checksums.
 // Two overlay veils: visited and never-seen. Current sight is a hole - no wash.
+// The clear center of a hole stays sharp. The rim and the shroud edge are both
+// painted by blurring the veil alphas, so dark-to-light falls off as gradually
+// as black-to-dark.
 // Hostile units stay through the overlay trail and hide when that veil is most
 // opaque. Enemy buildings hide until seen, then last-known while fogged.
 // Changing local player or shared-vision owners wipes explored tiles and
@@ -69,6 +72,29 @@ export function fogSortOrigin(eyeX, eyeY, eyeZ, axisX, axisY, axisZ) {
 const TEXEL_ALIGN = 64;
 /** Soft overlay + hide skirt past the hard explored circle. */
 const EDGE_FADE_TILES = 3;
+/**
+ * Paint blur for the veil alphas. Flat shroud, flat visited ground, and the
+ * clear middle of a hole stay raw. The rim and the shroud edge both use it,
+ * so dark-to-light falls off as gradually as black-to-dark.
+ */
+const FOG_BLUR_R = 3;
+const FOG_BLUR_W = (() => {
+  const sigma = 1.5;
+  const n = FOG_BLUR_R * 2 + 1;
+  const w = new Float64Array(n * n);
+  let sum = 0;
+  let k = 0;
+  const inv = 1 / (2 * sigma * sigma);
+  for (let z = -FOG_BLUR_R; z <= FOG_BLUR_R; z++) {
+    for (let x = -FOG_BLUR_R; x <= FOG_BLUR_R; x++, k++) {
+      const g = Math.exp(-(x * x + z * z) * inv);
+      w[k] = g;
+      sum += g;
+    }
+  }
+  for (let i = 0; i < w.length; i++) w[i] /= sum;
+  return w;
+})();
 /** Overlay pixel alpha on explored tiles that are no longer in sight. */
 export const VISITED_ALPHA = 110;
 /** Remaining cover (seen-ness) once a visited tile finishes fading. */
@@ -591,10 +617,9 @@ export function createFogOfWar() {
     if (!cover) return;
     const n = cover.length;
     for (let i = 0; i < n; i++) {
-      const seen = explored && explored[i];
       const c = cover[i];
-      if (seen || c > 0) markDirty(i);
-      const floor = seen ? VISITED_COVER : 0;
+      const floor = coverFloor(i);
+      if ((explored && explored[i]) || c > 0 || floor > 0) markDirty(i);
       if (c > floor) markHot(i);
     }
   }
@@ -634,7 +659,7 @@ export function createFogOfWar() {
         hot[w++] = i;
         continue;
       }
-      const floor = explored && explored[i] ? VISITED_COVER : 0;
+      const floor = coverFloor(i);
       const v = cover[i];
       if (v <= floor) {
         inHot[i] = 0;
@@ -746,8 +771,12 @@ export function createFogOfWar() {
     const tz = Math.floor((z + halfZ) / TILE_SIZE_F);
     if (tx < 0 || tz < 0 || tx >= width || tz >= height) return false;
     const i = tz * width + tx;
-    const floor = explored && explored[i] ? VISITED_COVER : 0;
-    return cover[i] > floor;
+    return cover[i] > coverFloor(i);
+  }
+
+  /** Cover the veil rests on once sight has left. Hard tiles sit at visited. */
+  function coverFloor(i) {
+    return explored && explored[i] ? VISITED_COVER : 0;
   }
 
   function isVisionAlly(owner) {
@@ -868,19 +897,7 @@ export function createFogOfWar() {
         const hard = tx >= xh0 && tx <= xh1;
         if (sign > 0) {
           const d2 = hard ? 0 : (tx - cx) * (tx - cx) + dz2;
-          if (sight) sight[i] += 1;
-          if (hard) {
-            if (visible) visible[i] += 1;
-            if (explored) explored[i] = 1;
-          }
-          if (cover) {
-            const c = hard ? 255 : ((fadeDen - (d2 - hardR2)) * 255 / fadeDen) | 0;
-            if (c > cover[i]) {
-              cover[i] = c;
-              markDirty(i);
-            }
-          }
-          markHot(i);
+          applyStamp(i, hard, d2, hardR2, fadeDen);
         } else {
           if (sight && sight[i] > 0) sight[i] -= 1;
           if (hard && visible && visible[i] > 0) visible[i] -= 1;
@@ -1273,29 +1290,83 @@ export function createFogOfWar() {
     buf[o + 3] = alpha;
   }
 
+  /** Unseen mask, visited mask. Same split the raw skirt uses at load. */
+  function layersOf(seen, out) {
+    if (seen <= 0) {
+      out[0] = 255;
+      out[1] = 0;
+      return;
+    }
+    if (seen >= 255) {
+      out[0] = 0;
+      out[1] = 0;
+      return;
+    }
+    if (seen <= VISITED_COVER) {
+      const t = seen / VISITED_COVER;
+      out[0] = Math.round(255 * (1 - t));
+      out[1] = Math.round(255 * t);
+      return;
+    }
+    const t = (seen - VISITED_COVER) / (255 - VISITED_COVER);
+    out[0] = 0;
+    out[1] = Math.round(255 * (1 - t));
+  }
+
+  const layerOut = [0, 0];
+
+  /** True when a neighbor's cover differs. Flat ground stays on the raw texel. */
+  function veilVaries(tx, tz, self) {
+    for (let z = -FOG_BLUR_R; z <= FOG_BLUR_R; z++) {
+      for (let x = -FOG_BLUR_R; x <= FOG_BLUR_R; x++) {
+        if (x === 0 && z === 0) continue;
+        let nx = tx + x;
+        let nz = tz + z;
+        if (nx < 0) nx = 0;
+        else if (nx >= width) nx = width - 1;
+        if (nz < 0) nz = 0;
+        else if (nz >= height) nz = height - 1;
+        if (coverAt(nx, nz) !== self) return true;
+      }
+    }
+    return false;
+  }
+
   function paintTexel(tx, tz) {
     const o = (tz * texW + tx) * 4;
-    const seen = cover
-      ? coverAt(tx, tz)
-      : visible && visible[tz * width + tx] > 0
-        ? 255
-        : 0;
     let unseen;
     let visitedA;
-    if (seen <= 0) {
-      unseen = 255;
-      visitedA = 0;
-    } else if (seen >= 255) {
-      unseen = 0;
-      visitedA = 0;
-    } else if (seen <= VISITED_COVER) {
-      const t = seen / VISITED_COVER;
-      unseen = Math.round(255 * (1 - t));
-      visitedA = Math.round(255 * t);
+    if (!cover) {
+      layersOf(visible && visible[tz * width + tx] > 0 ? 255 : 0, layerOut);
+      unseen = layerOut[0];
+      visitedA = layerOut[1];
     } else {
-      const t = (seen - VISITED_COVER) / (255 - VISITED_COVER);
-      unseen = 0;
-      visitedA = Math.round(255 * (1 - t));
+      const self = coverAt(tx, tz);
+      if (!sight || !veilVaries(tx, tz, self)) {
+        layersOf(self, layerOut);
+        unseen = layerOut[0];
+        visitedA = layerOut[1];
+      } else {
+        let u = 0;
+        let v = 0;
+        let k = 0;
+        for (let bz = -FOG_BLUR_R; bz <= FOG_BLUR_R; bz++) {
+          for (let bx = -FOG_BLUR_R; bx <= FOG_BLUR_R; bx++, k++) {
+            let nx = tx + bx;
+            let nz = tz + bz;
+            if (nx < 0) nx = 0;
+            else if (nx >= width) nx = width - 1;
+            if (nz < 0) nz = 0;
+            else if (nz >= height) nz = height - 1;
+            layersOf(coverAt(nx, nz), layerOut);
+            const weight = FOG_BLUR_W[k];
+            u += weight * layerOut[0];
+            v += weight * layerOut[1];
+          }
+        }
+        unseen = Math.round(u);
+        visitedA = Math.round(v);
+      }
     }
     writeLayer(pixels, o, unseen);
     writeLayer(visitedPixels, o, visitedA);
@@ -1321,9 +1392,29 @@ export function createFogOfWar() {
     visitedPixels.fill(0);
   }
 
+  function expandDirtyBlur() {
+    if (!dirty || dirtyN <= 0 || width < 1) return;
+    const n0 = dirtyN;
+    const r = FOG_BLUR_R;
+    for (let d = 0; d < n0; d++) {
+      const i = dirtyList[d];
+      const tz = (i / width) | 0;
+      const tx = i - tz * width;
+      const z0 = tz - r > 0 ? tz - r : 0;
+      const z1 = tz + r < height ? tz + r : height - 1;
+      const x0 = tx - r > 0 ? tx - r : 0;
+      const x1 = tx + r < width ? tx + r : width - 1;
+      for (let z = z0; z <= z1; z++) {
+        const row = z * width;
+        for (let x = x0; x <= x1; x++) markDirty(row + x);
+      }
+    }
+  }
+
   function paintPixels(incremental) {
     if (!pixels || !visitedPixels) return;
     if (incremental) {
+      expandDirtyBlur();
       for (let d = 0; d < dirtyN; d++) {
         const i = dirtyList[d];
         const tz = (i / width) | 0;

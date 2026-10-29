@@ -4120,7 +4120,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
   }
 
-  function writeInstanceAt(i, typeId, owner, x, z, diameter, yaw = 0, moving = false, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false, walkRate = 1, attacking = false) {
+  function writeInstanceAt(i, typeId, owner, x, z, diameter, yaw = 0, moving = false, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false, walkRate = 1, attacking = false, meshScale = 1) {
     // Retired entities have no slot on purpose. Report success so the caller's
     // unmapped tally does not read this as a broken mapping and force a rebuild.
     if (entityRetired[i]) return true;
@@ -4133,7 +4133,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (slot >= tiCount) return false;
     const def = getUnitDef(typeId);
     const zoomS = currentUnitZoomScale(def);
-    writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, batch === fallback, loft, pitch, roll, groundYOverride, carrying, chopping, walkRate, attacking, zoomS);
+    writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, batch === fallback, loft, pitch, roll, groundYOverride, carrying, chopping, walkRate, attacking, zoomS, meshScale);
     if (monkLobFx.isFlying(i)) monkLobFx.notePose(i, x, z);
     if (diameter > 0.05) {
       const gy = Number.isFinite(groundYOverride) ? groundYOverride : groundYAt(x, z);
@@ -4332,7 +4332,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   const screenOut = { x: 0, y: 0 };
 
-  function writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, useSphereY, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false, walkRate = 1, attacking = false, zoomOverride = NaN) {
+  function writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, useSphereY, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false, walkRate = 1, attacking = false, zoomOverride = NaN, meshScale = 1) {
     const baseGy = Number.isFinite(groundYOverride) ? groundYOverride : groundYAt(x, z);
     const gy = baseGy + (loft || 0);
     let animateVat = diameter > 0;
@@ -4393,7 +4393,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     } else if (diameter <= 0) {
       writeUnitMatrix(batch.matrices, slot, x, z, 0, yaw, false, gy, pitch, roll);
     } else {
-      const scale = (batch.vatScale ?? 1) * zoomS;
+      const scale = (batch.vatScale ?? 1) * zoomS * (meshScale > 0 ? meshScale : 0);
       const lift = batch.vatFootLift ?? 0;
       writeUnitMatrix(batch.matrices, slot, x, z, scale, yaw, false, gy + lift, pitch, roll);
     }
@@ -5818,8 +5818,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       }
     },
 
-    writeInstance(i, typeId, owner, x, z, diameter, yaw = 0, moving = false, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false, walkRate = 1, attacking = false) {
-      return writeInstanceAt(i, typeId, owner, x, z, diameter, yaw, moving, loft, pitch, roll, groundYOverride, carrying, chopping, walkRate, attacking);
+    writeInstance(i, typeId, owner, x, z, diameter, yaw = 0, moving = false, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false, walkRate = 1, attacking = false, meshScale = 1) {
+      return writeInstanceAt(i, typeId, owner, x, z, diameter, yaw, moving, loft, pitch, roll, groundYOverride, carrying, chopping, walkRate, attacking, meshScale);
     },
 
     /**

@@ -3,31 +3,31 @@
   "version": 3,
   "sockets": [
     {
-      "name": "spawn_anchor",
-      "x": -0.5513424873352051,
-      "y": 0.7969854474067688,
-      "z": -8.04394245147705,
-      "scale": 1,
-      "yaw": 0,
-      "pitch": 0,
-      "roll": 0
-    },
-    {
       "name": "smoke_anchor",
-      "x": -4.299328804016113,
-      "y": 5.186521053314209,
-      "z": -4.670814514160156,
-      "scale": 0.528732180595398,
+      "x": -3.8862104415893555,
+      "y": 3.2792916297912598,
+      "z": -2.5242319107055664,
+      "scale": 0.34265610575675964,
       "yaw": 0,
       "pitch": 0,
       "roll": 0
     },
     {
       "name": "smoke_anchor.001",
-      "x": 1.875744104385376,
-      "y": 4.02739953994751,
-      "z": 4.6676225662231445,
-      "scale": 0.528732180595398,
+      "x": -3.0013136863708496,
+      "y": 4.008965969085693,
+      "z": 2.398996353149414,
+      "scale": 0.34265610575675964,
+      "yaw": 0,
+      "pitch": 0,
+      "roll": 0
+    },
+    {
+      "name": "spawn_anchor",
+      "x": 0.13993564248085022,
+      "y": 1.1949361562728882,
+      "z": -4.495212554931641,
+      "scale": 0.6480712294578552,
       "yaw": 0,
       "pitch": 0,
       "roll": 0
@@ -35,11 +35,34 @@
   ],
   "materials": [
     {
-      "name": "Material.018",
+      "name": "roof",
       "baseColorFactor": [
-        0.037373751401901245,
-        0.04076504334807396,
-        0.06301984190940857,
+        0.017224961891770363,
+        0.017224961891770363,
+        0.017224961891770363,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "letters",
+      "baseColorFactor": [
+        0.8358296751976013,
+        0.8358296751976013,
+        0.8358296751976013,
         1
       ],
       "metallicFactor": 0,
@@ -83,9 +106,32 @@
     {
       "name": "Material",
       "baseColorFactor": [
-        0.0422445572912693,
-        0.02459133416414261,
-        0.004401430021971464,
+        0.04224243760108948,
+        0,
+        0.0004713845846708864,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "window",
+      "baseColorFactor": [
+        0.11902539432048798,
+        0.11044737696647644,
+        0.12331477552652359,
         1
       ],
       "metallicFactor": 0,
@@ -107,107 +153,177 @@
   "images": [],
   "parts": [
     {
-      "materialName": "Material.018",
+      "materialName": "roof",
       "materialIndex": 0,
       "reverseWinding": true,
       "boundMin": [
-        -3.722966194152832,
-        -0.27234870195388794,
-        2.477926731109619
+        -4.976192474365234,
+        -0.3767191171646118,
+        -3.823383092880249
       ],
       "boundMax": [
-        3.1560440063476562,
-        4.558425426483154,
-        6.04809045791626
+        3.8452348709106445,
+        4.945838928222656,
+        4.68790340423584
       ],
       "positions": {
         "offset": 0,
-        "length": 114,
+        "length": 360,
         "type": "f32"
       },
       "normals": {
-        "offset": 456,
-        "length": 114,
+        "offset": 1440,
+        "length": 360,
         "type": "f32"
       },
       "indices": {
-        "offset": 912,
-        "length": 60,
+        "offset": 2880,
+        "length": 192,
         "type": "u32"
       },
       "uvs": {
-        "offset": 1152,
-        "length": 76,
+        "offset": 3648,
+        "length": 240,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "letters",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "boundMin": [
+        3.373462200164795,
+        3.5344464778900146,
+        -1.8508715629577637
+      ],
+      "boundMax": [
+        3.373462200164795,
+        4.384519577026367,
+        -0.7731704115867615
+      ],
+      "positions": {
+        "offset": 4608,
+        "length": 120,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 5088,
+        "length": 120,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 5568,
+        "length": 126,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 6072,
+        "length": 80,
         "type": "f32"
       }
     },
     {
       "materialName": "TeamColor",
-      "materialIndex": 1,
+      "materialIndex": 2,
       "reverseWinding": true,
       "boundMin": [
-        -3.722966194152832,
-        3.340681314468384,
-        2.477926731109619
+        3.1990599632263184,
+        3.3488495349884033,
+        -1.9904226064682007
       ],
       "boundMax": [
-        3.1560440063476562,
-        4.558425426483154,
-        6.04809045791626
+        3.373462200164795,
+        4.475704193115234,
+        -0.04577888920903206
       ],
       "positions": {
-        "offset": 1456,
-        "length": 24,
+        "offset": 6392,
+        "length": 192,
         "type": "f32"
       },
       "normals": {
-        "offset": 1552,
-        "length": 24,
+        "offset": 7160,
+        "length": 192,
         "type": "f32"
       },
       "indices": {
-        "offset": 1648,
-        "length": 12,
+        "offset": 7928,
+        "length": 150,
         "type": "u32"
       },
       "uvs": {
-        "offset": 1696,
-        "length": 16,
+        "offset": 8528,
+        "length": 128,
         "type": "f32"
       }
     },
     {
       "materialName": "Material",
-      "materialIndex": 2,
+      "materialIndex": 3,
       "reverseWinding": true,
       "boundMin": [
-        -6.197952747344971,
-        -0.49746379256248474,
-        -5.514336585998535
+        -4.976192474365234,
+        -0.3767191171646118,
+        -3.823383092880249
       ],
       "boundMax": [
-        4.837218761444092,
-        6.142955303192139,
-        7.206848621368408
+        3.8452348709106445,
+        4.945838928222656,
+        3.617424249649048
       ],
       "positions": {
-        "offset": 1760,
-        "length": 282,
+        "offset": 9040,
+        "length": 558,
         "type": "f32"
       },
       "normals": {
-        "offset": 2888,
-        "length": 282,
+        "offset": 11272,
+        "length": 558,
         "type": "f32"
       },
       "indices": {
-        "offset": 4016,
-        "length": 144,
+        "offset": 13504,
+        "length": 492,
         "type": "u32"
       },
       "uvs": {
-        "offset": 4592,
-        "length": 188,
+        "offset": 15472,
+        "length": 372,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "window",
+      "materialIndex": 4,
+      "reverseWinding": true,
+      "boundMin": [
+        -3.230659246444702,
+        1.1679497957229614,
+        -2.8027420043945312
+      ],
+      "boundMax": [
+        3.2587177753448486,
+        2.1581223011016846,
+        3.411860942840576
+      ],
+      "positions": {
+        "offset": 16960,
+        "length": 96,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 17344,
+        "length": 96,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 17728,
+        "length": 48,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 17920,
+        "length": 64,
         "type": "f32"
       }
     }

@@ -29,6 +29,9 @@
     "/assets/models/perch.glb": "perch.png",
     "/assets/models/priest.glb": "priest.png",
     "/assets/models/prospecting.glb": "prospecting.png",
+    "/assets/models/rocks_moss.glb": "rocks_moss.png",
+    "/assets/models/rocks_plain.glb": "rocks_plain.png",
+    "/assets/models/rocks_snow.glb": "rocks_snow.png",
     "/assets/models/scribes.glb": "scribes.png",
     "/assets/models/shaman.glb": "shaman.png",
     "/assets/models/siegewagon.glb": "siegewagon.png",
@@ -36,6 +39,7 @@
     "/assets/models/stewardship.glb": "stewardship.png",
     "/assets/models/tavern.glb": "tavern.png",
     "/assets/models/tower.glb": "tower.png",
+    "/assets/models/trees.glb": "trees.png",
     "/assets/models/village.glb": "village.png",
     "/assets/models/villager.glb": "villager.png",
     "/assets/models/wagon.glb": "wagon.png",
@@ -43,10 +47,6 @@
     "/assets/models/warrior.glb": "warrior.png",
     "/assets/models/well.glb": "well.png",
     "/assets/models/wizard.glb": "wizard.png",
-    "/assets/models/workshop.glb": "workshop.png",
-    "/assets/models/rocks_moss.glb": "rocks_moss.png",
-    "/assets/models/rocks_plain.glb": "rocks_plain.png",
-    "/assets/models/rocks_snow.glb": "rocks_snow.png",
-    "/assets/models/trees.glb": "trees.png"
+    "/assets/models/workshop.glb": "workshop.png"
   }
 }

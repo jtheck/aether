@@ -43,8 +43,11 @@ function rejectsTransportInTransport() {
   const w = createWorld(2);
   const wagon = spawn(w, { x: 0, y: 0, type: UNIT.WAGON, owner: 0 });
   const apc = spawn(w, { x: fx.fromFloat(2), y: 0, type: UNIT.APC, owner: 0 });
+  const siege = spawn(w, { x: fx.fromFloat(4), y: 0, type: UNIT.SIEGE_WAGON, owner: 0 });
   assert.equal(canLoad(w, apc, wagon), false);
   assert.equal(loadUnit(w, apc, wagon), false);
+  assert.equal(canLoad(w, siege, wagon), false);
+  assert.equal(loadUnit(w, siege, wagon), false);
 }
 
 function rejectsMonks() {

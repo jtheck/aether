@@ -57,9 +57,12 @@ describe('death behavior', () => {
       assert.equal(sky.alpha, 1);
 
       assert.ok(sampleBalloon(0.5, seed).y > -0.01);
-      assert.ok(Math.abs(sampleBalloon(0.5, seed).scale - 0.625) < 1e-6, `seed ${seed} mid shrink`);
+      const midScale = sampleBalloon(0.5, seed).scale;
+      assert.ok(midScale < 0.6 && midScale > 0.45, `seed ${seed} mid shrink ${midScale}`);
+      assert.ok(sampleBalloon(0.1, seed).scale > 0.9, `seed ${seed} early shrink`);
+      assert.equal(sampleBalloon(0.88, seed).scale, 0.25);
       assert.ok(sampleBalloon(0.97, seed).alpha < 0.5);
-      assert.ok(sampleBalloon(0.97, seed).scale > 0.25);
+      assert.equal(sampleBalloon(0.97, seed).scale, 0.25);
       assert.equal(sampleBalloon(1, seed).alpha, 0);
       assert.equal(sampleBalloon(1, seed).scale, 0.25);
     }

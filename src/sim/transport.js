@@ -2,7 +2,7 @@
 // Passengers are discovered by scanning carriedBy[i] === transportId.
 
 import * as fx from './fixed.js';
-import { getUnitDef, isTransport, UNIT } from './unitTypes.js';
+import { getUnitDef, isMechanical, isTransport, UNIT } from './unitTypes.js';
 import { clearPath, queuePath } from './path.js';
 import { clearEngagement } from './engagement.js';
 import { ORDER } from './world.js';
@@ -23,10 +23,10 @@ export function transportCapacityOf(typeId) {
   return getUnitDef(typeId).transportCapacity ?? 0;
 }
 
-/** Monks walk - stick work doesn't belong in a wagon. */
+/** People ride. Monks and vehicles stay on the ground. */
 export function canRideTransport(typeId) {
   if (typeId === UNIT.MONK) return false;
-  if (isTransport(typeId)) return false;
+  if (isTransport(typeId) || isMechanical(typeId)) return false;
   return true;
 }
 

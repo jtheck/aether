@@ -541,6 +541,32 @@ describe('fogOfWar overlay edge', () => {
     assert.ok(fog.fogFactorAt(36, 0) > 0 && fog.fogFactorAt(36, 0) < 1);
     assert.equal(fog.fogFactorAt(64, 0), 1);
   });
+
+  it('does not dim a sitter when a neighbor only skirts that tile', () => {
+    const field = fakeField(40, 40);
+    const fog = createFogOfWar();
+    fog.reset(field);
+    const origin = worldToTileF(field, 0, 0);
+    const half = worldHalfFFromMap(field.width);
+    const inside = (tx) => tx * TILE_SIZE_F - half + 1;
+    const stampAt = (walkerTile, now) => fog.stamp({
+      world: fakeWorld([
+        { owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 },
+        { owner: 0, type: UNIT.VILLAGER, x: inside(walkerTile), z: 0 },
+      ]),
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [],
+      agoras: [],
+      now,
+    });
+    stampAt(origin.tx + 8, 1000);
+    assert.equal(fog.overlayAlphaAt(0, 0), 0);
+    stampAt(origin.tx + 9, 1000);
+    assert.equal(fog.overlayAlphaAt(0, 0), 0);
+    assert.equal(fog.isWorldVisible(0, 0), true);
+  });
 });
 
 describe('fogOfWar shared vision', () => {

@@ -386,7 +386,8 @@ export const UNIT_DEFS = [
     hp: 100,
     speed: fx.fromFloat(2.0),
     size: 9.5,
-    footprint: 2.8,
+    /** Soft-sep radius sized to the hull (~8 long at base scale). */
+    footprint: 4.5,
     steer: 0.18,
     accel: 0.24,
     decel: 0.32,

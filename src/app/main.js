@@ -4487,6 +4487,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       yaw += yawTwist;
       const hero = world.named?.[i] ? NAMED_UNIT_SCALE : 1;
       let size = def.size * hero;
+      let meshScale = 1;
       const fade = deathFade[i];
       let deathAlpha = fade;
       let deathExit = false;
@@ -4502,6 +4503,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           pitch = b.pitch;
           roll = b.roll;
           size *= b.scale;
+          meshScale = b.scale;
           deathAlpha = b.alpha;
           deathExit = true;
         } else if (kind === DEATH_KIND.FLEE) {
@@ -4545,7 +4547,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       const walkQ = Math.round(Math.max(0, Math.min(1, walkRate)) * 20);
       const forcePose = followSmooth || fade > 0 || loft > 0.01 || pitch !== 0 || roll !== 0;
       if (forcePose || poseDirty(i, x, z, yaw, size, loft, movingBit, carryingBit, choppingBit, walkQ, attackingBit)) {
-        if (renderer.writeInstance(i, world.type[i], world.owner[i], x, z, size, yaw, !!movingBit, loft, pitch, roll, gy, !!carryingBit, !!choppingBit, walkRate, !!attackingBit)) {
+        if (renderer.writeInstance(i, world.type[i], world.owner[i], x, z, size, yaw, !!movingBit, loft, pitch, roll, gy, !!carryingBit, !!choppingBit, walkRate, !!attackingBit, meshScale)) {
           if (world.owner[i] === 0) drawStats.p0++;
           else if (world.owner[i] === 1) drawStats.p1++;
         } else drawStats.unmapped++;

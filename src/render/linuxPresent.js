@@ -2,7 +2,8 @@
 // WebGPU canvas presents white while the sim keeps running. That pass is
 // skipped here; the mips were already written on the CPU. The same machines
 // also fail to composite the swapchain, so the frame is copied out and drawn
-// onto a 2d canvas above it.
+// onto a 2d canvas above it. Lite configures that canvas as a render target
+// only; the copy needs COPY_SRC, added here on configure.
 //
 // `?present=cpu` forces the readback on any OS so it can be checked locally.
 // Nothing is stored on WebGPU objects; those reject new properties.
@@ -15,16 +16,17 @@ const mipViews = new WeakMap();
 const contextDevices = new WeakMap();
 const sessions = new Set();
 
-const COPY_SRC = 0x4;
-const COPY_DST = 0x8;
+// Texture and buffer flag values differ. COPY_SRC on a texture is 0x1.
+const TEX_COPY_SRC = 0x1;
+const BUF_COPY_DST = 0x8;
 const MAP_READ = 0x1;
 
 let deviceLogInstalled = false;
 let mipSkipInstalled = false;
 let guardsInstalled = false;
 let readbackInstalled = false;
-let inReadback = false;
 let readbackWarned = false;
+let copySrcWarned = false;
 
 function readbackEnabled() {
   if (isLinuxGpu()) return true;
@@ -75,7 +77,14 @@ function installDeviceLog() {
         watchDevice(config.device);
         contextDevices.set(this, config.device);
       }
-      return orig.call(this, config);
+      let next = config;
+      if (config && readbackEnabled() && isGameCanvas(this.canvas)) {
+        const copySrc = globalThis.GPUTextureUsage?.COPY_SRC ?? TEX_COPY_SRC;
+        const render = globalThis.GPUTextureUsage?.RENDER_ATTACHMENT ?? 0x10;
+        const usage = (config.usage ?? render) | copySrc;
+        if (usage !== config.usage) next = { ...config, usage };
+      }
+      return orig.call(this, next);
     };
   }
 }
@@ -150,7 +159,6 @@ function installQueueGuards() {
   guardQueueMethod(queueProto, 'writeBuffer');
   const origSubmit = queueProto.submit;
   queueProto.submit = function submit(buffers) {
-    if (inReadback) return origSubmit.call(this, buffers);
     const device = queues.get(this);
     let scoped = false;
     if (device?.pushErrorScope) {
@@ -187,6 +195,7 @@ function sessionFor(context) {
     overlay: null,
     ctx2d: null,
     image: null,
+    pending: null,
   };
   sessions.add(session);
   return session;
@@ -246,13 +255,17 @@ function paint(session, src, width, height, bytesPerRow, format) {
   }
 }
 
-function copyTexture(session, texture) {
+function encodeCopy(session, texture) {
   const device = session.device;
   const width = texture.width | 0;
   const height = texture.height | 0;
-  if (!device || width < 1 || height < 1 || (texture.usage & COPY_SRC) === 0) {
-    session.busy = false;
-    return;
+  const copySrc = globalThis.GPUTextureUsage?.COPY_SRC ?? TEX_COPY_SRC;
+  if (!device || width < 1 || height < 1 || (texture.usage & copySrc) === 0) {
+    if (!copySrcWarned && texture && (texture.usage & copySrc) === 0) {
+      copySrcWarned = true;
+      console.error('[gpu] present readback skipped, canvas has no COPY_SRC');
+    }
+    return null;
   }
   const bytesPerRow = (width * 4 + 255) & ~255;
   const size = bytesPerRow * height;
@@ -261,17 +274,15 @@ function copyTexture(session, texture) {
     try {
       session.buffer = device.createBuffer({
         size,
-        usage: (globalThis.GPUBufferUsage?.COPY_DST ?? COPY_DST) | (globalThis.GPUBufferUsage?.MAP_READ ?? MAP_READ),
+        usage: (globalThis.GPUBufferUsage?.COPY_DST ?? BUF_COPY_DST) | (globalThis.GPUBufferUsage?.MAP_READ ?? MAP_READ),
       });
     } catch (err) {
       console.error('[gpu] present readback buffer failed', err?.message || err);
       session.buffer = null;
-      session.busy = false;
-      return;
+      return null;
     }
   }
   const buffer = session.buffer;
-  let command;
   try {
     const encoder = device.createCommandEncoder();
     encoder.copyTextureToBuffer(
@@ -279,61 +290,48 @@ function copyTexture(session, texture) {
       { buffer, bytesPerRow, rowsPerImage: height },
       { width, height, depthOrArrayLayers: 1 },
     );
-    command = encoder.finish();
+    return {
+      command: encoder.finish(),
+      buffer,
+      width,
+      height,
+      bytesPerRow,
+      format: texture.format,
+    };
   } catch (err) {
     console.error('[gpu] present readback failed', err?.message || err);
-    session.busy = false;
-    return;
+    return null;
   }
-  let scoped = false;
-  try {
-    if (device.pushErrorScope) {
-      device.pushErrorScope('validation');
-      scoped = true;
+}
+
+function mapCopy(session, job) {
+  const mode = globalThis.GPUMapMode?.READ ?? MAP_READ;
+  return job.buffer.mapAsync(mode).then(() => {
+    const src = new Uint8Array(job.buffer.getMappedRange());
+    try {
+      paint(session, src, job.width, job.height, job.bytesPerRow, job.format);
+    } finally {
+      job.buffer.unmap();
     }
-    inReadback = true;
-    device.queue.submit([command]);
-  } catch (err) {
-    console.error('[gpu] present readback failed', err?.message || err);
-    session.busy = false;
-    if (scoped) device.popErrorScope().catch(() => {});
-    return;
-  } finally {
-    inReadback = false;
-  }
-  const finish = () => {
-    const mode = globalThis.GPUMapMode?.READ ?? MAP_READ;
-    return buffer.mapAsync(mode).then(() => {
-      const src = new Uint8Array(buffer.getMappedRange());
-      try {
-        paint(session, src, width, height, bytesPerRow, texture.format);
-      } finally {
-        buffer.unmap();
-      }
-    });
-  };
-  const done = scoped
-    ? device.popErrorScope().then((err) => {
-      if (err) throw err;
-      return finish();
-    })
-    : finish();
-  done.catch((err) => {
-    console.error('[gpu] present readback failed', err?.message || err);
-  }).finally(() => {
-    session.busy = false;
   });
 }
 
-function startReadbacks(queue) {
+// Chrome presents the swapchain texture inside the submit that draws it, so a
+// later submit copies a destroyed texture. The copy rides along in that submit.
+function commandsFor(queue) {
+  const commands = [];
   for (const session of sessions) {
     if (!session.dirty || session.busy) continue;
     if (session.device?.queue !== queue) continue;
     if (!session.texture) continue;
+    const job = encodeCopy(session, session.texture);
     session.dirty = false;
+    if (!job) continue;
     session.busy = true;
-    copyTexture(session, session.texture);
+    session.pending = job;
+    commands.push(job.command);
   }
+  return commands;
 }
 
 function installReadback() {
@@ -355,11 +353,28 @@ function installReadback() {
   };
   const origSubmit = queueProto.submit;
   queueProto.submit = function submit(buffers) {
-    if (inReadback) return origSubmit.call(this, buffers);
+    const extra = commandsFor(this);
+    const list = extra.length ? [...(buffers || []), ...extra] : buffers;
+    let submitted = false;
     try {
-      return origSubmit.call(this, buffers);
+      const result = origSubmit.call(this, list);
+      submitted = true;
+      return result;
     } finally {
-      startReadbacks(this);
+      for (const session of sessions) {
+        if (!session.pending) continue;
+        const job = session.pending;
+        session.pending = null;
+        if (!submitted) {
+          session.busy = false;
+          continue;
+        }
+        mapCopy(session, job).catch((err) => {
+          console.error('[gpu] present readback failed', err?.message || err);
+        }).finally(() => {
+          session.busy = false;
+        });
+      }
     }
   };
 }

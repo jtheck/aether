@@ -1,6 +1,9 @@
 // Browser-side prebake: mesh packages, sockets, VAT dumps.
 // Driven by prebake.mjs via Playwright (or open /prebake/prebake.html manually).
 
+import '../render/externalImageUpload.js';
+import '../render/mappedBufferUpload.js';
+import '../render/linuxPresent.js';
 import { createEngine, createSceneContext, loadGltf, stopAnimation } from '../vendor/lite/liteVendor.js';
 import { bakeGltfParts, UNIT_MODEL_URLS } from '../render/unitModels.js';
 import { packBinary, bakedMeshStem } from '../render/bakedAssets.js';

@@ -1,5 +1,9 @@
 // Lite-native Forge - table silhouette + terrain paint. No sim worker.
 
+// Same Linux image and mapped-buffer fallbacks as the game.
+import '../render/externalImageUpload.js';
+import '../render/mappedBufferUpload.js';
+import '../render/linuxPresent.js';
 import {
   createEngine,
   createSceneContext,

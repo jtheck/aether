@@ -3,6 +3,11 @@
 // Units are thin-instanced GLB meshes (one draw call per type × owner in KOTH).
 // Skinned units with clips use Lite VAT on the same thin-instance path.
 
+// Linux Vulkan rejects Lite's external-image upload and large mappedAtCreation
+// buffers. Install the CPU fallbacks before any GPU resource is created.
+import './externalImageUpload.js';
+import './mappedBufferUpload.js';
+import './linuxPresent.js';
 import {
   createEngine,
   createSceneContext,

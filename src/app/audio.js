@@ -2,6 +2,7 @@
 
 import { Howl, Howler } from 'howler';
 import { getVolumeLevel } from './settings.js';
+import { assetUrl } from '../render/assetRev.js';
 
 const sounds = new Map();
 let masterVolume = 0.25;
@@ -42,8 +43,9 @@ export function load(name, src, opts = {}) {
   const prev = sounds.get(name);
   if (prev) prev.unload();
 
+  const sources = (Array.isArray(src) ? src : [src]).map((item) => assetUrl(item));
   const howl = new Howl({
-    src: Array.isArray(src) ? src : [src],
+    src: sources,
     volume: opts.volume ?? 1,
     loop: !!opts.loop,
     preload: opts.preload !== false,

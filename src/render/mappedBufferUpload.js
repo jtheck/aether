@@ -7,13 +7,6 @@ const COPY_DST = globalThis.GPUBufferUsage?.COPY_DST ?? 0x8;
 const patchedDevices = new WeakSet();
 const patchedBuffers = new WeakSet();
 const pending = new WeakMap();
-let warned = false;
-
-function warnOnce() {
-  if (warned) return;
-  warned = true;
-  console.warn('[gpu] uploading mapped buffers with writeBuffer');
-}
 
 /**
  * @param {object} [deviceProto]
@@ -31,7 +24,7 @@ export function installMappedBufferUploadFallback(
     return false;
   }
   if (patchedDevices.has(deviceProto)) return false;
-  const warn = options.warn ?? warnOnce;
+  const warn = options.warn;
   const origCreate = deviceProto.createBuffer;
   const origGetMappedRange = bufferProto.getMappedRange;
   const origUnmap = bufferProto.unmap;
@@ -76,7 +69,7 @@ export function installMappedBufferUploadFallback(
       mappedAtCreation: false,
     });
     pending.set(buffer, { device: this, range: null });
-    warn();
+    warn?.();
     return buffer;
   };
   patchedDevices.add(deviceProto);

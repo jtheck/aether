@@ -200,24 +200,24 @@ function keyEvent(key) {
 }
 
 describe('camera keys', () => {
-  it('W/R strafe the look target and S/F rotate yaw', () => {
+  it('S/F strafe the look target and W/R rotate yaw', () => {
     const cam = fakeCamera();
     const ctrl = createCameraController(cam, {}, { worldHalfF: 200 });
     const startAlpha = cam.alpha;
     const startX = cam.target.x;
     const startZ = cam.target.z;
 
-    ctrl.handleKeyDown(keyEvent('s'));
+    ctrl.handleKeyDown(keyEvent('w'));
     ctrl.tick(16);
-    ctrl.handleKeyUp(keyEvent('s'));
+    ctrl.handleKeyUp(keyEvent('w'));
     assert.notEqual(cam.alpha, startAlpha);
     assert.equal(cam.target.x, startX);
     assert.equal(cam.target.z, startZ);
 
     const afterRot = cam.alpha;
-    ctrl.handleKeyDown(keyEvent('w'));
+    ctrl.handleKeyDown(keyEvent('s'));
     ctrl.tick(16);
-    ctrl.handleKeyUp(keyEvent('w'));
+    ctrl.handleKeyUp(keyEvent('s'));
     assert.equal(cam.alpha, afterRot);
     assert.ok(cam.target.x !== startX || cam.target.z !== startZ);
   });
@@ -252,9 +252,9 @@ describe('camera keys', () => {
     for (let i = 0; i < 180; i++) ctrl.tick(16);
     const restX = cam.target.x;
     const restZ = cam.target.z;
-    ctrl.handleKeyDown(keyEvent('w'));
+    ctrl.handleKeyDown(keyEvent('s'));
     ctrl.tick(16);
-    ctrl.handleKeyUp(keyEvent('w'));
+    ctrl.handleKeyUp(keyEvent('s'));
     assert.ok(cam.target.x !== restX || cam.target.z !== restZ);
   });
 });
@@ -654,9 +654,9 @@ describe('rotate on look target', () => {
   it('keyboard rotate stays on the current look target', () => {
     const cam = fakeCamera();
     const ctrl = createCameraController(cam, fakeCanvas(), { worldHalfF: 200 });
-    ctrl.handleKeyDown(keyEvent('s'));
+    ctrl.handleKeyDown(keyEvent('w'));
     for (let i = 0; i < 8; i++) ctrl.tick(16);
-    ctrl.handleKeyUp(keyEvent('s'));
+    ctrl.handleKeyUp(keyEvent('w'));
     assert.ok(Math.abs(cam.target.x) < 0.2);
     assert.ok(Math.abs(cam.target.z) < 0.2);
     assert.notEqual(cam.alpha, 0);

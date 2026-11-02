@@ -1390,59 +1390,53 @@
           </dl>
         </div>
       </details>
-      <details>
-        <summary>Units</summary>
-        <div class="help-body help-units-body">
-          <div class="help-unit-roster" id="help-units"></div>
-        </div>
-      </details>
-      <details>
-        <summary>Buildings</summary>
-        <div class="help-body">
-          <div id="help-buildings"></div>
-        </div>
-      </details>
-      <details>
-        <summary>Upgrades</summary>
-        <div class="help-body">
-          <div id="help-upgrades"></div>
-        </div>
-      </details>
-      <details>
+      <details data-help-controls-root>
         <summary>Controls</summary>
         <div class="help-body">
-          <details>
+          <details data-help-controls="mouse-keyboard">
             <summary>Mouse and keyboard</summary>
             <div class="help-body">
+              <p>Mouse (Playable with mouse-only)</p>
               <dl class="help-keys">
-                <dt>Right click</dt><dd>Move, or gather</dd>
-                <dt>Right drag</dt><dd>Pan camera</dd>
-                <dt>Scroll</dt><dd>Zoom</dd>
-                <dt>Arrows</dt><dd>Pan camera</dd>
-                <dt>W / E / D / R</dt><dd>Pan camera</dd>
-                <dt>Z / V</dt><dd>Zoom out / in</dd>
-                <dt>S / F</dt><dd>Rotate camera</dd>
-                <dt>Left click</dt><dd>Select, or attack-move</dd>
-                <dt>Left drag</dt><dd>Box select</dd>
-                <dt>Shift+click</dt><dd>Add to selection</dd>
-                <dt>Double-click</dt><dd>Select all of that type</dd>
-                <dt>Top strip click</dt><dd>Select all of that unit or building type</dd>
-                <dt>Hold on ground</dt><dd>Cast ability (with units selected)</dd>
+                <dt>Scroll Wheel</dt><dd>ZOOM Camera</dd>
+                <dt>Right click + Drag</dt><dd>PAN Camera</dd>
+                <dt>Right click + Scroll Wheel</dt><dd>ROTATE Camera</dd>
+                <dt>Right click</dt><dd>Move command or gather</dd>
+                <dt>Left click</dt><dd>Attack command or select</dd>
+                <dt>Left click + Drag</dt><dd>Box select</dd>
+                <dt>Left click + Hold</dt><dd>Cast unit abilities</dd>
+                <dt>Double Left click</dt><dd>Cast unit abilities</dd>
+                <dt>Double Left click unit</dt><dd>Select all of type</dd>
+                <dt>Shift + Left click</dt><dd>Add units to selection</dd>
+                <dt>Top strip Left click</dt><dd>Select all unit type</dd>
+                <dt>Left click control group</dt><dd>Select control group</dd>
+                <dt>Left click + hold control group</dt><dd>Assign control group</dd>
+              </dl>
+              <br><br>
+              <p>Keyboard (Use Homerow position [ESDF])</p>
+              <dl class="help-keys">
+                <dt>E / S / D / F</dt><dd>PAN Camera</dd>
+                <dt>W / R</dt><dd>ROTATE camera</dd>
+                <dt>Z / V</dt><dd>ZOOM Camera</dd>
                 <dt>Q / A / T</dt><dd>Cast ability at cursor</dd>
-                <dt>1–6</dt><dd>Select control group. Tap again to center camera. Hold to assign</dd>
+                <dt>1–6 + hold</dt><dd>Assign control group</dd>
+                <dt>1–6</dt><dd>Select control group</dd>
+                <dt>1–6 double tap</dt><dd>Center camera</dd>
                 <dt>Ctrl+1–6</dt><dd>Assign control group</dd>
                 <dt>Shift+1–6</dt><dd>Add selected units to control group</dd>
                 <dt>B or `</dt><dd>Open your agora menu</dd>
                 <dt>Space</dt><dd>Follow selection (hold)</dd>
                 <dt>Enter</dt><dd>Open chat</dd>
-                <dt>Escape</dt><dd>Back out: help, placement, menus; then open menu</dd>
+                <dt>Escape</dt><dd>Back out: help, placement, menus</dd>
+                <dt>Arrows</dt><dd>PAN Camera</dd>
                 <dt>M</dt><dd>Toggle mute</dd>
                 <dt>O</dt><dd>Hide HUD for screenshots (hold for longer)</dd>
-                <dt>− / +</dt><dd>Slower / faster replay speed (while watching a replay)</dd>
+                <dt>− / +</dt><dd>REPLAY Slower / faster speed</dd>
+                <dt>1–5</dt><dd>REPLAY & SPECTATE follow player</dd>
               </dl>
             </div>
           </details>
-          <details>
+          <details data-help-controls="touch">
             <summary>Touch</summary>
             <div class="help-body">
               <dl class="help-keys">
@@ -1456,7 +1450,7 @@
               </dl>
             </div>
           </details>
-          <details>
+          <details data-help-controls="gamepad">
             <summary>Gamepad</summary>
             <div class="help-body">
               <dl class="help-keys">
@@ -1480,7 +1474,7 @@
               </dl>
             </div>
           </details>
-          <details>
+          <details data-help-controls="xr">
             <summary>XR</summary>
             <div class="help-body">
               Requires WebGPU XR capable Browser.
@@ -1497,6 +1491,24 @@
               </dl>
             </div>
           </details>
+        </div>
+      </details>
+      <details>
+        <summary>Units</summary>
+        <div class="help-body help-units-body">
+          <div class="help-unit-roster" id="help-units"></div>
+        </div>
+      </details>
+      <details>
+        <summary>Buildings</summary>
+        <div class="help-body">
+          <div id="help-buildings"></div>
+        </div>
+      </details>
+      <details>
+        <summary>Upgrades</summary>
+        <div class="help-body">
+          <div id="help-upgrades"></div>
         </div>
       </details>
     </div>

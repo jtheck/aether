@@ -20,6 +20,7 @@ import {
   hasBakedVat,
   tryFetch,
 } from './bakedAssets.js';
+import { assetFetch, assetUrl } from './assetRev.js';
 import { isTeamColorName, prepareTeamColorMaterial } from './teamColor.js';
 import {
   appendCarryLocomotion,
@@ -209,7 +210,7 @@ const vatSniffCache = new Map();
 export function sniffVatDef(url) {
   let pending = vatSniffCache.get(url);
   if (!pending) {
-    pending = fetch(url).then(async (res) => {
+    pending = assetFetch(url).then(async (res) => {
       if (!res.ok) return null;
       return vatDefFromGlbJson(url, parseGlbJson(await res.arrayBuffer()));
     }).catch((err) => {
@@ -570,7 +571,7 @@ const glbJsonCache = new Map();
 function loadGlbJson(url) {
   let pending = glbJsonCache.get(url);
   if (!pending) {
-    pending = fetch(url).then(async (res) => {
+    pending = assetFetch(url).then(async (res) => {
       if (!res.ok) return null;
       return parseGlbJson(await res.arrayBuffer());
     }).catch(() => null);
@@ -853,7 +854,7 @@ export async function loadIdleIconMeshes(engine, url) {
   const def = listedVatDefForUrl(url) ?? await sniffVatDef(url);
   if (!def?.idleClip) return null;
   const [container, gltf] = await Promise.all([
-    loadGltf(engine, url),
+    loadGltf(engine, assetUrl(url)),
     loadGlbJson(url),
   ]);
   const root = container.entities?.[0];
@@ -923,7 +924,7 @@ function pushVatParts(engine, list, cached, donorMat, parts) {
  * @param {VatUnitDef} def
  */
 export async function loadVatUnitTemplate(engine, def) {
-  const container = await loadGltf(engine, def.url);
+  const container = await loadGltf(engine, assetUrl(def.url));
   const root = container.entities[0];
   if (!root) throw new Error(`no root in ${def.url}`);
 

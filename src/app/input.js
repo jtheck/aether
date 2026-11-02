@@ -14,6 +14,7 @@ import { createGamepadAdapter } from './input/gamepad.js';
 import { openOsKbd } from './osKbd.js';
 import { aetherSteam, createSteamOverlayGuard } from './steam.js';
 import { cameraLatency } from './cameraLatency.js';
+import { noteHelpControlsDevice } from './helpControlsDevice.js';
 
 /**
  * @param {object} opts
@@ -60,9 +61,11 @@ export function setupInput(opts) {
     window: win,
     root: win ?? globalThis,
   });
-  if (cameraLatency.enabled) {
-    camera.setInputObserver?.((kind, eventAt) => cameraLatency.begin(kind, eventAt));
-  }
+  const onCameraInput = (kind, eventAt) => {
+    if (kind === 'keyboard') noteHelpControlsDevice('mouse');
+    if (cameraLatency.enabled) cameraLatency.begin(kind, eventAt);
+  };
+  camera.setInputObserver?.(onCameraInput);
   const pad = createGamepadAdapter({
     camera,
     // Sample immediately before cameraController.tick in the renderer callback.
@@ -79,7 +82,10 @@ export function setupInput(opts) {
       else if (!on && padAiming && source !== 'radial') showOsCursor();
       padAiming = !!on;
     },
-    onActivity: hideOsCursor,
+    onActivity() {
+      noteHelpControlsDevice('gamepad');
+      hideOsCursor();
+    },
     onTextEdit(el) {
       openOsKbd(el);
     },

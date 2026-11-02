@@ -29,24 +29,27 @@ function poseMesh(mesh, pose) {
  * @param {object} scene
  * @param {object} field
  */
-export async function createBackdropsFromField(engine, scene, field) {
+export async function createBackdropsFromField(engine, scene, field, backdropOpts = {}) {
   const poses = normalizeBackdrops(field?.backdrops);
   if (!poses.length) return emptyBackdrops();
 
   /** @type {Map<string, object[]>} */
   const templates = new Map();
-  for (const pose of poses) {
-    if (templates.has(pose.type)) continue;
-    const url = BACKDROP_DEFS[pose.type]?.url;
-    if (!url) continue;
-    try {
-      const parts = await loadBakedUnitMeshParts(engine, url);
-      templates.set(pose.type, parts);
-    } catch (err) {
-      console.warn(`[backdrops] ${pose.type} failed`, err);
-      templates.set(pose.type, []);
-    }
+  /** @type {string[]} */
+  const needed = [];
+  for (let i = 0; i < poses.length; i++) {
+    if (!needed.includes(poses[i].type)) needed.push(poses[i].type);
   }
+  await Promise.all(needed.map(async (type) => {
+    const url = BACKDROP_DEFS[type]?.url;
+    if (!url) return;
+    try {
+      templates.set(type, await loadBakedUnitMeshParts(engine, url));
+    } catch (err) {
+      console.warn(`[backdrops] ${type} failed`, err);
+      templates.set(type, []);
+    }
+  }));
 
   const meshes = [];
   const groups = [];
@@ -64,7 +67,7 @@ export async function createBackdropsFromField(engine, scene, field) {
       mesh.pickable = false;
       mesh.receiveShadows = false;
       poseMesh(mesh, pose);
-      addToScene(scene, mesh);
+      if (backdropOpts.deferScene !== true) addToScene(scene, mesh);
       meshes.push(mesh);
       group.push(mesh);
     }

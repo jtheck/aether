@@ -10,13 +10,6 @@
 import { isLinuxGpu } from './gpuPlatform.js';
 
 const patched = new WeakSet();
-let warned = false;
-
-function warnOnce() {
-  if (warned) return;
-  warned = true;
-  console.warn('[gpu] uploading images on the CPU');
-}
 
 /**
  * @param {GPUExtent3D | number[] | ArrayLike<number> | null | undefined} copySize
@@ -155,8 +148,6 @@ export function downsampleStored(src, width, height, srgb) {
   return { data: dst, width: w, height: h };
 }
 
-let mipWarned = false;
-
 function writeCpuMipChain(queue, destination, pixels, width, height) {
   const texture = destination?.texture;
   const levels = texture?.mipLevelCount | 0;
@@ -182,10 +173,6 @@ function writeCpuMipChain(queue, destination, pixels, width, height) {
     src = next.data;
     w = next.width;
     h = next.height;
-  }
-  if (!mipWarned) {
-    mipWarned = true;
-    console.warn('[gpu] filling mipmaps on the CPU');
   }
 }
 
@@ -255,7 +242,7 @@ export function installExternalImageUploadFallback(queueProto = globalThis.GPUQu
   if (!queueProto || patched.has(queueProto)) return false;
   if (typeof queueProto.copyExternalImageToTexture !== 'function') return false;
   const readPixels = options.readPixels ?? readExternalImagePixels;
-  const warn = options.warn ?? warnOnce;
+  const warn = options.warn;
   queueProto.copyExternalImageToTexture = function copyExternalImageToTexture(source, destination, copySize) {
     const straight = readPixels(source, copySize);
     const plan = externalImageWritePlan(straight, destination, copySize, !!source?.flipY);
@@ -266,7 +253,7 @@ export function installExternalImageUploadFallback(queueProto = globalThis.GPUQu
     if (isLinuxGpu()) {
       writeCpuMipChain(this, plan.destination, plan.tight, plan.size.width, plan.size.height);
     }
-    warn();
+    warn?.();
   };
   patched.add(queueProto);
   return true;

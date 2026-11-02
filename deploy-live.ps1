@@ -28,6 +28,11 @@ foreach ($f in @($main, $worker, $forge)) {
   aws s3 cp (Join-Path $Deploy $f) "s3://aether.garden/$f" --cache-control $cc --content-type $ct --region us-east-1
 }
 
+# sync does not restamp cache-control on an unchanged file, so copy the
+# hashed assets again with the long-lived header.
+Write-Host "  immutable cache: assets/"
+aws s3 cp (Join-Path $Deploy 'assets') "s3://aether.garden/assets/" --recursive --cache-control $cc --region us-east-1
+
 # aether.garden + www; axiom.aether.garden (same origin)
 foreach ($id in @('E16NES5CQO1ZJ8', 'E14MZ80C43O782')) {
   aws cloudfront create-invalidation --distribution-id $id --paths '/*' | Out-Null

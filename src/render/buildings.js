@@ -944,6 +944,12 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
       urls.push(url);
     }
     drawReady(snapshot);
+    // Fetch every type together. Instantiation stays one per frame so a full
+    // village cannot pin the tab, but the next type is already decoded.
+    for (let i = 0; i < urls.length; i++) {
+      if (templates.has(urls[i])) continue;
+      void prefetchBakedMesh(engine, urls[i]).catch(() => {});
+    }
     for (const url of urls) {
       if (templates.has(url)) continue;
       await ensureTemplate(url);

@@ -28,6 +28,7 @@ import {
 import { capacityFor } from '../sim/capacity.js';
 import { SCENERY_LOD_ROCK, SCENERY_LOD_TREE } from './lodDistances.js';
 import { hasBakedMesh } from './bakedAssets.js';
+import { assetUrl } from './assetRev.js';
 import { boundsOfPositions } from './bakeMerge.js';
 import { nearestMeshInstanceHit, pickPartsFromMeshes } from './meshPick.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
@@ -317,6 +318,20 @@ const atlasByEngine = new WeakMap();
 const modelContainersByEngine = new WeakMap();
 
 /**
+ * Start the billboard sheet and tree/rock bakes without waiting.
+ * These used to start only after the terrain atlases, so the opening
+ * frames were cards.
+ * @param {object} engine
+ */
+export function prefetchSceneryAssets(engine) {
+  if (!engine) return;
+  void getAtlas(engine).catch(() => {});
+  for (let i = 0; i < VARIANTS.length; i++) {
+    void loadModelParts(engine, VARIANTS[i]).catch(() => {});
+  }
+}
+
+/**
  * @param {object} engine
  * @param {object} field
  * @param {(field: object, x: number, z: number) => number} surfaceHeightAt
@@ -339,6 +354,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       dispose() {},
     };
   }
+  prefetchSceneryAssets(engine);
   const atlas = await getAtlas(engine);
   // Beyond this XZ radius from the look-at point, resources are hidden outright
   // (mesh and billboard). Terrain passes its keep ring here so trees/rocks drop
@@ -393,6 +409,12 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
   /** @type {object | null} */
   let treeBatch = null;
 
+  function admit(mesh) {
+    if (!mesh) return;
+    if (typeof opts.admitMesh === 'function') opts.admitMesh(mesh);
+    else if (opts.scene) addToScene(opts.scene, mesh);
+  }
+
   function attachModelParts(batch) {
     modelJobs.push(
       loadModelParts(engine, batch.variant)
@@ -412,7 +434,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
             setThinInstanceColors(part.mesh, batch.colors);
             setThinInstanceCount(part.mesh, cap);
             part.mesh.pickable = false;
-            if (opts.scene) addToScene(opts.scene, part.mesh);
+            admit(part.mesh);
             meshes.push(part.mesh);
             batch.modelParts.push(part);
             for (let i = 0; i < cap; i++) {
@@ -498,7 +520,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       }
     }
     if (notify) {
-      if (opts.scene) addToScene(opts.scene, billboardMesh);
+      admit(billboardMesh);
       opts.onModelMesh?.(billboardMesh);
     }
     attachModelParts(batch);
@@ -1344,7 +1366,7 @@ function makeEmptyTreeInstance() {
 async function getAtlas(engine) {
   let promise = atlasByEngine.get(engine);
   if (promise) return promise;
-  promise = loadTexture2D(engine, ATLAS_URL, {
+  promise = loadTexture2D(engine, assetUrl(ATLAS_URL), {
     srgb: true,
     mipMaps: true,
     invertY: false,
@@ -1387,7 +1409,7 @@ async function loadModelParts(engine, variant) {
         });
       }
 
-      const container = await loadGltf(engine, variant.modelUrl);
+      const container = await loadGltf(engine, assetUrl(variant.modelUrl));
       // Cloning the hierarchy assigns real parent links and computes the node
       // world matrices; the raw asset container only stores child arrays.
       const root = cloneTransformNode(container.entities[0]);

@@ -1,6 +1,7 @@
 // app/ - SimSession (lockstep) + Lite renderer + input.
 
 import { livingByOwner, ORDER, MAX_ENTITIES } from '../sim/world.js';
+import { assetUrl } from '../render/assetRev.js';
 import { shownKing } from '../sim/kothMeta.js';
 import { mountMatchSnapshot, snapCaption, snapshotDocFromSession } from './matchSnapshotView.js';
 import { getUnitDef, isFlyer, isTransport, FLY_HEIGHT } from '../sim/unitTypes.js';
@@ -116,6 +117,7 @@ import { selectionGroupsFromBuildings, selectionGroupsFromUnits } from '../rende
 import { isManaCaster, manaReadyCount } from '../sim/mana.js';
 import { createLiteExplorerToggle } from '../render/liteExplorer.js';
 import { setupMenu } from './menu.js';
+import { noteHelpControlsDevice } from './helpControlsDevice.js';
 import {
   ensureAaEnabledDefault,
   ensureFxModeDefault,
@@ -644,6 +646,7 @@ async function toggleMatchXr(renderer, getInput, jumps) {
     clearXrEye();
     renderer.releaseHeadsetCamera?.();
     paintXrButton(false);
+    noteHelpControlsDevice('mouse');
     await exitXr(ctx);
     return;
   }
@@ -683,6 +686,7 @@ async function toggleMatchXr(renderer, getInput, jumps) {
   });
   matchXr.xrControls = controls;
   paintXrButton(true);
+  noteHelpControlsDevice('xr');
 }
 
 async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide = 0, kothShard, solo = false }) {
@@ -1122,6 +1126,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       applyBuildingSkinsToRenderer(renderer);
     },
     xrSupported,
+    getXrActive: () => !!matchXr,
     onToggleXr: () => toggleMatchXr(renderer, () => inputApi, xrJumps),
   });
   const liteExplorer = createLiteExplorerToggle({
@@ -1281,6 +1286,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   const sceneryFogAt = (x, z) => fog.fogFactorAt(x, z);
   let sceneryFogOn = null;
+  /** >0 while a field swap is building the next board off-screen. */
+  let fieldSwapDepth = 0;
   function cameraFollowOwner() {
     if (session.watchingReplay && replayCamOwner != null) return replayCamOwner | 0;
     const live = viewFollow?.ownerTarget?.();
@@ -1290,7 +1297,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   }
 
   function stampFog(opts) {
-    if (liveConfigQuietFog && !opts?.force) return;
+    // Don't upload the incoming veil into the outgoing overlay mid-swap.
+    if ((liveConfigQuietFog || fieldSwapDepth) && !opts?.force) return;
     const follow = cameraFollowOwner();
     const entering = appliedFogFollow == null && follow != null;
     const leaving = appliedFogFollow != null && follow == null;
@@ -1525,27 +1533,32 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   session.onWorldRebuilt = async (entityCount) => {
     if (session._pendingWorldGen != null && session._pendingWorldGen !== liveConfigGeneration) return;
-    // Map dims may change across a rebuild (skirmish ↔ koth) - mirror them before
-    // any main-thread tile math (fog, snap, pathability) runs.
-    if (session.field) setActiveMapSize(session.field.width, session.field.height);
-    renderer.setCount(entityCount);
-    renderer.clearProjectiles?.();
-    renderer.clearParticles?.();
-    resetTableClient();
-    fog.reset(session.field);
-    // Stamp only after setField rebuilds the overlay - uploading a 208-tile
-    // 1v1 veil into the outgoing stress texture is what made the swap look insane.
-    if (session.field) await renderer.setField?.(session.field);
-    stampFog({ force: true });
-    renderEntityCount = syncDrawnEntities();
-    placeFoggedProps();
-    syncRallyFlagMarkers();
-    sceneryFogOn = null;
-    if (fog.isEnabled()) {
-      sceneryFogOn = true;
-      renderer.applySceneryFog?.(sceneryFogAt);
+    // Hold the outgoing picture until the next board is ready to draw.
+    fieldSwapDepth++;
+    try {
+      if (session.field) await renderer.setField?.(session.field);
+      // Map dims may change across a rebuild (skirmish ↔ koth) - mirror them before
+      // any main-thread tile math (fog, snap, pathability) runs.
+      if (session.field) setActiveMapSize(session.field.width, session.field.height);
+      renderer.setCount(entityCount);
+      renderer.clearProjectiles?.();
+      renderer.clearParticles?.();
+      resetTableClient();
+      // Stamp only after setField rebuilds the overlay - uploading a 208-tile
+      // 1v1 veil into the outgoing stress texture is what made the swap look insane.
+      stampFog({ force: true });
+      renderEntityCount = syncDrawnEntities();
+      placeFoggedProps();
+      syncRallyFlagMarkers();
+      sceneryFogOn = null;
+      if (fog.isEnabled()) {
+        sceneryFogOn = true;
+        renderer.applySceneryFog?.(sceneryFogAt);
+      }
+      updateColors();
+    } finally {
+      fieldSwapDepth--;
     }
-    updateColors();
   };
 
   session.onDoorsChanged = (broken) => {
@@ -3595,12 +3608,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (c) inputApi.castAbilityAt?.(c.clientX, c.clientY, 'keyboard');
       return;
     }
-    if (e.code === 'KeyG') {
+    if (e.code === 'KeyU') {
       e.preventDefault();
       renderer.toggleTileGrid();
       return;
     }
-    if (e.code === 'KeyH') {
+    if (e.code === 'KeyI') {
       e.preventDefault();
       const on = renderer.togglePickHitboxes?.();
       if (typeof on === 'boolean') {
@@ -3998,7 +4011,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         wasAlive[i] = 0;
       }
     }
-    if (session.count !== renderEntityCount || unitTypesChanged()) {
+    if (!session.resetting && !fieldSwapDepth && (session.count !== renderEntityCount || unitTypesChanged())) {
       renderEntityCount = session.count;
       renderer.setCount(renderEntityCount);
       syncDrawnEntities();
@@ -4135,6 +4148,16 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     // A/B: skip pose loop + health/auras when units are hidden.
     if (renderer.getUnitsEnabled && !renderer.getUnitsEnabled()) {
       pushSelectionFollow();
+      renderer.commit();
+      if (inputLatency.enabled) inputLatency.rendered(displayTick);
+      if (cameraLatency.enabled) cameraLatency.rendered();
+      finishFrameProf(frameT0);
+      return;
+    }
+
+    // Keep the outgoing units on the outgoing board until setField cuts over.
+    // Posing the new sim during the load is what left models hanging in the void.
+    if (session.resetting || fieldSwapDepth) {
       renderer.commit();
       if (inputLatency.enabled) inputLatency.rendered(displayTick);
       if (cameraLatency.enabled) cameraLatency.rendered();
@@ -6072,7 +6095,7 @@ function showMatchSplash() {
     el.id = 'boot-splash';
     el.setAttribute('aria-hidden', 'true');
     el.innerHTML =
-      '<img src="/assets/images/skinnyheader.png" alt="Æther.Garden" width="506" height="56" decoding="async" />';
+      `<img src="${assetUrl('/assets/images/skinnyheader.png')}" alt="Æther.Garden" width="506" height="56" decoding="async" />`;
     document.body.appendChild(el);
   }
   delete el.dataset.leaving;

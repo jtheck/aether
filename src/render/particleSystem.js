@@ -14,6 +14,7 @@ import {
   updateBillboardSprite,
 } from '../vendor/lite/liteVendor.js';
 import { capacityFor } from '../sim/capacity.js';
+import { assetUrl } from './assetRev.js';
 
 const TEXTURE_SIZE = 32;
 /** v1 Babylon fire/smoke sprite (`game/fx.js` ParticlePresets). */
@@ -194,7 +195,7 @@ export function streamPullAccel(position, stream, age) {
 }
 
 async function atlasFromPuffSprite(engine) {
-  const texture = await loadTexture2D(engine, PUFF_SPRITE_URL, {
+  const texture = await loadTexture2D(engine, assetUrl(PUFF_SPRITE_URL), {
     srgb: false,
     mipMaps: true,
     invertY: false,

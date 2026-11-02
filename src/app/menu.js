@@ -38,6 +38,7 @@ import {
 } from './fullscreen.js';
 import { blowGraffiti } from './graffitiPuff.js';
 import { mountHelpRoster } from './helpRoster.js';
+import { wireHelpControlsAutoOpen } from './helpControlsDevice.js';
 import { focusMenuEl } from './input/gamepad.js';
 
 /**
@@ -56,6 +57,7 @@ import { focusMenuEl } from './input/gamepad.js';
  * @param {(hex: string) => unknown} [opts.onPlayerColorChange]
  * @param {() => unknown} [opts.onUnitSkinsChange]
  * @param {boolean} [opts.xrSupported]
+ * @param {() => boolean} [opts.getXrActive]
  * @param {() => unknown} [opts.onToggleXr]
  */
 export function setupMenu({
@@ -67,6 +69,7 @@ export function setupMenu({
   onPlayerColorChange,
   onUnitSkinsChange,
   xrSupported = false,
+  getXrActive,
   onToggleXr,
 }) {
   // Shadow dimensions are locked in at renderer construction, so anything other
@@ -274,7 +277,7 @@ export function setupMenu({
   });
 
   // Camera/hotkeys listen on window. Stop keydown so typing a name does not
-  // pan or trip B/G/H. Leave keyup alone so a held pan key still releases.
+  // pan or trip B/U/I. Leave keyup alone so a held pan key still releases.
   const keyStop = [
     nameInput, colorPicker, aaEnabled, skinsBtn, slider, fxSlider, volumeSlider, soloBtn, openReplayBtn, testerBtn, stressBtn,
     menuKothStart, menuKothClaim, menuKothLeave,
@@ -383,6 +386,8 @@ export function setupMenu({
     btn?.setAttribute('aria-expanded', 'false');
   }
 
+  const helpControlsAuto = wireHelpControlsAutoOpen(helpPop, { getXrActive });
+
   function setHelpOpen(open, restoreFocus = false) {
     if (!helpPop) return;
     if (helpPop.hidden === !open) return;
@@ -391,6 +396,7 @@ export function setupMenu({
     helpBtn?.classList.toggle('is-on', open);
     helpBtn?.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open) {
+      helpControlsAuto?.reset();
       focusMenuEl(helpClose);
       return;
     }

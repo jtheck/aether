@@ -29,7 +29,6 @@ const MAP_READ = 0x1;
 let deviceLogInstalled = false;
 let mipSkipInstalled = false;
 let readbackInstalled = false;
-let readbackWarned = false;
 let readbackDead = false;
 let nativeSubmit = null;
 
@@ -51,22 +50,15 @@ function isGameCanvas(canvas) {
 function watchDevice(device) {
   if (!device || watched.has(device)) return;
   watched.add(device);
-  device.addEventListener?.('uncapturederror', (event) => {
-    const err = event.error;
-    console.error('[gpu] uncaptured', err?.message || err);
-  });
   device.lost?.then((info) => {
     // The boot probe calls destroy() on a device that never draws.
     if (!configuredDevices.has(device) && info?.reason === 'destroyed') return;
-    console.error('[gpu] device lost', info?.reason || '', info?.message || '');
-    if (configuredDevices.has(device)) stopReadback(info?.message || info?.reason);
+    if (configuredDevices.has(device)) stopReadback();
   });
 }
 
-function stopReadback(reason) {
-  if (readbackDead) return;
+function stopReadback() {
   readbackDead = true;
-  console.error('[gpu] present readback stopped', reason || '');
 }
 
 function installDeviceLog() {
@@ -160,8 +152,7 @@ function ensurePair(context, device) {
     const pair = { textures, device, width, height };
     mirrors.set(context, pair);
     return pair;
-  } catch (err) {
-    console.error('[gpu] present mirror failed', err?.message || err);
+  } catch {
     return null;
   }
 }
@@ -185,8 +176,6 @@ function sessionFor(context) {
     overlay: null,
     ctx2d: null,
     image: null,
-    copyFailed: false,
-    waitLogged: false,
   };
   sessions.add(session);
   return session;
@@ -227,16 +216,6 @@ function paint(session, src, width, height, bytesPerRow) {
     }
   }
   session.ctx2d.putImageData(session.image, 0, 0);
-  if (!readbackWarned) {
-    readbackWarned = true;
-    console.warn('[gpu] presenting frames on an overlay');
-  }
-}
-
-function noteCopyFailed(session, err) {
-  if (session.copyFailed) return;
-  session.copyFailed = true;
-  console.error('[gpu] present copy failed', err?.message || err);
 }
 
 const BLIT_WGSL = `
@@ -347,33 +326,22 @@ function finishCopy(session, ticket) {
 function mapCopy(job) {
   const session = job.session;
   const mode = globalThis.GPUMapMode?.READ ?? MAP_READ;
-  const timer = setTimeout(() => {
-    if (session.ticket !== job.ticket || session.waitLogged) return;
-    session.waitLogged = true;
-    console.error('[gpu] present copy still waiting');
-  }, 5000);
   let pending;
   try {
     pending = job.buffer.mapAsync(mode);
-  } catch (err) {
-    clearTimeout(timer);
+  } catch {
     try { job.buffer.destroy(); } catch { /* already gone */ }
-    noteCopyFailed(session, err);
     finishCopy(session, job.ticket);
     return;
   }
   pending.then(() => {
-    clearTimeout(timer);
     const src = new Uint8Array(job.buffer.getMappedRange());
     try {
       paint(session, src, job.width, job.height, job.bytesPerRow);
     } finally {
       job.buffer.unmap();
     }
-  }, (err) => {
-    noteCopyFailed(session, err);
-  }).finally(() => {
-    clearTimeout(timer);
+  }).catch(() => {}).finally(() => {
     try { job.buffer.destroy(); } catch { /* already gone */ }
     finishCopy(session, job.ticket);
   });
@@ -391,8 +359,7 @@ function scheduleCopy(session) {
     try {
       session.ticket = (session.ticket + 1) >>> 0;
       job = encodeCopy(session, texture);
-    } catch (err) {
-      noteCopyFailed(session, err);
+    } catch {
       return;
     }
     if (!job) return;
@@ -402,11 +369,10 @@ function scheduleCopy(session) {
     session.locked = index;
     try {
       nativeSubmit.call(session.device.queue, [job.command]);
-    } catch (err) {
+    } catch {
       session.busy = false;
       session.locked = -1;
       try { job.buffer.destroy(); } catch { /* not submitted */ }
-      noteCopyFailed(session, err);
       return;
     }
     mapCopy(job);

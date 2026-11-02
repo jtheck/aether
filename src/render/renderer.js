@@ -92,13 +92,14 @@ import {
   writeVatSlotParams,
 } from './vatUnits.js';
 import { createCelestialRig } from './celestial.js';
-import { createTerrainFromField, createTileGridOverlay, createPlacementGridOverlay, surfaceHeightAt, terrainChunkLodSpec } from './terrain.js';
+import { createTerrainFromField, createTileGridOverlay, createPlacementGridOverlay, primeFieldAssets, surfaceHeightAt, terrainChunkLodSpec } from './terrain.js';
 import { createProjectileRenderer } from './projectiles.js';
 import { createPickHitboxRenderer } from './pickHitboxes.js';
 import { createHolyShieldMaterial, createHolyShieldMesh } from './holyShields.js';
 import { createWorkRadiusRings } from './workRadiusRings.js';
 import { createAgoraCaptureRings } from './agoraCaptureRing.js';
 import { createXrLassoOverlay } from './xrLasso.js';
+import { assetUrl } from './assetRev.js';
 import { createFrogRenderer } from './frogs.js';
 import { createArrowTrails } from './arrowTrails.js';
 import { emitFallingFrost } from './frostFx.js';
@@ -856,8 +857,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   const msaaSamples = opts.msaaSamples === 4 ? 4 : 1;
   const engine = await createEngine(canvas, { msaaSamples });
   bootLog('engine');
+  // Tree/rock bakes are ~170KB and used to start only after the terrain sheets
+  // and the billboard atlas. That gap is the opening frame of cards.
+  if (opts.field) primeFieldAssets(engine);
   const scene = createSceneContext(engine);
-  const buildingMenuFontPromise = loadFont('/assets/fonts/Roboto-Regular.ttf').catch((err) => {
+  const buildingMenuFontPromise = loadFont(assetUrl('/assets/fonts/Roboto-Regular.ttf')).catch((err) => {
     console.warn('Building menu labels disabled: Roboto font failed to load.', err);
     return null;
   });
@@ -5163,8 +5167,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     /**
      * Swap flat ground for atlas terrain (or rebuild after world reset).
      * Serialized + generation-gated so overlapping match starts can't leave
-     * two forests in the scene. Fog CPU state resets with the board so a
-     * stress FFA veil cannot leak onto 1v1 (and the overlay resizes with it).
+     * two forests in the scene. The outgoing board stays up until the next
+     * one is built, then both cut on the same turn - disposing first left an
+     * empty table with the old units still drawn, worst on a cold asset load.
+     * Fog CPU state resets with the board so a stress FFA veil cannot leak
+     * onto 1v1 (and the overlay resizes with it).
      */
     setField(snap) {
       const gen = ++fieldGen;
@@ -5172,41 +5179,58 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       fieldAbort?.abort();
       fieldAbort = ac;
       const run = async () => {
-        const prev = terrain;
-        // Drop terrain from the update + CSM caster paths BEFORE destroying GPU
-        // buffers - otherwise shadow/submit keeps WriteBuffer'ing dead TI mats.
-        terrain = null;
-        fieldSnap = snap ?? null;
-        const tableHalf = snap ? worldHalfFFromField(snap) : WORLD_HALF_F;
-        const tableHalfZ = snap ? worldHalfZFFromField(snap) : tableHalf;
-        const ext = resolveCameraExtents(tableHalf, tableHalfZ, snap?.cameraHalfF);
-        cameraController.setWorldHalfF?.(ext.x, ext.z);
-        celestial.setWorldHalfF?.(Math.max(tableHalf, tableHalfZ));
-        fogApi?.reset?.(snap ?? null);
-        fogApi?.detachOverlay?.();
-        invalidateShadowCasterBookkeeping();
-        applyShadowState();
-        prev?.dispose?.();
-        if (ground) {
-          softDetachMesh(scene, ground);
-          ground = null;
-        }
         if (!snap) {
+          const prev = terrain;
+          // Drop terrain from the update + CSM caster paths BEFORE destroying GPU
+          // buffers - otherwise shadow/submit keeps WriteBuffer'ing dead TI mats.
+          terrain = null;
+          fieldSnap = null;
+          cameraController.setWorldHalfF?.(WORLD_HALF_F, WORLD_HALF_F);
+          celestial.setWorldHalfF?.(WORLD_HALF_F);
+          fogApi?.reset?.(null);
+          fogApi?.detachOverlay?.();
+          invalidateShadowCasterBookkeeping();
+          applyShadowState();
+          prev?.dispose?.();
+          if (ground) {
+            softDetachMesh(scene, ground);
+            ground = null;
+          }
           if (gen !== fieldGen) return;
           rebuildTileGrid(null);
-          fogApi?.detachOverlay?.();
           applyShadowState();
           return;
         }
         const next = await createTerrainFromField(engine, scene, snap, camera, {
           ...sceneryOpts(),
           signal: ac.signal,
+          deferScene: true,
         });
         if (gen !== fieldGen || ac.signal.aborted) {
-          next.dispose?.();
+          next?.dispose?.();
           applyShadowState();
           return;
         }
+        const outgoing = terrain;
+        // Drop terrain from the update + CSM caster paths BEFORE destroying GPU
+        // buffers - otherwise shadow/submit keeps WriteBuffer'ing dead TI mats.
+        terrain = null;
+        fieldSnap = snap;
+        const tableHalf = worldHalfFFromField(snap);
+        const tableHalfZ = worldHalfZFFromField(snap);
+        const ext = resolveCameraExtents(tableHalf, tableHalfZ, snap?.cameraHalfF);
+        cameraController.setWorldHalfF?.(ext.x, ext.z);
+        celestial.setWorldHalfF?.(Math.max(tableHalf, tableHalfZ));
+        fogApi?.reset?.(snap);
+        fogApi?.detachOverlay?.();
+        invalidateShadowCasterBookkeeping();
+        applyShadowState();
+        if (outgoing && outgoing !== next) outgoing.dispose?.();
+        if (ground) {
+          softDetachMesh(scene, ground);
+          ground = null;
+        }
+        next.present?.();
         terrain = next;
         sceneryModelsReady = next.modelsReady ?? Promise.resolve();
         invalidateShadowCasterBookkeeping();

@@ -95,11 +95,16 @@ Categories=Game;
   if (fs.existsSync(manifestPath)) {
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     const extra = '--no-sandbox --disable-gpu-sandbox --ozone-platform=x11 --enable-unsafe-webgpu --enable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE,WebXRLayers,WebXRWebGPUBinding --use-angle=vulkan --ignore-gpu-blocklist';
-    const args = typeof manifest['chromium-args'] === 'string' ? manifest['chromium-args'] : '';
-    if (!args.includes('--enable-unsafe-webgpu')) {
-      manifest['chromium-args'] = (args + ' ' + extra).trim();
+    let args = typeof manifest['chromium-args'] === 'string' ? manifest['chromium-args'] : '';
+    // Brave presents without this. In-process GPU is what the Steam shell adds,
+    // and mapAsync stalls there after the first frames.
+    const withoutInProcess = args.replace(/(?:^|\s)--in-process-gpu(?=\s|$)/g, ' ').replace(/\s+/g, ' ').trim();
+    let next = withoutInProcess;
+    if (!next.includes('--enable-unsafe-webgpu')) next = (next + ' ' + extra).trim();
+    if (next !== args) {
+      manifest['chromium-args'] = next;
       fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
-      console.log('[steam-build] Added Linux Chromium sandbox/WebGPU flags');
+      console.log('[steam-build] Linux Chromium flags: Vulkan on, in-process GPU off');
     }
   }
 }

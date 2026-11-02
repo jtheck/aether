@@ -2927,24 +2927,27 @@ async function rebuildTerrain() {
   clearTileWireTimer();
   const gen = ++fieldGen;
   const snap = field;
-  const prev = terrain;
-  const prevGrid = grid;
-  terrain = null;
-  grid = null;
-  prev?.dispose?.();
-  prevGrid?.dispose?.();
-  tileWireMesh = dropOverlay(tileWireMesh);
   try {
     const next = await createTerrainFromField(engine, scene, snap, camera, {
       skipScenery: false,
       // Editor meshes (including the draft ghost) are drawn separately.
       skipWalls: true,
       chunkedAtlas: true,
+      // Stay off-screen until the old board can be dropped on the same turn.
+      deferScene: true,
     });
     if (gen !== fieldGen) {
       next.dispose?.();
       return;
     }
+    const outgoing = terrain;
+    const outgoingGrid = grid;
+    terrain = null;
+    grid = null;
+    if (outgoing && outgoing !== next) outgoing.dispose?.();
+    outgoingGrid?.dispose?.();
+    tileWireMesh = dropOverlay(tileWireMesh);
+    next.present?.();
     terrain = next;
     terrain.setSceneryVisible?.(state.showScenery);
     grid = createTileGridOverlay(engine, scene, snap, { edges: false, overModels: true });

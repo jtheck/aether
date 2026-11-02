@@ -10,6 +10,7 @@ import {
 } from '../vendor/lite/liteVendor.js';
 import { buildWallGeometry } from './wallGeom.js';
 import { softDetachMesh } from './meshLifecycle.js';
+import { assetUrl } from './assetRev.js';
 
 const CASTLE_URL = '/assets/textures/castle.png';
 const DUNGEON_URL = '/assets/textures/dungeon.png';
@@ -236,7 +237,7 @@ function loadWallPaint(engine) {
   let pending = paintedTextures.get(engine);
   if (pending) return pending;
   const sampler = wallRepeatSampler(engine);
-  const load = (url) => loadTexture2D(engine, url, {
+  const load = (url) => loadTexture2D(engine, assetUrl(url), {
     srgb: true,
     mipMaps: true,
     invertY: false,

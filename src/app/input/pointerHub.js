@@ -12,6 +12,8 @@ export function isRmbPassthroughTarget(target) {
   return !!node?.closest?.(RMB_PASSTHROUGH_SELECTOR);
 }
 
+import { noteHelpControlsDevice } from '../helpControlsDevice.js';
+
 // Sole pointer/wheel surface for mouse and touch.
 // Document-level move/up like v1 - no pointer capture.
 // Touch is fully owned by the touch adapter (its own multi-finger bookkeeping);
@@ -150,9 +152,11 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
     if (!onCanvas(e) && !(e.button === 2 && isRmbPassthroughTarget(e.target))) return;
 
     if (e.pointerType === 'touch') {
+      noteHelpControlsDevice('touch');
       touch?.handlePointerDown(e);
       return;
     }
+    noteHelpControlsDevice('mouse');
 
     if (e.button === 2) {
       game.cancelDrag();

@@ -21,6 +21,7 @@ import {
 import { materialsFromBakeMeta } from './bakedMaterials.js';
 import { yawPitchRollFromWorldMatrix } from './transportSeats.js';
 import { BAKE_MESH_VERSION, boundsOfPositions, mergeSlicedParts } from './bakeMerge.js';
+import { assetUrl } from './assetRev.js';
 
 /** Static (non-VAT) thin-instance templates. */
 /** @type {Readonly<Record<number, string>>} */
@@ -215,7 +216,7 @@ function computeSmoothNormalsLH(positions, indices) {
  * @returns {Promise<{ parts: object[], sockets: { name: string, x: number, y: number, z: number, yaw: number, pitch: number, roll: number }[], sources: object[] }>}
  */
 export async function bakeGltfParts(engine, url) {
-  const container = await loadGltf(engine, url);
+  const container = await loadGltf(engine, assetUrl(url));
   const root = cloneTransformNode(container.entities[0]);
   const sockets = collectFxSockets(root);
   const sources = collectRenderableMeshes(root).filter((n) => !isFxSocketNode(n));
@@ -247,7 +248,7 @@ function loadMaterialSources(engine, url) {
   let pending = glbMaterialSourcesCache.get(url);
   if (!pending) {
     pending = (async () => {
-      const container = await loadGltf(engine, url);
+      const container = await loadGltf(engine, assetUrl(url));
       const root = cloneTransformNode(container.entities[0]);
       return collectRenderableMeshes(root).filter((n) => !isFxSocketNode(n));
     })();

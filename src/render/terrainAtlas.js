@@ -11,6 +11,7 @@ import {
   setStandardSpecularTexture,
 } from '../vendor/lite/liteVendor.js';
 import { ATLAS, isBlendAtlas } from '../sim/field.js';
+import { assetFetch, assetUrl } from './assetRev.js';
 import {
   ATLAS_GRID,
   PAVE_DIFFUSE,
@@ -348,7 +349,7 @@ function atlasSampler(engine) {
 async function loadAtlasTexture(engine, url) {
   // Mipmaps remove minification shimmer; anisotropy keeps oblique terrain sharp.
   // UVs use image-space V, so preserve the PNG's top-to-bottom orientation.
-  const texture = await loadLiteTexture2D(engine, url, {
+  const texture = await loadLiteTexture2D(engine, assetUrl(url), {
     srgb: true,
     mipMaps: true,
     invertY: false,
@@ -362,7 +363,7 @@ async function loadAtlasTexture(engine, url) {
 }
 
 async function decodeSheet(url) {
-  const blob = await (await fetch(url)).blob();
+  const blob = await (await assetFetch(url)).blob();
   const bitmap = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
   const size = bitmap.width;
   const canvas = new OffscreenCanvas(size, bitmap.height);

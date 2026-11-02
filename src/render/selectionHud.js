@@ -22,6 +22,7 @@ import {
   updateDefaultTextData,
 } from '../vendor/lite/liteVendor.js';
 import { bakedSpriteUrl } from './bakedAssets.js';
+import { assetUrl } from './assetRev.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
 import { loadIdleIconMeshes } from './vatUnits.js';
 import { formatGameNumber } from '../sim/formatGameNumber.js';
@@ -540,7 +541,7 @@ export async function createSelectionHud(engine, scene, screen = {}) {
   async function tryLoadSpriteIcon(key, url) {
     let tex = null;
     try {
-      tex = await loadTexture2D(engine, bakedSpriteUrl(url), {
+      tex = await loadTexture2D(engine, assetUrl(bakedSpriteUrl(url)), {
         mipMaps: true,
         addressModeU: 'clamp-to-edge',
         addressModeV: 'clamp-to-edge',

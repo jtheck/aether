@@ -17,7 +17,7 @@ import {
   mushroomPlacementsForHost,
   wagonPlacementForTile,
 } from '../sim/doodads.js';
-import { loadBakedUnitMeshParts } from './unitModels.js';
+import { loadBakedUnitMeshParts, prefetchBakedMesh } from './unitModels.js';
 import { softDetachMesh } from './meshLifecycle.js';
 
 const MUSHROOM_MODEL_URL = '/assets/models/mushroom.glb';
@@ -128,7 +128,7 @@ function makeForestMaterial(engine, name) {
   });
 }
 
-async function loadKindBatches(engine, scene, url, name, material) {
+async function loadKindBatches(engine, scene, url, name, material, deferScene = false) {
   const parts = await loadBakedUnitMeshParts(engine, url);
   const batches = [];
   const capacity = DOODAD_INITIAL;
@@ -143,7 +143,7 @@ async function loadKindBatches(engine, scene, url, name, material) {
     setThinInstances(mesh, matrices, capacity);
     setThinInstanceColors(mesh, colors);
     setThinInstanceCount(mesh, 0);
-    addToScene(scene, mesh);
+    if (!deferScene) addToScene(scene, mesh);
     batches.push({ mesh, matrices, colors, capacity });
   }
   return batches;
@@ -154,6 +154,13 @@ function placementsForSlot(field, slot) {
   return mushroomPlacementsForHost(field, slot.tile);
 }
 
+/** Decode mushroom and wagon packages while terrain sheets are still in flight. */
+export function prefetchDoodadModels(engine) {
+  if (!engine) return;
+  void prefetchBakedMesh(engine, MUSHROOM_MODEL_URL).catch(() => {});
+  void prefetchBakedMesh(engine, WAGON_MODEL_URL).catch(() => {});
+}
+
 /**
  * @param {object} engine
  * @param {object} scene
@@ -161,22 +168,37 @@ function placementsForSlot(field, slot) {
  * @param {(x: number, z: number) => number} groundYAt
  */
 export async function createDoodadsFromField(engine, scene, field, groundYAt, opts = {}) {
+  prefetchDoodadModels(engine);
   /** @type {{ mesh: object, matrices: Float32Array, colors: Float32Array, capacity: number }[]} */
   let mushroomBatches = [];
   /** @type {{ mesh: object, matrices: Float32Array, colors: Float32Array, capacity: number }[]} */
   let wagonBatches = [];
-  try {
-    const forestMat = makeForestMaterial(engine, 'doodad-mushroom');
-    mushroomBatches = await loadKindBatches(engine, scene, MUSHROOM_MODEL_URL, 'mushroom', forestMat);
-  } catch (err) {
-    console.warn('[doodads] mushroom.glb failed', err);
-  }
-  try {
-    const wagonMat = makeForestMaterial(engine, 'doodad-wagon');
-    wagonBatches = await loadKindBatches(engine, scene, WAGON_MODEL_URL, 'wagon', wagonMat);
-  } catch (err) {
-    console.warn('[doodads] wagon.glb failed', err);
-  }
+  const [mushrooms, wagons] = await Promise.all([
+    loadKindBatches(
+      engine,
+      scene,
+      MUSHROOM_MODEL_URL,
+      'mushroom',
+      makeForestMaterial(engine, 'doodad-mushroom'),
+      opts.deferScene === true,
+    ).catch((err) => {
+      console.warn('[doodads] mushroom.glb failed', err);
+      return [];
+    }),
+    loadKindBatches(
+      engine,
+      scene,
+      WAGON_MODEL_URL,
+      'wagon',
+      makeForestMaterial(engine, 'doodad-wagon'),
+      opts.deferScene === true,
+    ).catch((err) => {
+      console.warn('[doodads] wagon.glb failed', err);
+      return [];
+    }),
+  ]);
+  mushroomBatches = mushrooms;
+  wagonBatches = wagons;
   if (mushroomBatches.length === 0 && wagonBatches.length === 0) return emptyDoodads();
 
   /** @type {Map<string, { kind: number, growT: number, shrinkT: number, leaving: boolean, instances: object[] }>} */

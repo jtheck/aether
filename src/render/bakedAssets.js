@@ -1,5 +1,8 @@
 // Offline bake artifact helpers (VAT dumps, mesh packages, socket tables).
 // Files live under /assets/baked/ - produced by `npm run prebake`.
+// Deploy rewrites those paths by content hash; see assetRev.js.
+
+import { assetFetch, assetUrl } from './assetRev.js';
 
 /** @param {string} glbUrl e.g. /assets/models/tavern.glb */
 export function bakedMeshStem(glbUrl) {
@@ -18,7 +21,7 @@ export function bakedMeshStem(glbUrl) {
 
 /** Portrait PNG written by prebake (`sprites/<stem>.png`). */
 export function bakedSpriteUrl(glbUrl) {
-  return `/assets/baked/sprites/${bakedMeshStem(glbUrl)}.png`;
+  return assetUrl(`/assets/baked/sprites/${bakedMeshStem(glbUrl)}.png`);
 }
 
 /** @param {string} glbUrl */
@@ -90,9 +93,8 @@ export async function hasBakedVat(glbUrl) {
  */
 export async function tryFetch(url) {
   try {
-    // no-cache: always revalidate (ETag/304). force-cache stuck returning
-    // visitors on old unhashed bake/GLB bytes after deploy - hard-to-kill on mobile.
-    const res = await fetch(url, { cache: 'no-cache' });
+    // Unhashed dev paths revalidate. Hashed deploy paths stay cached.
+    const res = await assetFetch(url);
     if (!res.ok) return null;
     return res;
   } catch {

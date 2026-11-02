@@ -15,9 +15,11 @@ import {
   readdirSync,
   cpSync,
   existsSync,
+  statSync,
 } from 'fs';
 import { gzipSync } from 'zlib';
-import { join, extname } from 'path';
+import { createHash } from 'crypto';
+import { join, extname, dirname, relative } from 'path';
 import { fileURLToPath } from 'url';
 import { listHouseMapRelPaths, readSkirmishCatalog, resolveMapsUrl } from './mapsResolve.js';
 
@@ -25,6 +27,58 @@ const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 const DEPLOY = join(REPO, 'DEPLOY');
 const BAKED = join(REPO, 'assets', 'baked');
+const ASSET_REV_JS = join(ROOT, 'render', 'assetRev.js');
+
+function walkFiles(dir, out = []) {
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) walkFiles(path, out);
+    else out.push(path);
+  }
+  return out;
+}
+
+/** `meshes/trees.json` → `meshes/trees-<hash>.json` */
+function hashedAssetRel(rel, hash) {
+  const slash = rel.lastIndexOf('/');
+  const dir = slash >= 0 ? rel.slice(0, slash + 1) : '';
+  const file = slash >= 0 ? rel.slice(slash + 1) : rel;
+  const dot = file.lastIndexOf('.');
+  if (dot <= 0) return `${dir}${file}-${hash}`;
+  return `${dir}${file.slice(0, dot)}-${hash}${file.slice(dot)}`;
+}
+
+/**
+ * Content-hash every file under repo assets/. Dev keeps the stable names;
+ * DEPLOY only has the hashed copies. Keys are `/assets/<rel>`.
+ * @returns {Record<string, string>}
+ */
+function publishHashedAssets() {
+  const srcRoot = join(REPO, 'assets');
+  /** @type {Record<string, string>} */
+  const rev = {};
+  if (!existsSync(srcRoot)) return rev;
+  for (const file of walkFiles(srcRoot)) {
+    const rel = relative(srcRoot, file).replace(/\\/g, '/');
+    const buf = readFileSync(file);
+    const hash = createHash('sha256').update(buf).digest('hex').slice(0, 12);
+    const hashed = hashedAssetRel(rel, hash);
+    rev[`/assets/${rel}`] = `/assets/${hashed}`;
+    const dest = join(DEPLOY, 'assets', hashed);
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, buf);
+  }
+  return rev;
+}
+
+function rewriteAssetUrls(text, rev) {
+  const keys = Object.keys(rev).sort((a, b) => b.length - a.length);
+  let out = text;
+  for (const key of keys) {
+    if (out.includes(key)) out = out.replaceAll(key, rev[key]);
+  }
+  return out;
+}
 
 function mustExist(rel, hint) {
   const p = join(ROOT, rel);
@@ -47,6 +101,27 @@ for (const name of readdirSync(DEPLOY)) {
   if (name === '.gitkeep') continue;
   rmSync(join(DEPLOY, name), { recursive: true, force: true });
 }
+
+// Ensure baked manifest exists before hashing, so the deploy copy includes it.
+{
+  const bakedDir = join(REPO, 'assets', 'baked');
+  const manifestPath = join(bakedDir, 'manifest.json');
+  if (existsSync(bakedDir) && !existsSync(manifestPath)) {
+    const meshesDir = join(bakedDir, 'meshes');
+    const vatDir = join(bakedDir, 'vat');
+    const meshes = existsSync(meshesDir)
+      ? readdirSync(meshesDir).filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5))
+      : [];
+    const vat = existsSync(vatDir)
+      ? readdirSync(vatDir).filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5))
+      : [];
+    writeFileSync(manifestPath, JSON.stringify({ meshes, vat }, null, 2));
+    console.log(`wrote assets/baked/manifest.json (${meshes.length} meshes, ${vat.length} vat)`);
+  }
+}
+
+const assetRev = publishHashedAssets();
+console.log(`hashed ${Object.keys(assetRev).length} assets`);
 
 // splitting:false + liteVendor alias → 2 JS files instead of 400+ Lite shader chunks.
 // (splitting:true re-emits every dynamic import from @babylonjs/lite as its own file.)
@@ -71,6 +146,22 @@ const result = await esbuild.build({
     howler: join(ROOT, 'vendor/howler.js'),
     '@babylonjs/lite': join(ROOT, 'vendor/lite/liteVendor.js'),
   },
+  plugins: [
+    {
+      name: 'asset-rev',
+      setup(build) {
+        build.onLoad({ filter: /assetRev\.js$/ }, () => {
+          const needle = 'const ASSET_REV = Object.freeze({});';
+          let src = readFileSync(ASSET_REV_JS, 'utf8');
+          if (!src.includes(needle)) {
+            throw new Error('assetRev.js is missing the empty ASSET_REV marker');
+          }
+          src = src.replace(needle, `const ASSET_REV = Object.freeze(${JSON.stringify(assetRev)});`);
+          return { contents: src, loader: 'js', resolveDir: dirname(ASSET_REV_JS) };
+        });
+      },
+    },
+  ],
   logLevel: 'info',
   metafile: true,
   write: true,
@@ -112,6 +203,10 @@ const mainHash = mainFile.replace(/^main-/, '').replace(/\.js$/, '');
   }
   writeFileSync(mainPath, mainSrc);
   console.log(`worker URL → ./${workerFile}`);
+  const sample = Object.values(assetRev)[0];
+  if (sample && !mainSrc.includes(sample)) {
+    throw new Error('asset rev map was not bundled');
+  }
 }
 
 // Off by default. Opt in: PACKAGE_OBFUSCATE=1 npm run package
@@ -152,26 +247,7 @@ if (doObfuscate) {
   console.log('skip extra obfuscate (main + worker minify-only)');
 }
 
-// Ensure baked manifest exists (avoids per-mesh 404 probes at runtime).
-{
-  const bakedDir = join(REPO, 'assets', 'baked');
-  const manifestPath = join(bakedDir, 'manifest.json');
-  if (existsSync(bakedDir) && !existsSync(manifestPath)) {
-    const meshesDir = join(bakedDir, 'meshes');
-    const vatDir = join(bakedDir, 'vat');
-    const meshes = existsSync(meshesDir)
-      ? readdirSync(meshesDir).filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5))
-      : [];
-    const vat = existsSync(vatDir)
-      ? readdirSync(vatDir).filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5))
-      : [];
-    writeFileSync(manifestPath, JSON.stringify({ meshes, vat }, null, 2));
-    console.log(`wrote assets/baked/manifest.json (${meshes.length} meshes, ${vat.length} vat)`);
-  }
-}
-
-// Static copies
-cpSync(join(REPO, 'assets'), join(DEPLOY, 'assets'), { recursive: true });
+// Static copies. assets/ is already content-hashed into DEPLOY/assets.
 {
   const mapsDst = join(DEPLOY, 'maps');
   mkdirSync(mapsDst, { recursive: true });
@@ -236,7 +312,7 @@ let sw = readFileSync(join(ROOT, 'sw-aether.js'), 'utf8');
 sw = sw.replace(/const CACHE = ["'][^"']*["']/, `const CACHE = "aether-${mainHash.slice(0, 12)}"`);
 writeFileSync(join(DEPLOY, 'sw-aether.js'), sw);
 
-let html = readFileSync(join(ROOT, 'index.html'), 'utf8');
+let html = rewriteAssetUrls(readFileSync(join(ROOT, 'index.html'), 'utf8'), assetRev);
 // Drop importmap (bundled) and explorer CSS (optional in prod; F9 won't load explorer chunks easily).
 html = html.replace(/<script type="importmap">[\s\S]*?<\/script>\s*/i, '');
 html = html.replace(/<link rel="stylesheet" href="\.\/vendor\/lite-explorer\/explorer\.css">\s*/i, '');

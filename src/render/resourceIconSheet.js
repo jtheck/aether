@@ -5,8 +5,10 @@
 import { RESOURCE_KINDS } from '../sim/resources.js';
 import { RESOURCE_SLOT_LABELS } from '../sim/storage.js';
 
-export const RESOURCE_ICONS_URL = '/assets/images/resource_icons.svg';
+import { assetFetch } from './assetRev.js';
+
 /** Menu prices: wood #B, food #3, others #2. */
+export const RESOURCE_ICONS_URL = '/assets/images/resource_icons.svg';
 export const PRICE_ICON_SLOT = Object.freeze({
   wood: 'b',
   stone: '2',
@@ -159,7 +161,7 @@ export function isolateResourceIcon(iconG, opts) {
 export async function loadPriceIcons(url = RESOURCE_ICONS_URL) {
   /** @type {Record<string, SVGSVGElement>} */
   const out = {};
-  const res = await fetch(url);
+  const res = await assetFetch(url);
   if (!res.ok) throw new Error(`resource icons ${res.status}`);
   const doc = new DOMParser().parseFromString(await res.text(), 'image/svg+xml');
   const svg = doc.documentElement;

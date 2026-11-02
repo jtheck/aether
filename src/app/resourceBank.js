@@ -16,6 +16,7 @@ import {
   collectResourceIcons,
   normalizeResourceKind,
 } from '../render/resourceIconSheet.js';
+import { assetFetch } from '../render/assetRev.js';
 
 export { RESOURCE_ICONS_URL, collectResourceIcons, normalizeResourceKind };
 
@@ -33,7 +34,7 @@ export function createResourceBank(host) {
 
   async function mount() {
     if (!root || ready) return ready;
-    const res = await fetch(RESOURCE_ICONS_URL);
+    const res = await assetFetch(RESOURCE_ICONS_URL);
     if (!res.ok) throw new Error(`resource icons ${res.status}`);
     const text = await res.text();
     const doc = new DOMParser().parseFromString(text, 'image/svg+xml');

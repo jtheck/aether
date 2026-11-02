@@ -11,6 +11,7 @@ import {
   setThinInstances,
 } from '../vendor/lite/liteVendor.js';
 import { bakedSpriteUrl } from './bakedAssets.js';
+import { assetUrl } from './assetRev.js';
 import { createRadialSpriteMaterial } from './radialIconMaterial.js';
 import { RADIAL_ICON_RENDER_ORDER, radialIconBounds } from './radialPose.js';
 
@@ -84,7 +85,7 @@ export async function loadRadialSpriteIcon(engine, scene, name, glbUrl) {
   if (!glbUrl) return null;
   let tex = null;
   try {
-    tex = await loadTexture2D(engine, bakedSpriteUrl(glbUrl), {
+    tex = await loadTexture2D(engine, assetUrl(bakedSpriteUrl(glbUrl)), {
       mipMaps: true,
       addressModeU: 'clamp-to-edge',
       addressModeV: 'clamp-to-edge',

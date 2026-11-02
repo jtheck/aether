@@ -10,6 +10,7 @@ import {
   setPbrEmissive,
 } from '../vendor/lite/liteVendor.js';
 import { bakedMeshStem } from './bakedAssets.js';
+import { assetUrl } from './assetRev.js';
 
 const WHITE_PIXELS = new Uint8Array([255, 255, 255, 255]);
 
@@ -63,7 +64,7 @@ export async function materialFromBakeDesc(engine, glbUrl, matDesc, images) {
     if (idx == null || idx < 0) return null;
     const meta = images?.[idx];
     if (!meta?.file) return null;
-    return loadTexture2D(engine, `/assets/baked/meshes/${stem}/${meta.file}`, opts);
+    return loadTexture2D(engine, assetUrl(`/assets/baked/meshes/${stem}/${meta.file}`), opts);
   }
 
   const factor = matDesc.baseColorFactor ?? [1, 1, 1, 1];
@@ -72,11 +73,16 @@ export async function materialFromBakeDesc(engine, glbUrl, matDesc, images) {
   const alphaMode = matDesc.alphaMode ?? 'OPAQUE';
   const hasOrmImage = matDesc.ormImage != null;
 
-  const baseColorTexture = (await loadImg(matDesc.baseColorImage, srgbOpts)) || whiteTex(engine);
-  const ormTexture = (await loadImg(matDesc.ormImage, linearOpts))
-    || ormFactorTex(engine, roughness, metallic);
-  const normalTexture = (await loadImg(matDesc.normalImage, linearOpts)) || undefined;
-  const emissiveTexture = (await loadImg(matDesc.emissiveImage, srgbOpts)) || undefined;
+  const [baseColorRaw, ormRaw, normalRaw, emissiveRaw] = await Promise.all([
+    loadImg(matDesc.baseColorImage, srgbOpts),
+    loadImg(matDesc.ormImage, linearOpts),
+    loadImg(matDesc.normalImage, linearOpts),
+    loadImg(matDesc.emissiveImage, srgbOpts),
+  ]);
+  const baseColorTexture = baseColorRaw || whiteTex(engine);
+  const ormTexture = ormRaw || ormFactorTex(engine, roughness, metallic);
+  const normalTexture = normalRaw || undefined;
+  const emissiveTexture = emissiveRaw || undefined;
   const ef = matDesc.emissiveFactor ?? [0, 0, 0];
 
   // Must use createPbrMaterial so `_buildGroup` is set - plain objects never draw.

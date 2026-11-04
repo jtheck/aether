@@ -375,6 +375,27 @@ const LITE_PATCHES = [
     from: 'eng._gpuTaskTimerResolve?.(encoder);',
     to: 'eng._gpuTaskTimerResolve?.(lastEncoder);',
   },
+  {
+    // A thin-instance color upload writes count*16 bytes from the CPU array.
+    // Count can move ahead of that array (a grow, then a full reupload on the
+    // first shadow pass). Chrome rejects the write and the frame loop stops,
+    // because the next frame is scheduled only after the frame returns.
+    // Upload the prefix that exists. The tail stays the cleared GPU buffer
+    // until a later setThinInstanceColors replaces the array.
+    file: /thin-instance-gpu\.js$/,
+    from: /const cMin = colorRecreated \? 0 : ti\._colorDirtyMin;\s*const cMax = colorRecreated \? ti\.count : Math\.min\(ti\._colorDirtyMax, ti\.count\);\s*if \(cMax > cMin\) device\.queue\.writeBuffer\(ti\._colorGpuBuffer, cMin \* 16, ti\.colors\.buffer, ti\.colors\.byteOffset \+ cMin \* 16, \(cMax - cMin\) \* 16\);/,
+    to: `const cMin = colorRecreated ? 0 : ti._colorDirtyMin;
+			let cMax = colorRecreated ? ti.count : Math.min(ti._colorDirtyMax, ti.count);
+			const colorSlots = ti.colors.byteLength / 16 | 0;
+			if (cMax > colorSlots) {
+				cMax = colorSlots;
+				if (!ti._colorUploadClamped) {
+					ti._colorUploadClamped = true;
+					console.warn("[thin-instance] color array shorter than instance count", ti.count, ti.colors.length);
+				}
+			}
+			if (cMax > cMin) device.queue.writeBuffer(ti._colorGpuBuffer, cMin * 16, ti.colors.buffer, ti.colors.byteOffset + cMin * 16, (cMax - cMin) * 16);`,
+  },
 ];
 
 function liteGameplayPatches() {
@@ -382,7 +403,7 @@ function liteGameplayPatches() {
   return {
     name: 'aether-lite-patches',
     setup(build) {
-      build.onLoad({ filter: /csm-shadow-task-hooks\.js$|csm-shadow-fragment-core\.js$|csm-directional-shadow-generator\.js$|standard-group-builder\.js$|standard-template\.js$|standard-renderable\.js$|standard-pipeline\.js$|std-emissive-fragment\.js$|xr-session\.js$|material-shadow-bindings\.js$|pbr-geometry-view-.*\.js$/ }, (args) => {
+      build.onLoad({ filter: /csm-shadow-task-hooks\.js$|csm-shadow-fragment-core\.js$|csm-directional-shadow-generator\.js$|standard-group-builder\.js$|standard-template\.js$|standard-renderable\.js$|standard-pipeline\.js$|std-emissive-fragment\.js$|xr-session\.js$|material-shadow-bindings\.js$|pbr-geometry-view-.*\.js$|thin-instance-gpu\.js$/ }, (args) => {
         const patches = LITE_PATCHES.filter((p) => p.file.test(args.path));
         if (!patches.length) return null;
         let src = readFileSync(args.path, 'utf8');

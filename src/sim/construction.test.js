@@ -15,7 +15,14 @@ import { growTreeAt } from './trees.js';
 import { getResource, grantStartingResources } from './resources.js';
 import { getBuildTime, getBuildingCost } from './buildings.js';
 import { checksum } from './checksum.js';
-import { constructionVisualStage, CONSTRUCT_NEAR_NUM, CONSTRUCT_NEAR_DEN, IDLE_VILLAGE_DEN } from './construction.js';
+import {
+  constructionVisualStage,
+  constructionRingFill,
+  CONSTRUCT_NEAR_NUM,
+  CONSTRUCT_NEAR_DEN,
+  IDLE_VILLAGE_DEN,
+  CONSTRUCTION_RING_CHIPS,
+} from './construction.js';
 
 function siteBuilding(type, xF, zF, owner = 0) {
   return {
@@ -307,6 +314,14 @@ function visualStagesAtStartAndTwoThirds() {
   assert.equal(constructionVisualStage(90, 90), 2, 'finished-but-unflagged stays late');
 }
 
+function ringFillsOneChipAtATime() {
+  assert.equal(constructionRingFill(0, 90), 0, 'no chips before work');
+  assert.equal(constructionRingFill(1, 90), 1 / CONSTRUCTION_RING_CHIPS, 'first work lights a chip');
+  assert.ok(constructionRingFill(45, 90) > constructionRingFill(10, 90), 'more work lights more chips');
+  assert.equal(constructionRingFill(45, 90), 8 / CONSTRUCTION_RING_CHIPS, 'halfway is half the ring');
+  assert.equal(constructionRingFill(90, 90), 1, 'finished progress is the full ring');
+}
+
 function cancelConstructionRefundsAndClears() {
   const field = openField(8);
   field.activeMask?.fill(1);
@@ -429,6 +444,7 @@ farmCallsOneBuilder();
 finishingTurnsOnTheFarm();
 deterministic();
 visualStagesAtStartAndTwoThirds();
+ringFillsOneChipAtATime();
 cancelConstructionRefundsAndClears();
 cancelConstructionIgnoresFinished();
 twoOwnersRaiseIndependently();

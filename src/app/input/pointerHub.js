@@ -236,8 +236,6 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
     if (!syncActive().active) return;
     const help = document.getElementById('help_pop');
     if (help && !help.hidden) return;
-    const ladder = document.getElementById('ladder_pop');
-    if (ladder && !ladder.hidden) return;
     const skins = document.getElementById('skins_pop');
     if (skins && !skins.hidden) return;
     camera.handleKeyDown(e);

@@ -1,4 +1,4 @@
-import { fetchOfficialHouseMaps } from '../houseMapCatalog.js';
+import { AUTO_MAP_PREVIEW_URL, fetchOfficialHouseMaps, officialPreviewUrl } from '../houseMapCatalog.js';
 import { ladderSlices } from './ladderBoard.js';
 import { seasonInfo } from './ladderSeason.js';
 import { ladderLooking, ladderQueueReady, leaveLadder, loadLadderBoard, loadLadderRecent, loadLadderSnapshot, queueLadder, touchLadderName } from './ladderApi.js';
@@ -7,12 +7,33 @@ import { rememberLadderId } from './ladderId.js';
 import { clearLadderAssignment, getLadderAssignment, setLadderAssignment } from './ladderSession.js';
 import { getPlayerColor, getPlayerName } from './settings.js';
 import { focusMenuEl } from './input/gamepad.js';
+import { cleanMapName } from '../lobby/modes.js';
 
 const PLAYER_HEX = /^#[0-9a-fA-F]{6}$/;
 
 function ratingText(player) {
   const rating = player?.rating;
   return Number.isFinite(rating) ? String(rating | 0) : '';
+}
+
+/** Named official map, or the generated size once the deal is on the lobby. */
+export function ladderMapLabel(state) {
+  const name = cleanMapName(state?.settings?.mapName);
+  if (name) return name;
+  const dealt = state?.phase === 'countdown' || state?.phase === 'starting' || state?.loadingMap;
+  if (!dealt) return '';
+  const size = String(state?.settings?.fieldSize || '');
+  if (!size) return '';
+  return size.charAt(0).toUpperCase() + size.slice(1);
+}
+
+/** Forge shot for the dealt map, or the default picture. Hidden until a map is dealt. */
+export function ladderMapPreviewUrl(state) {
+  const chapter = String(state?.settings?.chapter || '');
+  const shot = officialPreviewUrl(chapter);
+  if (shot) return shot;
+  if (chapter || ladderMapLabel(state)) return AUTO_MAP_PREVIEW_URL;
+  return '';
 }
 
 function matchSide(players, mirror) {
@@ -123,7 +144,7 @@ function fill(el, rows, playerId, openId) {
   el.appendChild(table);
 }
 
-export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPlace }) {
+export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPlace, onQueueChange }) {
   const openBtn = document.getElementById('ladder-open');
   const pop = document.getElementById('ladder_pop');
   const closeBtn = document.getElementById('ladder_close');
@@ -151,6 +172,8 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPl
   const go = document.getElementById('ladder_go');
   const goNames = document.getElementById('ladder_go_names');
   const goCount = document.getElementById('ladder_go_count');
+  const goMap = document.getElementById('ladder_go_map');
+  const goPreview = document.getElementById('ladder_go_preview');
   const goCancel = document.getElementById('ladder_go_cancel');
   if (!openBtn || !pop || !matchLobby) return { refresh() {}, close() {} };
   void fetchOfficialHouseMaps('onevsone');
@@ -194,6 +217,33 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPl
   function paintMatchup(match) {
     renderLadderMatchup(goNames, go?.querySelector('.ladder-card'), match);
   }
+
+  let shownPreview = '';
+  let failedPreview = '';
+
+  function paintMap(state) {
+    const label = ladderMapLabel(state);
+    if (goMap) {
+      goMap.hidden = !label;
+      goMap.textContent = label;
+    }
+    const url = ladderMapPreviewUrl(state);
+    if (!goPreview) return;
+    if (!url || url === failedPreview) {
+      goPreview.hidden = true;
+      return;
+    }
+    if (shownPreview !== url) {
+      shownPreview = url;
+      goPreview.src = url;
+    }
+    goPreview.hidden = false;
+  }
+
+  goPreview?.addEventListener('error', () => {
+    failedPreview = shownPreview;
+    goPreview.hidden = true;
+  });
 
   function paint() {
     const view = ladderSlices(board.rows || [], playerId, page);
@@ -252,10 +302,12 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPl
   }
 
   function stopSearch() {
+    const was = searching;
     searching = false;
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = 0;
     if (findBtn) findBtn.textContent = findLabel();
+    if (was) onQueueChange?.(false);
   }
 
   async function cancelSearch() {
@@ -293,6 +345,7 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPl
 
   function showCountdown(match) {
     paintMatchup(match);
+    paintMap(null);
     paintCount('Connecting');
     if (go) go.hidden = false;
     onCloseMenu?.();
@@ -381,6 +434,7 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPl
   async function beginSearch() {
     if (holdMatch || matchLobby.isActive() || searching) return;
     searching = true;
+    onQueueChange?.(true);
     note = '';
     if (findBtn) findBtn.textContent = cancelLabel();
     if (boardId === 'teams' || boardId === 'koth') {
@@ -482,13 +536,28 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPl
         [entry.mode || '', ''],
         [entry.map || '', ''],
         [entry.opponent || '', ''],
-        [win ? 'Win' : 'Loss', win ? 'is-win' : 'is-loss'],
+        null,
         [delta > 0 ? `+${delta}` : String(delta), 'num'],
       ];
-      for (const [value, cls] of cells) {
+      for (const cell of cells) {
         const td = document.createElement('td');
-        if (cls) td.className = cls;
-        td.textContent = String(value);
+        if (!cell) {
+          td.className = win ? 'is-win' : 'is-loss';
+          const word = document.createElement('span');
+          word.className = 'ladder-result';
+          word.textContent = win ? 'Win' : 'Loss';
+          if (entry.end === 'dc' || entry.end === 'ff') {
+            const mark = document.createElement('span');
+            mark.className = 'ladder-mark';
+            mark.textContent = entry.end;
+            word.append(mark);
+          }
+          td.append(word);
+        } else {
+          const [value, cls] = cell;
+          if (cls) td.className = cls;
+          td.textContent = String(value);
+        }
         tr.append(td);
       }
       table.append(tr);
@@ -614,6 +683,7 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPl
       return;
     }
     if (go) go.hidden = false;
+    paintMap(state);
     if (goCount) {
       const ms = matchLobby.countdownMs?.() ?? 0;
       paintCount(state.phase === 'countdown' ? String(Math.max(1, Math.ceil(ms / 1000))) : 'Connecting');

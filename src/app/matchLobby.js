@@ -69,6 +69,7 @@ function unrefTimer(timer) {
  * @param {(active: boolean) => void} [opts.onActiveChange]
  * @param {(cfg: object) => void | Promise<void>} [opts.onStartMatch]
  * @param {() => void} [opts.onLeaveMatch]
+ * @param {() => void} [opts.onEndMatch] - concede froze the table; the room stays open
  * @param {() => void} [opts.onRankedPregameEnd] - opponent left before the match; requeue
  */
 export function createMatchLobby({
@@ -85,7 +86,13 @@ export function createMatchLobby({
   onActiveChange,
   onStartMatch,
   onLeaveMatch,
+  onEndMatch,
   onRankedLeave,
+  onRankedDisconnect,
+  onRankedDisconnectClear,
+  onRankedDisconnectLoss,
+  onRankedForfeit,
+  onRankedForfeitBy,
   onRankedPregameEnd,
   onChapter,
   onChat,
@@ -118,6 +125,9 @@ export function createMatchLobby({
   const peerUser = new Map();
   /** Player ids already forfeited this room. A drop during load still eliminates on attach. */
   const forfeited = new Set();
+  /** Ranked link drops wait out the grace before they become a loss. userId -> since. */
+  const linkGone = new Map();
+  let stallClaimed = false;
   let session = null;
   let prevSubmit = null;
   let prevCommit = null;
@@ -360,16 +370,16 @@ export function createMatchLobby({
 
   function kickstartLockstep() {
     if (bootstrapTimer) clearInterval(bootstrapTimer);
-    let tries = 0;
-    sendTickConfirm((session?.confirmedTick ?? 0) + 1);
-    bootstrapTimer = unrefTimer(setInterval(() => {
-      if (!lockstepOn || (session?.confirmedTick ?? 0) > 0 || ++tries > 16) {
-        clearInterval(bootstrapTimer);
+    const pump = () => {
+      if (!lockstepOn || !session || (session.confirmedTick ?? 0) > 0) {
+        if (bootstrapTimer) clearInterval(bootstrapTimer);
         bootstrapTimer = null;
         return;
       }
-      sendTickConfirm((session?.confirmedTick ?? 0) + 1);
-    }, 300));
+      sendTickConfirm((session.confirmedTick ?? 0) + 1);
+    };
+    pump();
+    bootstrapTimer = unrefTimer(setInterval(pump, 300));
   }
 
   function attachSession(simSession) {
@@ -438,8 +448,7 @@ export function createMatchLobby({
   }
 
   /** Frozen board stays up; room goes back to ready-up and type-channel browse. */
-  function returnToWaiting() {
-    if (phase !== 'playing') return false;
+  function endMatchStay() {
     detachSession();
     clearCountdown();
     lockstepEpoch = (lockstepEpoch + 1) | 0;
@@ -455,6 +464,32 @@ export function createMatchLobby({
     }
     emit();
     return true;
+  }
+
+  function returnToWaiting() {
+    if (phase !== 'playing') return false;
+    return endMatchStay();
+  }
+
+  /** End the current match and keep the room. Ranked games use forfeit instead. */
+  function concede() {
+    if (ranked || watching) return false;
+    if (phase !== 'playing') return false;
+    const payload = { type: MSG.CONCEDE };
+    sendType(payload);
+    sendData(payload);
+    return finishConcede();
+  }
+
+  function acceptConcede() {
+    if (ranked || phase !== 'playing') return false;
+    return finishConcede();
+  }
+
+  function finishConcede() {
+    const ok = endMatchStay();
+    if (ok) onEndMatch?.();
+    return ok;
   }
 
   function finishCountdown() {
@@ -603,6 +638,9 @@ export function createMatchLobby({
     rankedRoster = null;
     peerUser.clear();
     forfeited.clear();
+    linkGone.clear();
+    if (stallClaimed) onRankedDisconnectClear?.();
+    stallClaimed = false;
     rankedWaitSince = 0;
     settings = defaultSettings('onevsone');
     hadMatch = false;
@@ -718,8 +756,13 @@ export function createMatchLobby({
 
   function submitForfeit(playerId, tickHint) {
     if (!session) return;
-    session.removeHumanPlayer?.(playerId);
-    const tick = (tickHint | 0) || ((session.confirmedTick ?? 0) + 2);
+    const id = playerId | 0;
+    // Dropping the local seat first hides the eliminate from the next tick,
+    // so a concede never reaches the score card.
+    if (id !== (session.localPlayerId ?? -1)) session.removeHumanPlayer?.(id);
+    const confirmed = session.confirmedTick ?? 0;
+    const hinted = tickHint | 0;
+    const tick = hinted > confirmed ? hinted : confirmed + 2;
     const eventId = `forfeit:${roomId}:${playerId}`;
     const frame = session.submitAtTick?.(
       tick,
@@ -743,13 +786,61 @@ export function createMatchLobby({
     return true;
   }
 
+  function seatForPlayer(playerId) {
+    const id = playerId | 0;
+    return seats.find((s) => s.kind === 'human' && (s.index | 0) === id) || null;
+  }
+
+  function rankedHumansDown(userId) {
+    if (!ranked || !userId || sameUserId(userId, localId())) return;
+    if (phase !== 'starting' && phase !== 'playing') return;
+    if (linkGone.has(userId)) return;
+    linkGone.set(userId, Date.now());
+    onRankedDisconnect?.(userId);
+  }
+
+  function clearLinkGone(userId) {
+    if (!userId || !linkGone.delete(userId)) return;
+    if (linkGone.size === 0 && !stallClaimed) onRankedDisconnectClear?.();
+  }
+
+  function expireLinkGone() {
+    if (!linkGone.size) return;
+    const nowMs = Date.now();
+    for (const [userId, since] of linkGone) {
+      if (nowMs - since < LOCKSTEP_FORFEIT_MS) continue;
+      linkGone.delete(userId);
+      onRankedDisconnectLoss?.(userId);
+      applyPlayLeave(userId);
+    }
+  }
+
   function forfeitStalledPlayers() {
     if (phase !== 'playing' || !lockstepOn || !session) return;
-    if ((session.lockstepBlockedMs?.() ?? 0) < LOCKSTEP_FORFEIT_MS) return;
+    const blocked = session.lockstepBlockedMs?.() ?? 0;
     const waiters = session.lockstepWaiters?.() ?? [];
+    // Tick 0 is the opening handshake. Missing confirms there are the channel
+    // still coming up, not a player who left. Forfeiting now crowns both sides.
+    if (blocked <= 0 || (session.confirmedTick | 0) === 0) {
+      if (stallClaimed) {
+        stallClaimed = false;
+        if (linkGone.size === 0) onRankedDisconnectClear?.();
+      }
+      return;
+    }
+    if (ranked && !stallClaimed) {
+      stallClaimed = true;
+      for (const playerId of waiters) {
+        const seat = seatForPlayer(playerId);
+        if (seat?.userId) onRankedDisconnect?.(seat.userId);
+      }
+    }
+    if (blocked < LOCKSTEP_FORFEIT_MS) return;
+    stallClaimed = false;
     for (const playerId of waiters) {
       const id = playerId | 0;
-      const seat = seats.find((s) => s.kind === 'human' && (s.index | 0) === id);
+      const seat = seatForPlayer(id);
+      if (ranked && seat?.userId) onRankedDisconnectLoss?.(seat.userId);
       if (seat?.userId) applyPlayLeave(seat.userId, { playerId: id });
       else queueForfeit(id, 0);
     }
@@ -769,6 +860,7 @@ export function createMatchLobby({
       return;
     }
     rankedWaitSince = 0;
+    expireLinkGone();
     forfeitStalledPlayers();
   }
 
@@ -787,10 +879,24 @@ export function createMatchLobby({
       const me = localId();
       const seat = seatOf(seats, me);
       const playerId = session?.localPlayerId ?? seat?.index ?? -1;
-      const tick = (session?.confirmedTick ?? 0) + 2;
-      const payload = { type: MSG.LEAVE, playerId, tick };
-      sendType(payload);
-      sendData(payload);
+      // Stay through the wipe so the score card can open. Done leaves after that.
+      if (ranked && !session?.kothMatchOver) {
+        if (playerId >= 0 && !forfeited.has(playerId)) {
+          onRankedForfeit?.();
+          const tick = (session?.confirmedTick ?? 0) + 2;
+          const payload = { type: MSG.LEAVE, playerId, tick };
+          sendType(payload);
+          sendData(payload);
+          queueForfeit(playerId, tick);
+        }
+        return;
+      }
+      if (!(ranked && forfeited.has(playerId | 0))) {
+        const tick = (session?.confirmedTick ?? 0) + 2;
+        const payload = { type: MSG.LEAVE, playerId, tick };
+        sendType(payload);
+        sendData(payload);
+      }
     } else if (hosting) {
       gameLobby?.announce?.(announcePayload(MSG.CLOSED));
     } else {
@@ -1084,10 +1190,16 @@ export function createMatchLobby({
       applyState(data);
       return;
     }
+    if (data.type === MSG.CONCEDE) {
+      acceptConcede();
+      return;
+    }
     if (data.type === MSG.LEAVE) {
       if (phase === 'starting' || phase === 'playing') {
-        noteRankedLeave(senderUserId(data));
-        applyPlayLeave(senderUserId(data), data);
+        const userId = senderUserId(data);
+        if (ranked) onRankedForfeitBy?.(userId);
+        else noteRankedLeave(userId);
+        applyPlayLeave(userId, data);
         return;
       }
       if (!hosting) return;
@@ -1167,20 +1279,32 @@ export function createMatchLobby({
 
   subscribePeerConnected?.((peerId) => {
     if (phase === 'idle' || !peerId) return;
+    clearLinkGone(userIdForPeer(peerId));
     if (hosting) sendData(snapshot(), peerId);
     else sendData(presenceHello(), peerId);
+    if (lockstepOn && session?.role === 'player' && (session.localPlayerId ?? -1) >= 0) {
+      sendTickConfirm((session.confirmedTick ?? 0) + 1);
+    }
   });
 
   subscribePeerDisconnected?.((peerId) => {
     if (phase === 'idle' || !peerId) return;
     const userId = userIdForPeer(peerId);
-    peerUser.delete(peerId);
-    if (!userId || sameUserId(userId, localId())) return;
+    if (!userId || sameUserId(userId, localId())) {
+      peerUser.delete(peerId);
+      return;
+    }
     if (phase === 'starting' || phase === 'playing') {
+      if (ranked && seatOf(seats, userId)?.kind === 'human') {
+        rankedHumansDown(userId);
+        return;
+      }
+      peerUser.delete(peerId);
       if (seatOf(seats, userId)?.kind === 'human') noteRankedLeave(userId);
       applyPlayLeave(userId);
       return;
     }
+    peerUser.delete(peerId);
     if (!hosting) {
       if (sameUserId(userId, hostId) || sameUserId(userId, hostFromHint)) {
         if (seatOf(seats, userId)?.kind === 'human') noteRankedLeave(userId);
@@ -1261,10 +1385,16 @@ export function createMatchLobby({
       onChapter?.(msg);
       return;
     }
+    if (msg.type === MSG.CONCEDE) {
+      acceptConcede();
+      return;
+    }
     if (msg.type === MSG.LEAVE) {
       if (phase === 'starting' || phase === 'playing') {
-        noteRankedLeave(senderUserId(msg));
-        applyPlayLeave(senderUserId(msg), msg);
+        const userId = senderUserId(msg);
+        if (ranked) onRankedForfeitBy?.(userId);
+        else noteRankedLeave(userId);
+        applyPlayLeave(userId, msg);
         return;
       }
       if (!hosting) return;
@@ -1347,6 +1477,7 @@ export function createMatchLobby({
     attachSession,
     detachSession,
     returnToWaiting,
+    concede,
     sendChapter(payload) {
       sendData({ type: MSG.CHAPTER, ...payload });
     },

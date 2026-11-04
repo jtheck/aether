@@ -58,6 +58,27 @@ export function constructionVisualStage(progress, buildTime) {
   return 1;
 }
 
+/** Chips around the building collar. The construction ring lights these in order. */
+export const CONSTRUCTION_RING_CHIPS = 16;
+
+/**
+ * Collar fill while a site is unfinished. 0 before any work, then each chip
+ * in turn, and the full ring for the last chip. 1 once progress is complete.
+ * @param {number} progress
+ * @param {number} buildTime
+ */
+export function constructionRingFill(progress, buildTime) {
+  const time = Math.max(1, buildTime | 0);
+  const p = (progress | 0) / time;
+  if (!(p > 0)) return 0;
+  if (p >= 1) return 1;
+  const shown = Math.min(
+    CONSTRUCTION_RING_CHIPS,
+    Math.ceil(p * CONSTRUCTION_RING_CHIPS - 1e-6),
+  );
+  return shown / CONSTRUCTION_RING_CHIPS;
+}
+
 /** Presence tally per building index, reused across ticks (sim thread only). */
 let _present = new Int32Array(0);
 

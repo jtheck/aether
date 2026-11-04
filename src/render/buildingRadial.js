@@ -2,8 +2,8 @@
 // building; near the screen edge the disc slides off the building, then
 // shrinks, then fades.
 // Option angles stay screen-stable; hover/click uses CPU pad discs (the
-// circles under icons). While ghost-placing, chrome hides and the hub hole
-// stays open on the agora (world ghost shows validity).
+// circles under icons). While ghost-placing, chrome hides. A click on the
+// agora itself leaves placement; the yard around it does not, even zoomed out.
 
 import {
   addToScene,
@@ -133,6 +133,13 @@ const HUD_PLACE_FRAC = 0.82;
 const HUD_REF_DIST = 110;
 const HUD_BASE_SCALE = 0.9;
 const HUD_SCALE_MIN = 0.315;
+/**
+ * While placing, the cancel target stays on the agora. The open menu's hub
+ * grows with zoom so it keeps a steady screen size, and that disc was eating
+ * clicks in the yard around the building.
+ * Footprint is 4×4 tiles (edge at 8); 9 still catches the body, not the next plot.
+ */
+const PLACE_CANCEL_RADIUS = 9;
 const LABEL_FONT_SIZE = 24;
 const LABEL_SCREEN_SCALE = 1.1;
 const LABEL_DOWN = 4.32;
@@ -2236,8 +2243,18 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   }
 
   function hitHubHoleAtRay(ray) {
-    // Compact place mode still uses the hub as "back to the agora menu".
+    // Compact place mode still uses the agora as "back to the menu".
+    // That target is the building on the ground, not the zoomed menu hole.
     if (!open || !ray || !edgePickable()) return false;
+    if (placingPreviewType) {
+      const gy = groundYAt(anchorX, anchorZ);
+      const y = Number.isFinite(gy) ? gy : 0;
+      const hit = rayHitPlane(ray, anchorX, y, anchorZ, 0, 1, 0);
+      if (!hit) return false;
+      const dx = hit.x - anchorX;
+      const dz = hit.z - anchorZ;
+      return dx * dx + dz * dz < PLACE_CANCEL_RADIUS * PLACE_CANCEL_RADIUS;
+    }
     const pp = piePlanePoint();
     const hit = rayHitPlane(ray, pp.x, pp.y, pp.z, nx, ny, nz);
     if (!hit) return false;

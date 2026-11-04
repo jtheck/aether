@@ -482,6 +482,12 @@ export function encodeGarden(field, extras = {}) {
   if (extras.mapType != null && String(extras.mapType).trim() !== '') {
     out.mt = normalizeMapType(extras.mapType);
   }
+  if (typeof extras.preview === 'string') {
+    const preview = extras.preview.replace(/^data:image\/(?:png|jpeg);base64,/, '').replace(/\s/g, '');
+    const png = preview.startsWith('iVBORw0KGgo');
+    const jpeg = preview.startsWith('/9j/');
+    if ((png || jpeg) && preview.length <= 1400000) out.pv = preview;
+  }
   return out;
 }
 
@@ -558,6 +564,7 @@ export function decodeGarden(data) {
     teamByOwner: normalizeTeamByOwner(data.tm),
     walls: decodeWalls(data.wl),
     mapType: data.mt != null && String(data.mt).trim() !== '' ? normalizeMapType(data.mt) : '',
+    preview: typeof data.pv === 'string' ? data.pv : '',
   };
 }
 

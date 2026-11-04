@@ -8,7 +8,7 @@ import { aetherSteam } from './steam.js';
 import { stashSessionGarden, writeCampaignPack } from './gardenSession.js';
 import { formatWorkshopRef, isWorkshopRef, parseWorkshopRef } from './workshop.js';
 import { flattenCampaignChapters, formatPackRef, isCampaignBundle, normalizeCampaignIndex } from '../story/campaignPack.js';
-import { fetchOfficialHouseMaps } from '../houseMapCatalog.js';
+import { fetchOfficialHouseMaps, gardenPreviewDataUrl, lobbyMapPreviewUrl } from '../houseMapCatalog.js';
 import { getLadderAssignment } from './ladderSession.js';
 
 /**
@@ -313,7 +313,7 @@ export function groupSelectOptions(values, labelOf = (v) => v) {
   let current = null;
   for (const v of values || []) {
     const id = typeof v === 'string' ? v : v.id;
-    const name = typeof v === 'string' ? labelOf(v) : (v.name || id);
+    const name = typeof v === 'string' ? labelOf(v) : (v.label || v.name || id);
     const group = typeof v === 'string' ? '' : String(v.group || '');
     if (group && current?.group === group) {
       current.options.push({ id, name });
@@ -332,7 +332,7 @@ export function groupSelectOptions(values, labelOf = (v) => v) {
 
 function fillSelect(select, values, current, labelOf = (v) => v) {
   if (!select) return;
-  const sig = (values || []).map((v) => (typeof v === 'string' ? v : `${v.group || ''}\0${v.id}\0${v.name || ''}`)).join('\n');
+  const sig = (values || []).map((v) => (typeof v === 'string' ? v : `${v.group || ''}\0${v.id}\0${v.label || v.name || ''}`)).join('\n');
   if (select.dataset.optSig !== sig) {
     select.dataset.optSig = sig;
     select.replaceChildren();
@@ -445,13 +445,36 @@ export function chapterSelectOptions(workshopItems, current, search, hostname, l
   return sources.find((src) => src.id === id)?.chapters || [];
 }
 
+/**
+ * Start count on a lobby map row, such as (2p) or (4p).
+ * @param {unknown} spawns
+ */
+export function mapPlayerCountLabel(spawns) {
+  const n = Number(spawns) | 0;
+  if (n < 2) return '';
+  return `(${n}p)`;
+}
+
+function decorateMapOption(row) {
+  const mark = mapPlayerCountLabel(row?.spawns);
+  if (!mark) return row;
+  const name = row.name || row.id;
+  return { ...row, name, label: `${name} ${mark}` };
+}
+
 /** Workshop, official house maps, and loaded gardens for 1v1 / teams. Empty chapter = auto field. */
 export function customMapSelectOptions(workshopItems, current, localMaps, modeId, officialMaps, currentName = '') {
   const official = (Array.isArray(officialMaps) ? officialMaps : [])
     .filter((row) => row?.id && mapTypeFitsLobby(row.mapType, modeId));
   const local = (Array.isArray(localMaps) ? localMaps : [])
     .filter((row) => row?.id)
-    .map((row) => ({ id: row.id, name: row.name || row.id, group: row.group || '' }));
+    .map((row) => ({
+      id: row.id,
+      name: row.name || row.id,
+      group: row.group || '',
+      spawns: row.spawns,
+      preview: row.preview || '',
+    }));
   const extra = [];
   for (const item of workshopItems || []) {
     if (normalizeCampaignIndex(item.campaign)) continue;
@@ -460,6 +483,7 @@ export function customMapSelectOptions(workshopItems, current, localMaps, modeId
       extra.push({
         id: formatWorkshopRef(item.id, garden.file),
         name: workshopChapterLabel(item, garden),
+        spawns: garden.spawns,
       });
     }
   }
@@ -473,7 +497,7 @@ export function customMapSelectOptions(workshopItems, current, localMaps, modeId
       placeholder: !named,
     });
   }
-  return [...official, ...local, ...extra];
+  return [...official, ...local, ...extra].map(decorateMapOption);
 }
 
 /**
@@ -481,6 +505,7 @@ export function customMapSelectOptions(workshopItems, current, localMaps, modeId
  * @param {object} opts.gameLobby
  * @param {object} opts.matchLobby
  * @param {() => boolean} [opts.isKothLive]
+ * @param {() => boolean} [opts.isLadderQueued]
  * @param {() => string | null} [opts.getUserId]
  * @param {() => void} [opts.onCloseMenu]
  * @param {() => void | Promise<void>} [opts.onDismissSoloScore]
@@ -488,7 +513,7 @@ export function customMapSelectOptions(workshopItems, current, localMaps, modeId
  * @param {() => string | null} [opts.getFollowUser]
  */
 export function setupLobbyUi({
-  gameLobby, matchLobby, isKothLive, getUserId, onCloseMenu, onDismissSoloScore, onFollowReplay, getFollowUser, getKing,
+  gameLobby, matchLobby, isKothLive, isLadderQueued, getUserId, onCloseMenu, onDismissSoloScore, onFollowReplay, getFollowUser, getKing,
 }) {
   const drawersRoot = document.getElementById('menu-lobbies');
   const sidebar = document.getElementById('menu-match');
@@ -520,12 +545,14 @@ export function setupLobbyUi({
   const sideSeats = document.getElementById('menu-match-seats');
   const sideReady = document.getElementById('menu-match-ready');
   const sideStart = document.getElementById('menu-match-start');
+  const sideConcede = document.getElementById('menu-match-concede');
   const sideLeave = document.getElementById('menu-match-leave');
 
   const panelTitle = document.getElementById('match-lobby-title');
   const panelSeats = document.getElementById('match-lobby-seats');
   const panelReady = document.getElementById('match-lobby-ready');
   const panelStart = document.getElementById('match-lobby-start');
+  const panelConcede = document.getElementById('match-lobby-concede');
   const panelLeave = document.getElementById('match-lobby-leave');
   const panelNote = document.getElementById('match-lobby-note');
   const fieldSelect = document.getElementById('match-lobby-field');
@@ -533,6 +560,10 @@ export function setupLobbyUi({
   const chapterSelect = document.getElementById('match-lobby-chapter');
   const campaignSelect = document.getElementById('match-lobby-campaign');
   const mapSelect = document.getElementById('match-lobby-map');
+  const mapPreviewOpen = document.getElementById('match-lobby-map-preview-open');
+  const mapPreview = document.getElementById('match-lobby-map-preview');
+  const mapZoom = document.getElementById('map-preview-zoom');
+  const mapZoomImg = document.getElementById('map-preview-zoom-img');
   const spectatorInput = document.getElementById('match-lobby-spectators');
   const fieldRow = document.getElementById('match-lobby-field-row');
   const seedRow = document.getElementById('match-lobby-seed-row');
@@ -549,6 +580,9 @@ export function setupLobbyUi({
   let lastSig = '';
   let overlayParked = false;
   let workshopItems = [];
+  /** @type {Record<string, string>} */
+  const workshopPreviews = {};
+  const workshopPreviewTried = new Set();
   let localChapters = [];
   let adventureSources = [];
   let localMaps = [];
@@ -557,6 +591,40 @@ export function setupLobbyUi({
   let officialHouseMaps = { onevsone: [], teams: [] };
   let lastWorkshopPull = 0;
   let lastOfficialPull = 0;
+  let shownMapPreview = '';
+  let failedMapPreview = '';
+
+  function closeMapZoom() {
+    if (!mapZoom) return;
+    mapZoom.hidden = true;
+  }
+
+  function paintMapPreview(url) {
+    if (!mapPreviewOpen || !mapPreview) return;
+    if (!url || url === failedMapPreview) {
+      mapPreviewOpen.hidden = true;
+      closeMapZoom();
+      return;
+    }
+    if (shownMapPreview !== url) {
+      shownMapPreview = url;
+      mapPreview.src = url;
+      if (mapZoom && !mapZoom.hidden && mapZoomImg) mapZoomImg.src = url;
+    }
+    mapPreviewOpen.hidden = false;
+  }
+
+  mapPreview?.addEventListener('error', () => {
+    failedMapPreview = shownMapPreview;
+    if (mapPreviewOpen) mapPreviewOpen.hidden = true;
+    closeMapZoom();
+  });
+  mapPreviewOpen?.addEventListener('click', () => {
+    if (!mapZoom || !mapZoomImg || !mapPreview?.src) return;
+    mapZoomImg.src = mapPreview.src;
+    mapZoom.hidden = false;
+  });
+  mapZoom?.addEventListener('click', closeMapZoom);
 
   function pullOfficialHouseMaps() {
     const now = Date.now();
@@ -584,11 +652,30 @@ export function setupLobbyUi({
       const next = Array.isArray(items) ? items : [];
       const sig = next.flatMap((item) => (item.gardens || []).map((g) => `${item.id}:${g.file}`)).join();
       const prev = workshopItems.flatMap((item) => (item.gardens || []).map((g) => `${item.id}:${g.file}`)).join();
-      if (sig === prev) return;
-      workshopItems = next;
-      lastSig = '';
-      refresh();
+      if (sig !== prev) {
+        workshopItems = next;
+        lastSig = '';
+        refresh();
+      }
+      rememberWorkshopPreviews(next);
     });
+  }
+
+  function rememberWorkshopPreviews(items) {
+    for (const item of items || []) {
+      for (const garden of item.gardens || []) {
+        const ref = formatWorkshopRef(item.id, garden.file);
+        if (!ref || workshopPreviewTried.has(ref)) continue;
+        workshopPreviewTried.add(ref);
+        void aetherSteam.loadWorkshopGarden(item.id, garden.file).then((data) => {
+          const url = gardenPreviewDataUrl(data?.pv);
+          if (!url) return;
+          workshopPreviews[ref] = url;
+          lastSig = '';
+          refresh();
+        });
+      }
+    }
   }
 
   function refresh() {
@@ -617,10 +704,12 @@ export function setupLobbyUi({
       state?.watching,
       state?.ranked,
       overlayParked, matchOverOn,
+      Boolean(isLadderQueued?.()),
     ].join('/');
     if (sig === lastSig) return;
     lastSig = sig;
-    const busy = live || active;
+    const queued = Boolean(isLadderQueued?.());
+    const busy = live || active || queued;
     drawersRoot.classList.toggle('is-dimmed', busy);
     const practice = document.getElementById('menu-solo');
     practice?.classList.toggle('is-dimmed', busy);
@@ -630,7 +719,7 @@ export function setupLobbyUi({
     }
     for (const id of ['koth-start', 'menu-koth-start']) {
       const btn = document.getElementById(id);
-      if (btn) btn.disabled = active;
+      if (btn) btn.disabled = active || queued;
     }
 
     for (const [mode, ui] of drawers) {
@@ -721,6 +810,9 @@ export function setupLobbyUi({
       setText(panelStart, startLabel);
     }
     if (sideLeave) setText(sideLeave, ranked && !state.watching ? 'Forfeit' : 'Leave lobby');
+    const canConcede = inPlay && !ranked && !state.watching;
+    setHidden(sideConcede, !canConcede);
+    setHidden(panelConcede, !canConcede);
 
     const note = inPlay && stalled
       ? stallTitle
@@ -770,6 +862,11 @@ export function setupLobbyUi({
       [{ id: '', name: 'Auto' }, ...mapOptions],
       state.settings.chapter || '',
     );
+    const chapterId = state.settings.chapter || '';
+    const chosen = mapChoices.find((row) => row.id === chapterId);
+    paintMapPreview(mode?.customMap
+      ? lobbyMapPreviewUrl(chapterId, chosen?.preview || workshopPreviews[chapterId] || '')
+      : '');
     if (seedInput && document.activeElement !== seedInput && String(seedInput.value) !== String(state.settings.seed)) {
       seedInput.value = String(state.settings.seed);
     }
@@ -868,6 +965,12 @@ export function setupLobbyUi({
   }
   sideLeave?.addEventListener('click', leaveOrDismissSoloScore);
   panelLeave?.addEventListener('click', leaveOrDismissSoloScore);
+  function concedeMatch() {
+    matchLobby.concede?.();
+    refresh();
+  }
+  sideConcede?.addEventListener('click', concedeMatch);
+  panelConcede?.addEventListener('click', concedeMatch);
   overlayMin?.addEventListener('click', () => {
     overlayParked = !overlayParked;
     refresh();
@@ -902,12 +1005,17 @@ export function setupLobbyUi({
       const data = JSON.parse(text);
       const rowsFromCampaign = () => {
         const campaign = data.name || 'Campaign';
-        return flattenCampaignChapters(data).map((ch) => ({
-          id: formatPackRef(ch.file),
-          name: ch.name || ch.file,
-          group: ch.episode || '',
-          campaign,
-        }));
+        return flattenCampaignChapters(data).map((ch) => {
+          const garden = data.gardens?.[ch.file];
+          return {
+            id: formatPackRef(ch.file),
+            name: ch.name || ch.file,
+            group: ch.episode || '',
+            campaign,
+            spawns: Array.isArray(garden?.g) ? garden.g.length : 0,
+            preview: gardenPreviewDataUrl(garden?.pv),
+          };
+        });
       };
       if (isCampaignBundle(data)) {
         await writeCampaignPack(text);
@@ -922,7 +1030,13 @@ export function setupLobbyUi({
       } else if (data && typeof data === 'object' && (data.v | 0) >= 3 && (data.w | 0) > 0) {
         await stashSessionGarden(text);
         const name = String(data.n || data.name || file.name || 'Custom map');
-        const row = { id: 'session', name, campaign: name };
+        const row = {
+          id: 'session',
+          name,
+          campaign: name,
+          spawns: Array.isArray(data.g) ? data.g.length : 0,
+          preview: gardenPreviewDataUrl(data.pv),
+        };
         if (mode?.customMap) {
           localMaps = [row];
           matchLobby.setMap('session', name);

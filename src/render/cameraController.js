@@ -273,7 +273,24 @@ export function createCameraController(camera, canvas, opts = {}) {
   let RESET_RADIUS = Math.max(worldHalfF, worldHalfZF) * 1.8;
   /** Max zoom-out - keep the look-up view near the table, not a wide pullback. */
   let UPPER_RADIUS = Math.max(worldHalfF, worldHalfZF) * 2.15;
-  const betaBias = Number.isFinite(opts.betaBias) ? opts.betaBias : 0;
+  /** 1 = the play pullback. Preview framing raises this, then puts it back. */
+  let upperScale = 1;
+  /**
+   * Pitch and FOV use this far radius when set, even if the zoom clamp is farther.
+   * Extra preview pullback then holds the in-game far tilt instead of looking down.
+   */
+  let pitchRadiusLimit = null;
+  let betaBias = Number.isFinite(opts.betaBias) ? opts.betaBias : 0;
+  /** Preview framing: drag orbits, wheel dollies, pitch is not tied to zoom. */
+  let arcRotate = false;
+  let savedArcLimits = null;
+  let orbitActive = false;
+  let orbitPointerId = null;
+  let orbitLast = { x: 0, y: 0 };
+  const ARC_BETA_MIN = 0.05;
+  const ARC_BETA_MAX = 1.52;
+  const ARC_DRAG = 0.005;
+  const ARC_MIN_RADIUS = 12;
   const velocity = { alpha: 0, radius: 0, panX: 0, panZ: 0 };
   const keyStates = Object.create(null);
   let nudged = false;
@@ -320,8 +337,68 @@ export function createCameraController(camera, canvas, opts = {}) {
     const span = Math.max(worldHalfF, worldHalfZF);
     DEFAULT_RADIUS = span * 1.55;
     RESET_RADIUS = span * 1.8;
-    UPPER_RADIUS = span * 2.15;
+    UPPER_RADIUS = span * 2.15 * upperScale;
     camera.upperRadiusLimit = UPPER_RADIUS;
+  }
+
+  function setBetaBias(next) {
+    betaBias = Number.isFinite(next) ? next : 0;
+    snapBeta();
+  }
+
+  function setPitchRadiusLimit(next) {
+    const n = Number(next);
+    pitchRadiusLimit = Number.isFinite(n) && n > 0 ? n : null;
+    snapBeta();
+  }
+
+  function setUpperRadiusScale(scale) {
+    const n = Number(scale);
+    upperScale = Number.isFinite(n) && n > 0 ? n : 1;
+    applyWorldHalf(worldHalfF, worldHalfZF);
+    const { minR, maxR } = radiusLimits();
+    if (Number.isFinite(camera.radius)) {
+      camera.radius = Math.max(minR, Math.min(maxR, camera.radius));
+    }
+    if (arcRotate) return;
+    snapBeta();
+    snapFov();
+  }
+
+  function setArcRotate(on) {
+    const next = !!on;
+    if (next === arcRotate) return;
+    arcRotate = next;
+    orbitActive = false;
+    orbitPointerId = null;
+    if (next) {
+      savedArcLimits = {
+        lo: camera.lowerBetaLimit,
+        hi: camera.upperBetaLimit,
+        loR: camera.lowerRadiusLimit,
+      };
+      camera.lowerBetaLimit = ARC_BETA_MIN;
+      camera.upperBetaLimit = ARC_BETA_MAX;
+      camera.lowerRadiusLimit = ARC_MIN_RADIUS;
+      camera.beta = Math.max(ARC_BETA_MIN, Math.min(ARC_BETA_MAX, camera.beta));
+      writeFov(CAMERA_BASE_FOV);
+      fovVel = 0;
+      velocity.radius = 0;
+      velocity.alpha = 0;
+      zoomTend = false;
+      clearZoomFocus();
+      return;
+    }
+    if (savedArcLimits) {
+      camera.lowerBetaLimit = savedArcLimits.lo;
+      camera.upperBetaLimit = savedArcLimits.hi;
+      camera.lowerRadiusLimit = savedArcLimits.loR;
+      savedArcLimits = null;
+    }
+    const { minR, maxR } = radiusLimits();
+    if (Number.isFinite(camera.radius)) {
+      camera.radius = Math.max(minR, Math.min(maxR, camera.radius));
+    }
   }
 
   /** Live board swap (skirmish → stress, etc.) - pan + zoom limits follow the table. */
@@ -581,7 +658,8 @@ export function createCameraController(camera, canvas, opts = {}) {
 
   function zoomNormalized() {
     const { minR, maxR } = radiusLimits();
-    return cameraZoomNormalized(camera.radius, minR, maxR);
+    const hi = pitchRadiusLimit == null ? maxR : Math.min(maxR, pitchRadiusLimit);
+    return cameraZoomNormalized(camera.radius, minR, hi);
   }
 
   function writeFov(value) {
@@ -846,6 +924,14 @@ export function createCameraController(camera, canvas, opts = {}) {
 
   function handleWheel(e) {
     if (!camera) return;
+    if (arcRotate && (e.buttons & 2) === 0 && !e.shiftKey) {
+      noteInput('wheel-zoom', e.timeStamp);
+      markNudged();
+      e.preventDefault();
+      const step = INVERSE_ZOOM * e.deltaY * 0.0015 * Math.max(ARC_MIN_RADIUS, camera.radius || DEFAULT_RADIUS);
+      zoomBy(step);
+      return;
+    }
     noteInput((e.buttons & 2) !== 0 || e.shiftKey ? 'wheel-rotate' : 'wheel-zoom', e.timeStamp);
     markNudged();
     e.preventDefault();
@@ -868,6 +954,14 @@ export function createCameraController(camera, canvas, opts = {}) {
 
   function handlePointerDown(e) {
     if (e.pointerType === 'touch') return false;
+    if (arcRotate && e.button === 0) {
+      orbitActive = true;
+      orbitPointerId = e.pointerId;
+      orbitLast = { x: e.clientX, y: e.clientY };
+      canvas?.setPointerCapture?.(e.pointerId);
+      e.preventDefault();
+      return true;
+    }
     if (e.button !== 2) return false;
 
     rmbPanActive = true;
@@ -940,13 +1034,39 @@ export function createCameraController(camera, canvas, opts = {}) {
   }
 
   function handlePointerMove(e) {
+    if (orbitActive && (orbitPointerId == null || e.pointerId === orbitPointerId)) {
+      const dx = e.clientX - orbitLast.x;
+      const dy = e.clientY - orbitLast.y;
+      orbitLast = { x: e.clientX, y: e.clientY };
+      camera.alpha -= dx * ARC_DRAG;
+      const lo = camera.lowerBetaLimit ?? ARC_BETA_MIN;
+      const hi = camera.upperBetaLimit ?? ARC_BETA_MAX;
+      camera.beta = Math.max(lo, Math.min(hi, camera.beta - dy * ARC_DRAG));
+      return true;
+    }
     if (!rmbPanActive) return false;
     if (rmbPointerId != null && e.pointerId !== rmbPointerId) return false;
     applyRmbPanTo(e.clientX, e.clientY);
     return true;
   }
 
+  function endOrbit() {
+    if (!orbitActive) return false;
+    const id = orbitPointerId;
+    orbitActive = false;
+    orbitPointerId = null;
+    if (id != null) {
+      try { canvas?.releasePointerCapture?.(id); } catch { /* pointer already released */ }
+    }
+    return true;
+  }
+
   function handlePointerUp(e) {
+    if (orbitActive && (e.button === 0 || e.type === 'pointercancel')) {
+      if (orbitPointerId == null || e.pointerId === orbitPointerId || e.type === 'pointercancel') {
+        return endOrbit();
+      }
+    }
     if (!rmbPanActive) return false;
     if (e.type !== 'pointercancel' && e.button !== 2) return false;
     if (rmbPointerId != null && e.pointerId !== rmbPointerId && e.type !== 'pointercancel') {
@@ -1033,8 +1153,8 @@ export function createCameraController(camera, canvas, opts = {}) {
     if (keyStates.f) panX -= 1.0;
     if (keyStates.arrowup) panZ += 1.0;
     if (keyStates.arrowdown) panZ -= 1.0;
-    if (keyStates.arrowleft) panX -= 1.0;
-    if (keyStates.arrowright) panX += 1.0;
+    if (keyStates.arrowleft) panX += 1.0;
+    if (keyStates.arrowright) panX -= 1.0;
 
     applyLookPan(panX, panZ);
   }
@@ -1200,8 +1320,12 @@ export function createCameraController(camera, canvas, opts = {}) {
 
     zoomOutThisTick = false;
 
-    chaseBeta(dt);
-    chaseFov(dt);
+    if (!arcRotate) {
+      chaseBeta(dt);
+      chaseFov(dt);
+    } else {
+      writeFov(CAMERA_BASE_FOV);
+    }
 
     // Clear Lite inertial leftovers so they never fight us.
     camera.inertialPanningX = 0;
@@ -1281,6 +1405,10 @@ export function createCameraController(camera, canvas, opts = {}) {
     panByScreenDelta,
     getRadius: () => camera.radius,
     setWorldHalfF,
+    setBetaBias,
+    setPitchRadiusLimit,
+    setUpperRadiusScale,
+    setArcRotate,
     tick,
     reset,
     markNudged,

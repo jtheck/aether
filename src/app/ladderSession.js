@@ -3,17 +3,38 @@ import { mapLabels, mapLine } from './matchSnapshotView.js';
 
 let assignment = null;
 let finished = false;
+let settledBy = '';
+let snapshotSent = false;
+let lossGen = 0;
+let disconnectTimer = null;
+let claimBody = null;
 const postedBounties = new Set();
 
+/** Same window the match lobby waits before a ranked disconnect becomes a loss. */
+const DISCONNECT_GRACE_MS = 8000;
+
+function resetLossClaim() {
+  lossGen += 1;
+  claimBody = null;
+  if (disconnectTimer) clearTimeout(disconnectTimer);
+  disconnectTimer = null;
+}
+
 export function setLadderAssignment(next) {
+  resetLossClaim();
   assignment = next;
   finished = false;
+  settledBy = '';
+  snapshotSent = false;
   postedBounties.clear();
 }
 
 export function clearLadderAssignment() {
+  resetLossClaim();
   assignment = null;
   finished = false;
+  settledBy = '';
+  snapshotSent = false;
   postedBounties.clear();
 }
 
@@ -57,7 +78,7 @@ function snapshotPlayers(match) {
   return players.length >= 2 ? players : null;
 }
 
-function postMatchSnapshot(session, match, playerId) {
+function postMatchSnapshot(session, match, playerId, loss) {
   const snap = session?.snap;
   const players = snapshotPlayers(match);
   if (!snap?.samples?.length || !players || !playerId) return;
@@ -110,14 +131,20 @@ function postMatchSnapshot(session, match, playerId) {
     ...(map.type ? { mapType: map.type } : null),
     ...(map.size ? { mapSize: map.size } : null),
     ...(map.seed ? { mapSeed: map.seed } : null),
+    ...(loss === 'forfeit' || loss === 'disconnect' ? { loss } : null),
   }).then((res) => {
     if (res?.ok === false) console.warn('[ladder] snapshot rejected', res.error || res.status);
   }).catch(() => {});
+  return true;
 }
 
 export function noteLadderResult(session, playerId) {
   const match = assignment;
-  if (!match || finished || !playerId) return;
+  if (!match || !playerId) return;
+  if (!snapshotSent && postMatchSnapshot(session, match, playerId, finished ? (settledBy || 'forfeit') : '')) {
+    snapshotSent = true;
+  }
+  if (finished) return;
   if (session?.matchWinner == null || session.matchWinner < 0) return;
   const players = reportPlayers(match);
   if (!players) return;
@@ -133,7 +160,6 @@ export function noteLadderResult(session, playerId) {
     players,
     ...(line ? { map: line } : null),
   }).catch(() => {});
-  postMatchSnapshot(session, match, playerId);
 }
 
 /** Ranked hill. Each paying death is one ladder report, once per match and tick. */
@@ -195,11 +221,123 @@ export function noteKothElimination(report) {
   });
 }
 
+function reportedRoster() {
+  return assignment ? reportPlayers(assignment) : null;
+}
+
+function seatForPlayer(players, playerId) {
+  return players.find((player) => player.playerId === playerId)?.seat ?? null;
+}
+
+function seatForUser(players, lobbyUserId) {
+  const raw = (assignment?.players || []).find((player) => player.userId === lobbyUserId);
+  if (!raw?.playerId) return null;
+  return seatForPlayer(players, raw.playerId);
+}
+
+function winnerAgainst(players, loserSeat) {
+  const loser = players.find((player) => player.seat === loserSeat);
+  if (!loser) return null;
+  const team = loser.team ?? loser.seat;
+  const foe = players.find((player) => (player.team ?? player.seat) !== team);
+  return foe ? foe.seat : null;
+}
+
+function lossBody(playerId, winnerSeat, loss, sim) {
+  const match = assignment;
+  const players = reportedRoster();
+  if (!match || match.board !== '1v1' || !players || winnerSeat == null || !playerId) return null;
+  const line = mapLine(sim?.replayGarden, sim?.replayConfig);
+  return {
+    board: '1v1',
+    matchId: match.matchId,
+    playerId,
+    tick: 0,
+    checksum: 0,
+    winnerSeat,
+    players,
+    loss,
+    ...(line ? { map: line } : null),
+  };
+}
+
+function postLoss(body, gen) {
+  postLadderReport(body).then((res) => {
+    if (gen !== lossGen) return;
+    if (res?.status !== 'pending' || body.lossConfirm !== true) return;
+    disconnectTimer = setTimeout(() => postLoss(body, gen), DISCONNECT_GRACE_MS);
+    disconnectTimer.unref?.();
+  }).catch(() => {});
+}
+
+/** Forfeit button. The player who leaves takes the loss immediately. */
+export function noteLadderSelfForfeit(playerId, sim) {
+  const players = reportedRoster();
+  if (!assignment || finished || assignment.board !== '1v1' || !players || !playerId) return;
+  const winnerSeat = winnerAgainst(players, seatForPlayer(players, playerId));
+  const body = lossBody(playerId, winnerSeat, 'forfeit', sim);
+  if (!body) return;
+  finished = true;
+  settledBy = 'forfeit';
+  resetLossClaim();
+  postLoss(body, lossGen);
+}
+
+/** The opponent pressed Forfeit. Their side loses. */
+export function noteLadderForfeitBy(lobbyUserId, playerId, sim) {
+  const players = reportedRoster();
+  if (!assignment || finished || assignment.board !== '1v1' || !players || !playerId) return;
+  const winnerSeat = winnerAgainst(players, seatForUser(players, lobbyUserId));
+  const body = lossBody(playerId, winnerSeat, 'forfeit', sim);
+  if (!body) return;
+  finished = true;
+  settledBy = 'forfeit';
+  resetLossClaim();
+  postLoss(body, lossGen);
+}
+
+/** Link dropped or confirms stopped. The loss is not final until the grace expires. */
+export function beginLadderDisconnect(lobbyUserId, playerId, sim) {
+  const players = reportedRoster();
+  if (!assignment || finished || assignment.board !== '1v1' || !players || !playerId) return;
+  const winnerSeat = winnerAgainst(players, seatForUser(players, lobbyUserId));
+  const body = lossBody(playerId, winnerSeat, 'disconnect', sim);
+  if (!body) return;
+  if (claimBody && claimBody.matchId === body.matchId && claimBody.winnerSeat === body.winnerSeat) return;
+  claimBody = body;
+  const gen = ++lossGen;
+  if (disconnectTimer) clearTimeout(disconnectTimer);
+  disconnectTimer = null;
+  postLoss(body, gen);
+}
+
+/** They came back before the grace expired. */
+export function cancelLadderDisconnect() {
+  if (finished) return;
+  const body = claimBody;
+  resetLossClaim();
+  if (!body) return;
+  postLoss({ ...body, loss: 'cancel', lossConfirm: false }, lossGen);
+}
+
+/** Grace expired. Record the disconnect as a loss. */
+export function confirmLadderDisconnect(lobbyUserId, playerId, sim) {
+  const players = reportedRoster();
+  if (!assignment || finished || assignment.board !== '1v1' || !players || !playerId) return;
+  const winnerSeat = winnerAgainst(players, seatForUser(players, lobbyUserId));
+  const body = lossBody(playerId, winnerSeat, 'disconnect', sim);
+  if (!body) return;
+  body.lossConfirm = true;
+  finished = true;
+  settledBy = 'disconnect';
+  const gen = lossGen;
+  postLoss(body, gen);
+}
+
 export function noteLadderDisconnect(lobbyUserId, playerId) {
   const match = assignment;
-  if (!match || finished || !playerId) return;
+  if (!match || !playerId) return;
   const subject = match.players.find((player) => player.userId === lobbyUserId);
-  finished = true;
   void postLadderIncident({
     playerId,
     subjectId: subject?.playerId || '',

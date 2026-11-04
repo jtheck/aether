@@ -31,18 +31,19 @@ export function matchWipeStep(w) {
 
   let teams = 0;
   let liveTeams = 0;
-  const teamSeen = new Uint8Array(MAX_SEATS);
-  const teamLive = new Uint8Array(MAX_SEATS);
+  // Team id is a byte. Forge letter sides are 201+, not seat indexes.
+  const teamSeen = new Uint8Array(256);
+  const teamLive = new Uint8Array(256);
   let winner = -1;
   for (let i = 0; i < owners.length; i++) {
     const o = owners[i];
     const t = teamOf(o) & 0xff;
-    if (t < MAX_SEATS && !teamSeen[t]) {
+    if (!teamSeen[t]) {
       teamSeen[t] = 1;
       teams++;
     }
     if (livingByOwner(w, o) <= 0) continue;
-    if (t < MAX_SEATS && !teamLive[t]) {
+    if (!teamLive[t]) {
       teamLive[t] = 1;
       liveTeams++;
     }

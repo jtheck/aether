@@ -13,3 +13,5 @@ Served at `/maps/…` from repo root (same idea as `/assets/`).
 
 Regenerate official skirmish gardens: `node scripts/generate-map.mjs`  
 Regenerate `dev/*.garden` from `src/sim/testerGarden.js` and `src/sim/stressGarden.js`.
+
+Lobby and ladder pictures come from each garden's forge shot (`pv`). A map with none, and every auto field, uses `assets/images/default_map_preview.png`.

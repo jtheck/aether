@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { adventureLobbySources, chapterSelectOptions, customMapSelectOptions, formatCountdown, formatCreateLobbyLabel, formatMatchStatus, formatSeatName, formatStartLabel, formatTypeLobbyRow, groupSelectOptions, setupLobbyUi } from './lobbyUi.js';
+import { adventureLobbySources, chapterSelectOptions, customMapSelectOptions, formatCountdown, formatCreateLobbyLabel, formatMatchStatus, formatSeatName, formatStartLabel, formatTypeLobbyRow, groupSelectOptions, mapPlayerCountLabel, setupLobbyUi } from './lobbyUi.js';
 
 describe('lobby ui copy', () => {
   it('formats a type-list row', () => {
@@ -357,6 +357,7 @@ function lobbyDom() {
   const panel = new FakeEl('div', { className: 'match-lobby-panel', hidden: true });
   overlay.append(panel);
   put('match-over', new FakeEl('div', { hidden: true }));
+  put('match-lobby-concede', new FakeEl('button', { hidden: true }));
   put('match-lobby-leave', new FakeEl('button'));
   put('match-lobby-min', new FakeEl('button'));
   put('match-lobby-title', new FakeEl('h3'));
@@ -368,6 +369,7 @@ function lobbyDom() {
   put('menu-match-seats', new FakeEl('div'));
   put('menu-match-ready', new FakeEl('button'));
   put('menu-match-start', new FakeEl('button', { hidden: true }));
+  put('menu-match-concede', new FakeEl('button', { hidden: true }));
   put('menu-match-leave', new FakeEl('button'));
   return {
     drawers,
@@ -385,6 +387,8 @@ function lobbyDom() {
     sideStatus: byId.get('menu-match-status'),
     sideMeta: byId.get('menu-match-meta'),
     sideReady: byId.get('menu-match-ready'),
+    sideConcede: byId.get('menu-match-concede'),
+    panelConcede: byId.get('match-lobby-concede'),
     sideLeave: byId.get('menu-match-leave'),
     create(mode) {
       return drawers.querySelector(`[data-mode="${mode}"]`).querySelector('.lobby-create');
@@ -449,6 +453,16 @@ describe('custom map picker', () => {
     ];
     const opts = customMapSelectOptions(items, 'session', [{ id: 'session', name: 'My map' }], 'onevsone', []);
     assert.deepEqual(opts.map((row) => row.name), ['My map', 'Duel', 'Lanes', 'Open']);
+    const counted = customMapSelectOptions([], '', [
+      { id: 'ford', name: 'Ford', spawns: 2 },
+    ], 'onevsone', [
+      { id: '/maps/skirmish/bowl.garden', name: 'Knife Bowl', spawns: 4, mapType: 'skirmish', group: 'Official' },
+    ]);
+    assert.equal(counted[0].name, 'Knife Bowl');
+    assert.equal(counted[0].label, 'Knife Bowl (4p)');
+    assert.equal(counted[1].label, 'Ford (2p)');
+    assert.equal(mapPlayerCountLabel(3), '(3p)');
+    assert.equal(groupSelectOptions(counted)[0].options[0].name, 'Knife Bowl (4p)');
     assert.equal(opts[0].id, 'session');
     const teams = customMapSelectOptions(items, '', [], 'teams', []);
     assert.deepEqual(teams.map((row) => row.name), ['Duel', 'Lanes', 'Open']);
@@ -680,6 +694,51 @@ describe('match lobby overlay', () => {
       assert.equal(dom.practice.className.includes('is-dimmed'), true);
       assert.equal(dom.solo.disabled, true);
       assert.equal(dom.drawers.className.includes('is-dimmed'), true);
+      assert.equal(dom.sideConcede.hidden, true);
+    } finally {
+      restore();
+    }
+  });
+
+  it('shows concede during a normal match and keeps the room', () => {
+    const dom = lobbyDom();
+    const restore = dom.install();
+    try {
+      let conceded = 0;
+      let left = 0;
+      const state = {
+        ...waitingState('onevsone'),
+        phase: 'playing',
+        hosting: false,
+        playerCount: 2,
+        maxPlayers: 2,
+        seats: [
+          { kind: 'human', name: 'Aria', userId: 'u2', ready: true, index: 0 },
+          { kind: 'human', name: 'Blind', userId: 'u1', ready: true, index: 1 },
+        ],
+      };
+      const ui = setupLobbyUi({
+        gameLobby: { listLobbies: () => [], listen() {}, unlisten() {} },
+        matchLobby: {
+          isActive: () => true,
+          getState: () => state,
+          canStart: () => false,
+          startBlockReason: () => '',
+          countdownMs: () => 0,
+          lockstepStalled: () => false,
+          concede() { conceded += 1; state.phase = 'waiting'; },
+          leaveRoom() { left += 1; },
+        },
+        getUserId: () => 'u1',
+      });
+      assert.equal(dom.sideConcede.hidden, false);
+      assert.equal(dom.panelConcede.hidden, false);
+      assert.equal(dom.sideLeave.textContent, 'Leave lobby');
+      dom.sideConcede.click();
+      assert.equal(conceded, 1);
+      assert.equal(left, 0);
+      ui.refresh();
+      assert.equal(dom.sideConcede.hidden, true);
     } finally {
       restore();
     }
@@ -703,6 +762,36 @@ describe('match lobby overlay', () => {
       });
       assert.equal(dom.practice.className.includes('is-dimmed'), false);
       assert.equal(dom.solo.disabled, false);
+    } finally {
+      restore();
+    }
+  });
+
+  it('dims other lobbies while a ladder queue is open', () => {
+    const dom = lobbyDom();
+    const koth = new FakeEl('button');
+    const restore = dom.install();
+    const prevGet = globalThis.document.getElementById;
+    globalThis.document.getElementById = (id) => (id === 'menu-koth-start' ? koth : prevGet(id));
+    try {
+      setupLobbyUi({
+        gameLobby: { listLobbies: () => [], listen() {}, unlisten() {} },
+        matchLobby: {
+          isActive: () => false,
+          getState: () => null,
+          canStart: () => false,
+          startBlockReason: () => '',
+          countdownMs: () => 0,
+          lockstepStalled: () => false,
+        },
+        isLadderQueued: () => true,
+        getUserId: () => 'u1',
+      });
+      assert.equal(dom.practice.className.includes('is-dimmed'), true);
+      assert.equal(dom.solo.disabled, true);
+      assert.equal(dom.drawers.className.includes('is-dimmed'), true);
+      assert.equal(dom.create('onevsone').disabled, true);
+      assert.equal(koth.disabled, true);
     } finally {
       restore();
     }

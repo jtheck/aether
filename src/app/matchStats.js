@@ -65,7 +65,17 @@ export function matchStatOwners(session) {
     if (n < 0 || ids.includes(n)) return;
     ids.push(n);
   };
-  for (const id of session?.humanPlayers ?? []) add(id);
+  const people = [];
+  const pushPerson = (id) => {
+    const n = id | 0;
+    if (!Number.isInteger(id) && typeof id !== 'number') return;
+    if (n < 0 || people.includes(n)) return;
+    people.push(n);
+  };
+  for (const id of session?.humanPlayers ?? []) pushPerson(id);
+  for (const id of session?.departedPlayers ?? []) pushPerson(id);
+  people.sort((a, b) => a - b);
+  for (const id of people) add(id);
   for (const ai of session?.aiPlayers ?? []) add(typeof ai === 'number' ? ai : ai?.owner);
   for (const id of session?.activeSlots ?? []) add(id);
   const active = session?.koth?.active;

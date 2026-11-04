@@ -80,6 +80,18 @@ describe('match wipe (0 pop)', () => {
     }
   });
 
+  it('awards the survivor when sides use forge alliance ids', () => {
+    setTeamAssignments([201, 202, 203, 204]);
+    try {
+      const w = seatWorld([0, 1], [0]);
+      matchWipeStep(w);
+      assert.equal(w.kothMatchOver, 1);
+      assert.equal(w.matchWinner, 0);
+    } finally {
+      setTeamAssignments(null);
+    }
+  });
+
   it('in teams, wiping a whole side awards the surviving team', () => {
     setTeamAssignments([0, 1, 0, 1]);
     try {

@@ -84,6 +84,7 @@ function peekGardenMeta(text) {
   if (typeof data.n === 'string') name = data.n;
   else if (typeof data.name === 'string') name = data.name;
   var mapType = typeof data.mt === 'string' ? data.mt.trim().toLowerCase() : '';
+  var spawns = Array.isArray(data.g) ? data.g.length : 0;
   return {
     ok: true,
     garden: data,
@@ -92,6 +93,7 @@ function peekGardenMeta(text) {
     width: width,
     height: height,
     mapType: mapType,
+    spawns: spawns,
   };
 }
 
@@ -204,6 +206,7 @@ function describeInstall(folder, fsImpl) {
       file: rel,
       name: meta.name || rel.replace(/\.garden$/i, ''),
       mapType: meta.mapType || '',
+      spawns: meta.spawns | 0,
     });
   }
   return gardens;
@@ -425,8 +428,10 @@ function writePreviewJpeg(dir, raw, io) {
   var buf;
   try { buf = Buffer.from(text, 'base64'); } catch (_err) { return ''; }
   if (!buf.length || buf.length > 1024 * 1024) return '';
-  if (buf[0] !== 0xff || buf[1] !== 0xd8) return '';
-  var file = path.join(dir, 'preview.jpg');
+  var png = buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;
+  var jpeg = buf[0] === 0xff && buf[1] === 0xd8;
+  if (!png && !jpeg) return '';
+  var file = path.join(dir, png ? 'preview.png' : 'preview.jpg');
   try {
     io.writeFileSync(file, buf);
     return file;

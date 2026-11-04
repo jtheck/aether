@@ -24,6 +24,7 @@ describe('simSession lockstep leave', () => {
     assert.equal(session._canAdvance(11), false);
     session.removeHumanPlayer(1);
     assert.deepEqual(session.humanPlayers, [0]);
+    assert.deepEqual(session.departedPlayers, [1]);
     assert.equal(session._canAdvance(11), true);
     assert.equal(session.peerConfirmedTick.has(1), false);
   });

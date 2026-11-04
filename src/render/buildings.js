@@ -222,10 +222,12 @@ function makeCollarMaterial() {
   // Blended, but kept in the opaque bucket (needAlphaBlending: false) so it
   // draws before the building. Depth is not written, so the building test
   // still sees the ground and replaces every ring pixel it covers.
+  // instanceColor.r is the fill: 1 draws every chip, less keeps a leading arc.
   return createShaderMaterial({
     name: 'building-selection-collar',
     attributes: ['position'],
     uniforms: ['world', 'viewProjection'],
+    useThinInstanceColors: true,
     needAlphaBlending: false,
     blend: {
       color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
@@ -235,18 +237,29 @@ function makeCollarMaterial() {
     backFaceCulling: false,
     vertexSource: `struct VertexOutput {
   @builtin(position) position: vec4<f32>,
+  @location(0) localXz: vec2<f32>,
+  @location(1) fill: f32,
 };
 @vertex fn mainVertex(input: VertexInput) -> VertexOutput {
   var out: VertexOutput;
   let instanceWorld = mat4x4<f32>(input.world0, input.world1, input.world2, input.world3);
   let wp = (shaderSystem.world * instanceWorld) * vec4<f32>(input.position, 1.0);
   out.position = shaderSystem.viewProjection * wp;
+  out.localXz = input.position.xz;
+  out.fill = input.instanceColor.r;
   return out;
 }`,
     fragmentSource: `struct VertexOutput {
   @builtin(position) position: vec4<f32>,
+  @location(0) localXz: vec2<f32>,
+  @location(1) fill: f32,
 };
-@fragment fn mainFragment(_input: VertexOutput) -> @location(0) vec4<f32> {
+@fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
+  if (input.fill < 0.999) {
+    let ang = atan2(input.localXz.x, input.localXz.y);
+    let u = fract((ang + 3.14159265) / 6.2831853);
+    if (u >= input.fill) { discard; }
+  }
   return vec4<f32>(0.35, 0.95, 1.0, ${COLLAR_ALPHA});
 }`,
   });
@@ -323,7 +336,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
       mesh.renderOrder = COLLAR_RENDER_ORDER;
       mesh.pickable = false;
       const matrices = new Float32Array(16);
-      const colors = new Float32Array([0.35, 0.95, 1, COLLAR_ALPHA]);
+      const colors = new Float32Array([1, 0.95, 1, COLLAR_ALPHA]);
       setThinInstances(mesh, matrices, 1);
       setThinInstanceColors(mesh, colors);
       setThinInstanceCount(mesh, 1);
@@ -340,13 +353,15 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
     mesh.renderOrder = COLLAR_RENDER_ORDER;
     mesh.pickable = false;
     const matrices = new Float32Array(16);
+    const colors = new Float32Array([1, 0.95, 1, COLLAR_ALPHA]);
     setThinInstances(mesh, matrices, 1);
+    setThinInstanceColors(mesh, colors);
     setThinInstanceCount(mesh, 1);
     clearMatrix(matrices, 0);
     flushThinInstances(mesh);
     mesh.visible = false;
     addToScene(scene, mesh);
-    selParts = [{ mesh, matrices, colors: null }];
+    selParts = [{ mesh, matrices, colors }];
   }
 
   let ghostVisible = false;
@@ -355,7 +370,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
   let ghostType = null;
   /** @type {string | null} */
   let ghostUrl = null;
-  /** @type {{ x: number, z: number, size: 's' | 'm' | 'l' }[]} */
+  /** @type {{ x: number, z: number, size: 's' | 'm' | 'l', progress: number }[]} */
   let selAnchors = [];
   let selCapacity = 1;
   let placeGen = 0;
@@ -451,13 +466,16 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
   }
 
   function writeSelCollarColors(colors, count) {
-    for (let i = 0; i < count; i++) {
-      const o = i * 4;
-      colors[o] = 0.35;
-      colors[o + 1] = 0.95;
-      colors[o + 2] = 1;
-      colors[o + 3] = COLLAR_ALPHA;
-    }
+    for (let i = 0; i < count; i++) writeSelSlot(colors, i, 1);
+  }
+
+  /** instanceColor.r is the chip fill (1 = the whole ring). */
+  function writeSelSlot(colors, slot, fill) {
+    const o = slot * 4;
+    colors[o] = fill;
+    colors[o + 1] = 0.95;
+    colors[o + 2] = 1;
+    colors[o + 3] = COLLAR_ALPHA;
   }
 
   /** @param {number} needed */
@@ -504,6 +522,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
         const a = selAnchors[i];
         const gy = groundYAt(a.x, a.z);
         writeFlatCollar(part.matrices, i, a.x, a.z, resolveSelScale(a.size), gy);
+        if (part.colors) writeSelSlot(part.colors, i, a.progress);
       }
       setThinInstanceCount(part.mesh, n);
       if (part.colors) setThinInstanceColors(part.mesh, part.colors);
@@ -514,7 +533,9 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
   }
 
   /**
-   * @param {{ x: number, z: number, size?: 's' | 'm' | 'l' } | { x: number, z: number, size?: 's' | 'm' | 'l' }[] | null} pos
+   * `progress` below 1 keeps that fraction of the chips (construction).
+   * Omitted progress draws the whole ring (selection).
+   * @param {{ x: number, z: number, size?: 's' | 'm' | 'l', progress?: number } | { x: number, z: number, size?: 's' | 'm' | 'l', progress?: number }[] | null} pos
    */
   function setSelectionHighlight(pos) {
     if (!pos) {
@@ -530,6 +551,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
       x: p.x,
       z: p.z,
       size: p.size === 's' || p.size === 'l' ? p.size : 'm',
+      progress: Number.isFinite(p.progress) ? p.progress : 1,
     }));
     applySelectionHighlight();
   }

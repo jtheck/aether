@@ -17,6 +17,13 @@ describe('match stat rows', () => {
     assert.deepEqual(only.map((row) => row.owner), [1]);
   });
 
+  it('keeps a player who left on the score roster', () => {
+    assert.deepEqual(matchStatOwners({
+      humanPlayers: [1],
+      departedPlayers: [0],
+    }), [0, 1]);
+  });
+
   it('reads humans, AI, and a living hill', () => {
     assert.deepEqual(matchStatOwners({
       humanPlayers: [0],

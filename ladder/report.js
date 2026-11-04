@@ -116,6 +116,39 @@ export function canonicalOf(report) {
   return [report.board, report.matchId, report.tick, report.checksum, report.winnerSeat, players].join('|');
 }
 
+/** A forfeit or disconnect loss. Tick and checksum are not part of the agreement. */
+export const DISCONNECT_GRACE_MS = 8000;
+
+export function lossCanonicalOf(report) {
+  const players = report.players.map((p) => `${p.playerId}:${p.seat}:${p.team}`).join(',');
+  return [report.board, report.matchId, report.winnerSeat, players].join('|');
+}
+
+/**
+ * A forfeit settles from one report. A disconnect settles only after the grace
+ * has passed since the first claim, and only when every claim names one winner.
+ * @param {{ loss: string, lossCanonical?: string }} report
+ * @param {{ lossCanonical?: string, loss?: string, atMs?: number }[]} stored
+ */
+export function judgeLoss(report, stored, { nowMs, confirm }) {
+  const mine = report.lossCanonical || lossCanonicalOf(report);
+  const relevant = report.loss === 'forfeit'
+    ? stored.filter((row) => row.loss === 'forfeit')
+    : stored;
+  if (relevant.some((row) => row.lossCanonical && row.lossCanonical !== mine)) {
+    return { status: 'conflict' };
+  }
+  if (report.loss === 'forfeit') return { status: 'ready' };
+  if (!confirm) return { status: 'pending' };
+  let oldest = nowMs;
+  for (const row of stored) {
+    if (row.loss !== 'disconnect' || !Number.isInteger(row.atMs)) continue;
+    if (row.atMs < oldest) oldest = row.atMs;
+  }
+  if (nowMs - oldest < DISCONNECT_GRACE_MS) return { status: 'pending' };
+  return { status: 'ready' };
+}
+
 /**
  * Stored reports are one per player. They settle when every side has a reporter
  * and every stored report carries the same canonical line.

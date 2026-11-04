@@ -152,7 +152,29 @@
     #workshop-publish-dlg label { display: block; margin: 6px 0 2px; color: #aaa; }
     #workshop-publish-dlg input, #workshop-publish-dlg textarea { width: 100%; box-sizing: border-box; }
     #workshop-publish-dlg.open { display: block; }
-    #workshop-publish-dlg img { width: 100%; margin: 6px 0; background: #111; }
+    #workshop-publish-dlg img { width: 100%; height: auto; margin: 6px 0; background: #111; }
+    #forge-preview { display: block; width: 64px; height: 64px; margin: 4px 0; background: #111; cursor: pointer; object-fit: fill; }
+    #forge-preview.is-large { width: 100%; height: auto; }
+    #forge-preview[hidden] { display: none; }
+    body.is-preview #forge-top,
+    body.is-preview #forge-rail,
+    body.is-preview #forge-ui,
+    body.is-preview #workshop-publish-dlg,
+    body.is-preview #story-sheet { visibility: hidden; }
+    #forge-preview-frame {
+      position: fixed; pointer-events: none; box-sizing: border-box; z-index: 8;
+      border: 2px dashed rgba(255, 255, 255, 0.9);
+    }
+    #forge-preview-frame[hidden] { display: none; }
+    #forge-preview-bar {
+      display: none; position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+      z-index: 9; gap: 8px;
+    }
+    body.is-preview #forge-preview-bar { display: flex; }
+    #forge-preview-bar button {
+      background: #243038; color: #eee; border: 1px solid #3a4450;
+      padding: 6px 12px; cursor: pointer; font: inherit;
+    }
     .panel { margin-top: 8px; }
     #forge-view {
       display: flex;
@@ -215,6 +237,12 @@
 </head>
 <body>
   <canvas id="canvas"></canvas>
+  <div id="forge-preview-frame" hidden></div>
+  <div id="forge-preview-bar">
+    <button id="btn-preview-frame" type="button">Frame</button>
+    <button id="btn-preview-take" type="button">Take</button>
+    <button id="btn-preview-cancel" type="button">Cancel</button>
+  </div>
   <script type="module" src="./main.js"></script>
 </body>
 </html>

@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { customMapSelectOptions } from './app/lobbyUi.js';
 import { gardenUrlForChapter } from './lobby/modes.js';
-import { gardenLobbyFields, houseMapGardenUrl, lobbyOptionsFromHouseIndex, spawnsFitLobby } from './houseMapCatalog.js';
+import { AUTO_MAP_PREVIEW_URL, gardenLobbyFields, gardenPreviewDataUrl, houseMapGardenUrl, lobbyMapPreviewUrl, lobbyOptionsFromHouseIndex, spawnsFitLobby } from './houseMapCatalog.js';
 import { readSkirmishCatalog } from './mapsResolve.js';
 import { decodeGarden } from './sim/garden.js';
 
@@ -73,5 +73,19 @@ describe('house map catalog', () => {
 
   it('rejects unsafe garden paths', () => {
     assert.equal(houseMapGardenUrl('../secret.garden'), '');
+  });
+
+  it('uses a garden shot when the file has one, otherwise the default picture', () => {
+    const shot = 'iVBORw0KGgoAAA';
+    assert.equal(gardenPreviewDataUrl(shot), `data:image/png;base64,${shot}`);
+    assert.equal(gardenPreviewDataUrl('not-a-picture'), '');
+    assert.equal(lobbyMapPreviewUrl(''), AUTO_MAP_PREVIEW_URL);
+    assert.equal(lobbyMapPreviewUrl('/maps/skirmish/ford.garden'), AUTO_MAP_PREVIEW_URL);
+    assert.equal(lobbyMapPreviewUrl('session', shot), `data:image/png;base64,${shot}`);
+    assert.equal(lobbyMapPreviewUrl('workshop:12/map.garden'), AUTO_MAP_PREVIEW_URL);
+    const opts = lobbyOptionsFromHouseIndex({
+      maps: [{ file: 'ford.garden', name: 'Ford', spawns: 2, preview: shot }],
+    }, 'onevsone');
+    assert.equal(opts[0].preview, `data:image/png;base64,${shot}`);
   });
 });

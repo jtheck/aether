@@ -106,7 +106,7 @@ import {
 import { DEFAULT_MAP_TYPE, MAP_TYPES, normalizeMapType } from '../sim/mapType.js';
 import { adventureTeamByOwner } from '../sim/teams.js';
 import { agorasForMapType, spawnPadsForMapType } from '../sim/worldSetup.js';
-import { createCameraController, resolveCameraExtents, resolveCameraHalfF } from '../render/cameraController.js';
+import { CAMERA_BASE_FOV, createCameraController, resolveCameraExtents, resolveCameraHalfF } from '../render/cameraController.js';
 import {
   CLIP_CAMERA,
   CLIP_HOLD,
@@ -3394,6 +3394,7 @@ function gardenExtras({ committedWalls = false } = {}) {
     mapType: state.mapType,
     teamByOwner: state.teamByOwner,
     neutralTeams: state.neutralTeams,
+    preview: workshopPreviewJpeg,
   };
 }
 
@@ -3899,7 +3900,67 @@ async function saveTextFile(json, name, description, extension) {
   downloadGarden(json, name);
 }
 
+function overheadFrameRadius() {
+  if (!field || !canvas) return 0;
+  const half = Math.max(worldHalfFFromField(field), worldHalfZFFromField(field));
+  const rect = canvas.getBoundingClientRect();
+  const viewH = Math.max(1, rect.height);
+  const square = Math.max(1, Math.min(rect.width, viewH));
+  return (half * 1.15) / Math.tan(CAMERA_BASE_FOV / 2) * (viewH / square);
+}
+
+function applyOverheadFrame() {
+  if (!cam || !camera || !field || !canvas) return;
+  const radius = overheadFrameRadius();
+  camera.upperRadiusLimit = Math.max(camera.upperRadiusLimit || 0, radius + 1);
+  camera.inertialRadiusOffset = 0;
+  camera.inertialAlphaOffset = 0;
+  camera.inertialBetaOffset = 0;
+  cam.setPose({ x: 0, z: 0, alpha: -Math.PI / 2, radius }, { unclamped: true });
+  camera.beta = 0.05;
+  camera.fov = CAMERA_BASE_FOV;
+  camera.radius = Math.max(8, radius);
+}
+
+async function captureOverheadPreview() {
+  if (!cam || !camera || !field || !canvas || workshopPreviewJpeg) return workshopPreviewJpeg;
+  const posed = cam.getPose();
+  const beta = camera.beta;
+  const fov = camera.fov;
+  const prevUpper = camera.upperRadiusLimit;
+  const wasArc = previewMode;
+  if (!wasArc) cam.setArcRotate(true);
+  holdPreviewCamera = true;
+  applyOverheadFrame();
+  let url = '';
+  try {
+    url = await captureWorkshopPreview();
+  } finally {
+    holdPreviewCamera = true;
+    camera.upperRadiusLimit = prevUpper;
+    cam.setPose({
+      x: posed.x,
+      z: posed.z,
+      alpha: posed.alpha,
+      radius: posed.radius,
+    }, { unclamped: true });
+    if (wasArc) {
+      camera.beta = beta;
+      camera.fov = fov;
+    } else {
+      cam.setArcRotate(false);
+      cam.setBetaBias(FORGE_PITCH_BIAS);
+    }
+    holdPreviewCamera = false;
+  }
+  if (!url) return '';
+  workshopPreviewJpeg = url.replace(/^data:image\/(?:png|jpeg);base64,/, '');
+  showForgePreview(url);
+  return workshopPreviewJpeg;
+}
+
 async function exportMap() {
+  if (!workshopPreviewJpeg) await captureOverheadPreview();
   await saveTextFile(JSON.stringify(gardenPayload(), null, 0), gardenFileName(), 'Garden map', '.garden');
 }
 
@@ -4132,6 +4193,24 @@ function playMap() {
   });
 }
 
+function previewDataUrl(raw) {
+  const text = String(raw || '').replace(/^data:image\/(?:png|jpeg);base64,/, '').replace(/\s/g, '');
+  if (!text || text.length > 1400000) return '';
+  if (text.startsWith('iVBORw0KGgo')) return `data:image/png;base64,${text}`;
+  if (text.startsWith('/9j/')) return `data:image/jpeg;base64,${text}`;
+  return '';
+}
+
+function usablePreview(raw) {
+  const url = previewDataUrl(raw);
+  return url ? url.slice(url.indexOf(',') + 1) : '';
+}
+
+function applyStoredPreview(raw) {
+  workshopPreviewJpeg = usablePreview(raw);
+  showForgePreview(previewDataUrl(workshopPreviewJpeg));
+}
+
 function applyGardenJson(json) {
   const g = decodeGarden(json);
   field = fieldFromGarden(json);
@@ -4176,6 +4255,7 @@ function applyGardenJson(json) {
   renderWaveEditor();
   rebuildTerrain();
   syncPropUi();
+  applyStoredPreview(g.preview);
 }
 
 function importFile(file) {
@@ -4265,38 +4345,46 @@ function blobToDataUrl(blob) {
   });
 }
 
+const PREVIEW_PX = 256;
+const FORGE_PITCH_BIAS = 0.36;
+const PREVIEW_RADIUS_SCALE = 2;
+let previewMode = false;
+
+function drawPreviewSquare(ctx, source, bw, bh) {
+  const side = Math.min(bw, bh);
+  const sx = (bw - side) / 2;
+  const sy = (bh - side) / 2;
+  ctx.drawImage(source, sx, sy, side, side, 0, 0, PREVIEW_PX, PREVIEW_PX);
+}
+
 async function encodePreviewJpeg(srcCanvas) {
   const w = srcCanvas.width || srcCanvas.clientWidth;
   const h = srcCanvas.height || srcCanvas.clientHeight;
   if (!w || !h) return '';
-  const maxEdge = 512;
-  const scale = Math.min(1, maxEdge / Math.max(w, h));
-  const tw = Math.max(1, Math.round(w * scale));
-  const th = Math.max(1, Math.round(h * scale));
   const off = document.createElement('canvas');
-  off.width = tw;
-  off.height = th;
+  off.width = PREVIEW_PX;
+  off.height = PREVIEW_PX;
   const ctx = off.getContext('2d');
   if (!ctx) return '';
   try {
     if (typeof srcCanvas.convertToBlob === 'function') {
       const blob = await srcCanvas.convertToBlob({ type: 'image/png' });
       const bmp = await createImageBitmap(blob);
-      ctx.drawImage(bmp, 0, 0, tw, th);
+      drawPreviewSquare(ctx, bmp, bmp.width || w, bmp.height || h);
       bmp.close?.();
     } else {
       const bmp = await createImageBitmap(srcCanvas);
-      ctx.drawImage(bmp, 0, 0, tw, th);
+      drawPreviewSquare(ctx, bmp, bmp.width || w, bmp.height || h);
       bmp.close?.();
     }
   } catch {
-    try { ctx.drawImage(srcCanvas, 0, 0, tw, th); } catch { return ''; }
+    try { drawPreviewSquare(ctx, srcCanvas, w, h); } catch { return ''; }
   }
-  if (previewLooksBlank(ctx, tw, th)) return '';
-  const out = await new Promise((resolve) => off.toBlob(resolve, 'image/jpeg', 0.82));
+  if (previewLooksBlank(ctx, PREVIEW_PX, PREVIEW_PX)) return '';
+  const out = await new Promise((resolve) => off.toBlob(resolve, 'image/png'));
   if (!out || out.size > 1024 * 1024) return '';
   const url = await blobToDataUrl(out);
-  return url.startsWith('data:image/jpeg') ? url : '';
+  return url.startsWith('data:image/png') ? url : '';
 }
 
 async function captureWorkshopPreview() {
@@ -4322,6 +4410,63 @@ async function captureWorkshopPreview() {
 
 function closeWorkshopPublishDlg() {
   document.getElementById('workshop-publish-dlg')?.classList.remove('open');
+}
+
+function showForgePreview(url) {
+  for (const id of ['forge-preview', 'workshop-publish-preview']) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    if (!url) {
+      el.removeAttribute('src');
+      el.hidden = true;
+      continue;
+    }
+    el.src = url;
+    el.hidden = false;
+  }
+}
+
+function placePreviewFrame() {
+  const frame = document.getElementById('forge-preview-frame');
+  if (!frame || frame.hidden || !canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const side = Math.min(rect.width, rect.height);
+  frame.style.width = `${side}px`;
+  frame.style.height = `${side}px`;
+  frame.style.left = `${rect.left + (rect.width - side) / 2}px`;
+  frame.style.top = `${rect.top + (rect.height - side) / 2}px`;
+}
+
+function enterPreviewMode() {
+  if (previewMode || !cam || !camera) return;
+  previewMode = true;
+  cam.setArcRotate(true);
+  cam.setUpperRadiusScale(PREVIEW_RADIUS_SCALE);
+  document.body.classList.add('is-preview');
+  const frame = document.getElementById('forge-preview-frame');
+  if (frame) frame.hidden = false;
+  if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  placePreviewFrame();
+}
+
+function exitPreviewMode() {
+  if (!previewMode) return;
+  previewMode = false;
+  cam?.setArcRotate(false);
+  cam?.setUpperRadiusScale(1);
+  cam?.setBetaBias(FORGE_PITCH_BIAS);
+  document.body.classList.remove('is-preview');
+  const frame = document.getElementById('forge-preview-frame');
+  if (frame) frame.hidden = true;
+}
+
+async function takeForgePreview() {
+  const preview = await captureWorkshopPreview();
+  if (!preview) return '';
+  workshopPreviewJpeg = preview.replace(/^data:image\/(?:png|jpeg);base64,/, '');
+  showForgePreview(preview);
+  exitPreviewMode();
+  return preview;
 }
 
 function fillWorkshopNameSuggestions(garden, current) {
@@ -4358,31 +4503,20 @@ async function beginWorkshopPublish() {
   const garden = gardenPayload();
   const dlg = document.getElementById('workshop-publish-dlg');
   const nameEl = document.getElementById('workshop-publish-name');
-  const imgEl = document.getElementById('workshop-publish-preview');
   const hint = document.getElementById('workshop-publish-hint');
   workshopDescEdited = false;
   const names = fillWorkshopNameSuggestions(garden, state.mapName);
   if (nameEl) nameEl.value = names[0] || state.mapName || '';
   syncWorkshopDescription(garden, nameEl?.value || names[0] || '');
-  if (imgEl) {
-    imgEl.removeAttribute('src');
-    imgEl.hidden = true;
+  if (!workshopPreviewJpeg) {
+    enterPreviewMode();
+    return;
   }
-  if (hint) hint.textContent = 'Taking a snapshot…';
-  workshopPreviewJpeg = '';
   dlg?.classList.add('open');
   placeMenus();
-  const preview = await captureWorkshopPreview();
-  workshopPreviewJpeg = preview.replace(/^data:image\/jpeg;base64,/, '');
-  if (imgEl && preview) {
-    imgEl.src = preview;
-    imgEl.hidden = false;
-  }
-  if (hint) {
-    hint.textContent = preview
-      ? 'This is your current view. Pick a name, edit the description if you want, then confirm.'
-      : 'Could not capture a thumbnail. Name it and confirm to publish without one.';
-  }
+  const preview = previewDataUrl(workshopPreviewJpeg);
+  showForgePreview(preview);
+  if (hint) hint.textContent = 'This is the preview. Pick a name, edit the description if you want, then confirm.';
 }
 
 async function confirmWorkshopPublish() {
@@ -4978,10 +5112,12 @@ function mountUi() {
         <button id="btn-generate">Generate</button>
         <button id="btn-random" type="button">Random</button>
         <button id="btn-export">Export .garden</button>
+        <button id="btn-preview" type="button">Preview</button>
         <button id="btn-import">Import .garden</button>
         <button id="btn-workshop-publish" type="button">Publish</button>
         <button id="btn-play">Play chapter</button>
       </div>
+      <img id="forge-preview" alt="Map preview" hidden>
       <label>Steam Workshop</label>
       <select id="workshop-maps">
         <option value="">Subscribed maps…</option>
@@ -5372,7 +5508,10 @@ function mountUi() {
     placeMenus();
   };
   placeChrome();
-  window.addEventListener('resize', placeChrome);
+    window.addEventListener('resize', () => {
+      placeChrome();
+      placePreviewFrame();
+    });
   document.getElementById('btn-top-play')?.addEventListener('click', () => {
     const live = (campaignDraft.episodes || []).some((ep) => (ep.chapters || []).some((ch) => ch.live !== false));
     if (live) playCampaign();
@@ -5773,6 +5912,7 @@ function mountUi() {
     state.cameraHalfF = 0;
     placeGeneratedStarts();
     placeGeneratedScenery();
+    applyStoredPreview('');
     celestial?.setWorldHalfF(Math.max(worldHalfFFromField(field), worldHalfZFFromField(field)));
     applyCameraBound();
     syncCenterPlinthUi();
@@ -5832,6 +5972,21 @@ function mountUi() {
   });
   document.getElementById('btn-workshop-browse')?.addEventListener('click', (e) => {
     if (aetherSteam.openOverlay('workshop')) e.preventDefault();
+  });
+  document.getElementById('btn-preview')?.addEventListener('click', () => {
+    enterPreviewMode();
+  });
+  document.getElementById('btn-preview-frame')?.addEventListener('click', () => {
+    applyOverheadFrame();
+  });
+  document.getElementById('btn-preview-take')?.addEventListener('click', () => {
+    void takeForgePreview();
+  });
+  document.getElementById('btn-preview-cancel')?.addEventListener('click', () => {
+    exitPreviewMode();
+  });
+  document.getElementById('forge-preview')?.addEventListener('click', () => {
+    document.getElementById('forge-preview')?.classList.toggle('is-large');
   });
   document.getElementById('btn-workshop-publish')?.addEventListener('click', () => {
     void beginWorkshopPublish();
@@ -5961,7 +6116,6 @@ async function main() {
   const worldHalfF = worldHalfFFromField(field);
   const worldHalfZF = worldHalfZFFromField(field);
   // Steeper than play, and yaw on the table axes so the board reads square.
-  const FORGE_PITCH_BIAS = 0.36;
   camera = createArcRotateCamera(-Math.PI / 2, Math.PI / 3.2 - FORGE_PITCH_BIAS, Math.max(worldHalfF, worldHalfZF) * 1.55, {
     x: 0, y: 0, z: 0,
   });
@@ -6017,6 +6171,7 @@ async function main() {
   }, { passive: false });
   canvas.addEventListener('pointerdown', (e) => {
     if (!storyDriving()) cam.handlePointerDown(e);
+    if (previewMode) return;
     if (e.button === 0 && !cam.isRmbPanning()) {
       state.painting = true;
       if (state.layer === 'scenery') scenerySalt = (Math.random() * 0x100000000) >>> 0;
@@ -6054,6 +6209,7 @@ async function main() {
   });
   canvas.addEventListener('dblclick', (e) => {
     e.preventDefault();
+    if (previewMode) return;
     if (state.layer !== 'table') return;
     if (state.tableTool === 'props' && state.propArmed) return;
     const pos = pickGround(e.clientX, e.clientY);
@@ -6065,6 +6221,7 @@ async function main() {
   });
   canvas.addEventListener('pointermove', (e) => {
     if (!storyDriving()) cam.handlePointerMove(e);
+    if (previewMode) return;
     const pos = pickGround(e.clientX, e.clientY);
     if (propDrag && state.layer === 'table' && state.tableTool === 'props' && (e.buttons & 1)) {
       movePropDrag(pos);
@@ -6145,6 +6302,18 @@ async function main() {
   });
   window.addEventListener('keydown', (e) => {
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName);
+    if (previewMode && !typing) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        exitPreviewMode();
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        void takeForgePreview();
+        return;
+      }
+    }
     if (!typing && e.key === 'Escape') {
       if (state.layer === 'place' && state.placePicks.length) {
         e.preventDefault();

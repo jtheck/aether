@@ -14,6 +14,7 @@ describe('clearSessionTableState', () => {
       koth: { scores: [9, 1] },
       kothMatchOver: 1,
       matchWinner: 2,
+      departedPlayers: [1],
       _checkpoint: { tick: 40 },
       _checkpointTick: 40,
       _checkpointChecksum: 99,
@@ -33,6 +34,7 @@ describe('clearSessionTableState', () => {
     assert.equal(session.koth, null);
     assert.equal(session.kothMatchOver, 0);
     assert.equal(session.matchWinner, -1);
+    assert.equal(session.departedPlayers, null);
     assert.equal(session._checkpoint, null);
     assert.equal(session._checkpointTick, 0);
     assert.equal(session._checkpointChecksum, 0);

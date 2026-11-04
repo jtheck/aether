@@ -148,6 +148,7 @@ export function clearSessionTableState(session) {
   session.snap = null;
   session.kothMatchOver = 0;
   session.matchWinner = -1;
+  session.departedPlayers = null;
   session._checkpoint = null;
   session._checkpointTick = 0;
   session._checkpointChecksum = 0;
@@ -564,6 +565,7 @@ export class SimSession {
   /** Drop a player from lockstep quorum immediately (leave / forfeit). */
   removeHumanPlayer(playerId) {
     const id = playerId | 0;
+    const present = this.humanPlayers.includes(id);
     this.humanPlayers = this.humanPlayers.filter((p) => p !== id);
     this.peerConfirmedTick.delete(id);
     for (const [tick, list] of this.pendingJoins) {
@@ -571,6 +573,10 @@ export class SimSession {
       if (next.length) this.pendingJoins.set(tick, next);
       else this.pendingJoins.delete(tick);
     }
+    // The score screen still lists them. Quorum is the only thing that shrinks.
+    if (!present || id < 0) return;
+    if (!this.departedPlayers) this.departedPlayers = [];
+    if (!this.departedPlayers.includes(id)) this.departedPlayers.push(id);
   }
 
   setLocalPlayerId(playerId) {

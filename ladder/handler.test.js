@@ -663,6 +663,15 @@ function snapshotBody(playerId, extra = {}) {
   };
 }
 
+test('a forfeit snapshot is stored from one player', async () => {
+  const { store, handler } = setup();
+  const saved = await json(handler, post(snapshotBody(A, { loss: 'forfeit' })));
+  assert.equal(saved.body.status, 'saved');
+  const doc = JSON.parse(store.objects.get('ladder/matches/lobby-abc123.json'));
+  assert.equal(doc.map, 'Duel');
+  assert.equal(doc.samples[0].army[0], 40);
+});
+
 test('a snapshot is stored once when two players agree', async () => {
   const { store, handler } = setup();
   const first = await json(handler, post(snapshotBody(A)));
@@ -696,4 +705,100 @@ test('a snapshot is stored once when two players agree', async () => {
   });
   assert.equal(fetched.status, 200);
   assert.equal(fetched.body.players[0].name, 'Ann');
+});
+
+test('a forfeit is a loss from one report', async () => {
+  const { store, handler } = setup();
+  const loss = await json(handler, post(duel(B, { loss: 'forfeit', winnerSeat: 0 })));
+  assert.equal(loss.status, 200);
+  assert.equal(loss.body.status, 'settled');
+  const byId = Object.fromEntries(loss.body.ratings.map((row) => [row.playerId, row]));
+  assert.equal(byId[A].rating, 1016);
+  assert.equal(byId[A].wins, 1);
+  assert.equal(byId[B].rating, 984);
+  assert.equal(byId[B].wins, 0);
+  const again = await json(handler, post(duel(A, { loss: 'forfeit', winnerSeat: 0 })));
+  assert.equal(again.body.status, 'settled');
+  assert.equal((await store.getItem('1v1#2026-1', `p#${A}`)).games, 1);
+  const recentA = await store.getItem(`recent#${A}`, 'recent');
+  const recentB = await store.getItem(`recent#${B}`, 'recent');
+  assert.equal(recentA.recent[0].end, 'ff');
+  assert.equal(recentA.recent[0].result, 'win');
+  assert.equal(recentB.recent[0].end, 'ff');
+  assert.equal(recentB.recent[0].result, 'loss');
+});
+
+test('a contradictory forfeit does not rate the match again', async () => {
+  const { store, handler } = setup();
+  const first = await json(handler, post(duel(B, { loss: 'forfeit', winnerSeat: 0 })));
+  assert.equal(first.body.status, 'settled');
+  const other = await json(handler, post(duel(A, { loss: 'forfeit', winnerSeat: 1 })));
+  assert.equal(other.status, 409);
+  assert.equal(other.body.status, 'conflict');
+  assert.equal((await store.getItem('1v1#2026-1', `p#${A}`)).games, 1);
+  assert.equal((await store.getItem('1v1#2026-1', `p#${A}`)).wins, 1);
+});
+
+test('a disconnect is a loss only after the grace', async () => {
+  const store = createMemoryStore();
+  let nowMs = 1_000_000;
+  const handler = createHandler({
+    store,
+    season: '2026-1',
+    allowedOrigins: ['https://play.example'],
+    now: () => new Date(nowMs).toISOString(),
+    clock: () => nowMs,
+  });
+  const claim = await json(handler, post(duel(A, { loss: 'disconnect', winnerSeat: 0 })));
+  assert.equal(claim.status, 200);
+  assert.equal(claim.body.status, 'pending');
+  assert.equal(await store.getItem('1v1#2026-1', `p#${A}`), null);
+
+  nowMs += 7999;
+  const early = await json(handler, post(duel(A, { loss: 'disconnect', lossConfirm: true, winnerSeat: 0 })));
+  assert.equal(early.body.status, 'pending');
+
+  nowMs += 1;
+  const done = await json(handler, post(duel(A, { loss: 'disconnect', lossConfirm: true, winnerSeat: 0 })));
+  assert.equal(done.body.status, 'settled');
+  const byId = Object.fromEntries(done.body.ratings.map((row) => [row.playerId, row]));
+  assert.equal(byId[A].rating, 1016);
+  assert.equal(byId[B].rating, 984);
+  const recent = await store.getItem(`recent#${A}`, 'recent');
+  assert.equal(recent.recent[0].end, 'dc');
+  assert.equal(recent.recent[0].result, 'win');
+});
+
+test('a disconnect that clears during the grace is not a loss', async () => {
+  const store = createMemoryStore();
+  let nowMs = 1_000_000;
+  const handler = createHandler({
+    store,
+    season: '2026-1',
+    now: () => new Date(nowMs).toISOString(),
+    clock: () => nowMs,
+  });
+  await handler(post(duel(A, { loss: 'disconnect', winnerSeat: 0 })));
+  await handler(post(duel(A, { loss: 'cancel' })));
+  nowMs += 9000;
+  const late = await json(handler, post(duel(A, { loss: 'disconnect', lossConfirm: true, winnerSeat: 0 })));
+  assert.equal(late.body.status, 'pending');
+  assert.equal(await store.getItem('1v1#2026-1', `p#${A}`), null);
+});
+
+test('two disconnect claims that name different winners do not rate', async () => {
+  const store = createMemoryStore();
+  let nowMs = 1_000_000;
+  const handler = createHandler({
+    store,
+    season: '2026-1',
+    now: () => new Date(nowMs).toISOString(),
+    clock: () => nowMs,
+  });
+  await handler(post(duel(A, { loss: 'disconnect', winnerSeat: 0 })));
+  await handler(post(duel(B, { loss: 'disconnect', winnerSeat: 1 })));
+  nowMs += 9000;
+  const done = await json(handler, post(duel(A, { loss: 'disconnect', lossConfirm: true, winnerSeat: 0 })));
+  assert.equal(done.status, 409);
+  assert.equal(await store.getItem('1v1#2026-1', `p#${A}`), null);
 });

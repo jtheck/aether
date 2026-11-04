@@ -663,8 +663,33 @@
     #match-lobby-overlay #match-lobby-chapter,
     #match-lobby-overlay #match-lobby-campaign,
     #match-lobby-overlay #match-lobby-map { min-width: 0; }
-    #match-lobby-overlay #match-lobby-chapter-row,
-    #match-lobby-overlay #match-lobby-map-row { flex-wrap: wrap; }
+    #match-lobby-overlay #match-lobby-map-row {
+      display: grid; grid-template-columns: minmax(0, 1fr) auto;
+      column-gap: 8px; row-gap: 4px; align-items: center;
+    }
+    #match-lobby-overlay #match-lobby-map-row label { grid-column: 1 / -1; min-width: 0; }
+    #match-lobby-overlay.is-ranked-result #match-lobby-map-row { display: none; }
+    #match-lobby-overlay #match-lobby-map-row #match-lobby-map { width: 100%; }
+    #match-lobby-map-preview-open {
+      width: 64px; height: 64px; margin: 0; padding: 0;
+      border: 0; border-radius: 3px; background: #10141c; cursor: pointer;
+    }
+    #match-lobby-map-preview, #ladder_go_preview {
+      display: block; width: 100%; height: 100%; object-fit: contain;
+      background: #10141c;
+    }
+    #ladder_go_preview { width: 96px; height: 96px; margin: 14px auto 0; border-radius: 3px; }
+    #match-lobby-map-preview-open[hidden], #ladder_go_preview[hidden] { display: none; }
+    #map-preview-zoom {
+      position: fixed; inset: 0; z-index: 10012; display: flex; align-items: center; justify-content: center;
+      padding: 24px; border: 0; background: rgba(8, 10, 14, 0.72); cursor: pointer;
+    }
+    #map-preview-zoom[hidden] { display: none; }
+    #map-preview-zoom img {
+      width: min(78vmin, 420px); height: min(78vmin, 420px); object-fit: contain;
+      background: #10141c; pointer-events: none;
+    }
+    #match-lobby-overlay #match-lobby-chapter-row { flex-wrap: wrap; }
     #match-lobby-overlay:has(#match-lobby-map-row:not([hidden])) #match-lobby-field-row,
     #match-lobby-overlay:has(#match-lobby-map-row:not([hidden])) #match-lobby-seed-row {
       padding-left: 16px;
@@ -713,6 +738,20 @@
     }
     #ladder_pop[hidden], #ladder_go[hidden], #ladder_hist[hidden], #help_pop[hidden], #skins_pop[hidden] { display: none; }
     #ladder_hist { z-index: 10009; user-select: none; -webkit-user-select: none; }
+    #ladder_pop, #ladder_hist {
+      background: none;
+      pointer-events: none;
+    }
+    body:has(#side_menu.is-open) #ladder_pop,
+    body:has(#side_menu.is-open) #ladder_hist {
+      padding-left: min(300px, 86vw);
+      box-sizing: border-box;
+    }
+    #ladder_pop .ladder-card, #ladder_hist .ladder-card { pointer-events: auto; }
+    body:has(#side_menu.is-open) #ladder_pop .ladder-card,
+    body:has(#side_menu.is-open) #ladder_hist .ladder-card {
+      width: min(420px, 100%);
+    }
     #ladder_pop {
       align-items: start;
       justify-items: center;
@@ -787,8 +826,14 @@
     #ladder_hist th { font-size: 11px; color: #8b93a7; }
     #ladder_hist td.when, #ladder_hist td.num { white-space: nowrap; font-variant-numeric: tabular-nums; }
     #ladder_hist td.num { text-align: right; }
+    #ladder_hist td.is-win, #ladder_hist td.is-loss { padding-right: 1.7em; }
     #ladder_hist td.is-win { color: aqua; }
     #ladder_hist td.is-loss { color: #e07070; }
+    #ladder_hist .ladder-result { position: relative; display: inline-block; }
+    #ladder_hist .ladder-mark {
+      position: absolute; left: calc(100% + 4px); top: 50%; transform: translateY(-50%);
+      font-size: 10px; letter-spacing: .02em;
+    }
     #ladder_hist .note { margin: 4px 0; font-size: 12px; color: #e0b050; }
     #ladder_hist tr.ladder-match { cursor: pointer; }
     .snap { margin-top: 8px; font: 500 12px/1.35 system-ui, sans-serif; }
@@ -852,6 +897,9 @@
     #ladder_go .ladder-vs {
       flex: 0 0 auto; font-size: 11px; font-weight: 600; letter-spacing: 0.18em;
       text-transform: uppercase; color: #6d7688;
+    }
+    #ladder_go #ladder_go_map {
+      margin: 16px 0 0; font-size: 14px; font-weight: 600; letter-spacing: 0.06em; color: #d5dbe8;
     }
     #ladder_go #ladder_go_count {
       width: 100%; margin: 18px 0 0; padding-top: 14px; border-top: 1px solid #2a3140;
@@ -1067,6 +1115,9 @@
       <div id="match-lobby-map-row" class="match-lobby-setting" hidden>
         <label for="match-lobby-map">Map</label>
         <select id="match-lobby-map"></select>
+        <button type="button" id="match-lobby-map-preview-open" hidden aria-label="Show larger map preview">
+          <img id="match-lobby-map-preview" alt="">
+        </button>
       </div>
       <div id="match-lobby-field-row" class="match-lobby-setting">
         <label for="match-lobby-field">Field</label>
@@ -1095,6 +1146,7 @@
       <input id="match-lobby-map-file" type="file" accept=".garden,.campaign,.json" hidden>
       <button type="button" class="btn" id="match-lobby-ready">Ready</button>
       <button type="button" class="btn" id="match-lobby-start" hidden>Start</button>
+      <button type="button" class="btn" id="match-lobby-concede" hidden>Concede</button>
       <button type="button" class="btn" id="match-lobby-leave">Leave</button>
       <div id="match-lobby-note" class="note"></div>
     </div>
@@ -1142,6 +1194,7 @@
         <div id="menu-match-seats"></div>
         <button type="button" class="btn" id="menu-match-ready">Ready</button>
         <button type="button" class="btn" id="menu-match-start" hidden>Start</button>
+        <button type="button" class="btn" id="menu-match-concede" hidden>Concede</button>
         <button type="button" class="btn" id="menu-match-leave">Leave lobby</button>
       </div>
       <div class="row menu-mode" id="menu-koth" data-mode="koth" hidden>
@@ -1319,7 +1372,7 @@
     </div>
   </div>
   <div id="ladder_pop" hidden>
-    <div class="ladder-card" role="dialog" aria-modal="true" aria-labelledby="ladder_title">
+    <div class="ladder-card" role="dialog" aria-modal="false" aria-labelledby="ladder_title">
       <div class="ladder-bar">
         <h3 id="ladder_title">Two Words: Move In</h3>
         <div class="ladder-season-meta">
@@ -1355,7 +1408,7 @@
     </div>
   </div>
   <div id="ladder_hist" hidden>
-    <div class="ladder-card" role="dialog" aria-modal="true" aria-labelledby="ladder_hist_name">
+    <div class="ladder-card" role="dialog" aria-modal="false" aria-labelledby="ladder_hist_name">
       <div class="ladder-bar">
         <div class="ladder-hist-side">
           <button type="button" id="ladder_hist_back" hidden aria-label="Back to recent matches">Back</button>
@@ -1369,9 +1422,14 @@
       <div class="ladder-body" id="ladder_hist_list"></div>
     </div>
   </div>
+  <button type="button" id="map-preview-zoom" hidden aria-label="Close map preview">
+    <img id="map-preview-zoom-img" alt="">
+  </button>
   <div id="ladder_go" hidden>
     <div class="ladder-card" role="dialog" aria-modal="true" aria-label="Ladder match">
       <div id="ladder_go_names" class="ladder-matchup" aria-hidden="true"></div>
+      <img id="ladder_go_preview" alt="" hidden>
+      <p id="ladder_go_map" hidden></p>
       <p id="ladder_go_count" class="is-wait">Connecting</p>
       <button type="button" class="btn" id="ladder_go_cancel">Cancel</button>
     </div>
@@ -1430,6 +1488,7 @@
                 <dt>Escape</dt><dd>Back out: help, placement, menus</dd>
                 <dt>Arrows</dt><dd>PAN Camera</dd>
                 <dt>M</dt><dd>Toggle mute</dd>
+                <dt>P</dt><dd>Pause or resume</dd>
                 <dt>O</dt><dd>Hide HUD for screenshots (hold for longer)</dd>
                 <dt>− / +</dt><dd>REPLAY Slower / faster speed</dd>
                 <dt>1–5</dt><dd>REPLAY & SPECTATE follow player</dd>

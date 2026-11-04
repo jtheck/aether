@@ -49,6 +49,7 @@ import {
 } from '../sim/ai.js';
 import { CMD } from '../sim/commands.js';
 import { villageVillagerProgress } from '../sim/buildingProduction.js';
+import { constructionRingFill } from '../sim/construction.js';
 import { decodeCelestial, decodeGarden } from '../sim/garden.js';
 import { loadGardenRef, resolveNextGardenRef } from './workshop.js';
 import { continuationGardenRef, loadPlayIndex } from './campaignPlay.js';
@@ -187,7 +188,17 @@ import { watchCornerStack } from './cornerStack.js';
 import { setupLobbyUi } from './lobbyUi.js';
 import { setupLadderDialog } from './ladderDialog.js';
 import { postHill } from './ladderApi.js';
-import { getLadderAssignment, noteHillBounties, noteLadderDisconnect, noteLadderResult } from './ladderSession.js';
+import {
+  beginLadderDisconnect,
+  cancelLadderDisconnect,
+  confirmLadderDisconnect,
+  getLadderAssignment,
+  noteHillBounties,
+  noteLadderDisconnect,
+  noteLadderForfeitBy,
+  noteLadderResult,
+  noteLadderSelfForfeit,
+} from './ladderSession.js';
 import { rememberLadderId } from './ladderId.js';
 import {
   buildReplayFile,
@@ -510,7 +521,7 @@ async function main() {
     adoptLiveNetworkConfig(cfg, ctx);
     syncPresentation(ctx, cfg);
     if (cfg.sweepToSpawn && !ctx.matchStory?.driving?.()) {
-      sweepCameraToArmy(ctx, cfg);
+      placeCameraAtArmy(ctx, cfg);
     }
   }
 
@@ -1579,6 +1590,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.placeAgoras?.(shownA);
     agoraOwnerPaintSig = '';
     renderer.placeBuildings?.(shownB);
+    syncBuildingHighlight(selectedBuildings.length ? selectedBuildings : null);
     syncRallyFlagMarkers(list);
     syncRadialMenuGate();
     if (actionBuildingIndex >= 0) {
@@ -1789,6 +1801,38 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     return { x: b.x, z: b.z, size };
   }
 
+  function ringSlotKey(x, z) {
+    return `${Math.round(x * 2)}:${Math.round(z * 2)}`;
+  }
+
+  /**
+   * @param {{ x: number, z: number, size?: string, progress?: number }[]} positions
+   * @param {Set<string>} seen
+   * @param {{ x: number, z: number, size?: string, progress?: number } | null} pos
+   */
+  function pushStructureRing(positions, seen, pos) {
+    if (!pos) return;
+    const key = ringSlotKey(pos.x, pos.z);
+    if (seen.has(key)) return;
+    seen.add(key);
+    positions.push(pos);
+  }
+
+  /** Unfinished sites keep a collar and light another chip as work lands. */
+  function appendConstructionRings(positions, seen) {
+    const list = fog.filterBuildings(livingBuildingList(session.buildings));
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i];
+      if (!b || b.built !== 0) continue;
+      const fill = constructionRingFill(b.buildProgress, b.buildTime);
+      if (!(fill > 0)) continue;
+      const pos = buildingCollarPos(b);
+      if (!pos) continue;
+      pos.progress = fill;
+      pushStructureRing(positions, seen, pos);
+    }
+  }
+
   /**
    * While ghost-placing a silo: attach-range rings on every live source
    * (camp / mine / farm), plus a matching ring on the ghost. Buildings the
@@ -1816,11 +1860,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       const ghostRim = sharedRimKey(attached.map((src) => rimKeyForBuildingType(src.type)));
       rings.push({ x: gx, z: gz, radius: SILO_ATTACH_RANGE_F, owner, rimKey: ghostRim });
       const collars = [];
+      const seen = new Set();
+      appendConstructionRings(collars, seen);
       const links = [];
       for (let i = 0; i < attached.length; i++) {
         const src = attached[i];
         const pos = buildingCollarPos(src);
-        if (pos) collars.push(pos);
+        if (pos) pushStructureRing(collars, seen, pos);
         links.push({
           x0: gx,
           z0: gz,
@@ -1832,7 +1878,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       renderer.setBuildingSelectionHighlight?.(collars.length ? collars : null);
       renderer.setWorkRadiusRing?.(rings.length ? rings : null, links);
     } else {
-      renderer.setBuildingSelectionHighlight?.(null);
+      const collars = [];
+      appendConstructionRings(collars, new Set());
+      renderer.setBuildingSelectionHighlight?.(collars.length ? collars : null);
       renderer.setWorkRadiusRing?.(rings.length ? rings : null);
     }
   }
@@ -2224,15 +2272,15 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       syncSiloPlacePreview();
       return;
     }
-    if (!selOrList) {
-      renderer.setBuildingSelectionHighlight?.(null);
-      return;
-    }
-    const list = Array.isArray(selOrList) ? selOrList : [selOrList];
     const positions = [];
-    for (let i = 0; i < list.length; i++) {
-      const pos = buildingWorldPos(list[i]);
-      if (pos) positions.push(pos);
+    const seen = new Set();
+    // Sites in progress own the collar, so a selected site shows chips, not a full ring.
+    appendConstructionRings(positions, seen);
+    if (selOrList) {
+      const list = Array.isArray(selOrList) ? selOrList : [selOrList];
+      for (let i = 0; i < list.length; i++) {
+        pushStructureRing(positions, seen, buildingWorldPos(list[i]));
+      }
     }
     renderer.setBuildingSelectionHighlight?.(positions.length ? positions : null);
   }
@@ -3742,6 +3790,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         ladderUi.refresh();
       },
       onRankedLeave: (userId) => noteLadderDisconnect(userId, rememberLadderId()),
+      onRankedDisconnect: (userId) => beginLadderDisconnect(userId, rememberLadderId(), session),
+      onRankedDisconnectClear: () => cancelLadderDisconnect(),
+      onRankedDisconnectLoss: (userId) => confirmLadderDisconnect(userId, rememberLadderId(), session),
+      onRankedForfeit: () => noteLadderSelfForfeit(rememberLadderId(), session),
+      onRankedForfeitBy: (userId) => noteLadderForfeitBy(userId, rememberLadderId(), session),
       onRankedPregameEnd: () => ladderUi.requeue?.(),
       onChat: () => chatHud.refresh(),
       onActiveChange: (active) => kothShard.setLobbyMatchHold?.(active),
@@ -3752,6 +3805,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         kothShard.setLobbyMatchHold?.(false);
         return restoreMenuSkirmishBackdrop(ctxRef.current);
       },
+      onEndMatch: () => {
+        if (!session) return;
+        session.pauseLockstep = true;
+        session.simAcc = 0;
+        renderer.setFxPaused?.(true);
+        inputApi?.setRole?.('spectator');
+      },
     });
     observerLobby = matchLobby;
     kothLobbyUi = setupKothLobby({
@@ -3759,10 +3819,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       gameLobby,
       matchLobby,
     });
+    let ladderQueued = false;
     lobbyUi = setupLobbyUi({
       gameLobby,
       matchLobby,
       isKothLive: () => kothShard.getLobbyPresence?.()?.browsing === false,
+      isLadderQueued: () => ladderQueued,
       getUserId: () => kothShard.getUserId(),
       onDismissSoloScore: () => restoreMenuSkirmishBackdrop(ctxRef.current),
       onCloseMenu: () => sideMenu.close(),
@@ -3775,6 +3837,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       getUserId: () => kothShard.getUserId(),
       onCloseMenu: () => sideMenu.close(),
       onKothPlace: placeLadderHill,
+      onQueueChange(on) {
+        ladderQueued = Boolean(on);
+        lobbyUi.refresh();
+      },
     });
     setInterval(() => {
       const assignment = getLadderAssignment();
@@ -5300,29 +5366,18 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
   if (cfg.mode === 'koth' && !localSolo) kothShard?.notifyLiveSessionReady?.();
 
   ctx.setInteractive?.(true);
-  if (!cfg.skipSplash) dismissBootSplash();
-  if (wantsMatchIntroSweep(cfg)) {
-    // Hold the neutral overview for a beat while the splash lifts, then sweep in.
-    // Guard against a newer match rebuild superseding this one during the wait.
-    const sweepGen = gen;
-    setTimeout(() => {
-      // Never override an active story cinematic (belt-and-suspenders on top of
-      // the adventure/story exclusion in wantsMatchIntroSweep).
-      if (sweepGen === liveConfigGeneration && !ctx.matchStory?.driving?.()) {
-        sweepCameraToArmy(ctx, cfg);
-      }
-    }, MATCH_INTRO_SWEEP_DELAY_MS);
+  // Snap behind the army before the splash lifts, so the first frame is already
+  // the match view. Story cinematics keep their own camera.
+  if (wantsMatchIntroSweep(cfg) && !ctx.matchStory?.driving?.()) {
+    placeCameraAtArmy(ctx, cfg);
   }
+  if (!cfg.skipSplash) dismissBootSplash();
   aetherSteam.notifyPlayReady();
 }
 
-/** Neutral overview holds for a beat, then the view glides in behind the army. */
-const MATCH_INTRO_SWEEP_DELAY_MS = 650;
-const MATCH_INTRO_SWEEP_MS = 1400;
-const MATCH_INTRO_SWEEP_RATE = 3.4;
 /** Slide the look-at this fraction from the home agora toward map center. */
 const MATCH_INTRO_LOOK_BIAS = 0.16;
-/** Gentle push-in from the reset radius as the view swings around. */
+/** Slightly inside the reset overview radius. */
 const MATCH_INTRO_ZOOM = 0.92;
 
 /** A fresh competitive table (koth / 1v1 / teams) - not skirmish backdrop, replay, or a story map. */
@@ -5336,13 +5391,13 @@ function wantsMatchIntroSweep(cfg) {
 }
 
 /**
- * Match intro: swing from the neutral overview to behind the local spawn
- * (home agora, or the KOTH pad under the army), looking across midfield.
- * No-op for spectators / empty seats - the neutral pose stays put.
+ * Match start: sit behind the local spawn (home agora, or the KOTH pad under
+ * the army), looking across midfield. Instant - the view must already be here
+ * when the splash lifts. No-op for spectators / empty seats.
  */
-function sweepCameraToArmy(ctx, cfg) {
+function placeCameraAtArmy(ctx, cfg) {
   const controller = ctx?.renderer?.cameraController;
-  if (!controller?.easePose) return;
+  if (!controller?.setPose) return;
   const localId = cfg?.localPlayerId ?? ctx?.localPlayerId;
   if (!(localId >= 0)) return;
   const home = spawnCameraHomeXZ(
@@ -5361,10 +5416,7 @@ function sweepCameraToArmy(ctx, cfg) {
   const tz = home.z * (1 - MATCH_INTRO_LOOK_BIAS);
   const pose = controller.getPose?.();
   const radius = Number.isFinite(pose?.radius) ? pose.radius * MATCH_INTRO_ZOOM : undefined;
-  controller.easePose(
-    { x: tx, z: tz, alpha, radius },
-    { ms: MATCH_INTRO_SWEEP_MS, rate: MATCH_INTRO_SWEEP_RATE },
-  );
+  controller.setPose({ x: tx, z: tz, alpha, radius });
 }
 
 /** Stinger on the first lockstep commit of a real match - not lobby / replay / sandbox. */

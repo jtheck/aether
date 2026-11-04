@@ -13,7 +13,9 @@ import {
 import { parseSnapshot } from './snapshot.js';
 import {
   boardPartition,
+  judgeLoss,
   judgeReports,
+  lossCanonicalOf,
   parseKothReport,
   parseReport,
   playerKey,
@@ -146,9 +148,178 @@ function matchEntries(report, rated, at) {
       rating: row.rating,
       matchId: report.matchId,
       ...(report.map ? { map: report.map } : null),
+      ...(report.loss === 'disconnect' ? { end: 'dc' } : report.loss === 'forfeit' ? { end: 'ff' } : null),
     };
   }
   return entries;
+}
+
+async function settleRatedMatch(store, { season, report, now }) {
+  const resultPk = resultPartition(report.board, report.matchId);
+  let rated = null;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const existing = await store.getItem(resultPk, SETTLED);
+    if (existing) {
+      rated = existing.deltas;
+      break;
+    }
+    const ratings = await loadRatings(store, season, report);
+    const next = rateMatch(report, ratings);
+    const playerPk = boardPartition(report.board, season);
+    const at = now();
+    const ids = report.players.map((player) => player.playerId);
+    const histories = await loadHistories(store, ids);
+    const result = await store.settle({
+      settled: {
+        pk: resultPk,
+        sk: SETTLED,
+        board: report.board,
+        season,
+        matchId: report.matchId,
+        tick: report.tick,
+        checksum: report.checksum,
+        winnerSeat: report.winnerSeat,
+        deltas: next.map((row) => ({
+          playerId: row.playerId,
+          rating: row.rating,
+          delta: row.delta,
+          games: row.games,
+          wins: row.wins,
+        })),
+        at,
+      },
+      players: next.map((row) => ({
+        pk: playerPk,
+        sk: playerKey(row.playerId),
+        playerId: row.playerId,
+        name: report.players.find((player) => player.playerId === row.playerId)?.name || '',
+        oldRating: row.oldRating,
+        oldGames: row.oldGames,
+        rating: row.rating,
+        games: row.games,
+        wins: row.wins,
+      })),
+      histories: historyPuts(matchEntries(report, next, at), histories),
+    });
+    if (result.ok || result.reason === 'exists') {
+      const settled = result.ok ? null : await store.getItem(resultPk, SETTLED);
+      rated = settled?.deltas ?? next.map((row) => ({
+        playerId: row.playerId,
+        rating: row.rating,
+        delta: row.delta,
+        games: row.games,
+        wins: row.wins,
+      }));
+      break;
+    }
+  }
+  if (!rated) return { statusCode: 500, body: { ok: false, error: 'could not settle' } };
+  return {
+    statusCode: 200,
+    publish: true,
+    playerIds: report.players.map((player) => player.playerId),
+    body: {
+      ok: true,
+      status: 'settled',
+      season,
+      board: report.board,
+      matchId: report.matchId,
+      ratings: rated,
+    },
+  };
+}
+
+function settledView(row) {
+  return {
+    ok: true,
+    status: 'settled',
+    season: row.season,
+    board: row.board,
+    matchId: row.matchId,
+    ratings: row.deltas,
+  };
+}
+
+async function handleLoss(store, body, { season, now, clock }) {
+  const board = body.board === '1v1' || body.board === 'teams' ? body.board : '';
+  const matchId = String(body.matchId ?? '').toLowerCase();
+  const reporter = String(body.playerId ?? '').toLowerCase();
+  if (!board || !isMatchId(matchId) || !isLadderPlayerId(reporter)) {
+    return { statusCode: 400, body: { ok: false, error: 'invalid loss' } };
+  }
+  const resultPk = resultPartition(board, matchId);
+  if (body.loss === 'cancel') {
+    await store.deleteItem(resultPk, `d#${reporter}`);
+    await store.deleteItem(resultPk, `f#${reporter}`);
+    return { statusCode: 200, body: { ok: true, status: 'cleared', season, board, matchId } };
+  }
+
+  const parsed = parseReport(body);
+  if (!parsed.ok) return { statusCode: 400, body: { ok: false, error: parsed.error } };
+  const report = parsed.report;
+  const lossCanonical = lossCanonicalOf(report);
+  const already = await store.getItem(resultPk, SETTLED);
+  if (already) {
+    if (Number.isInteger(already.winnerSeat) && already.winnerSeat !== report.winnerSeat) {
+      return {
+        statusCode: 409,
+        body: { ok: false, status: 'conflict', season, board, matchId },
+      };
+    }
+    return { statusCode: 200, publish: true, playerIds: (already.deltas || []).map((row) => row.playerId), body: settledView(already) };
+  }
+
+  const sk = body.loss === 'disconnect' ? `d#${report.playerId}` : `f#${report.playerId}`;
+  const put = await store.putReportIfAbsent({
+    pk: resultPk,
+    sk,
+    playerId: report.playerId,
+    canonical: lossCanonical,
+    lossCanonical,
+    winnerSeat: report.winnerSeat,
+    loss: body.loss,
+    atMs: clock(),
+    at: now(),
+  });
+  if (!put.created && put.existing?.lossCanonical !== lossCanonical) {
+    await recordIncident(store, {
+      season,
+      kind: 'discrepancy',
+      matchId,
+      reporterId: report.playerId,
+      subjectId: report.players.find((player) => player.playerId !== report.playerId)?.playerId,
+      detail: 'loss reports disagreed',
+      at: now(),
+    });
+    return { statusCode: 409, body: { ok: false, status: 'conflict', season, board, matchId } };
+  }
+
+  const stored = [
+    ...await store.listByPrefix(resultPk, 'f#'),
+    ...await store.listByPrefix(resultPk, 'd#'),
+  ];
+  const judgement = judgeLoss(
+    { loss: body.loss, lossCanonical },
+    stored,
+    { nowMs: clock(), confirm: body.loss === 'forfeit' || body.lossConfirm === true },
+  );
+  if (judgement.status === 'conflict') {
+    await recordIncident(store, {
+      season,
+      kind: 'discrepancy',
+      matchId,
+      reporterId: report.playerId,
+      subjectId: report.players.find((player) => player.playerId !== report.playerId)?.playerId,
+      detail: 'loss reports disagreed',
+      at: now(),
+    });
+    return { statusCode: 409, body: { ok: false, status: 'conflict', season, board, matchId } };
+  }
+  if (judgement.status !== 'ready') {
+    return { statusCode: 200, body: { ok: true, status: 'pending', season, board, matchId } };
+  }
+  report.loss = body.loss;
+  return settleRatedMatch(store, { season, report, now });
 }
 
 function kothEntries(report, rated, names, at) {
@@ -171,7 +342,7 @@ function kothEntries(report, rated, names, at) {
   return entries;
 }
 
-async function acceptSnapshot(store, parsed, now) {
+async function acceptSnapshot(store, parsed, now, loss) {
   const pk = `snap#${parsed.snapshot.matchId}`;
   await store.putItem({
     pk,
@@ -183,7 +354,8 @@ async function acceptSnapshot(store, parsed, now) {
   const rows = await store.listByPrefix(pk, 'p#');
   const agreed = rows.filter((row) => row.canonical === parsed.canonical);
   const reporters = new Set(agreed.map((row) => row.playerId));
-  if (reporters.size < 2) return { status: 200, body: { ok: true, status: 'pending' } };
+  const alone = loss === 'forfeit' || loss === 'disconnect';
+  if (!alone && reporters.size < 2) return { status: 200, body: { ok: true, status: 'pending' } };
   const doc = { ...parsed.snapshot, updatedAt: now() };
   await store.putObject(matchSnapshotKey(parsed.snapshot.matchId), JSON.stringify(doc));
   return { status: 200, body: { ok: true, status: 'saved' } };
@@ -412,7 +584,7 @@ export function createHandler({
     if (body?.action === 'snapshot') {
       const parsed = parseSnapshot(body);
       if (!parsed.ok) return respond(400, { ok: false, error: parsed.error }, origin, origins);
-      const saved = await acceptSnapshot(store, parsed, now);
+      const saved = await acceptSnapshot(store, parsed, now, body.loss);
       return respond(saved.status, saved.body, origin, origins);
     }
     if (raw.length > 8192) return respond(400, { ok: false, error: 'body too large' }, origin, origins);
@@ -466,6 +638,15 @@ export function createHandler({
       return respond(settled.statusCode, settled.body, origin, origins);
     }
 
+    if (body?.loss === 'cancel' || body?.loss === 'forfeit' || body?.loss === 'disconnect') {
+      const loss = await handleLoss(store, body, { season, now, clock });
+      if (loss.publish) {
+        await publish(store, { season: loss.body.season || season, envSeason: season, board: loss.body.board, now });
+        await publishRecent(store, loss.playerIds || [], now);
+      }
+      return respond(loss.statusCode, loss.body, origin, origins);
+    }
+
     const parsed = parseReport(body);
     if (!parsed.ok) return respond(400, { ok: false, error: parsed.error }, origin, origins);
     const { report, canonical } = parsed;
@@ -473,16 +654,18 @@ export function createHandler({
 
     const already = await store.getItem(resultPk, SETTLED);
     if (already) {
+      if (Number.isInteger(already.winnerSeat) && already.winnerSeat !== report.winnerSeat) {
+        return respond(409, {
+          ok: false,
+          status: 'conflict',
+          season,
+          board: report.board,
+          matchId: report.matchId,
+        }, origin, origins);
+      }
       await publish(store, { season: already.season, envSeason: season, board: report.board, now });
       await publishRecent(store, (already.deltas || []).map((row) => row.playerId), now);
-      return respond(200, {
-        ok: true,
-        status: 'settled',
-        season: already.season,
-        board: report.board,
-        matchId: report.matchId,
-        ratings: already.deltas,
-      }, origin, origins);
+      return respond(200, settledView(already), origin, origins);
     }
 
     const put = await store.putReportIfAbsent({
@@ -535,74 +718,11 @@ export function createHandler({
       }, origin, origins);
     }
 
-    let rated = null;
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const existing = await store.getItem(resultPk, SETTLED);
-      if (existing) {
-        rated = existing.deltas;
-        break;
-      }
-      const ratings = await loadRatings(store, season, report);
-      const next = rateMatch(report, ratings);
-      const playerPk = boardPartition(report.board, season);
-      const at = now();
-      const ids = report.players.map((player) => player.playerId);
-      const histories = await loadHistories(store, ids);
-      const result = await store.settle({
-        settled: {
-          pk: resultPk,
-          sk: SETTLED,
-          board: report.board,
-          season,
-          matchId: report.matchId,
-          tick: report.tick,
-          checksum: report.checksum,
-          winnerSeat: report.winnerSeat,
-          deltas: next.map((row) => ({
-            playerId: row.playerId,
-            rating: row.rating,
-            delta: row.delta,
-            games: row.games,
-            wins: row.wins,
-          })),
-          at,
-        },
-        players: next.map((row) => ({
-          pk: playerPk,
-          sk: playerKey(row.playerId),
-          playerId: row.playerId,
-          name: report.players.find((player) => player.playerId === row.playerId)?.name || '',
-          oldRating: row.oldRating,
-          oldGames: row.oldGames,
-          rating: row.rating,
-          games: row.games,
-          wins: row.wins,
-        })),
-        histories: historyPuts(matchEntries(report, next, at), histories),
-      });
-      if (result.ok || result.reason === 'exists') {
-        const settled = result.ok ? null : await store.getItem(resultPk, SETTLED);
-        rated = settled?.deltas ?? next.map((row) => ({
-          playerId: row.playerId,
-          rating: row.rating,
-          delta: row.delta,
-          games: row.games,
-          wins: row.wins,
-        }));
-        break;
-      }
+    const settled = await settleRatedMatch(store, { season, report, now });
+    if (settled.publish) {
+      await publish(store, { season, envSeason: season, board: report.board, now });
+      await publishRecent(store, settled.playerIds, now);
     }
-    if (!rated) return respond(500, { ok: false, error: 'could not settle' }, origin, origins);
-
-    await publish(store, { season, envSeason: season, board: report.board, now });
-    await publishRecent(store, report.players.map((player) => player.playerId), now);
-    return respond(200, {
-      ok: true,
-      status: 'settled',
-      season,
-      board: report.board,
-      matchId: report.matchId,
-      ratings: rated,
-    }, origin, origins);
+    return respond(settled.statusCode, settled.body, origin, origins);
   };
 }

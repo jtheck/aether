@@ -386,6 +386,22 @@ describe('menu focus helpers', () => {
     go.hidden = false;
     assert.equal(activeMenuRoot(withReplay), go);
   });
+
+  it('keeps the side menu when the ladder is open beside it', () => {
+    const side = el('div', { id: 'side_menu' });
+    side.classList.add('is-open');
+    const ladder = el('div', { id: 'ladder_pop', hidden: false });
+    const doc = {
+      getElementById(id) {
+        if (id === 'side_menu') return side;
+        if (id === 'ladder_pop') return ladder;
+        return null;
+      },
+    };
+    assert.equal(activeMenuRoot(doc), side);
+    side.classList.toggle('is-open', false);
+    assert.equal(activeMenuRoot(doc), ladder);
+  });
 });
 
 describe('playOrderIntent', () => {

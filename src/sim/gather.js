@@ -636,10 +636,15 @@ export function gatherSystem(w, field) {
     const cx = tileCenterX(tx);
     const cy = tileCenterY(tz);
     if (fx.dist2(w.px[i], w.py[i], cx, cy) <= nodeRangeSq(node.foot)) {
+      // Still finishing the walk. Stop this tick; the bite waits until a tick
+      // they began already standing, so the first wood is not taken on arrival.
+      const arriving =
+        w.vx[i] !== 0 || w.vy[i] !== 0 || (w.navWpCount[i] | 0) > 0 || (w.pathRequest[i] | 0) !== 0;
       setGatherAct(w, i, GATHER_ACT.CHOP);
       w.vx[i] = 0;
       w.vy[i] = 0;
       clearPath(w, i);
+      if (arriving) continue;
       if (w.gatherCd[i] > 0) {
         w.gatherCd[i]--;
       } else {

@@ -43,6 +43,7 @@ export function matchRecent(entry) {
   if (REPLAY_ID.test(replay)) row.replay = replay;
   const matchId = String(entry?.matchId ?? '').toLowerCase();
   if (MATCH_ID.test(matchId)) row.matchId = matchId;
+  if (entry?.end === 'dc' || entry?.end === 'ff') row.end = entry.end;
   return row;
 }
 

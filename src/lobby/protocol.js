@@ -12,6 +12,7 @@ export const MSG = {
   JOIN: 'lobby_join',
   SPECTATE: 'lobby_spectate',
   LEAVE: 'lobby_leave',
+  CONCEDE: 'lobby_concede',
   READY: 'lobby_ready',
   REPLAY: 'lobby_replay',
   SETTING: 'lobby_setting',

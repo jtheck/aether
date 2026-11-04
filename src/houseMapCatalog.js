@@ -17,6 +17,36 @@ export function houseMapGardenUrl(file) {
   return `/maps/${HOUSE_SKIRMISH_DIR}/${rel}`;
 }
 
+/** Shown for a generated field, and for any garden that has no forge shot. */
+export const DEFAULT_MAP_PREVIEW_URL = '/assets/images/default_map_preview.png';
+export const AUTO_MAP_PREVIEW_URL = DEFAULT_MAP_PREVIEW_URL;
+
+/** Forge `pv` as an image URL. Blank when the garden has no shot. */
+export function gardenPreviewDataUrl(raw) {
+  const text = String(raw || '').replace(/^data:image\/(?:png|jpeg);base64,/, '').replace(/\s/g, '');
+  if (!text || text.length > 1400000) return '';
+  if (text.startsWith('iVBORw0KGgo')) return `data:image/png;base64,${text}`;
+  if (text.startsWith('/9j/')) return `data:image/jpeg;base64,${text}`;
+  return '';
+}
+
+/** Shot stored for an official garden already read into the catalog. */
+export function officialPreviewUrl(chapter) {
+  const id = String(chapter || '');
+  if (!id || !catalog) return '';
+  for (const row of catalog.maps || []) {
+    if (houseMapGardenUrl(row.file) === id && row.preview) return row.preview;
+  }
+  return '';
+}
+
+/** Lobby picker: the garden's forge shot, or the default picture. */
+export function lobbyMapPreviewUrl(chapter, known = '') {
+  const shot = gardenPreviewDataUrl(known) || officialPreviewUrl(chapter);
+  if (shot) return shot;
+  return DEFAULT_MAP_PREVIEW_URL;
+}
+
 /** 1v1 lists every map with two or more starts. Teams lists more than two. */
 export function spawnsFitLobby(spawns, modeId) {
   const n = Number(spawns) | 0;
@@ -53,12 +83,14 @@ export function lobbyOptionsFromHouseIndex(index, modeId) {
         spawns: Number(row?.spawns) | 0,
       };
     if (!fields || !spawnsFitLobby(fields.spawns, modeId)) continue;
+    const preview = gardenPreviewDataUrl(row?.preview);
     out.push({
       id,
       name: fields.name || file,
       group: 'Official',
       mapType: 'skirmish',
       spawns: fields.spawns,
+      ...(preview ? { preview } : {}),
     });
   }
   out.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
@@ -103,7 +135,12 @@ async function readSkirmishCatalog() {
       const gardenRes = await fetch(url, { cache: 'no-store' });
       if (!gardenRes.ok) return;
       const data = await gardenRes.json();
-      maps.push({ file, mapType: data?.mt, ...gardenLobbyFields(data, file) });
+      maps.push({
+        file,
+        mapType: data?.mt,
+        ...gardenLobbyFields(data, file),
+        preview: gardenPreviewDataUrl(data?.pv),
+      });
     } catch {
       /* skip a garden that is not readable */
     }

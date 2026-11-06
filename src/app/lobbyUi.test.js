@@ -470,6 +470,42 @@ describe('custom map picker', () => {
 });
 
 describe('match lobby overlay', () => {
+  it('keeps the quiet countdown, then hides the lobby for the match card', () => {
+    const dom = lobbyDom();
+    const restore = dom.install();
+    try {
+      const state = {
+        ...waitingState('onevsone'),
+        phase: 'countdown',
+        playerCount: 2,
+      };
+      let ms = 5000;
+      const ui = setupLobbyUi({
+        gameLobby: { listLobbies: () => [], listen() {}, unlisten() {} },
+        matchLobby: {
+          isActive: () => true,
+          getState: () => state,
+          canStart: () => true,
+          startBlockReason: () => '',
+          countdownMs: () => ms,
+        },
+        getUserId: () => 'u1',
+      });
+      assert.equal(dom.overlay.hidden, false);
+      assert.equal(dom.note.textContent, 'Starting in 2');
+      ms = 2000;
+      ui.refresh();
+      assert.equal(dom.overlay.hidden, true);
+      assert.equal(dom.sidebar.hidden, true);
+      state.mode = 'adventure';
+      ui.refresh();
+      assert.equal(dom.overlay.hidden, false);
+      assert.equal(dom.note.textContent, 'Starting in 2');
+    } finally {
+      restore();
+    }
+  });
+
   it('closes the side menu when a regular lobby opens', () => {
     const dom = lobbyDom();
     const restore = dom.install();
@@ -568,7 +604,7 @@ describe('match lobby overlay', () => {
       assert.equal(dom.title.textContent, 'Aria is lagging');
       assert.equal(dom.note.textContent, 'Aria is lagging');
       const statuses = dom.seats.querySelectorAll('.lobby-seat-status').map((el) => el.textContent);
-      assert.deepEqual(statuses, ['Ready', 'lagging']);
+      assert.deepEqual(statuses, ['Host', 'lagging']);
     } finally {
       restore();
     }
@@ -616,6 +652,10 @@ describe('match lobby overlay', () => {
       assert.equal(dom.overlay.hidden, false);
       assert.equal(dom.overlay.className.includes('is-parked'), false);
       assert.equal(dom.min.textContent, '−');
+      assert.deepEqual(
+        [...dom.seats.querySelectorAll('.lobby-seat-status')].map((el) => el.textContent),
+        ['Host'],
+      );
       dom.min.click();
       assert.equal(dom.overlay.className.includes('is-parked'), true);
       assert.equal(dom.min.getAttribute('aria-label'), 'Expand lobby');
@@ -700,12 +740,13 @@ describe('match lobby overlay', () => {
     }
   });
 
-  it('shows concede during a normal match and keeps the room', () => {
+  it('shows forfeit during a normal match and keeps the room', () => {
     const dom = lobbyDom();
     const restore = dom.install();
     try {
       let conceded = 0;
       let left = 0;
+      let forfeited = false;
       const state = {
         ...waitingState('onevsone'),
         phase: 'playing',
@@ -726,19 +767,24 @@ describe('match lobby overlay', () => {
           startBlockReason: () => '',
           countdownMs: () => 0,
           lockstepStalled: () => false,
-          concede() { conceded += 1; state.phase = 'waiting'; },
+          hasForfeited: () => forfeited,
+          concede() { conceded += 1; forfeited = true; },
           leaveRoom() { left += 1; },
         },
         getUserId: () => 'u1',
       });
       assert.equal(dom.sideConcede.hidden, false);
       assert.equal(dom.panelConcede.hidden, false);
+      assert.equal(dom.sideConcede.textContent, 'Forfeit');
+      assert.equal(dom.panelConcede.textContent, 'Forfeit');
       assert.equal(dom.sideLeave.textContent, 'Leave lobby');
       dom.sideConcede.click();
       assert.equal(conceded, 1);
       assert.equal(left, 0);
+      assert.equal(state.phase, 'playing');
       ui.refresh();
       assert.equal(dom.sideConcede.hidden, true);
+      assert.equal(dom.panelConcede.hidden, true);
     } finally {
       restore();
     }

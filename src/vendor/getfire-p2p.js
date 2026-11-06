@@ -418,6 +418,7 @@
 
       let connectionTimeout;
       peerData.markConnected = () => {
+        if (findPeerEntry(peerId)[1] !== peerData) return;
         if (peerData.state === 'connected') return;
         clearTimeout(connectionTimeout);
         peerData.state = 'connected';
@@ -439,6 +440,7 @@
 
       // Monitor ICE connection for TURN detection
       peerConnection.oniceconnectionstatechange = () => {
+        if (findPeerEntry(peerId)[1] !== peerData) return;
         const ice = peerConnection.iceConnectionState;
         p2pLog('ice state', { peer: peerId?.slice(-8), ice });
         if (ice === 'connected' || ice === 'completed') {
@@ -450,6 +452,7 @@
       };
 
       connectionTimeout = setTimeout(() => {
+        if (findPeerEntry(peerId)[1] !== peerData) return;
         if (peerData.state !== 'connected') {
           p2pLog('connect timeout', {
             peer: peerId?.slice(-8),
@@ -462,6 +465,9 @@
       }, ICE_CONNECT_TIMEOUT_MS);
 
       peerConnection.onconnectionstatechange = () => {
+        // A rejoin replaces this entry. The old socket must not disconnect or
+        // delete the new one when its close event lands late.
+        if (findPeerEntry(peerId)[1] !== peerData) return;
         const conn = peerConnection.connectionState;
         p2pLog('conn state', { peer: peerId?.slice(-8), conn });
         if (conn === 'connected') {
@@ -472,6 +478,7 @@
           if (conn === 'failed') onPeerLinkFailed(peerId);
           onPeerDisconnected(peerId);
           setTimeout(() => {
+            if (findPeerEntry(peerId)[1] !== peerData) return;
             cleanupPeer(peerId);
           }, 500);
         }

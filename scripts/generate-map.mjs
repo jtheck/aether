@@ -383,34 +383,23 @@ for (const map of MAPS) {
   written.push({ ...map, bytes: JSON.stringify(data).length, trees: stats.trees });
 }
 
-function indexRow(file, data) {
-  return {
-    file,
-    name: String(data.n || file.replace(/\.garden$/i, '')).replace(/\s+/g, ' ').trim(),
-    spawns: Array.isArray(data.g) ? data.g.length : 0,
-  };
-}
-
-function writeIndex(dir, rows) {
-  const index = {
-    maps: rows.map((row) => ({ file: row.file, name: row.name, spawns: row.spawns | 0 })),
-  };
-  writeFileSync(join(mapsRoot, dir, 'index.json'), `${JSON.stringify(index, null, 2)}\n`);
+function writeIndex(dir, files) {
+  const maps = [...new Set(files)].sort((a, b) => a.localeCompare(b)).map((file) => ({ file }));
+  writeFileSync(join(mapsRoot, dir, 'index.json'), `${JSON.stringify({ maps }, null, 2)}\n`);
 }
 
 function handAuthored(dir) {
   const generated = new Set(MAPS.map((m) => m.file));
-  const rows = [];
+  const files = [];
   for (const file of readdirSync(join(mapsRoot, dir))) {
     if (!file.endsWith('.garden') || generated.has(file)) continue;
-    const data = JSON.parse(readFileSync(join(mapsRoot, dir, file), 'utf8'));
-    rows.push(indexRow(file, data));
+    files.push(file);
   }
-  return rows;
+  return files;
 }
 
 writeIndex(SKIRMISH_DIR, [
-  ...written.map((row) => indexRow(row.file, JSON.parse(readFileSync(join(mapsRoot, SKIRMISH_DIR, row.file), 'utf8')))),
+  ...written.map((row) => row.file),
   ...handAuthored(SKIRMISH_DIR),
 ]);
 

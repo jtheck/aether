@@ -4,6 +4,7 @@ import { sameUserId } from '../lobby/ids.js';
 import { rosterStatusLabel } from './viewFollow.js';
 import { observerSheetIndexFromCode } from './observerData.js';
 import { cleanMapName, FIELD_SIZES, MODE_IDS, getMode, mapTypeFitsLobby, selectableAdventureChapters } from '../lobby/modes.js';
+import { matchCardOpen, quietCountdownMs } from '../lobby/protocol.js';
 import { aetherSteam } from './steam.js';
 import { stashSessionGarden, writeCampaignPack } from './gardenSession.js';
 import { formatWorkshopRef, isWorkshopRef, parseWorkshopRef } from './workshop.js';
@@ -207,6 +208,7 @@ function paintMoves(row, userId, hostMoves) {
 
 function paintSeats(container, seats, {
   teams, localId, compact, spectators, hostMoves, followUserId, kingOwner = -1, laggingIds = null, ratings = false,
+  hostId = null,
 }) {
   if (!container) return;
   const groups = teams
@@ -273,7 +275,8 @@ function paintSeats(container, seats, {
           && laggingIds.has(seat.index),
         );
         const rating = ratings && !lagging && !seat.watching ? ladderRating(seat.userId) : '';
-        setText(statusEl, rating || rosterStatusLabel({ ...seat, lagging }));
+        const host = Boolean(hostId) && !seat.watching && sameUserId(seat.userId, hostId);
+        setText(statusEl, rating || rosterStatusLabel({ ...seat, lagging, host }));
         const canFollow = Boolean(seat.replay) && !sameUserId(seat.userId, localId);
         const following = canFollow && followUserId && sameUserId(seat.userId, followUserId);
         if (canFollow) row.dataset.replayUser = seat.userId;
@@ -682,6 +685,8 @@ export function setupLobbyUi({
     const live = kothLive();
     const active = matchLobby.isActive();
     const state = active ? matchLobby.getState() : null;
+    const fullMs = matchLobby.countdownMs?.() ?? 0;
+    const cardOpen = matchCardOpen(state, fullMs);
     const open = [...drawers].map(([m, ui]) => `${m}:${ui.toggle?.getAttribute('aria-expanded')}`).join();
     const lists = MODE_IDS.map((m) => gameLobby.listLobbies(m).map((l) => `${l.roomId}:${l.playerCount}`).join(',')).join('|');
     const matchOverOn = Boolean(matchOverEl) && !matchOverEl.hidden;
@@ -690,7 +695,8 @@ export function setupLobbyUi({
       state?.phase, state?.playerCount, state?.countdownEndsAt,
       Boolean(matchLobby.lockstepStalled?.()),
       (matchLobby.lockstepWaiters?.() ?? []).join(','),
-      Math.ceil((matchLobby.countdownMs?.() ?? 0) / 200),
+      Math.ceil(fullMs / 200),
+      cardOpen,
       state?.settings?.fieldSize, state?.settings?.seed, state?.settings?.chapter,
       state?.settings?.mapName, state?.settings?.allowSpectators,
       state?.loadingMap,
@@ -703,6 +709,7 @@ export function setupLobbyUi({
       JSON.stringify(state?.spectators ?? []),
       state?.watching,
       state?.ranked,
+      Boolean(matchLobby.hasForfeited?.()),
       overlayParked, matchOverOn,
       Boolean(isLadderQueued?.()),
     ].join('/');
@@ -738,9 +745,11 @@ export function setupLobbyUi({
     const stallTitle = formatLockstepStallTitle(namesForLockstepWaiters(state?.seats, waiterIds))
       || 'Waiting for players…';
     const ranked = Boolean(state?.ranked);
-    const showOverlay = ranked
-      ? matchOverOn
-      : (active && (!inPlay || stalled)) || matchOverOn;
+    const showOverlay = cardOpen
+      ? false
+      : ranked
+        ? matchOverOn
+        : (active && (!inPlay || stalled)) || matchOverOn;
     // No room: the score card stands alone. A fresh lobby must not wear it.
     const scoreOnly = Boolean(matchOverOn && !active);
     overlay?.classList.toggle('is-ranked-result', Boolean((ranked && matchOverOn) || scoreOnly));
@@ -748,7 +757,7 @@ export function setupLobbyUi({
     if (overlayOpening) overlayParked = false;
     overlay?.classList.toggle('is-lag', Boolean(showOverlay && inPlay && stalled));
     overlay?.classList.toggle('is-parked', Boolean(showOverlay && overlayParked && !(inPlay && stalled)));
-    setHidden(sidebar, !active);
+    setHidden(sidebar, !active || cardOpen);
     setHidden(overlay, !showOverlay);
     setHidden(overlayPanel, !active && !scoreOnly);
     if (scoreOnly) setText(panelLeave, 'Play again');
@@ -765,10 +774,11 @@ export function setupLobbyUi({
     const status = formatMatchStatus(state);
     const localId = getUserId?.() ?? null;
     const mySeat = state.seats.find((s) => sameUserId(s.userId, localId));
+    const quietMs = quietCountdownMs(state, fullMs);
     const startLabel = formatStartLabel(
       matchLobby.canStart(),
       matchLobby.startBlockReason(),
-      matchLobby.countdownMs(),
+      quietMs,
       state.phase,
     );
     const canClickStart = state.hosting && matchLobby.canStart() && state.phase === 'waiting';
@@ -781,11 +791,12 @@ export function setupLobbyUi({
     const hostMoves = state.hosting && (state.phase === 'waiting' || state.phase === 'countdown');
     const followUserId = getFollowUser?.() ?? null;
     const kingOwner = state.mode === 'koth' ? (getKing?.() ?? -1) : -1;
+    const hostId = state.hostId || (state.hosting ? localId : null);
     paintSeats(sideSeats, state.seats, {
-      teams: Boolean(mode?.teams), localId, compact: true, spectators: state.spectators, hostMoves, followUserId, kingOwner, laggingIds, ratings: ranked,
+      teams: Boolean(mode?.teams), localId, compact: true, spectators: state.spectators, hostMoves, followUserId, kingOwner, laggingIds, ratings: ranked, hostId,
     });
     paintSeats(panelSeats, state.seats, {
-      teams: Boolean(mode?.teams), localId, compact: false, spectators: state.spectators, hostMoves, followUserId, kingOwner, laggingIds, ratings: ranked,
+      teams: Boolean(mode?.teams), localId, compact: false, spectators: state.spectators, hostMoves, followUserId, kingOwner, laggingIds, ratings: ranked, hostId,
     });
 
     setHidden(sideReady, ranked || state.hosting || state.watching);
@@ -810,16 +821,20 @@ export function setupLobbyUi({
       setText(panelStart, startLabel);
     }
     if (sideLeave) setText(sideLeave, ranked && !state.watching ? 'Forfeit' : 'Leave lobby');
-    const canConcede = inPlay && !ranked && !state.watching;
+    const canConcede = inPlay && !ranked && !state.watching && !matchLobby.hasForfeited?.();
     setHidden(sideConcede, !canConcede);
     setHidden(panelConcede, !canConcede);
+    if (canConcede) {
+      setText(sideConcede, 'Forfeit');
+      setText(panelConcede, 'Forfeit');
+    }
 
     const note = inPlay && stalled
       ? stallTitle
       : inPlay
       ? 'Match running.'
       : state.phase === 'countdown' || state.phase === 'starting'
-        ? formatCountdown(matchLobby.countdownMs())
+        ? formatCountdown(quietMs)
         : matchOverOn
           ? (state.hosting ? 'Ready up to play again.' : 'Ready up for another round.')
           : (state.hosting ? 'Ready up, then start.' : 'Waiting for host.');
@@ -954,7 +969,9 @@ export function setupLobbyUi({
   panelReady?.addEventListener('click', toggleReady);
   sideStart?.addEventListener('click', () => { matchLobby.requestStart(); refresh(); });
   panelStart?.addEventListener('click', () => { matchLobby.requestStart(); refresh(); });
-  function leaveOrDismissSoloScore() {
+  function leaveOrDismissSoloScore(e) {
+    // Click focuses the button. Drop it before the menu can be marked aria-hidden.
+    e?.currentTarget?.blur?.();
     const scoreOnly = Boolean(matchOverEl && !matchOverEl.hidden && !matchLobby.isActive());
     if (scoreOnly) {
       void Promise.resolve(onDismissSoloScore?.()).then(() => refresh());

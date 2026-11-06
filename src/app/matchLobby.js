@@ -6,7 +6,7 @@ import { ladderMatchDeal } from '../lobby/ladderMap.js';
 import { lobbyOptionsFromHouseIndex, peekSkirmishCatalog, skirmishCatalogInflight } from '../houseMapCatalog.js';
 import {
   ANNOUNCE_MS,
-  COUNTDOWN_MS,
+  lobbyStartMs,
   LOBBY_PROTOCOL_VERSION,
   MSG,
   generateRoomId,
@@ -69,7 +69,6 @@ function unrefTimer(timer) {
  * @param {(active: boolean) => void} [opts.onActiveChange]
  * @param {(cfg: object) => void | Promise<void>} [opts.onStartMatch]
  * @param {() => void} [opts.onLeaveMatch]
- * @param {() => void} [opts.onEndMatch] - concede froze the table; the room stays open
  * @param {() => void} [opts.onRankedPregameEnd] - opponent left before the match; requeue
  */
 export function createMatchLobby({
@@ -86,7 +85,6 @@ export function createMatchLobby({
   onActiveChange,
   onStartMatch,
   onLeaveMatch,
-  onEndMatch,
   onRankedLeave,
   onRankedDisconnect,
   onRankedDisconnectClear,
@@ -125,6 +123,8 @@ export function createMatchLobby({
   const peerUser = new Map();
   /** Player ids already forfeited this room. A drop during load still eliminates on attach. */
   const forfeited = new Set();
+  /** Both clients hold the sim. A one-sided freeze stops tick confirms and looks like a drop. */
+  let matchPaused = false;
   /** Ranked link drops wait out the grace before they become a loss. userId -> since. */
   const linkGone = new Map();
   let stallClaimed = false;
@@ -144,6 +144,13 @@ export function createMatchLobby({
   /** Raw garden JSON embedded on START so web guests can play Workshop maps. */
   let startGarden = null;
   let startBusy = false;
+  /** Host roster generation. A delayed announce from before a rejoin must not clobber the new seat. */
+  let rosterRev = 0;
+  /** Stable for this page. A refreshed client has a new token, so its join replaces the old visit. */
+  const clientToken = generateRoomId();
+  let presenceSeq = 0;
+  /** userId -> { token, seq } of the latest membership message accepted. */
+  const presenceSeen = new Map();
 
   function emit() {
     onChange?.();
@@ -191,6 +198,8 @@ export function createMatchLobby({
       ranked,
       garden: startGarden,
       loadingMap: startBusy,
+      rev: rosterRev,
+      epoch: lockstepEpoch,
     };
   }
 
@@ -215,7 +224,67 @@ export function createMatchLobby({
       seats: snap.seats,
       phase,
       countdownEndsAt: snap.countdownEndsAt,
+      rev: rosterRev,
+      epoch: lockstepEpoch,
     };
+  }
+
+  function bumpRev() {
+    if (hosting) rosterRev += 1;
+  }
+
+  /** One roster generation, then the data snapshot and the browse announce. */
+  function publishRoom() {
+    bumpRev();
+    sendData(snapshot());
+    startAnnounce();
+    emit();
+  }
+
+  function membership(msg) {
+    presenceSeq += 1;
+    return { ...msg, client: clientToken, seq: presenceSeq };
+  }
+
+  /**
+   * Ignore a membership message from an earlier visit.
+   * A claim (join / spectate) from a new page replaces the stored visit.
+   * A leave from that old page must not undo the new one.
+   */
+  function admit(msg, claim) {
+    const userId = senderUserId(msg);
+    if (!userId || sameUserId(userId, localId())) return false;
+    const token = typeof msg.client === 'string' && msg.client ? msg.client : '';
+    const seq = Number(msg.seq);
+    if (!token || !Number.isFinite(seq)) return true;
+    const prev = presenceSeen.get(userId);
+    if (prev && prev.token === token && seq < prev.seq) return false;
+    if (prev && prev.token !== token && !claim) return false;
+    if (!prev || prev.token !== token || seq > prev.seq) {
+      presenceSeen.set(userId, { token, seq });
+    }
+    return true;
+  }
+
+  function noteEpoch(msg) {
+    if (msg?.epoch == null) return;
+    const n = msg.epoch | 0;
+    if (n > lockstepEpoch) lockstepEpoch = n;
+  }
+
+  function noteRev(msg) {
+    const rev = Number(msg?.rev);
+    if (!Number.isFinite(rev)) return true;
+    if (rev < rosterRev) return false;
+    rosterRev = rev;
+    return true;
+  }
+
+  function forgetPeerUser(userId) {
+    if (!userId) return;
+    for (const [peerId, mapped] of peerUser) {
+      if (sameUserId(mapped, userId)) peerUser.delete(peerId);
+    }
   }
 
   function stamp(msg) {
@@ -401,6 +470,7 @@ export function createMatchLobby({
     };
     dialSeatedPeers();
     if (session.role === 'player') kickstartLockstep();
+    if (matchPaused) holdSimPaused();
     for (const playerId of forfeited) submitForfeit(playerId, 0);
   }
 
@@ -436,28 +506,35 @@ export function createMatchLobby({
 
   function presenceHello() {
     const me = profile();
-    if (watching) return { type: MSG.SPECTATE, name: me.name, color: me.color };
-    return {
+    if (watching) return membership({ type: MSG.SPECTATE, name: me.name, color: me.color });
+    return membership({
       type: MSG.JOIN,
       name: me.name,
       color: me.color,
       dlc: me.dlc,
       skins: me.skins,
       ready: Boolean(seatOf(seats, me.userId)?.ready),
-    };
+    });
   }
 
   /** Frozen board stays up; room goes back to ready-up and type-channel browse. */
   function endMatchStay() {
+    matchPaused = false;
+    forfeited.clear();
+    linkGone.clear();
+    if (stallClaimed) onRankedDisconnectClear?.();
+    stallClaimed = false;
+    if (session) {
+      session.playPaused = false;
+      session.pauseLockstep = false;
+    }
     detachSession();
     clearCountdown();
     lockstepEpoch = (lockstepEpoch + 1) | 0;
     phase = 'waiting';
     unreadyGuests();
-    if (hosting) {
-      startAnnounce();
-      sendData(snapshot());
-    } else {
+    if (hosting) publishRoom();
+    else {
       const hello = presenceHello();
       sendType(hello);
       sendData(hello);
@@ -471,25 +548,40 @@ export function createMatchLobby({
     return endMatchStay();
   }
 
-  /** End the current match and keep the room. Ranked games use forfeit instead. */
+  /** Resign this seat. The match plays on to the score card. Ranked leave is the ladder forfeit. */
   function concede() {
     if (ranked || watching) return false;
     if (phase !== 'playing') return false;
-    const payload = { type: MSG.CONCEDE };
+    if (session?.kothMatchOver) return false;
+    const seat = seatOf(seats, localId());
+    const playerId = session?.localPlayerId ?? seat?.index ?? -1;
+    if (playerId < 0 || forfeited.has(playerId)) return false;
+    const tick = (session?.confirmedTick ?? 0) + 2;
+    const payload = { type: MSG.CONCEDE, playerId, tick };
     sendType(payload);
     sendData(payload);
-    return finishConcede();
+    queueForfeit(playerId, tick);
+    emit();
+    return true;
   }
 
-  function acceptConcede() {
-    if (ranked || phase !== 'playing') return false;
-    return finishConcede();
+  function acceptConcede(msg) {
+    if (ranked || (phase !== 'playing' && phase !== 'starting')) return false;
+    const userId = senderUserId(msg);
+    if (!userId || sameUserId(userId, localId())) return false;
+    const seat = seatOf(seats, userId);
+    if (!seat || seat.kind !== 'human') return false;
+    const playerId = seat.index | 0;
+    if (msg?.playerId != null && (msg.playerId | 0) !== playerId) return false;
+    queueForfeit(playerId, msg?.tick | 0);
+    emit();
+    return true;
   }
 
-  function finishConcede() {
-    const ok = endMatchStay();
-    if (ok) onEndMatch?.();
-    return ok;
+  function localHasForfeited() {
+    const seat = seatOf(seats, localId());
+    const playerId = session?.localPlayerId ?? seat?.index ?? -1;
+    return playerId >= 0 && forfeited.has(playerId);
   }
 
   function finishCountdown() {
@@ -539,6 +631,8 @@ export function createMatchLobby({
   function applyState(msg) {
     if (!msg || (msg.roomId && roomId && msg.roomId !== roomId)) return;
     if (phase === 'starting' || phase === 'playing') return;
+    if (!noteRev(msg)) return;
+    noteEpoch(msg);
     if (msg.seats) seats = cloneRoster(msg.seats);
     if (Array.isArray(msg.spectators)) {
       spectators = msg.spectators.map((s) => ({ ...s }));
@@ -617,6 +711,11 @@ export function createMatchLobby({
   }
 
   function resetRoom() {
+    if (session && (matchPaused || session.playPaused)) {
+      session.playPaused = false;
+      session.pauseLockstep = false;
+    }
+    matchPaused = false;
     detachSession();
     stopAnnounce();
     stopRankedHello();
@@ -639,6 +738,8 @@ export function createMatchLobby({
     peerUser.clear();
     forfeited.clear();
     linkGone.clear();
+    presenceSeen.clear();
+    rosterRev = 0;
     if (stallClaimed) onRankedDisconnectClear?.();
     stallClaimed = false;
     rankedWaitSince = 0;
@@ -673,7 +774,10 @@ export function createMatchLobby({
     seats = createRoster(nextMode);
     const mine = rankedRoster?.find((row) => sameUserId(row.userId, me.userId));
     seats = takeSeat(seats, { ...me, ready: true }, mine?.seat);
+    rosterRev = 0;
+    lockstepEpoch = 0;
     joinMatchChannel();
+    bumpRev();
     startAnnounce();
     emit();
     return true;
@@ -698,6 +802,8 @@ export function createMatchLobby({
     if (opts.seed != null) settings.seed = (Number(opts.seed) || 0) >>> 0;
     hostFromHint = from ?? null;
     hostId = from ?? null;
+    rosterRev = 0;
+    lockstepEpoch = 0;
     seats = createRoster(nextMode);
     spectators = [];
     if (spectate) spectators = addSpectator([], me).spectators;
@@ -735,21 +841,81 @@ export function createMatchLobby({
     if (phase !== 'playing' && phase !== 'starting') return false;
     if (spectatorOf(spectators, userId)) {
       spectators = removeSpectator(spectators, userId);
+      forgetPeerUser(userId);
       emit();
       return true;
     }
     const seat = seatOf(seats, userId);
     if (!seat || seat.kind !== 'human') return false;
     const playerId = msg.playerId != null ? (msg.playerId | 0) : seat.index;
+    forgetPeerUser(userId);
     seats = releaseSeat(seats, userId);
     queueForfeit(playerId, msg.tick | 0);
     emit();
     return true;
   }
 
+  function holdSimPaused() {
+    if (!session) return;
+    session.playPaused = true;
+    session.pauseLockstep = true;
+    session.simAcc = 0;
+  }
+
+  function applyMatchPause(on) {
+    const next = Boolean(on);
+    const changed = matchPaused !== next
+      || Boolean(session?.playPaused) !== next
+      || Boolean(session?.pauseLockstep) !== next;
+    matchPaused = next;
+    if (session) {
+      session.playPaused = next;
+      session.pauseLockstep = next;
+      if (next) session.simAcc = 0;
+    }
+    if (!next && changed && lockstepOn && session) {
+      sendTickConfirm((session.confirmedTick ?? 0) + 1);
+    }
+    if (changed) emit();
+    return changed;
+  }
+
+  /** Drop a player pause so a forfeit tick can commit. Peers unpause with us. */
+  function releaseMatchPause() {
+    if (!matchPaused && !session?.playPaused) return;
+    applyMatchPause(false);
+    const payload = { type: MSG.PAUSE, paused: false };
+    sendType(payload);
+    sendData(payload);
+  }
+
+  /**
+   * P while a match is on. Spectators keep simulating.
+   * Returns true when this room owns the key, including a no-op for spectators.
+   */
+  function toggleMatchPause() {
+    if (phase !== 'playing' || !session) return false;
+    if (watching || session.role === 'spectator') return true;
+    const next = !matchPaused;
+    applyMatchPause(next);
+    const payload = { type: MSG.PAUSE, paused: next };
+    sendType(payload);
+    sendData(payload);
+    return true;
+  }
+
+  function acceptPause(msg) {
+    if (phase !== 'playing' && phase !== 'starting') return false;
+    const userId = senderUserId(msg);
+    if (!userId || sameUserId(userId, localId())) return false;
+    applyMatchPause(Boolean(msg.paused));
+    return true;
+  }
+
   function queueForfeit(playerId, tickHint) {
     const id = playerId | 0;
     if (id < 0 || forfeited.has(id)) return;
+    releaseMatchPause();
     forfeited.add(id);
     submitForfeit(id, tickHint);
   }
@@ -758,7 +924,7 @@ export function createMatchLobby({
     if (!session) return;
     const id = playerId | 0;
     // Dropping the local seat first hides the eliminate from the next tick,
-    // so a concede never reaches the score card.
+    // so your own forfeit never reaches the score card.
     if (id !== (session.localPlayerId ?? -1)) session.removeHumanPlayer?.(id);
     const confirmed = session.confirmedTick ?? 0;
     const hinted = tickHint | 0;
@@ -817,6 +983,13 @@ export function createMatchLobby({
 
   function forfeitStalledPlayers() {
     if (phase !== 'playing' || !lockstepOn || !session) return;
+    if (matchPaused || session.pauseLockstep || session.playPaused) {
+      if (stallClaimed) {
+        stallClaimed = false;
+        if (linkGone.size === 0) onRankedDisconnectClear?.();
+      }
+      return;
+    }
     const blocked = session.lockstepBlockedMs?.() ?? 0;
     const waiters = session.lockstepWaiters?.() ?? [];
     // Tick 0 is the opening handshake. Missing confirms there are the channel
@@ -884,7 +1057,7 @@ export function createMatchLobby({
         if (playerId >= 0 && !forfeited.has(playerId)) {
           onRankedForfeit?.();
           const tick = (session?.confirmedTick ?? 0) + 2;
-          const payload = { type: MSG.LEAVE, playerId, tick };
+          const payload = membership({ type: MSG.LEAVE, playerId, tick });
           sendType(payload);
           sendData(payload);
           queueForfeit(playerId, tick);
@@ -893,15 +1066,16 @@ export function createMatchLobby({
       }
       if (!(ranked && forfeited.has(playerId | 0))) {
         const tick = (session?.confirmedTick ?? 0) + 2;
-        const payload = { type: MSG.LEAVE, playerId, tick };
+        const payload = membership({ type: MSG.LEAVE, playerId, tick });
         sendType(payload);
         sendData(payload);
       }
     } else if (hosting) {
       gameLobby?.announce?.(announcePayload(MSG.CLOSED));
     } else {
-      sendType({ type: MSG.LEAVE });
-      sendData({ type: MSG.LEAVE });
+      const payload = membership({ type: MSG.LEAVE });
+      sendType(payload);
+      sendData(payload);
     }
     resetRoom();
     if (restoreWorld) onLeaveMatch?.();
@@ -919,9 +1093,7 @@ export function createMatchLobby({
     seats = moved.seats;
     spectators = moved.spectators;
     if (phase === 'countdown') abortCountdown(true);
-    sendData(snapshot());
-    startAnnounce();
-    emit();
+    publishRoom();
     return true;
   }
 
@@ -951,13 +1123,10 @@ export function createMatchLobby({
     if (phase === 'idle') return false;
     const me = localId();
     if (!me || !markReplay(me, on)) return false;
-    const msg = { type: MSG.REPLAY, replay: Boolean(on) };
+    const msg = membership({ type: MSG.REPLAY, replay: Boolean(on) });
     sendType(msg);
     sendData(msg);
-    if (hosting) {
-      startAnnounce();
-      sendData(snapshot());
-    }
+    if (hosting) publishRoom();
     emit();
     return true;
   }
@@ -978,8 +1147,9 @@ export function createMatchLobby({
     if (!me) return;
     seats = setSeatReady(seats, me, ready);
     if (phase === 'countdown' && !ready) abortCountdown(false);
-    sendType({ type: MSG.READY, ready: Boolean(ready) });
-    sendData({ type: MSG.READY, ready: Boolean(ready) });
+    const readyMsg = membership({ type: MSG.READY, ready: Boolean(ready) });
+    sendType(readyMsg);
+    sendData(readyMsg);
     emit();
   }
 
@@ -1000,6 +1170,7 @@ export function createMatchLobby({
     const msg = { type: MSG.SETTING, key, value: settings[key] };
     if (key === 'chapter') msg.mapName = settings.mapName;
     sendData(msg);
+    bumpRev();
     startAnnounce();
     emit();
   }
@@ -1016,6 +1187,7 @@ export function createMatchLobby({
       value: settings.chapter,
       mapName: settings.mapName,
     });
+    bumpRev();
     startAnnounce();
     emit();
   }
@@ -1051,12 +1223,16 @@ export function createMatchLobby({
       seed: settings.seed,
       settings: { ...settings },
       seats: cloneRoster(seats),
+      rev: rosterRev,
+      epoch: lockstepEpoch,
     };
   }
 
   /** Guest must build the same table the host has: seed and both seats. */
   function acceptStart(msg) {
     if (!msg?.countdownEndsAt || hosting) return;
+    if (!noteRev(msg)) return;
+    noteEpoch(msg);
     if (msg.settings && typeof msg.settings === 'object') settings = { ...settings, ...msg.settings };
     if (msg.seed != null) settings.seed = (Number(msg.seed) || 0) >>> 0;
     if (Array.isArray(msg.seats)) seats = cloneRoster(msg.seats);
@@ -1064,9 +1240,16 @@ export function createMatchLobby({
     armCountdown(msg.countdownEndsAt);
   }
 
+  function cancelCountdown() {
+    if (!hosting || phase !== 'countdown') return false;
+    abortCountdown(true);
+    return true;
+  }
+
   function beginCountdown() {
     startBusy = false;
-    armCountdown(Date.now() + COUNTDOWN_MS);
+    armCountdown(Date.now() + lobbyStartMs(mode, ranked));
+    bumpRev();
     const startMsg = startMessage();
     sendData(startMsg);
     sendType(startMsg);
@@ -1158,6 +1341,59 @@ export function createMatchLobby({
     return true;
   }
 
+  function onGuestLeave(msg) {
+    if (!admit(msg, false)) return;
+    if (phase === 'starting' || phase === 'playing') {
+      const userId = senderUserId(msg);
+      if (ranked) onRankedForfeitBy?.(userId);
+      else noteRankedLeave(userId);
+      applyPlayLeave(userId, msg);
+      return;
+    }
+    if (!hosting) return;
+    const userId = senderUserId(msg);
+    if (spectatorOf(spectators, userId)) {
+      spectators = removeSpectator(spectators, userId);
+      forgetPeerUser(userId);
+      publishRoom();
+      return;
+    }
+    if (hostRelease(msg)) {
+      forgetPeerUser(userId);
+      noteRankedLeave(userId);
+      if (abandonRankedIfShort()) return;
+      if (phase === 'countdown') abortCountdown(true);
+      publishRoom();
+    }
+  }
+
+  function onGuestSpectate(msg) {
+    if (!admit(msg, true)) return;
+    if (hostAddSpectator(msg)) publishRoom();
+  }
+
+  function onGuestJoin(msg) {
+    if (!admit(msg, true)) return;
+    const seated = phase !== 'countdown' && hostClaim(msg);
+    if (!seated && !hostAddSpectator(msg)) return;
+    if (seated && ranked) dial(senderUserId(msg));
+    publishRoom();
+    if (seated) maybeRankedStart();
+  }
+
+  function onGuestReady(msg) {
+    if (!admit(msg, false)) return;
+    if (!hostSetReady(msg)) return;
+    if (phase === 'countdown' && !msg.ready) abortCountdown(true);
+    publishRoom();
+    if (msg.ready) maybeRankedStart();
+  }
+
+  function onGuestReplay(msg) {
+    if (!admit(msg, false)) return;
+    if (hostSetReplay(msg)) publishRoom();
+  }
+
   subscribeBroadcast?.((data) => {
     if (
       !data ||
@@ -1182,7 +1418,7 @@ export function createMatchLobby({
       return;
     }
     if (data.type === MSG.JOIN && ranked && hosting && phase === 'countdown') {
-      sendType(startMessage());
+      if (admit(data, true)) sendType(startMessage());
       return;
     }
     if (data.type === MSG.ANNOUNCE && !hosting) {
@@ -1191,73 +1427,32 @@ export function createMatchLobby({
       return;
     }
     if (data.type === MSG.CONCEDE) {
-      acceptConcede();
+      acceptConcede(data);
+      return;
+    }
+    if (data.type === MSG.PAUSE) {
+      acceptPause(data);
       return;
     }
     if (data.type === MSG.LEAVE) {
-      if (phase === 'starting' || phase === 'playing') {
-        const userId = senderUserId(data);
-        if (ranked) onRankedForfeitBy?.(userId);
-        else noteRankedLeave(userId);
-        applyPlayLeave(userId, data);
-        return;
-      }
-      if (!hosting) return;
-      if (spectatorOf(spectators, senderUserId(data))) {
-        spectators = removeSpectator(spectators, senderUserId(data));
-        startAnnounce();
-        sendData(snapshot());
-        emit();
-        return;
-      }
-      if (hostRelease(data)) {
-        noteRankedLeave(senderUserId(data));
-        if (abandonRankedIfShort()) return;
-        if (phase === 'countdown') abortCountdown(true);
-        startAnnounce();
-        sendData(snapshot());
-        emit();
-      }
+      onGuestLeave(data);
       return;
     }
     if (!hosting) return;
     if (phase === 'starting' || phase === 'playing') return;
     if (data.type === MSG.SPECTATE) {
-      if (hostAddSpectator(data)) {
-        startAnnounce();
-        sendData(snapshot());
-        emit();
-      }
+      onGuestSpectate(data);
       return;
     }
     if (data.type === MSG.JOIN) {
-      const seated = phase !== 'countdown' && hostClaim(data);
-      if (seated || hostAddSpectator(data)) {
-        if (seated && ranked) dial(senderUserId(data));
-        startAnnounce();
-        sendData(snapshot());
-        emit();
-        if (seated) maybeRankedStart();
-      }
+      onGuestJoin(data);
       return;
     }
     if (data.type === MSG.READY) {
-      if (hostSetReady(data)) {
-        if (phase === 'countdown' && !data.ready) abortCountdown(true);
-        startAnnounce();
-        sendData(snapshot());
-        emit();
-        if (data.ready) maybeRankedStart();
-      }
+      onGuestReady(data);
       return;
     }
-    if (data.type === MSG.REPLAY) {
-      if (hostSetReplay(data)) {
-        startAnnounce();
-        sendData(snapshot());
-        emit();
-      }
-    }
+    if (data.type === MSG.REPLAY) onGuestReplay(data);
   });
 
   subscribeLobbyMessage?.((data, lobbyName) => {
@@ -1318,19 +1513,17 @@ export function createMatchLobby({
     }
     if (spectatorOf(spectators, userId)) {
       spectators = removeSpectator(spectators, userId);
-      startAnnounce();
-      sendData(snapshot());
-      emit();
+      forgetPeerUser(userId);
+      publishRoom();
       return;
     }
     if (!seatOf(seats, userId)) return;
     noteRankedLeave(userId);
     seats = releaseSeat(seats, userId);
+    forgetPeerUser(userId);
     if (abandonRankedIfShort()) return;
     if (phase === 'countdown') abortCountdown(true);
-    startAnnounce();
-    sendData(snapshot());
-    emit();
+    publishRoom();
   });
 
   subscribeDataMessage?.((msg, fromPeerId) => {
@@ -1365,6 +1558,10 @@ export function createMatchLobby({
       acceptStart(msg);
       return;
     }
+    if (msg.type === MSG.JOIN && ranked && hosting && phase === 'countdown') {
+      if (admit(msg, true)) sendData(startMessage(), fromPeerId);
+      return;
+    }
     if (msg.type === MSG.ABORT) {
       abortCountdown(false);
       return;
@@ -1386,73 +1583,33 @@ export function createMatchLobby({
       return;
     }
     if (msg.type === MSG.CONCEDE) {
-      acceptConcede();
+      acceptConcede(msg);
+      return;
+    }
+    if (msg.type === MSG.PAUSE) {
+      acceptPause(msg);
       return;
     }
     if (msg.type === MSG.LEAVE) {
-      if (phase === 'starting' || phase === 'playing') {
-        const userId = senderUserId(msg);
-        if (ranked) onRankedForfeitBy?.(userId);
-        else noteRankedLeave(userId);
-        applyPlayLeave(userId, msg);
-        return;
-      }
-      if (!hosting) return;
-      if (spectatorOf(spectators, senderUserId(msg))) {
-        spectators = removeSpectator(spectators, senderUserId(msg));
-        sendData(snapshot());
-        startAnnounce();
-        emit();
-        return;
-      }
-      if (hostRelease(msg)) {
-        noteRankedLeave(senderUserId(msg));
-        if (abandonRankedIfShort()) return;
-        if (phase === 'countdown') abortCountdown(true);
-        sendData(snapshot());
-        startAnnounce();
-        emit();
-      }
+      onGuestLeave(msg);
       return;
     }
     if (!hosting) return;
     if (phase === 'starting' || phase === 'playing') return;
 
     if (msg.type === MSG.SPECTATE) {
-      if (hostAddSpectator(msg)) {
-        sendData(snapshot());
-        startAnnounce();
-        emit();
-      }
+      onGuestSpectate(msg);
       return;
     }
     if (msg.type === MSG.JOIN) {
-      const seated = phase !== 'countdown' && hostClaim(msg);
-      if (seated || hostAddSpectator(msg)) {
-        if (seated && ranked) dial(senderUserId(msg));
-        sendData(snapshot());
-        startAnnounce();
-        emit();
-        if (seated) maybeRankedStart();
-      }
+      onGuestJoin(msg);
       return;
     }
     if (msg.type === MSG.READY) {
-      if (hostSetReady(msg)) {
-        if (phase === 'countdown' && !msg.ready) abortCountdown(true);
-        sendData(snapshot());
-        emit();
-        if (msg.ready) maybeRankedStart();
-      }
+      onGuestReady(msg);
       return;
     }
-    if (msg.type === MSG.REPLAY) {
-      if (hostSetReplay(msg)) {
-        sendData(snapshot());
-        startAnnounce();
-        emit();
-      }
-    }
+    if (msg.type === MSG.REPLAY) onGuestReplay(msg);
   });
 
   unrefTimer(setInterval(watchOpponents, 500));
@@ -1474,10 +1631,13 @@ export function createMatchLobby({
     setSetting,
     setMap,
     requestStart,
+    cancelCountdown,
     attachSession,
     detachSession,
     returnToWaiting,
     concede,
+    toggleMatchPause,
+    hasForfeited: localHasForfeited,
     sendChapter(payload) {
       sendData({ type: MSG.CHAPTER, ...payload });
     },

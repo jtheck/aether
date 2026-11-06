@@ -239,6 +239,8 @@ export class SimSession {
     this._pausedDisplayAlpha = null;
     this._pausedDisplayTick = null;
     this.pauseLockstep = false;
+    /** Player pressed P (or a peer did). Catch-up and the score screen also freeze the sim. */
+    this.playPaused = false;
     this.replayingCatchUp = false;
     /** @type {{ tick: number, targetTick: number } | null} */
     this.catchupProgress = null;
@@ -876,6 +878,7 @@ export class SimSession {
     this._pausedDisplayAlpha = null;
     this._pausedDisplayTick = null;
     this.pauseLockstep = false;
+    this.playPaused = false;
     this.resetting = false;
     this.koth = other.koth;
     this.ownerStats = other.ownerStats;

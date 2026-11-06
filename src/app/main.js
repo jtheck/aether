@@ -1671,6 +1671,18 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (sideEl.textContent !== next) sideEl.textContent = next;
   }
 
+  function paintPlayPaused() {
+    const el = document.getElementById('sim-paused');
+    if (!el) return;
+    if (session.playPaused && !session.pauseLockstep) session.playPaused = false;
+    const over = matchOverShown || session.kothMatchOver;
+    const show = Boolean(session.playPaused)
+      && !session.watchingReplay
+      && !session.replayingCatchUp
+      && !over;
+    if (el.hidden !== !show) el.hidden = !show;
+  }
+
   function paintStatus() {
     paintStatusClock();
     paintStatusPop();
@@ -1679,6 +1691,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     lobbyUi.refresh();
     chatHud.refresh();
     paintResources();
+    paintPlayPaused();
     hudDirty = 0;
   }
 
@@ -3682,9 +3695,19 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (e.code === 'KeyP') {
       e.preventDefault();
       if (replayCtl.togglePlay()) return;
+      if (observerLobby?.toggleMatchPause?.()) {
+        paintPlayPaused();
+        return;
+      }
+      // One client freezing lockstep stops its tick confirms. The other side
+      // waits, then forfeits, and the eliminate tick never arrives.
+      const others = (session.humanPlayers || []).some((id) => (id | 0) !== (session.localPlayerId | 0));
+      if (others && session.role === 'player' && !session.watchingReplay) return;
       session.pauseLockstep = !session.pauseLockstep;
+      session.playPaused = session.pauseLockstep;
       if (session.pauseLockstep) session.simAcc = 0;
       renderer.setFxPaused?.(session.pauseLockstep);
+      paintPlayPaused();
       paintStatus();
       return;
     }
@@ -3804,13 +3827,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         matchLobby.detachSession();
         kothShard.setLobbyMatchHold?.(false);
         return restoreMenuSkirmishBackdrop(ctxRef.current);
-      },
-      onEndMatch: () => {
-        if (!session) return;
-        session.pauseLockstep = true;
-        session.simAcc = 0;
-        renderer.setFxPaused?.(true);
-        inputApi?.setRole?.('spectator');
       },
     });
     observerLobby = matchLobby;
@@ -4146,6 +4162,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     inputApi.pollGamepad?.();
     // Keep FX clocks in sync with pause (catch-up / KOTH also toggle pauseLockstep).
     renderer.setFxPaused?.(session.pauseLockstep);
+    paintPlayPaused();
     matchStory.tick(deltaMs);
     exitMarks.tick();
     renderer.cameraController?.tick?.(deltaMs);
@@ -5773,6 +5790,7 @@ function showMatchOver(session) {
 }
 
 function enterPostGameObserve(session) {
+  session.playPaused = false;
   session.pauseLockstep = true;
   session.simAcc = 0;
   session.setRole('spectator');
@@ -5875,7 +5893,7 @@ async function waitForGetFireP2p(timeoutMs = 5000) {
   return typeof globalThis.GETFIREP2P === 'function';
 }
 
-/** Soft landing for Lite (WebGPU-only) - src/axiom/ is packaged at /axiom/. */
+/** Soft landing for Lite (WebGPU-only). /axiom/ is src/axiom/, shipped by deploy-axiom.ps1. */
 function goAxiom() {
   showFallback('WebGPU support not detected, going elsewhere...');
   // Slow / no-WebGPU boxes often miss a 1-frame notice. Wait for a real paint,

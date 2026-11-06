@@ -2,6 +2,7 @@
 // Names and agora counts come from each .garden, not from a stored label.
 
 import { cleanMapName } from './lobby/modes.js';
+import { assetUrl } from './render/assetRev.js';
 
 export const HOUSE_SKIRMISH_DIR = 'skirmish';
 
@@ -44,7 +45,7 @@ export function officialPreviewUrl(chapter) {
 export function lobbyMapPreviewUrl(chapter, known = '') {
   const shot = gardenPreviewDataUrl(known) || officialPreviewUrl(chapter);
   if (shot) return shot;
-  return DEFAULT_MAP_PREVIEW_URL;
+  return assetUrl(DEFAULT_MAP_PREVIEW_URL);
 }
 
 /** 1v1 lists every map with two or more starts. Teams lists more than two. */

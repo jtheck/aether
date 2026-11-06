@@ -1,6 +1,6 @@
 // House maps live at repo-root maps/ (same idea as assets/).
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
+import { existsSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 
 export function houseMapsDir(repoRoot) {
@@ -47,8 +47,7 @@ export function listHouseMapRelPaths(repoRoot) {
 }
 
 /**
- * Skirmish folder listing. Name and spawn count are read from each garden.
- * Two or more agoras show in 1v1. More than two also show in teams.
+ * Skirmish file list. Name and spawn count stay on each garden.
  * @param {string} repoRoot
  */
 export function readSkirmishCatalog(repoRoot) {
@@ -57,20 +56,7 @@ export function readSkirmishCatalog(repoRoot) {
   const maps = [];
   for (const file of readdirSync(dir)) {
     if (!file.endsWith('.garden')) continue;
-    let data;
-    try {
-      data = JSON.parse(readFileSync(join(dir, file), 'utf8'));
-    } catch {
-      continue;
-    }
-    const name = String(data?.n || data?.name || file.replace(/\.garden$/i, '')).replace(/\s+/g, ' ').trim();
-    const spawns = Array.isArray(data?.g) ? data.g.length : 0;
-    maps.push({
-      file,
-      name: name || file.replace(/\.garden$/i, ''),
-      spawns,
-      ...(data?.mt ? { mapType: String(data.mt) } : {}),
-    });
+    maps.push({ file });
   }
   maps.sort((a, b) => a.file.localeCompare(b.file));
   return { maps };

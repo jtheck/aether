@@ -290,11 +290,12 @@ export function cameraFollowMode(local, remote) {
   return 'ease';
 }
 
-/** Seat column: replay viewer, spectator, lockstep stall, ready, or waiting. */
+/** Seat column: replay viewer, spectator, lockstep stall, host, ready, or waiting. */
 export function rosterStatusLabel(person) {
   if (person?.lagging) return 'lagging';
   if (person?.replay) return 'watching replay';
   if (person?.watching) return 'Watching';
+  if (person?.host) return 'Host';
   if (person?.ready) return 'Ready';
   return 'Not ready';
 }

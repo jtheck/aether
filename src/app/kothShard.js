@@ -2458,10 +2458,11 @@ export function createKothShard(options = {}) {
     const othersRemain = wasPlayer && countActive(roster) > 1;
 
     if (wasPlayer && othersRemain && localPlayerId >= 0) {
-      const tick = (session?.confirmedTick ?? 0) + 2;
       const pid = localPlayerId;
-      roster = releaseUser(roster, localUserId, true);
-      sendAll({ type: MSG.SLOT_DEFEAT, matchId: leavingId, playerId: pid, userId: localUserId, tick });
+      roster = releaseUser(roster, localUserId, false);
+      // No tick: the leaver's clock may already be behind. Every peer frees the
+      // seat now; only the king writes the eliminate, on the king's tick.
+      sendAll({ type: MSG.SLOT_DEFEAT, matchId: leavingId, playerId: pid, userId: localUserId });
     } else if (wasLive && wasPlayer) {
       sendAll({ type: MSG.SHARD_GONE, matchId: leavingId });
       broadcastPresence({ gone: true });

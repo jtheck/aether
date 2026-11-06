@@ -1,4 +1,5 @@
 import { AUTO_MAP_PREVIEW_URL, fetchOfficialHouseMaps, officialPreviewUrl } from '../houseMapCatalog.js';
+import { assetUrl } from '../render/assetRev.js';
 import { ladderSlices } from './ladderBoard.js';
 import { seasonInfo } from './ladderSeason.js';
 import { ladderLooking, ladderQueueReady, leaveLadder, loadLadderBoard, loadLadderRecent, loadLadderSnapshot, queueLadder, touchLadderName } from './ladderApi.js';
@@ -8,6 +9,7 @@ import { clearLadderAssignment, getLadderAssignment, setLadderAssignment } from 
 import { getPlayerColor, getPlayerName } from './settings.js';
 import { focusMenuEl } from './input/gamepad.js';
 import { cleanMapName } from '../lobby/modes.js';
+import { matchCardOpen } from '../lobby/protocol.js';
 
 const PLAYER_HEX = /^#[0-9a-fA-F]{6}$/;
 
@@ -32,7 +34,7 @@ export function ladderMapPreviewUrl(state) {
   const chapter = String(state?.settings?.chapter || '');
   const shot = officialPreviewUrl(chapter);
   if (shot) return shot;
-  if (chapter || ladderMapLabel(state)) return AUTO_MAP_PREVIEW_URL;
+  if (chapter || ladderMapLabel(state)) return assetUrl(AUTO_MAP_PREVIEW_URL);
   return '';
 }
 
@@ -66,6 +68,18 @@ function matchSide(players, mirror) {
     side.append(row);
   }
   return side;
+}
+
+function lobbyMatchup(state) {
+  const players = (state?.seats || [])
+    .filter((seat) => seat?.kind === 'human')
+    .map((seat) => ({
+      name: seat.name,
+      color: seat.color,
+      team: seat.team,
+    }));
+  const board = state?.mode === 'teams' ? 'teams' : state?.mode === 'koth' ? 'koth' : '1v1';
+  return { board, players };
 }
 
 function renderLadderMatchup(goNames, card, match) {
@@ -645,7 +659,28 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPl
     if (searching) void cancelSearch();
     setOpen(false);
   });
-  goCancel?.addEventListener('click', () => { void cancelConnect(); });
+  function cancelGo() {
+    const state = matchLobby.isActive() ? matchLobby.getState() : null;
+    if (!state || state.ranked) {
+      void cancelConnect();
+      return;
+    }
+    if (state.phase !== 'countdown') {
+      matchLobby.leaveRoom?.();
+      return;
+    }
+    if (state.hosting) {
+      matchLobby.cancelCountdown?.();
+      return;
+    }
+    if (state.watching) {
+      matchLobby.leaveRoom?.();
+      return;
+    }
+    matchLobby.setReady?.(false);
+  }
+
+  goCancel?.addEventListener('click', () => { cancelGo(); });
   findBtn?.addEventListener('click', () => {
     if (searching) void cancelSearch();
     else void beginSearch();
@@ -663,6 +698,16 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPl
   });
 
   const tickTimer = setInterval(() => refresh(), 200);
+  let shownCardKey = '';
+  let cardAnnounced = false;
+
+  function paintSkirmishMatchup(state) {
+    const match = lobbyMatchup(state);
+    const key = `${match.board}:${match.players.map((player) => `${player.name}:${player.color}:${player.team}`).join('|')}`;
+    if (key === shownCardKey) return;
+    shownCardKey = key;
+    paintMatchup(match);
+  }
 
   function refresh() {
     const state = matchLobby.isActive() ? matchLobby.getState() : null;
@@ -672,20 +717,33 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPl
       setOpen(true);
     }
     const matchOver = document.getElementById('match-over');
+    const ms = matchLobby.countdownMs?.() ?? 0;
+    const skirmishCard = matchCardOpen(state, ms);
     const counting = Boolean(
-      state?.ranked
-      && state.phase !== 'playing'
-      && state.phase !== 'idle'
-      && matchOver?.hidden !== false,
+      skirmishCard
+      || (
+        state?.ranked
+        && state.phase !== 'playing'
+        && state.phase !== 'idle'
+        && matchOver?.hidden !== false
+      ),
     );
     if (!counting) {
+      shownCardKey = '';
+      cardAnnounced = false;
       if (go) go.hidden = true;
       return;
     }
     if (go) go.hidden = false;
+    if (skirmishCard) {
+      paintSkirmishMatchup(state);
+      if (!cardAnnounced) {
+        cardAnnounced = true;
+        onCloseMenu?.();
+      }
+    }
     paintMap(state);
     if (goCount) {
-      const ms = matchLobby.countdownMs?.() ?? 0;
       paintCount(state.phase === 'countdown' ? String(Math.max(1, Math.ceil(ms / 1000))) : 'Connecting');
     }
   }

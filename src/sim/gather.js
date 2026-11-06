@@ -12,7 +12,7 @@
 
 import * as fx from './fixed.js';
 import { ORDER } from './world.js';
-import { queuePath, clearPath } from './path.js';
+import { queuePath, clearPath, FINAL_ARRIVE_SQ } from './path.js';
 import { clearEngagement } from './engagement.js';
 import { damageTree } from './trees.js';
 import { tileCenterX, tileCenterY, snapToPassable, worldToTile, worldToTileZ, TILE_SIZE_F, isPassable } from './field.js';
@@ -87,6 +87,23 @@ function nodeAt(field, tile) {
 function nodeRangeSq(foot) {
   const r = NODE_RANGE + fx.fromInt(foot * TILE_SIZE_F);
   return fx.mul(r, r);
+}
+
+/**
+ * Close enough to chop. Movement calls a walk done up to FINAL_ARRIVE short of
+ * the stand tile's center. On a packed plain rock the only open stand is the
+ * diagonal, and that center sits barely inside the disk, so the stop used to
+ * land outside it and the job was cancelled.
+ */
+function inNodeRange(field, px, py, cx, cy, rangeSq) {
+  if (fx.dist2(px, py, cx, cy) <= rangeSq) return true;
+  const tx = worldToTile(px);
+  const tz = worldToTileZ(py);
+  if (!isPassable(field, tx, tz)) return false;
+  const sx = tileCenterX(tx);
+  const sy = tileCenterY(tz);
+  if (fx.dist2(sx, sy, cx, cy) > rangeSq) return false;
+  return fx.dist2(px, py, sx, sy) <= FINAL_ARRIVE_SQ;
 }
 
 /** Render/VAT pose: chop at the node, carry only while hauling the load back. */
@@ -442,9 +459,61 @@ function workFarm(w, field, i, tile, width) {
 }
 
 /**
+ * A passable tile inside the harvest disk can still be a pocket in a rock
+ * pile: corner-safe walking never enters it. Big Knife Bowl stones do this.
+ * The click flashes the rock, then the crew walks up to the wall and stops.
+ * A real stand floods out to open ground.
+ */
+const STAND_OPEN_CHEB = 8;
+const STAND_OPEN_CAP = 96;
+const standOpenStack = [];
+let standOpenSeen = new Uint16Array(0);
+let standOpenGen = 1;
+
+function standOpensOut(field, nodeTx, nodeTz, tx, tz) {
+  const width = field.width | 0;
+  const height = field.height | 0;
+  const cells = width * height;
+  if (standOpenSeen.length < cells) standOpenSeen = new Uint16Array(cells);
+  if (standOpenGen === 65535) {
+    standOpenSeen.fill(0);
+    standOpenGen = 1;
+  }
+  const gen = standOpenGen++;
+  const stack = standOpenStack;
+  stack.length = 0;
+  const start = tz * width + tx;
+  stack.push(start);
+  standOpenSeen[start] = gen;
+  for (let steps = 0; steps < stack.length && steps < STAND_OPEN_CAP; steps++) {
+    const i = stack[steps];
+    const x = i % width;
+    const z = (i / width) | 0;
+    if (Math.max(Math.abs(x - nodeTx), Math.abs(z - nodeTz)) >= STAND_OPEN_CHEB) return true;
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dz === 0) continue;
+        const nx = x + dx;
+        const nz = z + dz;
+        if (nx < 0 || nz < 0 || nx >= width || nz >= height) continue;
+        if (!isPassable(field, nx, nz)) continue;
+        if (dx !== 0 && dz !== 0) {
+          if (!isPassable(field, x + dx, z) || !isPassable(field, x, z + dz)) continue;
+        }
+        const ni = nz * width + nx;
+        if (standOpenSeen[ni] === gen) continue;
+        standOpenSeen[ni] = gen;
+        stack.push(ni);
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Stand on the near-side rim of a blocked node (rocks). Prefers a passable
  * tile still inside harvest range and closest to the villager so a crew does
- * not all path to the same far corner.
+ * not all path to the same far corner. Skips tiles walled into the pile.
  */
 function snapToHarvestStand(field, cx, cy, fromX, fromY, rangeSq) {
   const ctx = worldToTile(cx);
@@ -453,6 +522,10 @@ function snapToHarvestStand(field, cx, cy, fromX, fromY, rangeSq) {
   let bestY = 0;
   let bestFrom = 0x7fffffffffff;
   let found = false;
+  let pocketX = 0;
+  let pocketY = 0;
+  let pocketFrom = 0x7fffffffffff;
+  let pocket = false;
   for (let dz = -6; dz <= 6; dz++) {
     for (let dx = -6; dx <= 6; dx++) {
       const tx = ctx + dx;
@@ -462,6 +535,14 @@ function snapToHarvestStand(field, cx, cy, fromX, fromY, rangeSq) {
       const y = tileCenterY(tz);
       if (fx.dist2(x, y, cx, cy) > rangeSq) continue;
       const d = fx.dist2(fromX, fromY, x, y);
+      if (!pocket || d < pocketFrom) {
+        pocket = true;
+        pocketFrom = d;
+        pocketX = x;
+        pocketY = y;
+      }
+      if (found && d >= bestFrom) continue;
+      if (!standOpensOut(field, ctx, ctz, tx, tz)) continue;
       if (!found || d < bestFrom) {
         found = true;
         bestFrom = d;
@@ -471,6 +552,7 @@ function snapToHarvestStand(field, cx, cy, fromX, fromY, rangeSq) {
     }
   }
   if (found) return { x: bestX, y: bestY };
+  if (pocket) return { x: pocketX, y: pocketY };
   return snapToPassable(field, cx, cy);
 }
 
@@ -635,7 +717,7 @@ export function gatherSystem(w, field) {
     const tz = (tile / width) | 0;
     const cx = tileCenterX(tx);
     const cy = tileCenterY(tz);
-    if (fx.dist2(w.px[i], w.py[i], cx, cy) <= nodeRangeSq(node.foot)) {
+    if (inNodeRange(field, w.px[i], w.py[i], cx, cy, nodeRangeSq(node.foot))) {
       // Still finishing the walk. Stop this tick; the bite waits until a tick
       // they began already standing, so the first wood is not taken on arrival.
       const arriving =

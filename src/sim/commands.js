@@ -94,11 +94,9 @@ export const CMD = {
 
 export function applyCommands(world, field, commands) {
   if (!commands || commands.length === 0) return;
-  const holding = world.koth && !world.koth.opened;
 
   for (let c = 0; c < commands.length; c++) {
     const cmd = commands[c];
-    if (holding && cmd.type !== CMD.SPAWN_SLOT && cmd.type !== CMD.FORCE_ELIMINATE) continue;
     if (ACTION_COMMANDS.has(cmd.type)) {
       const owner = Number.isInteger(cmd.playerId) && cmd.playerId >= 0
         ? cmd.playerId | 0

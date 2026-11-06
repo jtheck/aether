@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import * as fx from './fixed.js';
 import { createWorld, spawn, ORDER } from './world.js';
 import { UNIT } from './unitTypes.js';
 import { step } from './step.js';
 import { CMD } from './commands.js';
 import { createField, worldToTile, tileCenterX, tileCenterY } from './field.js';
+import { fieldFromGarden } from './garden.js';
 import { growTreeAt } from './trees.js';
 import { SCENERY, rockFootprintRadius, rockYield } from './scenery.js';
 import { addResource, getResource } from './resources.js';
@@ -245,6 +247,52 @@ function minesPlainRockForMineral() {
   assert.ok(field.rockStock[rockTile] < rockYield(SCENERY.ROCK_PLAIN), 'rock is being chipped');
   assert.ok(getResource(w, 0, 'mineral') > 0, 'plain rock banks mineral');
   assert.equal(getResource(w, 0, 'wood'), 0, 'no wood from a rock');
+}
+
+function minesPlainRockFromDiagonalGap() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(77);
+  const cx = worldToTile(0);
+  const cz = worldToTile(0);
+  const rockTile = plantRockAt(field, cx, cz, SCENERY.ROCK_PLAIN, rockYield(SCENERY.ROCK_PLAIN), 0);
+  // Cardinal faces blocked, as in Knife Bowl's packed mineral rocks.
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    field.pass[(cz + dz) * field.width + (cx + dx)] = 0;
+  }
+  const vill = spawn(w, {
+    x: tileCenterX(cx - 2),
+    y: tileCenterY(cz - 2),
+    type: UNIT.VILLAGER,
+    owner: 0,
+  });
+  w.agoras = [{ owner: 0, x: tileCenterX(cx - 4), z: tileCenterY(cz - 4) }];
+
+  step(w, field, [{ type: CMD.GATHER, entities: [vill], tile: rockTile }]);
+  for (let t = 0; t < 200; t++) step(w, field, []);
+
+  assert.equal(w.order[vill], ORDER.GATHER, 'stopping short of the diagonal stand does not cancel mining');
+  assert.ok(field.rockStock[rockTile] < rockYield(SCENERY.ROCK_PLAIN), 'diagonal gap still chips the rock');
+}
+
+function minesWalledSnowRockOnKnifeBowl() {
+  const raw = JSON.parse(readFileSync(new URL('../../maps/skirmish/bowl.garden', import.meta.url), 'utf8'));
+  const field = fieldFromGarden(raw);
+  const tx = 49;
+  const tz = 51;
+  const tile = tz * field.width + tx;
+  const stock = field.rockStock[tile] | 0;
+  assert.equal(field.sceneryType[tile], SCENERY.ROCK_SNOW);
+  const w = createWorld(91);
+  // South of the pile. The nearer rim tiles are walled in; the open stand is around the side.
+  const vill = spawn(w, { x: tileCenterX(tx), y: tileCenterY(60), type: UNIT.VILLAGER, owner: 0 });
+  w.agoras = [{ owner: 0, x: tileCenterX(tx), z: tileCenterY(60) }];
+
+  step(w, field, [{ type: CMD.GATHER, entities: [vill], tile }]);
+  for (let t = 0; t < 250; t++) step(w, field, []);
+
+  assert.ok(field.rockStock[tile] < stock, 'crew walks around the pile and chips the snow rock');
+  assert.equal(w.order[vill], ORDER.GATHER, 'the job stays up after the rock flashes');
 }
 
 function minesMossRockForStone() {
@@ -862,6 +910,8 @@ gathersAndDeposits();
 returnsAllTheWayToTheDropOff();
 chopsAtTheNodeThenHauls();
 minesPlainRockForMineral();
+minesPlainRockFromDiagonalGap();
+minesWalledSnowRockOnKnifeBowl();
 minesMossRockForStone();
 minesMossRockFromFarAway();
 minesSnowRockFromFarAway();

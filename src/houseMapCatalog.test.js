@@ -45,20 +45,23 @@ describe('house map catalog', () => {
   it('reads names and spawn counts from the skirmish gardens', () => {
     const shipped = readSkirmishCatalog(repoRoot);
     assert.ok(shipped.maps.length >= 1);
-    const listed = (mode) => new Set(lobbyOptionsFromHouseIndex(shipped, mode).map((row) => row.id));
+    const catalog = { maps: [] };
     for (const row of shipped.maps) {
+      assert.deepEqual(Object.keys(row), ['file']);
       const data = JSON.parse(readFileSync(join(mapsRoot, 'skirmish', row.file), 'utf8'));
       const fields = gardenLobbyFields(data, row.file);
-      assert.equal(row.name, data.n);
-      assert.equal(row.spawns, fields.spawns);
       const garden = decodeGarden(data);
       assert.equal(garden.agoras.length, fields.spawns);
       assert.equal(garden.terrainTypes.length, garden.width * garden.height);
-      const id = `/maps/skirmish/${row.file}`;
-      assert.equal(listed('onevsone').has(id), spawnsFitLobby(fields.spawns, 'onevsone'));
-      assert.equal(listed('teams').has(id), spawnsFitLobby(fields.spawns, 'teams'));
+      catalog.maps.push({ file: row.file, mapType: data.mt, ...fields });
     }
-    assert.ok(shipped.maps.some((row) => row.spawns > 2));
+    const listed = (mode) => new Set(lobbyOptionsFromHouseIndex(catalog, mode).map((row) => row.id));
+    for (const row of catalog.maps) {
+      const id = `/maps/skirmish/${row.file}`;
+      assert.equal(listed('onevsone').has(id), spawnsFitLobby(row.spawns, 'onevsone'));
+      assert.equal(listed('teams').has(id), spawnsFitLobby(row.spawns, 'teams'));
+    }
+    assert.ok(catalog.maps.some((row) => row.spawns > 2));
   });
 
   it('lists official maps before workshop in the picker', () => {

@@ -2,7 +2,8 @@
 // Extra javascript-obfuscator is off (stringArray wrecks tick/pose). Opt in:
 // PACKAGE_OBFUSCATE=1 npm run package
 // assets (incl. baked), PWA bits, index derived from src/index.html.
-// Also copies src/axiom/ raw. Forge is an esbuild entry (forge-*.js + forge/index.html).
+// Forge is an esbuild entry (forge-*.js + forge/index.html).
+// src/axiom/ is a separate ship (deploy-axiom.ps1); do not copy it here.
 // Does NOT rebuild vendor lite/howler - uses whatever is already in vendor/.
 
 import esbuild from 'esbuild';
@@ -283,20 +284,6 @@ if (existsSync(join(ROOT, 'vendor', 'lite-explorer'))) {
 }
 cpSync(join(ROOT, 'manifest.json'), join(DEPLOY, 'manifest.json'));
 
-// Legacy extras (under src/) - copy raw, no minify/obfuscate.
-function copyRawDir(name, { required = false, note = '' } = {}) {
-  const src = join(ROOT, name);
-  if (!existsSync(src)) {
-    const msg = `⚠️  ${name}/ missing${note ? ` - ${note}` : ''}`;
-    if (required) throw new Error(msg);
-    console.warn(msg);
-    return;
-  }
-  cpSync(src, join(DEPLOY, name), { recursive: true });
-  console.log(`copied ${name}/ (raw)`);
-}
-
-copyRawDir('axiom', { note: 'Three default; ?backend=lite / babylon' });
 {
   mkdirSync(join(DEPLOY, 'forge'), { recursive: true });
   let forgeHtml = readFileSync(join(ROOT, 'forge/index.html'), 'utf8');

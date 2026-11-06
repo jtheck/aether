@@ -68,6 +68,13 @@
       overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
     }
     #status { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); z-index: 10001; font-size: 13px; opacity: 0.9; pointer-events: none; user-select: none; -webkit-user-select: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    #sim-paused {
+      position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+      z-index: 10000; margin: 0; pointer-events: none; user-select: none;
+      font: 600 22px/1 system-ui, sans-serif; letter-spacing: 0.08em; color: #f2fbff;
+      text-shadow: 0 1px 2px #000;
+    }
+    #sim-paused[hidden] { display: none; }
     /* skinnyheader.png is optically left of its bbox; nudge loading status to match. */
     body:has(#boot-splash:not([data-leaving="1"])) #status {
       transform: translateX(calc(-50% - 22px));
@@ -489,7 +496,7 @@
     #match-lobby-overlay.is-parked .lobby-seat { gap: 6px; margin-bottom: 2px; }
     #match-lobby-overlay.is-parked #match-over { margin: 0 28px 4px 0; font-size: 13px; }
     #match-lobby-overlay.is-parked .match-replay-row { margin-top: 6px; }
-    #match-lobby-overlay.is-parked .match-lobby-panel > .btn:not(.match-lobby-min) {
+    #match-lobby-overlay.is-parked .match-lobby-panel > .btn:not(.match-lobby-min):not([hidden]) {
       display: inline-block;
       width: auto;
       margin: 6px 6px 0 0;
@@ -717,7 +724,7 @@
     }
     #match-lobby-overlay .btn:hover, #match-lobby-overlay .btn:focus-visible { border-color: aqua; color: aqua; outline: none; }
     #match-lobby-overlay .btn:disabled { opacity: .45; cursor: default; border-color: #2a3140; color: inherit; }
-    #match-lobby-overlay .btn[hidden] { display: none; }
+    #match-lobby-overlay .btn[hidden] { display: none !important; }
     #match-lobby-overlay .note { margin-top: 8px; font-size: 11px; color: #e0b050; }
     #side_menu #fullscreen_exit_b {
       position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%);
@@ -1066,7 +1073,7 @@
     body.screenshot-hud :is(
       #status, #resources, #resource-bank, #observer-data, #radial-prices,
       #koth-controls, #match-lobby-overlay, #header, #menu_b, #side_menu,
-      #boot-splash, #match-over, #version, #replay-watch, #help_pop, #skins_pop
+      #boot-splash, #match-over, #version, #replay-watch, #help_pop, #skins_pop, #sim-paused
     ),
     body.screenshot-hud .ble-root {
       visibility: hidden !important;
@@ -1083,6 +1090,7 @@
   </div>
   <canvas id="canvas"></canvas>
   <div id="status"><span id="status-pop"></span><span id="status-time"></span><span id="status-side"></span></div>
+  <div id="sim-paused" hidden>Paused</div>
   <div id="resources"></div>
   <div id="observer-data" hidden></div>
   <div id="resource-bank" hidden>
@@ -1146,7 +1154,7 @@
       <input id="match-lobby-map-file" type="file" accept=".garden,.campaign,.json" hidden>
       <button type="button" class="btn" id="match-lobby-ready">Ready</button>
       <button type="button" class="btn" id="match-lobby-start" hidden>Start</button>
-      <button type="button" class="btn" id="match-lobby-concede" hidden>Concede</button>
+      <button type="button" class="btn" id="match-lobby-concede" hidden>Forfeit</button>
       <button type="button" class="btn" id="match-lobby-leave">Leave</button>
       <div id="match-lobby-note" class="note"></div>
     </div>
@@ -1194,7 +1202,7 @@
         <div id="menu-match-seats"></div>
         <button type="button" class="btn" id="menu-match-ready">Ready</button>
         <button type="button" class="btn" id="menu-match-start" hidden>Start</button>
-        <button type="button" class="btn" id="menu-match-concede" hidden>Concede</button>
+        <button type="button" class="btn" id="menu-match-concede" hidden>Forfeit</button>
         <button type="button" class="btn" id="menu-match-leave">Leave lobby</button>
       </div>
       <div class="row menu-mode" id="menu-koth" data-mode="koth" hidden>

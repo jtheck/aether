@@ -4,7 +4,7 @@ alwaysApply: false
 ---
 # Shipping stack
 
-- **Current game:** `src/` (Lite / WebGPU). Local: `src/index.html`. Ship: `npm run package` in `src/` → `DEPLOY/` (S3/CloudFront).
+- **Current game:** `src/` (Lite / WebGPU). Local: `src/index.html`. Ship: `npm run package` in `src/` → `DEPLOY/` (S3/CloudFront). `src/axiom/` is not in that package; ship it with `deploy-axiom.ps1`.
 - **Deprecated:** `legacy/` (index.html, game/, vendor/babylon9*). Babylon 9 JS stack. Do not add features here unless the user explicitly asks to touch the legacy build.
 - `src/forge/game/` is the forge copy, not the deprecated `legacy/game/` tree.
 

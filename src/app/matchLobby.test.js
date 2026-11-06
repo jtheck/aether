@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMatchLobby } from './matchLobby.js';
 import { createGameLobby } from './gameLobby.js';
-import { COUNTDOWN_MS, MSG } from '../lobby/protocol.js';
+import { COUNTDOWN_MS, MATCH_CARD_MS, MSG } from '../lobby/protocol.js';
 import { ladderMatchDeal } from '../lobby/ladderMap.js';
 import { CMD } from '../sim/commands.js';
 import { SIM_GENERATION } from '../sim/generation.js';
@@ -13,7 +13,7 @@ const withSim = (fn) => (message, ...rest) => fn(
 );
 
 async function finishCountdown(t) {
-  t.mock.timers.tick(COUNTDOWN_MS);
+  t.mock.timers.tick(COUNTDOWN_MS + MATCH_CARD_MS);
   await Promise.resolve();
 }
 
@@ -331,6 +331,39 @@ describe('match lobby', () => {
     const { roomId, mode } = room.getState();
     dataFn({ v: 1, type: MSG.JOIN, from: 'guest', name: 'Guest', roomId, mode });
     assert.equal(room.getState().playerCount, 1);
+    room.leaveRoom();
+  });
+
+  it('keeps the quiet countdown, then the match card, before play', async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+    const p2p = fakeP2p('host');
+    let dataFn = null;
+    let started = null;
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
+      onStartMatch: (snap) => { started = snap; },
+    });
+    room.createRoom('onevsone');
+    const { roomId, mode } = room.getState();
+    dataFn({ v: 1, type: MSG.JOIN, userId: 'guest', name: 'Guest', color: '#0f0', roomId, mode });
+    dataFn({ v: 1, type: MSG.READY, userId: 'guest', ready: true, roomId, mode });
+    assert.equal(room.requestStart(), true);
+    assert.ok(room.countdownMs() > COUNTDOWN_MS);
+    t.mock.timers.tick(COUNTDOWN_MS);
+    await Promise.resolve();
+    assert.equal(room.getState().phase, 'countdown');
+    assert.equal(started, null);
+    const cardMs = room.countdownMs();
+    assert.ok(cardMs > 0 && cardMs <= MATCH_CARD_MS);
+    assert.equal(room.cancelCountdown(), true);
+    assert.equal(room.getState().phase, 'waiting');
+    t.mock.timers.tick(MATCH_CARD_MS);
+    await Promise.resolve();
+    assert.equal(room.getState().phase, 'waiting');
+    assert.equal(started, null);
     room.leaveRoom();
   });
 
@@ -930,6 +963,116 @@ describe('match lobby', () => {
     room.leaveRoom();
   });
 
+  it('a paused match does not forfeit a quiet opponent', async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'] });
+    const p2p = fakeP2p('host');
+    let dataFn = null;
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
+    });
+    room.createRoom('onevsone');
+    const { roomId, mode } = room.getState();
+    dataFn({ v: 1, type: MSG.JOIN, userId: 'guest', name: 'Guest', color: '#0f0', roomId, mode });
+    dataFn({ v: 1, type: MSG.READY, userId: 'guest', ready: true, roomId, mode });
+    room.requestStart();
+    await finishCountdown(t);
+    const removed = [];
+    const sim = {
+      localPlayerId: 0,
+      role: 'player',
+      confirmedTick: 10,
+      humanPlayers: [0, 1],
+      pauseLockstep: false,
+      playPaused: false,
+      simAcc: 0,
+      lockstepBlockedMs() { return 8000; },
+      lockstepWaiters() { return [1]; },
+      submitCommand() { return null; },
+      removeHumanPlayer(id) { removed.push(id); },
+      submitAtTick() { return null; },
+      bufferRemoteFrame() {},
+      setPeerConfirmedTick() {},
+    };
+    room.attachSession(sim);
+    dataFn({
+      v: 1,
+      type: MSG.PAUSE,
+      userId: 'guest',
+      paused: true,
+      roomId,
+      mode,
+    });
+    assert.equal(sim.pauseLockstep, true);
+    assert.equal(sim.playPaused, true);
+    t.mock.timers.tick(500);
+    assert.deepEqual(removed, []);
+    const before = p2p.sent.length;
+    dataFn({
+      v: 1,
+      type: MSG.PAUSE,
+      userId: 'guest',
+      paused: false,
+      roomId,
+      mode,
+    });
+    assert.equal(sim.pauseLockstep, false);
+    assert.equal(sim.playPaused, false);
+    assert.equal(p2p.sent.slice(before).some((row) => row.msg.type === MSG.CONFIRM), true);
+    room.leaveRoom();
+  });
+
+  it('forfeit while paused releases the sim and still eliminates', async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'] });
+    const p2p = fakeP2p('host');
+    let dataFn = null;
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
+    });
+    room.createRoom('onevsone');
+    const { roomId, mode } = room.getState();
+    dataFn({ v: 1, type: MSG.JOIN, userId: 'guest', name: 'Guest', color: '#0f0', roomId, mode });
+    dataFn({ v: 1, type: MSG.READY, userId: 'guest', ready: true, roomId, mode });
+    room.requestStart();
+    await finishCountdown(t);
+    const frames = [];
+    const sim = {
+      localPlayerId: 0,
+      role: 'player',
+      confirmedTick: 10,
+      humanPlayers: [0, 1],
+      pauseLockstep: false,
+      playPaused: false,
+      simAcc: 4,
+      submitCommand() { return null; },
+      removeHumanPlayer() {},
+      submitAtTick(tick, cmd) {
+        frames.push({ tick, cmd });
+        return { tick, playerId: 0, commands: [cmd] };
+      },
+      bufferRemoteFrame() {},
+      setPeerConfirmedTick() {},
+    };
+    room.attachSession(sim);
+    assert.equal(room.toggleMatchPause(), true);
+    assert.equal(sim.pauseLockstep, true);
+    assert.equal(sim.simAcc, 0);
+    assert.equal(p2p.sent.some((row) => row.msg.type === MSG.PAUSE && row.msg.paused === true), true);
+    assert.equal(p2p.broadcasts.some((row) => row.data.type === MSG.PAUSE && row.data.paused === true), true);
+    assert.equal(room.concede(), true);
+    assert.equal(sim.pauseLockstep, false);
+    assert.equal(sim.playPaused, false);
+    assert.equal(frames[0].cmd.type, CMD.FORCE_ELIMINATE);
+    assert.equal(frames[0].cmd.playerId, 0);
+    assert.equal(p2p.sent.some((row) => row.msg.type === MSG.PAUSE && row.msg.paused === false), true);
+    room.leaveRoom();
+  });
+
   it('keeps sending the opening confirm until the first tick commits', async (t) => {
     t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'] });
     const p2p = fakeP2p('host');
@@ -1054,11 +1197,10 @@ describe('match lobby', () => {
     room.leaveRoom();
   });
 
-  it('concede ends the match and keeps the room', async (t) => {
+  it('concede forfeits the local player and the match keeps running', async (t) => {
     t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
     const p2p = fakeP2p('host');
     let dataFn = null;
-    let ended = 0;
     let left = 0;
     const room = createMatchLobby({
       getP2p: () => p2p,
@@ -1066,7 +1208,6 @@ describe('match lobby', () => {
       gameLobby: createGameLobby({ getP2p: () => p2p }),
       subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
       onStartMatch: () => {},
-      onEndMatch: () => { ended += 1; },
       onLeaveMatch: () => { left += 1; },
     });
     room.createRoom('onevsone');
@@ -1075,16 +1216,39 @@ describe('match lobby', () => {
     dataFn({ v: 1, type: MSG.READY, userId: 'guest', ready: true, roomId, mode });
     assert.equal(room.requestStart(), true);
     await finishCountdown(t);
+    const frames = [];
+    room.attachSession({
+      localPlayerId: 0,
+      role: 'player',
+      confirmedTick: 8,
+      humanPlayers: [0, 1],
+      submitCommand() { return null; },
+      removeHumanPlayer(id) { frames.push({ removed: id }); },
+      submitAtTick(tick, cmd) {
+        frames.push({ tick, cmd });
+        return { tick, playerId: 0, commands: [cmd] };
+      },
+      bufferRemoteFrame() {},
+      setPeerConfirmedTick() {},
+    });
     const beforeSent = p2p.sent.length;
     const beforeBroadcast = p2p.broadcasts.length;
     assert.equal(room.concede(), true);
     assert.equal(room.isActive(), true);
-    assert.equal(room.getState().phase, 'waiting');
-    assert.equal(room.getState().seats.find((s) => s.userId === 'guest')?.ready, false);
-    assert.equal(ended, 1);
+    assert.equal(room.getState().phase, 'playing');
+    assert.equal(room.hasForfeited(), true);
+    assert.equal(room.getState().seats.find((s) => s.userId === 'guest')?.ready, true);
     assert.equal(left, 0);
-    assert.equal(p2p.sent.slice(beforeSent).filter((row) => row.msg.type === MSG.CONCEDE).length, 1);
-    assert.equal(p2p.broadcasts.slice(beforeBroadcast).filter((row) => row.data.type === MSG.CONCEDE).length, 1);
+    assert.equal(frames.some((row) => row.removed != null), false);
+    assert.equal(frames[0].cmd.type, CMD.FORCE_ELIMINATE);
+    assert.equal(frames[0].cmd.playerId, 0);
+    assert.equal(frames[0].tick, 10);
+    const sent = p2p.sent.slice(beforeSent).filter((row) => row.msg.type === MSG.CONCEDE);
+    const broadcast = p2p.broadcasts.slice(beforeBroadcast).filter((row) => row.data.type === MSG.CONCEDE);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].msg.playerId, 0);
+    assert.equal(sent[0].msg.tick, 10);
+    assert.equal(broadcast.length, 1);
     assert.equal(room.concede(), false);
     room.leaveRoom();
     assert.equal(left, 1);
@@ -1117,10 +1281,9 @@ describe('match lobby', () => {
     room.leaveRoom();
   });
 
-  it('a concede from the other player returns this client to the same lobby', async () => {
+  it('a concede from the other player forfeits them and stays in the match', async () => {
     const p2p = fakeP2p('guest-id');
     let dataFn = null;
-    let ended = 0;
     let left = 0;
     const guest = createMatchLobby({
       getP2p: () => p2p,
@@ -1128,7 +1291,6 @@ describe('match lobby', () => {
       gameLobby: createGameLobby({ getP2p: () => p2p }),
       subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
       onStartMatch: () => {},
-      onEndMatch: () => { ended += 1; },
       onLeaveMatch: () => { left += 1; },
     });
     guest.joinRoom('onevsone', 'lobby-1', 'host-id');
@@ -1138,21 +1300,48 @@ describe('match lobby', () => {
       countdownEndsAt: Date.now() - 1,
       roomId: 'lobby-1',
       mode: 'onevsone',
+      seats: [
+        { index: 0, kind: 'human', userId: 'host-id', name: 'Host', ready: true },
+        { index: 1, kind: 'human', userId: 'guest-id', name: 'Guest', ready: true },
+      ],
     });
     await new Promise((r) => setTimeout(r, 0));
     assert.equal(guest.getState().phase, 'playing');
+    const frames = [];
+    const removed = [];
+    guest.attachSession({
+      localPlayerId: 1,
+      role: 'player',
+      confirmedTick: 4,
+      humanPlayers: [0, 1],
+      submitCommand() { return null; },
+      removeHumanPlayer(id) { removed.push(id); },
+      submitAtTick(tick, cmd) {
+        frames.push({ tick, cmd });
+        return { tick, playerId: 1, commands: [cmd] };
+      },
+      bufferRemoteFrame() {},
+      setPeerConfirmedTick() {},
+    });
     dataFn({
       v: 1,
       type: MSG.CONCEDE,
       userId: 'host-id',
+      playerId: 0,
+      tick: 6,
       roomId: 'lobby-1',
       mode: 'onevsone',
     });
     assert.equal(guest.isActive(), true);
-    assert.equal(guest.getState().phase, 'waiting');
+    assert.equal(guest.getState().phase, 'playing');
     assert.equal(guest.getState().roomId, 'lobby-1');
-    assert.equal(ended, 1);
+    assert.equal(guest.hasForfeited(), false);
     assert.equal(left, 0);
+    assert.deepEqual(removed, [0]);
+    assert.equal(frames[0].cmd.type, CMD.FORCE_ELIMINATE);
+    assert.equal(frames[0].cmd.playerId, 0);
+    assert.equal(frames[0].tick, 6);
+    assert.equal(guest.getState().seats.some((s) => s.userId === 'host-id'), true);
     guest.leaveRoom();
   });
 
@@ -1614,5 +1803,166 @@ describe('match lobby', () => {
     assert.equal(room.setReplayWatch(false), true);
     assert.equal(room.getState().seats.find((s) => s.userId === 'host').replay, false);
     room.leaveRoom();
+  });
+
+  it('ignores a leave from the visit that already rejoined', async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+    const p2p = fakeP2p('host');
+    let dataFn = null;
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
+      onStartMatch: () => {},
+    });
+    room.createRoom('onevsone');
+    const { roomId, mode } = room.getState();
+    const visit = (seq, type, extra = {}) => ({
+      v: 1,
+      client: 'guest-page',
+      seq,
+      type,
+      userId: 'guest',
+      name: 'Guest',
+      color: '#0f0',
+      roomId,
+      mode,
+      ...extra,
+    });
+    dataFn(visit(1, MSG.JOIN));
+    assert.equal(room.getState().playerCount, 2);
+    dataFn(visit(2, MSG.LEAVE));
+    assert.equal(room.getState().playerCount, 1);
+    dataFn(visit(3, MSG.JOIN));
+    dataFn(visit(4, MSG.READY, { ready: true }));
+    assert.equal(room.getState().playerCount, 2);
+    dataFn(visit(2, MSG.LEAVE));
+    assert.equal(room.getState().playerCount, 2);
+    assert.equal(room.requestStart(), true);
+    await finishCountdown(t);
+    assert.equal(room.getState().phase, 'playing');
+    const frames = [];
+    room.attachSession({
+      localPlayerId: 0,
+      role: 'player',
+      confirmedTick: 3,
+      humanPlayers: [0, 1],
+      submitCommand() { return null; },
+      removeHumanPlayer() {},
+      submitAtTick(tick, cmd) {
+        frames.push({ tick, cmd });
+        return { tick };
+      },
+      bufferRemoteFrame() {},
+      setPeerConfirmedTick() {},
+    });
+    dataFn(visit(2, MSG.LEAVE, { playerId: 1, tick: 5 }));
+    assert.equal(room.getState().playerCount, 2);
+    assert.equal(frames.length, 0);
+    dataFn(visit(5, MSG.LEAVE, { playerId: 1, tick: 5 }));
+    assert.equal(room.getState().playerCount, 1);
+    assert.equal(frames[0].cmd.type, CMD.FORCE_ELIMINATE);
+    assert.equal(frames[0].cmd.playerId, 1);
+    room.leaveRoom();
+  });
+
+  it('does not carry a forfeit or a stale roster into the next match', async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+    const p2p = fakeP2p('host');
+    let dataFn = null;
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
+      onStartMatch: () => {},
+    });
+    room.createRoom('onevsone');
+    const { roomId, mode } = room.getState();
+    const base = { v: 1, userId: 'guest', name: 'Guest', color: '#0f0', roomId, mode };
+    dataFn({ ...base, type: MSG.JOIN });
+    dataFn({ ...base, type: MSG.READY, ready: true });
+    room.requestStart();
+    await finishCountdown(t);
+    room.attachSession({
+      localPlayerId: 0,
+      role: 'player',
+      confirmedTick: 4,
+      submitCommand() { return null; },
+      removeHumanPlayer() {},
+      submitAtTick() { return { tick: 6 }; },
+      bufferRemoteFrame() {},
+      setPeerConfirmedTick() {},
+    });
+    dataFn({ ...base, type: MSG.LEAVE, playerId: 1, tick: 6 });
+    assert.equal(room.getState().playerCount, 1);
+    assert.equal(room.returnToWaiting(), true);
+    dataFn({ ...base, type: MSG.JOIN });
+    dataFn({ ...base, type: MSG.READY, ready: true });
+    assert.equal(room.getState().playerCount, 2);
+    room.requestStart();
+    await finishCountdown(t);
+    const frames = [];
+    room.attachSession({
+      localPlayerId: 0,
+      role: 'player',
+      confirmedTick: 0,
+      humanPlayers: [0, 1],
+      submitCommand() { return null; },
+      removeHumanPlayer(id) { frames.push(id); },
+      submitAtTick(tick, cmd) {
+        frames.push({ tick, cmd });
+        return null;
+      },
+      bufferRemoteFrame() {},
+      setPeerConfirmedTick() {},
+    });
+    assert.equal(frames.length, 0);
+    assert.equal(room.getState().playerCount, 2);
+    room.leaveRoom();
+  });
+
+  it('a rejoining guest keeps the host epoch and ignores an older roster', () => {
+    let dataFn = null;
+    const guest = createMatchLobby({
+      getP2p: () => fakeP2p('guest'),
+      getUserId: () => 'guest',
+      gameLobby: createGameLobby({ getP2p: () => fakeP2p('guest') }),
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
+    });
+    guest.setLockstepEpoch(5);
+    guest.joinRoom('onevsone', 'lobby-1', 'host');
+    assert.equal(guest.getLockstepEpoch(), 0);
+    const both = [
+      { index: 0, kind: 'human', userId: 'host', name: 'Host', ready: true },
+      { index: 1, kind: 'human', userId: 'guest', name: 'Guest', ready: false },
+    ];
+    dataFn({
+      v: 1,
+      type: MSG.STATE,
+      roomId: 'lobby-1',
+      mode: 'onevsone',
+      rev: 2,
+      epoch: 2,
+      seats: both,
+      phase: 'waiting',
+    });
+    assert.equal(guest.getLockstepEpoch(), 2);
+    assert.equal(guest.getState().playerCount, 2);
+    dataFn({
+      v: 1,
+      type: MSG.STATE,
+      roomId: 'lobby-1',
+      mode: 'onevsone',
+      rev: 1,
+      epoch: 0,
+      seats: [{ index: 0, kind: 'human', userId: 'host', name: 'Host', ready: true }],
+      phase: 'waiting',
+    });
+    assert.equal(guest.getLockstepEpoch(), 2);
+    assert.equal(guest.getState().playerCount, 2);
+    assert.equal(guest.getState().seats.find((s) => s.userId === 'guest')?.index, 1);
+    guest.leaveRoom();
   });
 });

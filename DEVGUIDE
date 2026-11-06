@@ -47,17 +47,24 @@ Package upload folder:
 npm run package
 ```
 Fills ../DEPLOY/ (index at root, hashed+minified JS, assets incl. baked, PWA).
+Does not include src/axiom/. That tree ships on its own.
 JS is two bundles (main + worker) - not hundreds of Lite chunks.
 Obfuscation off by default; opt-in: PACKAGE_OBFUSCATE=1 (main + sim worker - both are fully bundled).
 Do not open index.html from disk (file:// / CORS / SAB).
 
-To deploy (this is the only ship path):
+To deploy:
  - Do not build a local-only package and call it deployed. Do not edit a Steam library install, `aether.url`, or anything beside the installed exe. A local build or an install edit happens only after the user confirms that, more than once, in the same request.
  - From repo root (AWS CLI configured): `.\deploy-live.ps1`
    Runs `npm run package` in src/, `aws s3 sync DEPLOY` → `s3://aether.garden/` (us-east-1),
-   sets long-cache on main-/worker-/forge-*.js, invalidates CloudFront E16NES5CQO1ZJ8 + E14MZ80C43O782.
- - Manual equivalent: upload the *contents* of DEPLOY/ to the S3 bucket root (not the DEPLOY folder name)
- - CloudFront → Distributions → Invalidation "/*" (both distributions above if axiom subdomain matters)
+   skips the `axiom/` prefix so `--delete` leaves it, uploads hashed bundles and `assets/`
+   only when the key is new or the size changed (those keep a long-lived cache header),
+   invalidates CloudFront E16NES5CQO1ZJ8 (aether.garden + www) only.
+ - Axiom: `.\deploy-axiom.ps1` syncs `src/axiom/` → `s3://aether.garden/axiom/` and invalidates
+   E14MZ80C43O782 (axiom.aether.garden, origin path `/axiom`) plus `/axiom/*` on E16NES5CQO1ZJ8.
+ - Manual equivalent: upload the *contents* of DEPLOY/ to the S3 bucket root (not the DEPLOY folder name).
+   Do not delete `s3://aether.garden/axiom/`.
+ - CloudFront → Distributions → Invalidation "/*" on E16NES5CQO1ZJ8 for a garden ship.
+   Axiom subdomain only when running deploy-axiom.ps1.
  - CloudFront MUST send these on HTML (ideally all responses) or the game stays a black/fallback screen:
      Cross-Origin-Opener-Policy: same-origin
      Cross-Origin-Embedder-Policy: require-corp
@@ -65,8 +72,8 @@ To deploy (this is the only ship path):
    and crossOriginIsolated is false - check console: window.crossOriginIsolated)
  - Cache-Control (S3 metadata or CF response headers) - origin currently sends none, which sticks old HTML/assets on phones:
      index.html, sw-aether.js, manifest.json → Cache-Control: no-cache
-     main-*.js / sim.worker-*.js → Cache-Control: public, max-age=31536000, immutable
-     /assets/* → Cache-Control: no-cache   (unhashed bake/GLB paths; or short max-age)
+     main-*.js / sim.worker-*.js / forge-*.js → Cache-Control: public, max-age=31536000, immutable
+     /assets/* (content hash in the filename) → Cache-Control: public, max-age=31536000, immutable
 
 
 

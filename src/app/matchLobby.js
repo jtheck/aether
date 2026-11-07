@@ -40,7 +40,12 @@ import { localOwnedPacks, selectedSkins } from './dlcCatalog.js';
 import { aetherSteam } from './steam.js';
 import { loadGardenRef, parseWorkshopRef } from './workshop.js';
 import { CMD } from '../sim/commands.js';
-import { SIM_GENERATION, hasCurrentSimGeneration } from '../sim/generation.js';
+import {
+  SIM_GENERATION,
+  SIM_RULES_ID,
+  hasCurrentSimGeneration,
+  hasCurrentSimRules,
+} from '../sim/generation.js';
 import { compactFrameForTransport, expandTransportFrame } from '../network/lockstepWire.js';
 import { LOCKSTEP_STALL_UI_MS } from './simSession.js';
 
@@ -69,6 +74,7 @@ function unrefTimer(timer) {
  * @param {(active: boolean) => void} [opts.onActiveChange]
  * @param {(cfg: object) => void | Promise<void>} [opts.onStartMatch]
  * @param {() => void} [opts.onLeaveMatch]
+ * @param {(reason: string) => void | Promise<void>} [opts.onAbortMatch]
  * @param {() => void} [opts.onRankedPregameEnd] - opponent left before the match; requeue
  */
 export function createMatchLobby({
@@ -85,6 +91,7 @@ export function createMatchLobby({
   onActiveChange,
   onStartMatch,
   onLeaveMatch,
+  onAbortMatch,
   onRankedLeave,
   onRankedDisconnect,
   onRankedDisconnectClear,
@@ -125,7 +132,7 @@ export function createMatchLobby({
   const forfeited = new Set();
   /** Both clients hold the sim. A one-sided freeze stops tick confirms and looks like a drop. */
   let matchPaused = false;
-  /** Ranked link drops wait out the grace before they become a loss. userId -> since. */
+  /** Human link drops wait out reconnect grace. userId -> first missing timestamp. */
   const linkGone = new Map();
   let stallClaimed = false;
   let session = null;
@@ -149,6 +156,7 @@ export function createMatchLobby({
   /** Stable for this page. A refreshed client has a new token, so its join replaces the old visit. */
   const clientToken = generateRoomId();
   let presenceSeq = 0;
+  let compatibilityProblem = '';
   /** userId -> { token, seq } of the latest membership message accepted. */
   const presenceSeen = new Map();
 
@@ -179,6 +187,7 @@ export function createMatchLobby({
     return {
       v: LOBBY_PROTOCOL_VERSION,
       sim: SIM_GENERATION,
+      simRules: SIM_RULES_ID,
       type: MSG.STATE,
       mode,
       roomId,
@@ -210,6 +219,7 @@ export function createMatchLobby({
       type,
       v: LOBBY_PROTOCOL_VERSION,
       sim: SIM_GENERATION,
+      simRules: SIM_RULES_ID,
       mode,
       roomId,
       userId,
@@ -295,8 +305,26 @@ export function createMatchLobby({
       mode,
       ...msg,
       sim: SIM_GENERATION,
+      simRules: SIM_RULES_ID,
       userId,
     };
+  }
+
+  function acceptsPeerRules(msg) {
+    const compatible = hasCurrentSimGeneration(msg?.sim) && hasCurrentSimRules(msg?.simRules);
+    if (compatible) {
+      if (compatibilityProblem) {
+        compatibilityProblem = '';
+        emit();
+      }
+      return true;
+    }
+    const next = 'Version mismatch — hard refresh both players';
+    if (compatibilityProblem !== next) {
+      compatibilityProblem = next;
+      emit();
+    }
+    return false;
   }
 
   function sendData(msg, peerId = null) {
@@ -419,6 +447,23 @@ export function createMatchLobby({
 
   function seatedUserIds() {
     return seats.filter((s) => s.kind === 'human' && s.userId).map((s) => s.userId);
+  }
+
+  function seatedPeersConnected() {
+    const me = localId();
+    const connected = getP2p?.()?.getConnectedPeers?.() ?? [];
+    return seatedUserIds().every((userId) => (
+      sameUserId(userId, me)
+      || connected.some((peerId) => (
+        sameUserId(peerId, userId)
+        || sameUserId(peerUser.get(peerId), userId)
+      ))
+    ));
+  }
+
+  function meshStartBlockReason() {
+    if (countHumans(seats) < 2 || seatedPeersConnected()) return '';
+    return 'Waiting for peer connection…';
   }
 
   function dialSeatedPeers() {
@@ -587,6 +632,10 @@ export function createMatchLobby({
   function finishCountdown() {
     countdownTimer = null;
     if (phase !== 'countdown') return;
+    if (!seatedPeersConnected()) {
+      abortCountdown(hosting);
+      return;
+    }
     phase = 'starting';
     emit();
     const snap = snapshot();
@@ -624,7 +673,10 @@ export function createMatchLobby({
     if (phase !== 'countdown') return;
     clearCountdown();
     phase = 'waiting';
-    if (broadcast && hosting) sendData({ type: MSG.ABORT });
+    if (broadcast && hosting) {
+      sendData({ type: MSG.ABORT });
+      sendType({ type: MSG.ABORT });
+    }
     emit();
   }
 
@@ -743,6 +795,7 @@ export function createMatchLobby({
     if (stallClaimed) onRankedDisconnectClear?.();
     stallClaimed = false;
     rankedWaitSince = 0;
+    compatibilityProblem = '';
     settings = defaultSettings('onevsone');
     hadMatch = false;
     startGarden = null;
@@ -761,6 +814,7 @@ export function createMatchLobby({
     roomId = opts.roomId || generateRoomId();
     ranked = Boolean(opts.ranked);
     rankedRoster = Array.isArray(opts.roster) ? opts.roster : null;
+    compatibilityProblem = '';
     hosting = true;
     phase = 'waiting';
     onActiveChange?.(true);
@@ -794,6 +848,7 @@ export function createMatchLobby({
     mode = nextMode;
     roomId = nextRoomId;
     ranked = Boolean(opts.ranked);
+    compatibilityProblem = '';
     hosting = false;
     watching = spectate;
     phase = 'waiting';
@@ -965,9 +1020,29 @@ export function createMatchLobby({
     onRankedDisconnect?.(userId);
   }
 
+  function customHumanDown(userId) {
+    if (ranked || !userId || sameUserId(userId, localId())) return;
+    if (phase !== 'starting' && phase !== 'playing') return;
+    if (!linkGone.has(userId)) linkGone.set(userId, Date.now());
+  }
+
   function clearLinkGone(userId) {
     if (!userId || !linkGone.delete(userId)) return;
-    if (linkGone.size === 0 && !stallClaimed) onRankedDisconnectClear?.();
+    if (ranked && linkGone.size === 0 && !stallClaimed) onRankedDisconnectClear?.();
+  }
+
+  function abortCustomTransportLoss() {
+    if (ranked || (phase !== 'starting' && phase !== 'playing')) return false;
+    const reason = 'Connection lost — match aborted';
+    resetRoom();
+    try {
+      void Promise.resolve((onAbortMatch ?? onLeaveMatch)?.(reason)).catch((err) => {
+        console.error('[lobby] match abort cleanup failed', err);
+      });
+    } catch (err) {
+      console.error('[lobby] match abort cleanup failed', err);
+    }
+    return true;
   }
 
   function expireLinkGone() {
@@ -976,6 +1051,10 @@ export function createMatchLobby({
     for (const [userId, since] of linkGone) {
       if (nowMs - since < LOCKSTEP_FORFEIT_MS) continue;
       linkGone.delete(userId);
+      if (!ranked) {
+        abortCustomTransportLoss();
+        return;
+      }
       onRankedDisconnectLoss?.(userId);
       applyPlayLeave(userId);
     }
@@ -1001,6 +1080,7 @@ export function createMatchLobby({
       }
       return;
     }
+    if (waiters.length === 0) return;
     if (ranked && !stallClaimed) {
       stallClaimed = true;
       for (const playerId of waiters) {
@@ -1010,6 +1090,10 @@ export function createMatchLobby({
     }
     if (blocked < LOCKSTEP_FORFEIT_MS) return;
     stallClaimed = false;
+    if (!ranked) {
+      abortCustomTransportLoss();
+      return;
+    }
     for (const playerId of waiters) {
       const id = playerId | 0;
       const seat = seatForPlayer(id);
@@ -1289,6 +1373,7 @@ export function createMatchLobby({
   function requestStart() {
     if (!hosting || phase !== 'waiting' || startBusy) return false;
     if (!canStart(mode, seats)) return false;
+    if (!seatedPeersConnected()) return false;
     if (awaitingLadderMaps()) {
       const pending = skirmishCatalogInflight();
       const room = roomId;
@@ -1395,12 +1480,9 @@ export function createMatchLobby({
   }
 
   subscribeBroadcast?.((data) => {
-    if (
-      !data ||
-      data.v !== LOBBY_PROTOCOL_VERSION ||
-      !hasCurrentSimGeneration(data.sim)
-    ) return;
+    if (!data || data.v !== LOBBY_PROTOCOL_VERSION) return;
     if (phase === 'idle' || !roomId || data.roomId !== roomId || data.mode !== mode) return;
+    if (!acceptsPeerRules(data)) return;
     if (noteChat(data)) return;
     if (data.type === MSG.CLOSED && !hosting) {
       if (phase === 'starting' || phase === 'playing') return;
@@ -1480,6 +1562,7 @@ export function createMatchLobby({
     if (lockstepOn && session?.role === 'player' && (session.localPlayerId ?? -1) >= 0) {
       sendTickConfirm((session.confirmedTick ?? 0) + 1);
     }
+    if (hosting) maybeRankedStart();
   });
 
   subscribePeerDisconnected?.((peerId) => {
@@ -1490,13 +1573,17 @@ export function createMatchLobby({
       return;
     }
     if (phase === 'starting' || phase === 'playing') {
-      if (ranked && seatOf(seats, userId)?.kind === 'human') {
-        rankedHumansDown(userId);
+      const seat = seatOf(seats, userId);
+      if (seat?.kind === 'human') {
+        if (ranked) rankedHumansDown(userId);
+        else customHumanDown(userId);
         return;
       }
       peerUser.delete(peerId);
-      if (seatOf(seats, userId)?.kind === 'human') noteRankedLeave(userId);
-      applyPlayLeave(userId);
+      if (spectatorOf(spectators, userId)) {
+        spectators = removeSpectator(spectators, userId);
+        emit();
+      }
       return;
     }
     peerUser.delete(peerId);
@@ -1527,13 +1614,10 @@ export function createMatchLobby({
   });
 
   subscribeDataMessage?.((msg, fromPeerId) => {
-    if (
-      !msg ||
-      msg.v !== LOBBY_PROTOCOL_VERSION ||
-      !hasCurrentSimGeneration(msg.sim)
-    ) return;
+    if (!msg || msg.v !== LOBBY_PROTOCOL_VERSION) return;
     if (phase === 'idle') return;
     if (msg.roomId !== roomId || msg.mode !== mode) return;
+    if (!acceptsPeerRules(msg)) return;
     if (noteChat(msg)) return;
     notePeerUser(fromPeerId, senderUserId(msg));
 
@@ -1662,8 +1746,17 @@ export function createMatchLobby({
     isActive: () => phase !== 'idle',
     hasPlayed: () => hadMatch,
     isHosting: () => hosting,
-    startBlockReason: () => startBusy ? 'Loading map…' : (mode ? startBlockReason(mode, seats) : ''),
-    canStart: () => !startBusy && (mode ? canStart(mode, seats) : false),
+    startBlockReason: () => (
+      startBusy
+        ? 'Loading map…'
+        : (mode ? (compatibilityProblem || startBlockReason(mode, seats) || meshStartBlockReason()) : '')
+    ),
+    canStart: () => (
+      !startBusy
+      && !compatibilityProblem
+      && (mode ? canStart(mode, seats) : false)
+      && seatedPeersConnected()
+    ),
     countdownMs: () => (phase === 'countdown' ? Math.max(0, countdownEndsAt - Date.now()) : 0),
   };
 }

@@ -56,6 +56,7 @@
       // console.log('Peer disconnected:', peerId); 
     };
     let onPeerLinkFailed = config.onPeerLinkFailed || function(peerId) {};
+    let onPeerRoute = config.onPeerRoute || function(peerId, route) {};
     let onBroadcastMessage = config.onBroadcastMessage || function(data) { 
       // console.log('Broadcast message:', data); 
     };
@@ -64,22 +65,23 @@
     };
     let onMatchLobbyConnected = config.onMatchLobbyConnected || function(lobbyName) {};
 
-    // WebRTC Configuration
+    // WebRTC configuration. TURN is deliberately injected by the application:
+    // a dead public relay is worse than an explicit STUN-only connection because
+    // it makes restrictive networks appear covered when they are not.
+    const defaultIceServers = [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+    ];
+    const iceServers = Array.isArray(config.iceServers)
+      ? config.iceServers
+      : defaultIceServers;
     const rtcConfig = {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        {
-          urls: [
-            'turn:openrelay.metered.ca:80',
-            'turn:openrelay.metered.ca:443',
-            'turn:openrelay.metered.ca:443?transport=tcp',
-          ],
-          username: 'open',
-          credential: 'open',
-        },
-      ],
+      iceServers,
     };
+    const hasTurnRelay = iceServers.some((server) => {
+      const urls = Array.isArray(server?.urls) ? server.urls : [server?.urls];
+      return urls.some((url) => typeof url === 'string' && /^turns?:/i.test(url));
+    });
 
     // Internal state
     let peers = new Map();
@@ -118,6 +120,7 @@
     }
 
     const ICE_CONNECT_TIMEOUT_MS = 25000;
+    const ICE_DISCONNECT_GRACE_MS = 5000;
 
     function isLocalDevHost() {
       const h = window.location.hostname;
@@ -413,17 +416,70 @@
         signalingChannel: signalingChannel,
         pendingIceCandidates: [],
         connectStartedAt: Date.now(),
+        disconnectTimer: null,
+        disconnectNotified: false,
+        linkFailureReported: false,
+        routeReported: false,
+        closing: false,
       };
       peers.set(peerId, peerData);
 
       let connectionTimeout;
+      peerData.reportLinkFailed = (reason) => {
+        if (peerData.linkFailureReported || peerData.closing) return;
+        peerData.linkFailureReported = true;
+        const detail = hasTurnRelay
+          ? 'the configured TURN relay was unavailable'
+          : 'no direct path was found and no TURN relay is configured';
+        console.warn(`[GetFire P2P] Peer link failed (${reason}): ${detail}.`);
+        onPeerLinkFailed(peerId);
+      };
+      peerData.reportRoute = async () => {
+        if (peerData.routeReported || peerData.closing) return;
+        try {
+          const stats = await peerConnection.getStats();
+          let pair = null;
+          for (const report of stats.values()) {
+            if (report.type === 'transport' && report.selectedCandidatePairId) {
+              pair = stats.get(report.selectedCandidatePairId) ?? pair;
+            }
+            if (
+              report.type === 'candidate-pair' &&
+              report.state === 'succeeded' &&
+              (report.selected || report.nominated)
+            ) {
+              pair = pair ?? report;
+            }
+          }
+          if (!pair) return;
+          const local = stats.get(pair.localCandidateId);
+          const remote = stats.get(pair.remoteCandidateId);
+          const localType = local?.candidateType ?? 'unknown';
+          const remoteType = remote?.candidateType ?? 'unknown';
+          const route = localType === 'relay' || remoteType === 'relay' ? 'relay' : 'direct';
+          peerData.routeReported = true;
+          p2pLog('route', {
+            peer: peerId?.slice(-8),
+            route,
+            local: localType,
+            remote: remoteType,
+          });
+          onPeerRoute(peerId, route, { localCandidateType: localType, remoteCandidateType: remoteType });
+        } catch {
+          // Route diagnostics must never disturb a healthy data channel.
+        }
+      };
       peerData.markConnected = () => {
         if (findPeerEntry(peerId)[1] !== peerData) return;
         if (peerData.state === 'connected') return;
         clearTimeout(connectionTimeout);
+        if (peerData.disconnectTimer != null) clearTimeout(peerData.disconnectTimer);
+        peerData.disconnectTimer = null;
         peerData.state = 'connected';
+        peerData.disconnectNotified = false;
         p2pLog('connected', { peer: peerId?.slice(-8) });
         onPeerConnected(peerId);
+        setTimeout(() => peerData.reportRoute(), 0);
       };
 
       peerConnection.onicecandidate = (event) => {
@@ -447,7 +503,7 @@
           peerData.markConnected();
         } else if (ice === 'failed') {
           p2pLog('ICE failed - possible network restrictions', peerId?.slice(-8));
-          onPeerLinkFailed(peerId);
+          peerData.reportLinkFailed('ICE failed');
         }
       };
 
@@ -460,9 +516,10 @@
             conn: peerConnection.connectionState,
           });
           p2pLog('connect timeout - possible network restrictions', peerId?.slice(-8));
-          onPeerLinkFailed(peerId);
+          peerData.reportLinkFailed('connection timeout');
         }
       }, ICE_CONNECT_TIMEOUT_MS);
+      peerData.connectionTimeout = connectionTimeout;
 
       peerConnection.onconnectionstatechange = () => {
         // A rejoin replaces this entry. The old socket must not disconnect or
@@ -473,14 +530,21 @@
         if (conn === 'connected') {
           peerData.markConnected();
         } else if (conn === 'disconnected' || conn === 'failed' || conn === 'closed') {
+          if (peerData.closing) return;
           clearTimeout(connectionTimeout);
           peerData.state = 'disconnected';
-          if (conn === 'failed') onPeerLinkFailed(peerId);
-          onPeerDisconnected(peerId);
-          setTimeout(() => {
+          if (conn === 'failed') peerData.reportLinkFailed('connection failed');
+          if (!peerData.disconnectNotified) {
+            peerData.disconnectNotified = true;
+            onPeerDisconnected(peerId);
+          }
+          if (peerData.disconnectTimer != null) clearTimeout(peerData.disconnectTimer);
+          const cleanupDelay = conn === 'disconnected' ? ICE_DISCONNECT_GRACE_MS : 0;
+          peerData.disconnectTimer = setTimeout(() => {
             if (findPeerEntry(peerId)[1] !== peerData) return;
+            if (peerData.state === 'connected') return;
             cleanupPeer(peerId);
-          }, 500);
+          }, cleanupDelay);
         }
       };
 
@@ -642,6 +706,10 @@
       const [id, peerData] = findPeerEntry(peerId);
       if (!peerData) return;
       const key = id ?? peerId;
+      peerData.closing = true;
+      clearTimeout(peerData.connectionTimeout);
+      if (peerData.disconnectTimer != null) clearTimeout(peerData.disconnectTimer);
+      peers.delete(key);
       try {
         if (peerData.dataChannel && peerData.dataChannel.readyState !== 'closed') {
           peerData.dataChannel.close();
@@ -656,7 +724,6 @@
       } catch (e) {
         // Cleanup error
       }
-      peers.delete(key);
       clearOutboundRequest(peerId);
 
       // Try to reconnect to any remaining peers across all joined lobbies.

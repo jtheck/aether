@@ -18,10 +18,12 @@ import {
   replaySimOf,
   replaySimProblem,
   REPLAY_KIND,
+  REPLAY_SIM_MISMATCH,
   REPLAY_SIM_OLD,
   REPLAY_SIM_UNSTAMPED,
   REPLAY_SIM_UPDATE,
   SIM_GENERATION,
+  SIM_RULES_ID,
 } from './replay.js';
 
 describe('replayConfigFromLive', () => {
@@ -123,6 +125,7 @@ describe('buildReplayFile', () => {
     assert.equal(file.tick, 400);
     assert.equal(file.checksum, 0xabc);
     assert.equal(file.sim, SIM_GENERATION);
+    assert.equal(file.simRules, SIM_RULES_ID);
     assert.equal(file.names[0], 'Blind');
     assert.equal(file.frames[0].tick, 12);
     file.frames[0].commands[0].entities.push(9);
@@ -234,6 +237,7 @@ describe('parseReplayFile', () => {
     assert.equal(parsed.config.mode, 'onevsone');
     assert.equal(parsed.frames[0].tick, 3);
     assert.equal(parsed.sim, SIM_GENERATION);
+    assert.equal(parsed.simRules, SIM_RULES_ID);
     assert.equal(replaySimOf(null), REPLAY_SIM_UNSTAMPED);
     assert.throws(
       () => parseReplayFile({
@@ -258,6 +262,13 @@ describe('parseReplayFile', () => {
       }),
       new RegExp(REPLAY_SIM_UPDATE),
     );
+    assert.throws(
+      () => parseReplayFile({
+        ...built,
+        simRules: '000000000000',
+      }),
+      new RegExp(REPLAY_SIM_MISMATCH),
+    );
     assert.equal(replayChecksumExpect({ tick: 80, checksum: 7 }, 80), 7);
     assert.equal(replayChecksumExpect({ tick: 80, checksum: 7 }, 12), null);
     assert.equal(replayChecksumExpect({ tick: 80, checksum: null }, 80), null);
@@ -276,6 +287,7 @@ describe('liveConfigFromReplay', () => {
       v: 1,
       kind: REPLAY_KIND,
       sim: SIM_GENERATION,
+      simRules: SIM_RULES_ID,
       tick: 40,
       config: { seed: 9, mode: 'teams', humanPlayers: [0, 2], activeSlots: [0, 2] },
       frames: [],

@@ -2,7 +2,12 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fx from '../sim/fixed.js';
 import { CMD } from '../sim/commands.js';
-import { SIM_GENERATION, hasCurrentSimGeneration } from '../sim/generation.js';
+import {
+  SIM_GENERATION,
+  SIM_RULES_ID,
+  hasCurrentSimGeneration,
+  hasCurrentSimRules,
+} from '../sim/generation.js';
 import { createWorld, spawn } from '../sim/world.js';
 import { createField } from '../sim/field.js';
 import { UNIT } from '../sim/unitTypes.js';
@@ -76,10 +81,14 @@ describe('lockstep transport wire', () => {
     assert.equal(checksum(worlds[0], fields[0]), checksum(worlds[1], fields[1]));
   });
 
-  it('requires an explicit exact live simulation generation', () => {
+  it('requires an explicit exact live simulation generation and rules epoch', () => {
     assert.equal(hasCurrentSimGeneration(SIM_GENERATION), true);
     assert.equal(hasCurrentSimGeneration(undefined), false);
     assert.equal(hasCurrentSimGeneration(String(SIM_GENERATION)), false);
     assert.equal(hasCurrentSimGeneration(SIM_GENERATION + 1), false);
+    assert.equal(hasCurrentSimRules(SIM_RULES_ID), true);
+    assert.equal(hasCurrentSimRules(undefined), false);
+    assert.equal(hasCurrentSimRules(SIM_RULES_ID.toUpperCase()), false);
+    assert.equal(hasCurrentSimRules('000000000000'), false);
   });
 });

@@ -5,10 +5,10 @@ import { createGameLobby } from './gameLobby.js';
 import { COUNTDOWN_MS, MATCH_CARD_MS, MSG } from '../lobby/protocol.js';
 import { ladderMatchDeal } from '../lobby/ladderMap.js';
 import { CMD } from '../sim/commands.js';
-import { SIM_GENERATION } from '../sim/generation.js';
+import { SIM_GENERATION, SIM_RULES_ID } from '../sim/generation.js';
 
 const withSim = (fn) => (message, ...rest) => fn(
-  { sim: SIM_GENERATION, ...message },
+  { sim: SIM_GENERATION, simRules: SIM_RULES_ID, ...message },
   ...rest,
 );
 
@@ -22,8 +22,12 @@ function fakeP2p(userId = 'host') {
   const sent = [];
   const lobbyMessages = [];
   const lobbies = new Set();
+  const connectedPeers = new Set(['host', 'guest', 'host-id', 'guest-id', 'a', 'b', 'c']);
   return {
     getUserId: () => userId,
+    getConnectedPeers: () => [...connectedPeers],
+    connectPeer(peerId) { connectedPeers.add(peerId); },
+    disconnectPeer(peerId) { connectedPeers.delete(peerId); },
     joinBroadcast() {},
     leaveBroadcast() {},
     broadcast(data, channel) { broadcasts.push({ data, channel }); },
@@ -41,6 +45,7 @@ function fakeP2p(userId = 'host') {
     sent,
     lobbyMessages,
     lobbies,
+    connectedPeers,
   };
 }
 
@@ -93,8 +98,32 @@ describe('match lobby', () => {
 
     receive(join);
     assert.equal(room.getState().playerCount, 1);
-    receive({ ...join, sim: SIM_GENERATION });
+    receive({ ...join, sim: SIM_GENERATION, simRules: SIM_RULES_ID });
     assert.equal(room.getState().playerCount, 2);
+  });
+
+  it('rejects a same-generation peer with a different rules fingerprint', () => {
+    const p2p = fakeP2p('host');
+    let receive = null;
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      subscribeDataMessage: (fn) => { receive = fn; return () => {}; },
+    });
+    room.createRoom('onevsone');
+    const { roomId, mode } = room.getState();
+    receive({
+      v: 1,
+      sim: SIM_GENERATION,
+      simRules: '000000000000',
+      type: MSG.JOIN,
+      userId: 'guest',
+      roomId,
+      mode,
+    });
+    assert.equal(room.getState().playerCount, 1);
+    assert.equal(room.startBlockReason(), 'Version mismatch — hard refresh both players');
   });
 
   it('host applies join/ready and can start', () => {
@@ -135,6 +164,32 @@ describe('match lobby', () => {
     assert.equal(room.requestStart(), true);
     assert.equal(room.getState().phase, 'countdown');
     assert.equal(room.getState().settings.fieldSize, 'tiny');
+    room.leaveRoom();
+  });
+
+  it('does not start until every seated peer has a live link', () => {
+    const p2p = fakeP2p('host');
+    p2p.connectedPeers.clear();
+    let dataFn = null;
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
+    });
+    room.createRoom('onevsone');
+    const { roomId, mode } = room.getState();
+    dataFn({ v: 1, type: MSG.JOIN, userId: 'guest', name: 'Guest', roomId, mode });
+    dataFn({ v: 1, type: MSG.READY, userId: 'guest', ready: true, roomId, mode });
+
+    assert.equal(room.canStart(), false);
+    assert.equal(room.startBlockReason(), 'Waiting for peer connection…');
+    assert.equal(room.requestStart(), false);
+
+    p2p.connectPeer('guest');
+    assert.equal(room.canStart(), true);
+    assert.equal(room.startBlockReason(), '');
+    assert.equal(room.requestStart(), true);
     room.leaveRoom();
   });
 
@@ -704,17 +759,21 @@ describe('match lobby', () => {
     assert.equal(left, 1);
   });
 
-  it('forfeits an opponent who drops during play', async (t) => {
-    t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+  it('keeps a custom match alive when a dropped peer reconnects during grace', async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'] });
     const p2p = fakeP2p('host');
     let dataFn = null;
     let onDisconnect = null;
+    let onConnect = null;
+    let aborted = 0;
     const room = createMatchLobby({
       getP2p: () => p2p,
       getUserId: () => 'host',
       gameLobby: createGameLobby({ getP2p: () => p2p }),
       subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
       subscribePeerDisconnected: (fn) => { onDisconnect = fn; return () => {}; },
+      subscribePeerConnected: (fn) => { onConnect = fn; return () => {}; },
+      onAbortMatch: () => { aborted += 1; },
     });
     room.createRoom('onevsone');
     const { roomId, mode } = room.getState();
@@ -726,8 +785,6 @@ describe('match lobby', () => {
 
     const removed = [];
     const frames = [];
-    onDisconnect('guest');
-    assert.equal(room.getState().playerCount, 1);
     room.attachSession({
       localPlayerId: 0,
       role: 'player',
@@ -742,23 +799,34 @@ describe('match lobby', () => {
       bufferRemoteFrame() {},
       setPeerConfirmedTick() {},
     });
-    assert.deepEqual(removed, [1]);
-    assert.equal(frames[0].cmd.type, CMD.FORCE_ELIMINATE);
-    assert.equal(frames[0].cmd.playerId, 1);
+
+    onDisconnect('guest');
+    assert.equal(room.getState().playerCount, 2);
+    t.mock.timers.tick(3000);
+    onConnect('guest');
+    t.mock.timers.tick(9000);
+
+    assert.equal(room.isActive(), true);
+    assert.equal(aborted, 0);
+    assert.deepEqual(removed, []);
+    assert.deepEqual(frames, []);
     room.leaveRoom();
   });
 
-  it('forfeits the host when their link drops during play', async (t) => {
-    t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+  it('aborts a custom match without a winner when transport loss outlives grace', async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'] });
     let dataFn = null;
     let onDisconnect = null;
+    const p2p = fakeP2p('guest');
+    const aborts = [];
     const guest = createMatchLobby({
-      getP2p: () => fakeP2p('guest'),
+      getP2p: () => p2p,
       getUserId: () => 'guest',
-      gameLobby: createGameLobby({ getP2p: () => fakeP2p('guest') }),
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
       subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
       subscribePeerDisconnected: (fn) => { onDisconnect = fn; return () => {}; },
       onStartMatch: () => {},
+      onAbortMatch: (reason) => { aborts.push(reason); },
     });
     guest.joinRoom('onevsone', 'lobby-1', 'host');
     dataFn({
@@ -775,20 +843,28 @@ describe('match lobby', () => {
     await finishCountdown(t);
     assert.equal(guest.getState().phase, 'playing');
     const removed = [];
+    const frames = [];
     guest.attachSession({
       localPlayerId: 1,
       role: 'player',
       confirmedTick: 4,
       submitCommand() { return null; },
       removeHumanPlayer(id) { removed.push(id); },
-      submitAtTick() { return { tick: 6 }; },
+      submitAtTick(tick, cmd) {
+        frames.push({ tick, cmd });
+        return { tick, commands: [cmd] };
+      },
       bufferRemoteFrame() {},
       setPeerConfirmedTick() {},
     });
     onDisconnect('host');
-    assert.deepEqual(removed, [0]);
-    assert.equal(guest.getState().playerCount, 1);
-    guest.leaveRoom();
+    t.mock.timers.tick(8500);
+    await Promise.resolve();
+
+    assert.equal(guest.isActive(), false);
+    assert.deepEqual(aborts, ['Connection lost — match aborted']);
+    assert.deepEqual(removed, []);
+    assert.deepEqual(frames, []);
   });
 
   it('a ranked disconnect is a loss only after the grace', async (t) => {
@@ -922,15 +998,17 @@ describe('match lobby', () => {
     assert.equal(requeue, 1);
   });
 
-  it('forfeits a player whose confirms stop', async (t) => {
+  it('aborts a custom match when confirms stop without a disconnect event', async (t) => {
     t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'] });
     const p2p = fakeP2p('host');
     let dataFn = null;
+    const aborts = [];
     const room = createMatchLobby({
       getP2p: () => p2p,
       getUserId: () => 'host',
       gameLobby: createGameLobby({ getP2p: () => p2p }),
       subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
+      onAbortMatch: (reason) => { aborts.push(reason); },
     });
     room.createRoom('onevsone');
     const { roomId, mode } = room.getState();
@@ -957,10 +1035,11 @@ describe('match lobby', () => {
       setPeerConfirmedTick() {},
     });
     t.mock.timers.tick(500);
-    assert.deepEqual(removed, [1]);
-    assert.equal(frames[0].cmd.type, CMD.FORCE_ELIMINATE);
-    assert.equal(frames[0].cmd.playerId, 1);
-    room.leaveRoom();
+    await Promise.resolve();
+    assert.equal(room.isActive(), false);
+    assert.deepEqual(aborts, ['Connection lost — match aborted']);
+    assert.deepEqual(removed, []);
+    assert.deepEqual(frames, []);
   });
 
   it('a paused match does not forfeit a quiet opponent', async (t) => {

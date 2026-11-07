@@ -53,7 +53,12 @@ import {
   packLedgerChunks,
 } from './kothCheckpointWire.js';
 import { CMD } from '../sim/commands.js';
-import { SIM_GENERATION, hasCurrentSimGeneration } from '../sim/generation.js';
+import {
+  SIM_GENERATION,
+  SIM_RULES_ID,
+  hasCurrentSimGeneration,
+  hasCurrentSimRules,
+} from '../sim/generation.js';
 import { attachKothAuthoredGarden } from '../koth/authoredMap.js';
 import { compactFrameForTransport, expandTransportFrame } from '../network/lockstepWire.js';
 import { kothWipedOwners } from '../sim/kothMeta.js';
@@ -233,6 +238,7 @@ function userIdsMatch(a, b) {
  *   onShardChange?: (shard: object) => void,
  *   onLiveStart?: (config: object) => void,
  *   onPresentationSync?: (config: object) => void,
+ *   iceServers?: RTCIceServer[],
  * }} [options]
  */
 export function createKothShard(options = {}) {
@@ -243,6 +249,7 @@ export function createKothShard(options = {}) {
   const onLeaveSolo = options.onLeaveSolo ?? (() => {});
   const loadGarden = options.loadGarden ?? null;
   const onAuthoredMap = options.onAuthoredMap ?? (() => {});
+  let rulesMismatchNotedAt = -Infinity;
   let armyPerSide = (options.armyPerSide | 0) || 0;
 
   if (typeof globalThis.GETFIREP2P !== 'function') {
@@ -605,6 +612,7 @@ export function createKothShard(options = {}) {
         appState,
         v: KOTH_PROTOCOL_VERSION,
         sim: SIM_GENERATION,
+        simRules: SIM_RULES_ID,
         peers: connectedPeerIds(),
         sponsorId: assignedSponsorId,
         observerDepth,
@@ -1415,6 +1423,7 @@ export function createKothShard(options = {}) {
         phase: SHARD_PHASE.SANDBOX,
         v: KOTH_PROTOCOL_VERSION,
         sim: SIM_GENERATION,
+        simRules: SIM_RULES_ID,
       },
       BROADCAST,
     );
@@ -1755,12 +1764,29 @@ export function createKothShard(options = {}) {
         ? { ...msg, frame: compactFrameForTransport(msg.frame) }
         : msg;
     const versioned =
-      framed.v === KOTH_PROTOCOL_VERSION && framed.sim === SIM_GENERATION
+      framed.v === KOTH_PROTOCOL_VERSION
+      && framed.sim === SIM_GENERATION
+      && framed.simRules === SIM_RULES_ID
         ? framed
-        : { ...framed, v: KOTH_PROTOCOL_VERSION, sim: SIM_GENERATION };
+        : {
+            ...framed,
+            v: KOTH_PROTOCOL_VERSION,
+            sim: SIM_GENERATION,
+            simRules: SIM_RULES_ID,
+          };
     const sourced = versioned.from == null && localUserId ? { ...versioned, from: localUserId } : versioned;
     if (sourced._mid) return sourced;
     return { ...sourced, _mid: nextMessageId(sourced.type ?? 'msg') };
+  }
+
+  function acceptsCurrentRules(msg, notice = false) {
+    if (hasCurrentSimGeneration(msg?.sim) && hasCurrentSimRules(msg?.simRules)) return true;
+    const now = Date.now();
+    if (notice && now - rulesMismatchNotedAt >= 5000) {
+      rulesMismatchNotedAt = now;
+      onStatus('Player version mismatch — hard refresh');
+    }
+    return false;
   }
 
   function sendBroadcastMsg(msg) {
@@ -4744,7 +4770,7 @@ export function createKothShard(options = {}) {
     if (!msg?.type) return;
     if (noteChat(msg, { requireMatchId: true })) return;
     if (msg.v !== KOTH_PROTOCOL_VERSION) return;
-    if (!hasCurrentSimGeneration(msg.sim)) return;
+    if (!acceptsCurrentRules(msg, true)) return;
     if (msg._mid) {
       if (seenMessageIds.has(msg._mid)) return;
       rememberMessageId(msg._mid);
@@ -5216,6 +5242,7 @@ export function createKothShard(options = {}) {
       type: MSG.SHARD_HELLO,
       v: KOTH_PROTOCOL_VERSION,
       sim: SIM_GENERATION,
+      simRules: SIM_RULES_ID,
       matchId,
       from: localUserId,
       phase,
@@ -5363,7 +5390,7 @@ export function createKothShard(options = {}) {
     if (!msg?.type) return;
     if (msg.from && userIdsMatch(msg.from, localUserId)) return;
     if (msg.v !== KOTH_PROTOCOL_VERSION) return;
-    if (!hasCurrentSimGeneration(msg.sim)) return;
+    if (!acceptsCurrentRules(msg, true)) return;
     if (msg._mid) {
       if (seenMessageIds.has(msg._mid)) return;
       rememberMessageId(msg._mid);
@@ -5442,7 +5469,7 @@ export function createKothShard(options = {}) {
     emitListeners(broadcastListeners, data, raw);
     if (!data?.type) return;
     if (noteChat(data, { requireMatchId: true })) return;
-    if (!hasCurrentSimGeneration(data.sim)) return;
+    if (!acceptsCurrentRules(data)) return;
     if (data.type !== MSG.SHARD_PRESENCE) {
       onGameBroadcastMessage(data);
       return;
@@ -5497,6 +5524,7 @@ export function createKothShard(options = {}) {
   p2p = globalThis.GETFIREP2P({
     roomType: LOBBY,
     devMode: p2pDevModeFromLocation(),
+    iceServers: options.iceServers,
     onGameLobbyMessage,
     onMatchLobbyConnected,
     onDataChannelMessage: onDataMessage,

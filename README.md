@@ -4,6 +4,12 @@ Current game: `src/`. What ships: `DEPLOY/` (`npm run package` in `src/`, then `
 
 The deprecated Babylon 9 client lives in `legacy/` (`index.html`, `game/`, `vendor/babylon9*`). Shared art stays at repo-root `assets/`.
 
+## Multiplayer compatibility
+
+The shipped client is STUN/direct-P2P by default and does not bundle a TURN account. A future relay is injected as an `iceServers` array through the `createKothShard` options and passed to `GETFIREP2P`; keep provider credentials and billing policy outside the vendor wrapper.
+
+`SIM_GENERATION` and `src/sim/rulesEpoch.js` identify deterministic rules. After an intentional change under `src/sim/` or to `src/app/sim.worker.js`, bump `SIM_GENERATION` and run `npm run sim-rules:write` from `src/`. `npm run package` refuses to ship changed deterministic sources without that bump. Render and shader changes are excluded.
+
 ## Ladder Lambda
 
 Ranked ladder is the existing function `aether-ladder` in `us-west-2`. Update that function. `deploy-live.ps1` does not ship it. The function URL is in `src/app/ladderApi.js`.

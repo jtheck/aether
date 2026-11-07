@@ -3830,6 +3830,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         kothShard.setLobbyMatchHold?.(false);
         return restoreMenuSkirmishBackdrop(ctxRef.current);
       },
+      onAbortMatch: async (reason) => {
+        matchLobby.detachSession();
+        kothShard.setLobbyMatchHold?.(false);
+        await restoreMenuSkirmishBackdrop(ctxRef.current);
+        setStatusText(reason);
+      },
     });
     observerLobby = matchLobby;
     kothLobbyUi = setupKothLobby({

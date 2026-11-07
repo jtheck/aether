@@ -3,9 +3,9 @@
 
 import { packReplayCams } from './replayCam.js';
 import { isWorkshopRef } from './workshop.js';
-import { SIM_GENERATION } from '../sim/generation.js';
+import { SIM_GENERATION, SIM_RULES_ID, hasCurrentSimRules } from '../sim/generation.js';
 
-export { SIM_GENERATION } from '../sim/generation.js';
+export { SIM_GENERATION, SIM_RULES_ID } from '../sim/generation.js';
 
 export const REPLAY_KIND = 'aether-replay';
 export const REPLAY_VERSION = 1;
@@ -162,6 +162,7 @@ export function buildReplayFile(session, extra = {}) {
   const file = {
     v: REPLAY_VERSION,
     sim: SIM_GENERATION,
+    simRules: SIM_RULES_ID,
     kind: REPLAY_KIND,
     savedAt: extra.savedAt ?? new Date().toISOString(),
     tick: (session?.confirmedTick | 0) || 0,
@@ -329,6 +330,7 @@ export function parseReplayFile(raw) {
   if ((data.v | 0) !== REPLAY_VERSION) throw new Error('Unsupported replay version');
   const simProblem = replaySimProblem(data.sim);
   if (simProblem) throw new Error(simProblem);
+  if (!hasCurrentSimRules(data.simRules)) throw new Error(REPLAY_SIM_MISMATCH);
   if (!data.config || typeof data.config !== 'object') throw new Error('Replay is missing match config');
   if (!Array.isArray(data.frames)) throw new Error('Replay is missing frames');
   const config = replayConfigFromLive(data.config);
@@ -336,6 +338,7 @@ export function parseReplayFile(raw) {
   return {
     v: REPLAY_VERSION,
     sim: replaySimOf(data.sim),
+    simRules: data.simRules,
     kind: REPLAY_KIND,
     savedAt: typeof data.savedAt === 'string' ? data.savedAt : '',
     tick: data.tick | 0,

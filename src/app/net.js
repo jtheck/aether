@@ -3,7 +3,12 @@
 
 import { animStressPerSideFromSearch, stressPerSideFromSearch } from '../sim/worldSetup.js';
 import { networkChannel } from '../network/namespace.js';
-import { SIM_GENERATION, hasCurrentSimGeneration } from '../sim/generation.js';
+import {
+  SIM_GENERATION,
+  SIM_RULES_ID,
+  hasCurrentSimGeneration,
+  hasCurrentSimRules,
+} from '../sim/generation.js';
 import { compactFrameForTransport, expandTransportFrame } from '../network/lockstepWire.js';
 
 const LOBBY = networkChannel('aether-v2');
@@ -43,7 +48,7 @@ function sendReliable(p2p, message, peerId = null) {
 
 /**
  * Auto-match two tabs via GetFire P2P, then bridge SimSession lockstep.
- * @param {{ lobby?: string, seed?: number, onStatus?: (msg: string) => void }} [options]
+ * @param {{ lobby?: string, seed?: number, onStatus?: (msg: string) => void, iceServers?: RTCIceServer[] }} [options]
  */
 export function createNetMatch(options = {}) {
   const lobby = options.lobby ?? LOBBY;
@@ -83,26 +88,36 @@ export function createNetMatch(options = {}) {
     matchResolve(config);
   }
 
-  function rejectPeerGeneration(value, id = peerId) {
+  function rejectPeerVersion(msg, id = peerId) {
     if (matchDone) return;
     matchDone = true;
     clearTimeout(matchTimeout);
     if (rejoinTimer) clearInterval(rejoinTimer);
-    const shown = value == null ? 'missing' : String(value);
-    const error = new Error(`Simulation generation mismatch (peer ${shown}, local ${SIM_GENERATION})`);
+    const generationOk = hasCurrentSimGeneration(msg?.sim);
+    const shown = generationOk
+      ? `rules ${msg?.simRules ?? 'missing'}`
+      : `generation ${msg?.sim ?? 'missing'}`;
+    const error = new Error(
+      `Simulation version mismatch (peer ${shown}, local ${SIM_GENERATION}/${SIM_RULES_ID}) — hard refresh`,
+    );
     onStatus(error.message);
     p2p?.disconnectPeer?.(id);
     matchReject(error);
   }
 
   function sendMatchReady(id) {
-    sendReliable(p2p, { type: 'match_ready', sim: SIM_GENERATION }, id);
+    sendReliable(
+      p2p,
+      { type: 'match_ready', sim: SIM_GENERATION, simRules: SIM_RULES_ID },
+      id,
+    );
   }
 
   function sendMatchStart(id) {
     const startMsg = {
       type: 'match_start',
       sim: SIM_GENERATION,
+      simRules: SIM_RULES_ID,
       seed: defaultSeed,
       hostUserId: localUserId,
       guestUserId: id,
@@ -166,8 +181,8 @@ export function createNetMatch(options = {}) {
     switch (msg.type) {
       case 'match_start':
         if (matchDone) return;
-        if (!hasCurrentSimGeneration(msg.sim)) {
-          rejectPeerGeneration(msg.sim, fromPeerId);
+        if (!hasCurrentSimGeneration(msg.sim) || !hasCurrentSimRules(msg.simRules)) {
+          rejectPeerVersion(msg, fromPeerId);
           return;
         }
         if (!localUserId) localUserId = p2p.getUserId?.() ?? null;
@@ -177,8 +192,8 @@ export function createNetMatch(options = {}) {
         break;
 
       case 'match_ready':
-        if (!hasCurrentSimGeneration(msg.sim)) {
-          rejectPeerGeneration(msg.sim, fromPeerId);
+        if (!hasCurrentSimGeneration(msg.sim) || !hasCurrentSimRules(msg.simRules)) {
+          rejectPeerVersion(msg, fromPeerId);
           return;
         }
         if (matchDone) return;
@@ -240,6 +255,7 @@ export function createNetMatch(options = {}) {
   p2p = globalThis.GETFIREP2P({
     roomType: networkChannel('aether-v2'),
     devMode: p2pDevModeFromLocation(),
+    iceServers: options.iceServers,
     onGameLobbyMessage,
     onDataChannelMessage: onDataMessage,
     onPeerConnected,

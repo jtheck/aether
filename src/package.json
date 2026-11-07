@@ -3,6 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "check:sim-rules": "node ../scripts/check-sim-rules.mjs",
+    "sim-rules:write": "node ../scripts/check-sim-rules.mjs --write",
+    "test:sim-rules": "node --test ../scripts/sim-rules.test.mjs && node ../scripts/check-sim-rules.mjs",
     "test:determinism": "node sim/determinism.test.js",
     "test:spatial": "node sim/spatial.test.js",
     "test:projectiles": "node sim/projectiles.test.js",
@@ -34,6 +37,7 @@
     "serve": "node serve.mjs",
     "prebake": "node prebake.mjs",
     "prebake:repack": "node prebake/repackMeshes.mjs",
+    "prepackage": "node ../scripts/check-sim-rules.mjs",
     "package": "node package.mjs"
   },
   "dependencies": {

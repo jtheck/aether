@@ -63,8 +63,12 @@ import {
   BUILDING_FOOTPRINTS,
   buildingOffersMenuItem,
   canPreviewPlaceBuilding,
+  actionMenuForSelection,
   mergeBuildingMenus,
+  buildingCanRally,
   defaultRallyWorld,
+  RALLY_EXTRA_HOP_MAX,
+  RALLY_EXTRA_HOP_MAX_DRAYAGE,
   isRallyBeyondBuilding,
   listRallyFlags,
   buildingTrainsOnlyFlyers,
@@ -154,6 +158,7 @@ import {
 import { setupInput } from './input.js';
 import { canvasCenterClient } from './input/gamepadCursor.js';
 import { isCameraFollowTypingTarget, selectionCentroidXZ, shouldHoldSelectionFollow } from './input/cameraFollow.js';
+import { menuHotkeyPick } from './input/menuHotkeys.js';
 import { isControlGroupDoubleTap } from './input/controlGroups.js';
 import {
   aggregateBuildingTracks,
@@ -1977,6 +1982,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   let placementParked = false;
   /** True while setting a production building's train rally with the flag cursor. */
   let placingRally = false;
+  /**
+   * Second select of a production building. Ground clicks plant the rally.
+   * A ghost flag stands in when no point is planted yet.
+   */
+  let buildingWaypointPreview = false;
   /** @type {{ kind: 'agora' | 'building', index: number }[]} */
   let selectedBuildings = [];
   /** Space held: camera zips to / locks on the current selection. */
@@ -2177,27 +2187,52 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     return markers;
   }
 
-  function setRallyGhostAt(b, x, z) {
-    const tx = worldToTile(fx.fromFloat(x));
-    const tz = worldToTileZ(fx.fromFloat(z));
-    const key = ((tz & 0xffff) << 16) | (tx & 0xffff);
+  function setRallyGhostAt(b, x, z, hopFrom = -1, from = null) {
+    const over = !isRallyBeyondBuilding(b.type, b.x, b.z, x, z);
+    const lift = over ? (renderer.buildingChipHeight?.(b.type) ?? 0) : 0;
     const pathOpts = rallyPathOptsForOwner(b.owner);
-    if (key !== ghostPathTileKey || !ghostPathPoints) {
-      ghostPathTileKey = key;
-      ghostPathPoints = rallyPathWorldPoints(session.field, b, x, z, pathOpts);
+    let fromX = b.x;
+    let fromZ = b.z;
+    /** @type {{ x: number, z: number }[] | null} */
+    let points;
+    if ((hopFrom | 0) >= 0 && from) {
+      fromX = from.x;
+      fromZ = from.z;
+      ghostPathTileKey = -1;
+      points = rallySegmentWorldPoints(session.field, fromX, fromZ, x, z, {
+        ...pathOpts,
+        air: buildingTrainsOnlyFlyers(b.type),
+      });
+    } else if (over) {
+      ghostPathTileKey = -1;
+      ghostPathPoints = null;
+      points = [
+        { x: b.x, z: b.z },
+        { x, z },
+      ];
     } else {
-      // Same tile - keep the A* spine, pin the tip to the live cursor.
-      const pts = ghostPathPoints.slice();
-      if (pts.length) pts[pts.length - 1] = { x, z };
-      else pts.push({ x, z });
-      ghostPathPoints = pts;
+      const tx = worldToTile(fx.fromFloat(x));
+      const tz = worldToTileZ(fx.fromFloat(z));
+      const key = ((tz & 0xffff) << 16) | (tx & 0xffff);
+      if (key !== ghostPathTileKey || !ghostPathPoints) {
+        ghostPathTileKey = key;
+        ghostPathPoints = rallyPathWorldPoints(session.field, b, x, z, pathOpts);
+      } else {
+        // Same tile - keep the A* spine, pin the tip to the live cursor.
+        const pts = ghostPathPoints.slice();
+        if (pts.length) pts[pts.length - 1] = { x, z };
+        else pts.push({ x, z });
+        ghostPathPoints = pts;
+      }
+      points = ghostPathPoints;
     }
     renderer.setRallyGhost?.({
       x,
       z,
-      fromX: b.x,
-      fromZ: b.z,
-      points: ghostPathPoints,
+      lift,
+      fromX,
+      fromZ,
+      points,
       owner: localPlayerId,
     });
   }
@@ -2245,15 +2280,36 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       rz = def.z;
     }
     setRallyGhostAt(b, rx, rz);
-    // Hide planted marker while the ghost owns the cursor.
-    renderer.placeRallyFlags?.([]);
+  }
+
+  function waypointPreviewBuilding() {
+    const buildings = session.buildings ?? [];
+    if (actionBuildingIndex >= 0) {
+      const primary = buildings[actionBuildingIndex];
+      if (primary && buildingCanRally(primary.type)) return primary;
+    }
+    for (let i = 0; i < selectedBuildings.length; i++) {
+      const sel = selectedBuildings[i];
+      if (sel?.kind !== 'building') continue;
+      const b = buildings[sel.index];
+      if (!b || (b.owner | 0) !== localPlayerId) continue;
+      if (!buildingCanRally(b.type)) continue;
+      return b;
+    }
+    return null;
+  }
+
+  /** Flag on the roof so the mode is visible while the aim is still on the building. */
+  function showUnsetWaypointPreview(b) {
+    if (!b) return;
+    setRallyGhostAt(b, b.x, b.z);
   }
 
   function endRallyPlacement() {
     placingRally = false;
     ghostPathTileKey = -1;
     ghostPathPoints = null;
-    renderer.setRallyGhost?.(null);
+    if (!buildingWaypointPreview) renderer.setRallyGhost?.(null);
     syncRallyFlagMarkers();
   }
   /** Radians - kept across multi-place until cancel / type switch. */
@@ -2407,26 +2463,26 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   }
 
   function menuForActionGroup(indices, list = session.buildings) {
-    const menu = mergeBuildingMenus(typesForActionGroup(indices, list));
+    let menu = mergeBuildingMenus(typesForActionGroup(indices, list));
     // Villages auto-trickle villagers (no train button) - surface a display-only
     // villager pad so the player can watch that production's progress. Shown
     // while the site is still rising; the ring stays empty until it completes.
     if (firstVillageIndex(indices, list) >= 0) {
-      const units = [
-        { id: 'villager', name: 'Villager', cost: {}, auto: true },
-        ...(menu?.units ?? []),
-      ];
-      return {
-        units,
+      menu = {
+        units: [
+          { id: 'villager', name: 'Villager', cost: {}, auto: true },
+          ...(menu?.units ?? []),
+        ],
         upgrades: menu?.upgrades ?? [],
         buildings: menu?.buildings ?? [],
       };
     }
-    return menu;
+    return actionMenuForSelection(menu, indices?.length ?? 0);
   }
 
   function actionMenuKeyFrom(indices, list = session.buildings) {
-    return typesForActionGroup(indices, list).slice().sort().join('+');
+    const multi = (indices?.length ?? 0) > 1 ? 'm:' : '';
+    return multi + typesForActionGroup(indices, list).slice().sort().join('+');
   }
 
   function groupHasConstructionSite(indices, list = session.buildings) {
@@ -3293,11 +3349,29 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       comboPlaceEntities = type === 'agora' && entities?.length ? entities.slice() : null;
     },
     isPlacingRally: () => placingRally,
-    onRallyMove: (x, z) => {
-      if (!placingRally || actionBuildingIndex < 0) return;
-      const b = session.buildings?.[actionBuildingIndex];
+    rallyHopCap: () =>
+      ownerHasDrayage(localPlayerId) ? RALLY_EXTRA_HOP_MAX_DRAYAGE : RALLY_EXTRA_HOP_MAX,
+    onBuildingWaypoint: (armed) => {
+      buildingWaypointPreview = !!armed;
+      if (!buildingWaypointPreview) {
+        if (!placingRally) {
+          ghostPathTileKey = -1;
+          ghostPathPoints = null;
+          renderer.setRallyGhost?.(null);
+          syncRallyFlagMarkers();
+        }
+        return;
+      }
+      syncRallyFlagMarkers();
+      showUnsetWaypointPreview(waypointPreviewBuilding());
+    },
+    onRallyMove: (x, z, hopFrom = -1, from = null) => {
+      if (!placingRally && !buildingWaypointPreview) return;
+      const b = placingRally
+        ? session.buildings?.[actionBuildingIndex]
+        : waypointPreviewBuilding();
       if (!b) return;
-      setRallyGhostAt(b, x, z);
+      setRallyGhostAt(b, x, z, placingRally ? -1 : hopFrom, placingRally ? null : from);
     },
     onRallyConfirm: (x, z) => {
       if (!playerCanIssueCommands()) return;
@@ -3663,7 +3737,18 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       openOwnAgoraMenu();
       return;
     }
-    if (e.code === 'KeyQ' || e.code === 'KeyA' || e.code === 'KeyT') {
+    const menuPick = menuHotkeyPick(renderer.getRadialStickTargets?.() ?? null, e.code);
+    if (menuPick !== undefined) {
+      if (isCameraFollowTypingTarget(document.activeElement)) return;
+      e.preventDefault();
+      if (!bootInteractive || !menuPick) return;
+      inputApi.confirmRadialPick?.(menuPick);
+      return;
+    }
+    if (
+      e.code === 'KeyQ' || e.code === 'KeyA' || e.code === 'KeyT'
+      || e.code === 'KeyG' || e.code === 'KeyH'
+    ) {
       if (isCameraFollowTypingTarget(document.activeElement)) return;
       e.preventDefault();
       if (!bootInteractive) return;

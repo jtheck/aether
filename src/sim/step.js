@@ -28,12 +28,13 @@ import {
   planPathBudget,
   attackInRange,
   atFinalDest,
+  clearPath,
   waypointReached,
   onPathExhausted,
   wpBase,
   MAX_REPATHS,
 } from './path.js';
-import { getUnitDef, UNIT_DEFS, UNIT, unitFootprint, unitSteer, unitAccel, unitDecel, unitSlowMul, isFlyer } from './unitTypes.js';
+import { getUnitDef, UNIT_DEFS, UNIT, pairSeparationDist, unitSteer, unitAccel, unitDecel, unitSlowMul, isFlyer } from './unitTypes.js';
 import { ORDER } from './world.js';
 import { continueRallyHop, tickBuildingMorphs } from './buildings.js';
 import { worldToTile, worldToTileZ, isPassable, isSlowTile } from './field.js';
@@ -129,7 +130,7 @@ for (let a = 0; a < SEP_TYPE_COUNT; a++) {
   for (let b = 0; b < SEP_TYPE_COUNT; b++) {
     const key = a * SEP_TYPE_COUNT + b;
     // Footprints alone are size/6 (~1.25); floor is the main "how far apart" knob.
-    const spacing = Math.max(2.9, unitFootprint(a) + unitFootprint(b));
+    const spacing = pairSeparationDist(a, b);
     SEP_MIN_DIST[key] = fx.fromFloat(spacing);
     SEP_MIN_DIST_SQ[key] = fx.mul(SEP_MIN_DIST[key], SEP_MIN_DIST[key]);
   }
@@ -350,6 +351,14 @@ function movementSystem(w, field) {
         // Path exhausted - repath or seek final dest (do not go IDLE early).
         onPathExhausted(w, field, i);
         if (atFinalDest(w, i)) {
+          // Repair stand-off is the destination. Arriving there is the job,
+          // not a completed move — finishMove would drop the order.
+          if (order === ORDER.REPAIR) {
+            clearPath(w, i);
+            w.vx[i] = 0;
+            w.vy[i] = 0;
+            continue;
+          }
           if (continueRallyHop(w, field, i)) continue;
           if (
             order === ORDER.ATTACK_MOVE &&
@@ -624,6 +633,7 @@ function movingAvoidanceSystem(w, field) {
         if (!isAvoidanceUnit(w, j) || w.owner[i] !== w.owner[j]) continue;
         // Need at least one mover - pure standers are separationSystem's job.
         if (!isMovingUnit(w, i) && !isMovingUnit(w, j)) continue;
+        if (isRepairPair(w, i, j)) continue;
         w.metrics.movingAvoidancePairs++;
         applyMovingAvoidance(w, field, i, j);
       }
@@ -641,6 +651,7 @@ function movingAvoidanceSystem(w, field) {
         for (let j = grid.next[i]; j >= 0; j = grid.next[j]) {
           if (w.owner[i] !== w.owner[j]) continue;
           if (!isMovingUnit(w, i) && !isMovingUnit(w, j)) continue;
+          if (isRepairPair(w, i, j)) continue;
           w.metrics.movingAvoidancePairs++;
           applyMovingAvoidance(w, field, i, j);
         }
@@ -654,6 +665,7 @@ function movingAvoidanceSystem(w, field) {
           for (let j = grid.head[other]; j >= 0; j = grid.next[j]) {
             if (w.owner[i] !== w.owner[j]) continue;
             if (!isMovingUnit(w, i) && !isMovingUnit(w, j)) continue;
+            if (isRepairPair(w, i, j)) continue;
             w.metrics.movingAvoidancePairs++;
             applyMovingAvoidance(w, field, i, j);
           }
@@ -689,7 +701,7 @@ function separationSystem(w, field) {
     if (!w.alive[i]) continue;
     for (let j = i + 1; j < w.count; j++) {
       if (!w.alive[j]) continue;
-      if (isAttackPair(w, i, j)) continue;
+      if (isAttackPair(w, i, j) || isRepairPair(w, i, j)) continue;
       applySeparation(w, field, i, j);
     }
   }
@@ -705,7 +717,7 @@ function gridSeparation(w, field) {
       for (let i = grid.head[cell]; i >= 0; i = grid.next[i]) {
         for (let j = grid.next[i]; j >= 0; j = grid.next[j]) {
           w.metrics.separationPairs++;
-          if (isAttackPair(w, i, j)) continue;
+          if (isAttackPair(w, i, j) || isRepairPair(w, i, j)) continue;
           applySeparation(w, field, i, j);
         }
       }
@@ -725,7 +737,7 @@ function gridSeparation(w, field) {
         for (let i = grid.head[cell]; i >= 0; i = grid.next[i]) {
           for (let j = grid.head[other]; j >= 0; j = grid.next[j]) {
             w.metrics.separationPairs++;
-            if (isAttackPair(w, i, j)) continue;
+            if (isAttackPair(w, i, j) || isRepairPair(w, i, j)) continue;
             applySeparation(w, field, i, j);
           }
         }
@@ -838,5 +850,12 @@ function revertIfBlocked(w, field, i, undoX, undoY) {
 function isAttackPair(w, i, j) {
   if (w.order[i] === ORDER.ATTACK && w.targetEntity[i] === j) return true;
   if (w.order[j] === ORDER.ATTACK && w.targetEntity[j] === i) return true;
+  return false;
+}
+
+/** Engineer fixing this unit — don't shove the thing being repaired. */
+function isRepairPair(w, i, j) {
+  if (w.order[i] === ORDER.REPAIR && w.targetEntity[i] === j) return true;
+  if (w.order[j] === ORDER.REPAIR && w.targetEntity[j] === i) return true;
   return false;
 }

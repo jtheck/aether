@@ -471,6 +471,10 @@
       };
       peerData.markConnected = () => {
         if (findPeerEntry(peerId)[1] !== peerData) return;
+        // ICE/DTLS can report connected before the reliable application channel
+        // is usable. App callbacks send their lobby handshake immediately, so
+        // exposing the peer any earlier silently drops that handshake.
+        if (peerData.dataChannel?.readyState !== 'open') return;
         if (peerData.state === 'connected') return;
         clearTimeout(connectionTimeout);
         if (peerData.disconnectTimer != null) clearTimeout(peerData.disconnectTimer);
@@ -559,8 +563,8 @@
           // If we ever want best-effort delivery for high-rate telemetry, create a *second*
           // channel for that traffic instead of making the primary channel unreliable.
         });
-        setupDataChannel(dataChannel, peerId);
         peerData.dataChannel = dataChannel;
+        setupDataChannel(dataChannel, peerId);
         
         // Wait a bit before creating offer to ensure data channel is ready
         setTimeout(() => {
@@ -582,8 +586,8 @@
       } else {
         peerConnection.ondatachannel = (event) => {
           const dataChannel = event.channel;
-          setupDataChannel(dataChannel, peerId);
           peerData.dataChannel = dataChannel;
+          setupDataChannel(dataChannel, peerId);
         };
       }
       return peerData;
@@ -593,6 +597,7 @@
     function setupDataChannel(dataChannel, peerId) {
       dataChannel.onopen = () => {
         const [, peerData] = findPeerEntry(peerId);
+        if (peerData?.dataChannel !== dataChannel) return;
         peerData?.markConnected?.();
         // Test the connection with a ping
         setTimeout(() => {
@@ -868,7 +873,7 @@
     GETFIREP2P.getConnectedPeers = function() {
       return Array.from(peers.keys()).filter(peerId => {
         const peerData = peers.get(peerId);
-        return peerData.state === 'connected';
+        return peerData.state === 'connected' && peerData.dataChannel?.readyState === 'open';
       });
     };
 

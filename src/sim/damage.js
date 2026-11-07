@@ -5,7 +5,7 @@ import { claimEngagement } from './engagement.js';
 import { getUnitDef, isTransport, UNIT } from './unitTypes.js';
 import { isHostile } from './teams.js';
 import { storyProtectsOwner } from './storyProtect.js';
-import { unloadPassengers } from './transport.js';
+import { releaseTransportPickup, unloadPassengers } from './transport.js';
 import { onMycoDeath } from './sporeBloom.js';
 import { armChaseLeash } from './leash.js';
 import { creditDamagedBy, noteWarriorDamage } from './champion.js';
@@ -81,11 +81,13 @@ export function kill(w, i, source = -1) {
   const deathY = w.py[i];
   // Spill passengers alive before clearing the hull.
   if (isTransport(w.type[i])) {
+    releaseTransportPickup(w, i);
     unloadPassengers(w, i, null, null);
   }
   // Drop out of a living transport's passenger set.
   if (w.carriedBy) w.carriedBy[i] = -1;
   if (w.transportTarget) w.transportTarget[i] = -1;
+  if (w.transportWait) w.transportWait[i] = 0;
   w.alive[i] = 0;
   w.order[i] = w.ORDER.IDLE;
   w.targetEntity[i] = -1;

@@ -7,7 +7,7 @@
 // socket echo.
 //
 // Tap-driven so mobile works without a hardware keyboard: a Chat button opens
-// the composer (input + Send); desktop can also press Enter as a shortcut.
+// the composer (input + Send); desktop can also press Enter or Y as a shortcut.
 //
 // `resolveChat()` returns the currently-active chat surface, or null when the
 // player is not in a networked room:
@@ -407,10 +407,12 @@ export function setupChatHud({ resolveChat, getUserId } = {}) {
     }
   });
 
-  // Press Enter anywhere (when not already typing) to jump into chat - desktop
-  // shortcut that complements the on-screen button used on touch devices.
+  // Press Enter or Y anywhere (when not already typing) to jump into chat.
+  // Desktop shortcut that complements the on-screen button used on touch devices.
   window.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' || root.hidden || root.classList.contains('chat-local')) return;
+    const enter = e.key === 'Enter';
+    const y = e.code === 'KeyY' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat;
+    if ((!enter && !y) || root.hidden || root.classList.contains('chat-local')) return;
     if (isTypingTarget(e.target) || e.target === input) return;
     e.preventDefault();
     setOpen(true);

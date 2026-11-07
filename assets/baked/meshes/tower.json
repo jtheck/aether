@@ -4,10 +4,10 @@
   "sockets": [
     {
       "name": "fire_anchor",
-      "x": -2.8185248374938965,
-      "y": 7.924212455749512,
-      "z": 2.997220754623413,
-      "scale": 0.6687835454940796,
+      "x": -2.848846912384033,
+      "y": 7.516341686248779,
+      "z": 3.148285388946533,
+      "scale": 1.0570920705795288,
       "yaw": 0,
       "pitch": 0,
       "roll": 0
@@ -36,6 +36,29 @@
       "normalImage": null,
       "ormImage": null,
       "emissiveImage": null
+    },
+    {
+      "name": "TeamColor",
+      "baseColorFactor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
     }
   ],
   "images": [],
@@ -45,33 +68,68 @@
       "materialIndex": 0,
       "reverseWinding": true,
       "boundMin": [
-        -3.7439866065979004,
-        0.07671821117401123,
-        -3.793484687805176
+        -3.987872838973999,
+        -0.7337707877159119,
+        -4.060614109039307
       ],
       "boundMax": [
-        3.4251410961151123,
-        8.519264221191406,
-        4.058891773223877
+        3.669027328491211,
+        8.593503952026367,
+        4.326021671295166
       ],
       "positions": {
         "offset": 0,
-        "length": 312,
+        "length": 360,
         "type": "f32"
       },
       "normals": {
-        "offset": 1248,
-        "length": 312,
+        "offset": 1440,
+        "length": 360,
         "type": "f32"
       },
       "indices": {
-        "offset": 2496,
-        "length": 156,
+        "offset": 2880,
+        "length": 180,
         "type": "u32"
       },
       "uvs": {
-        "offset": 3120,
-        "length": 208,
+        "offset": 3600,
+        "length": 240,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "TeamColor",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "boundMin": [
+        -2.103740692138672,
+        4.362740516662598,
+        -1.99691641330719
+      ],
+      "boundMax": [
+        1.7848950624465942,
+        7.201663970947266,
+        2.2623233795166016
+      ],
+      "positions": {
+        "offset": 4560,
+        "length": 48,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 4752,
+        "length": 48,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 4944,
+        "length": 24,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 5040,
+        "length": 32,
         "type": "f32"
       }
     }

@@ -21,6 +21,7 @@ import {
   isRallyBeyondBuilding,
   isRallyBeyondPoint,
   listRallyFlags,
+  RALLY_EXTRA_HOP_MAX,
 } from '../../sim/buildings.js';
 import {
   CONTROL_GROUP_BLACK,
@@ -39,7 +40,7 @@ import { MAX_ENTITIES, ORDER } from '../../sim/world.js';
 import { isMechanical, isTransport, UNIT, getUnitDef, isVillagerLine, unitAttacksBuildings } from '../../sim/unitTypes.js';
 import { NAMED_UNIT_SCALE } from '../../sim/namedUnit.js';
 import { isHostile } from '../../sim/teams.js';
-import { canRideTransport, passengerCount, assignNearestRidersToTransport, listPassengers, transportCapacityOf } from '../../sim/transport.js';
+import { canRideTransport, passengerCount, assignNearestRidersToTransport, assignTransportsToRiders, listPassengers, listPickupCandidates, transportCapacityOf } from '../../sim/transport.js';
 import { playVillagerMove } from '../audio.js';
 import { TILE_SIZE_F } from '../../sim/field.js';
 import { siloIsAttached } from '../../sim/storage.js';
@@ -126,6 +127,8 @@ export const ABILITY_HOLD_MS = 400;
  * @param {(x: number, z: number) => void} [opts.onRallyMove]
  * @param {(x: number, z: number) => void} [opts.onRallyConfirm]
  * @param {() => void} [opts.onRallyCancel]
+ * @param {(armed: boolean) => void} [opts.onBuildingWaypoint] - second select of a production building
+ * @param {() => number} [opts.rallyHopCap] - extra hops after the first flag (Drayage adds one)
  * @param {() => void} [opts.clearRallyPlacement]
  * @param {() => number} [opts.getPlacementYaw]
  * @param {(yaw: number) => void} [opts.setPlacementYaw]
@@ -170,6 +173,8 @@ export function createGameInput(opts) {
     onRallyMove,
     onRallyConfirm,
     onRallyCancel,
+    onBuildingWaypoint,
+    rallyHopCap,
     clearRallyPlacement,
     getPlacementYaw,
     setPlacementYaw,
@@ -253,6 +258,15 @@ export function createGameInput(opts) {
   let selectedBuilding = null;
   /** @type {{ kind: 'agora' | 'building', index: number }[]} */
   let selectedBuildings = [];
+  /**
+   * Production buildings are not in rally mode on the first select.
+   * A second select (same as picking a flag to extend the chain) arms it.
+   */
+  let buildingWaypointArmed = false;
+  /** hopFrom for the next plant while armed. -1 is the building; 0+ chains. */
+  let buildingWaypointHop = -1;
+  /** @type {{ x: number, z: number } | null} */
+  let buildingWaypointFrom = null;
 
   let boxStart = null;
   /** Client-space samples for a freeform lasso (start first). */
@@ -1044,7 +1058,78 @@ export function createGameInput(opts) {
     }
   }
 
+  function disarmBuildingWaypoint() {
+    if (!buildingWaypointArmed) return;
+    buildingWaypointArmed = false;
+    buildingWaypointHop = -1;
+    buildingWaypointFrom = null;
+    onBuildingWaypoint?.(false);
+  }
+
+  function emitRallyMove(x, z) {
+    onRallyMove?.(x, z, buildingWaypointHop | 0, buildingWaypointFrom);
+  }
+
+  /**
+   * Own rally-capable building that is already in the selection.
+   * The click that selects it the first time does not arm.
+   * @param {{ kind?: string, index?: number } | null | undefined} hit
+   */
+  function buildingReselectArms(hit) {
+    if (!hit || hit.kind !== 'building') return false;
+    if (buildingOwnerOf(hit) !== localPlayerId) return false;
+    const b = getBuildings?.()?.[hit.index];
+    if (!b || !buildingCanRally(b.type)) return false;
+    const idx = hit.index | 0;
+    for (let i = 0; i < selectedBuildings.length; i++) {
+      const s = selectedBuildings[i];
+      if (s.kind === 'building' && (s.index | 0) === idx) return true;
+    }
+    return false;
+  }
+
+  /**
+   * @param {number | null} clientX
+   * @param {number | null} clientY
+   */
+  function armBuildingWaypoint(clientX, clientY) {
+    const was = buildingWaypointArmed;
+    buildingWaypointArmed = true;
+    if (!was) {
+      buildingWaypointHop = -1;
+      buildingWaypointFrom = null;
+      onBuildingWaypoint?.(true);
+    }
+    if (clientX == null || clientY == null) return;
+    const g = renderer.screenToGround?.(clientX, clientY);
+    if (g) emitRallyMove(g.x, g.z);
+  }
+
+  function previewArmedWaypoint(clientX, clientY) {
+    if (!buildingWaypointArmed || isPlacing()) return;
+    const g = renderer.screenToGround?.(clientX, clientY);
+    if (g) emitRallyMove(g.x, g.z);
+  }
+
+  /**
+   * A plant while armed chains the next hop when the owner still has one.
+   * @param {number} x
+   * @param {number} z
+   */
+  function continueBuildingWaypoint(x, z) {
+    const cap = rallyHopCap?.() ?? RALLY_EXTRA_HOP_MAX;
+    const next = (buildingWaypointHop | 0) + 1;
+    if (next >= cap) {
+      disarmBuildingWaypoint();
+      return;
+    }
+    buildingWaypointHop = next;
+    buildingWaypointFrom = { x, z };
+    emitRallyMove(x, z);
+  }
+
   function clearBuildingSelection() {
+    disarmBuildingWaypoint();
     abandonPlacement();
     if (!selectedBuilding && selectedBuildings.length === 0) {
       onBuildingSelected?.(null);
@@ -1145,6 +1230,7 @@ export function createGameInput(opts) {
    * @param {{ clientX: number, clientY: number } | undefined} [ptr]
    */
   function setBuildingSelection(list, add, primary, ptr) {
+    disarmBuildingWaypoint();
     if (list.length === 0) {
       if (!add) clearBuildingSelection();
       return;
@@ -1377,11 +1463,19 @@ export function createGameInput(opts) {
         });
         continue;
       }
-      if (sel.kind !== 'building') continue;
+      if (sel.kind !== 'building' || !buildingWaypointArmed) continue;
       const b = buildings[sel.index];
       if (!b || (b.owner | 0) !== localPlayerId) continue;
       if (!buildingCanRally(b.type)) continue;
-      out.push({ index: sel.index, type: b.type, x: b.x, z: b.z, hopFrom: -1 });
+      const hopFrom = buildingWaypointHop | 0;
+      const from = hopFrom >= 0 ? buildingWaypointFrom : null;
+      out.push({
+        index: sel.index,
+        type: b.type,
+        x: from ? from.x : b.x,
+        z: from ? from.z : b.z,
+        hopFrom,
+      });
     }
     return out;
   }
@@ -1419,7 +1513,10 @@ export function createGameInput(opts) {
       });
       any = true;
     }
-    if (any) onOrder?.(x, z, undefined, cmdType);
+    if (any) {
+      onOrder?.(x, z, undefined, cmdType);
+      if (buildingWaypointArmed) continueBuildingWaypoint(x, z);
+    }
     return any;
   }
 
@@ -1723,6 +1820,11 @@ export function createGameInput(opts) {
     const bld = pickBuildingAtRay(ray);
     if (bld) {
       if (buildingOwnerOf(bld) !== localPlayerId && !inspect) return false;
+      if (!add && buildingReselectArms(bld)) {
+        clearUnitSelection();
+        armBuildingWaypoint(null, null);
+        return true;
+      }
       clearUnitSelection();
       setBuildingSelection([bld], add, bld);
       return true;
@@ -1864,40 +1966,8 @@ export function createGameInput(opts) {
 
     // Click a friendly transport → nearest selected riders embark (up to capacity).
     // Includes engineers - repair falls through only when nobody can board (full / empty pick).
-    if (hit >= 0 && (cmdType === CMD.MOVE || cmdType === CMD.ATTACK_MOVE)) {
-      const isOwnTransport =
-        world.owner[hit] === localPlayerId &&
-        isTransport(world.type[hit]) &&
-        !ids.every((id) => id === hit);
-      if (isOwnTransport) {
-        const assignments = assignNearestRidersToTransport(world, hit, ids);
-        if (assignments.length > 0) {
-          if (epoch !== undefined && !clickCurrent(epoch)) return;
-          const moveIds = [...assignments.map((a) => a.riderId), hit];
-          const { tx, ty } = moveDestinations(
-            moveIds,
-            fx.toFloat(world.px[hit]),
-            fx.toFloat(world.py[hit]),
-          );
-          enqueueCommand({
-            type: CMD.MOVE,
-            entities: moveIds,
-            tx,
-            ty,
-            transportAssignments: assignments,
-          });
-          // Drop boarding riders from selection; keep everyone else; add the vehicle.
-          for (let a = 0; a < assignments.length; a++) {
-            deselectEntity(assignments[a].riderId);
-          }
-          selectEntity(hit);
-          clearBuildingSelection();
-          syncSelectionSquad();
-          onSelectionChanged?.();
-          playVillagerMove();
-          return;
-        }
-      }
+    if ((cmdType === CMD.MOVE || cmdType === CMD.ATTACK_MOVE) && issueBoardTransport(hit, ids, epoch)) {
+      return;
     }
 
     // Engineers on a mechanical ally → repair. Mixed selections: only engineers
@@ -2160,6 +2230,8 @@ export function createGameInput(opts) {
     // Chip / control-group press holds the gesture - no box-select.
     if (selHudGesture || ctrlGroupGesture != null) return true;
 
+    previewArmedWaypoint(e.clientX, e.clientY);
+
     if (isPlacing()) {
       if (isRadialOpen?.()) void onRadialHover?.(e.clientX, e.clientY);
       if (radialGesture) return true;
@@ -2355,6 +2427,9 @@ export function createGameInput(opts) {
         const ptr = { clientX: e.clientX, clientY: e.clientY };
         if (selectAll && typeKey) {
           selectAllBuildingsOfType(typeKey, e.shiftKey, bld, ptr, buildingOwnerOf(bld));
+        } else if (!e.shiftKey && ownBld && buildingReselectArms(bld)) {
+          clearUnitSelection();
+          armBuildingWaypoint(e.clientX, e.clientY);
         } else {
           clearUnitSelection();
           setBuildingSelection([bld], e.shiftKey, bld, ptr);
@@ -2700,8 +2775,96 @@ export function createGameInput(opts) {
   }
 
   /**
+   * Right-click a friendly vehicle with riders selected: those riders walk in.
+   * @returns {boolean} true when the click was a board (issued or dropped as stale)
+   */
+  function issueBoardTransport(hit, ids, epoch) {
+    if (hit < 0 || !ids?.length) return false;
+    const world = getWorld();
+    if (world.owner[hit] !== localPlayerId || !isTransport(world.type[hit])) return false;
+    if (ids.every((id) => id === hit)) return false;
+    const assignments = assignNearestRidersToTransport(world, hit, ids);
+    if (assignments.length === 0) return false;
+    if (epoch !== undefined && !clickCurrent(epoch)) return true;
+    const moveIds = [...assignments.map((a) => a.riderId), hit];
+    const { tx, ty } = moveDestinations(
+      moveIds,
+      fx.toFloat(world.px[hit]),
+      fx.toFloat(world.py[hit]),
+    );
+    enqueueCommand({
+      type: CMD.MOVE,
+      entities: moveIds,
+      tx,
+      ty,
+      transportAssignments: assignments,
+    });
+    for (let a = 0; a < assignments.length; a++) deselectEntity(assignments[a].riderId);
+    selectEntity(hit);
+    clearBuildingSelection();
+    syncSelectionSquad();
+    onSelectionChanged?.();
+    playVillagerMove();
+    return true;
+  }
+
+  /** Selected units are vehicles with free seats and nobody who should walk in themselves. */
+  function selectionIsPickupTransport(world, ids) {
+    let room = false;
+    for (let k = 0; k < ids.length; k++) {
+      const id = ids[k];
+      if (!isTransport(world.type[id])) return false;
+      if (passengerCount(world, id) < transportCapacityOf(world.type[id])) room = true;
+    }
+    return room;
+  }
+
+  /**
+   * Vehicle selected: right-click drives it onto nearby friendly riders and loads them.
+   * Riders hold. A click on empty ground with nobody close is not a pickup.
+   */
+  function issueTransportPickup(ids, aim, hit) {
+    const world = getWorld();
+    if (!selectionIsPickupTransport(world, ids)) return false;
+    const g = aim.ground();
+    if (!g) return false;
+    const x = fx.fromFloat(g.x);
+    const y = fx.fromFloat(g.z);
+    const focus =
+      hit >= 0 &&
+      world.owner[hit] === localPlayerId &&
+      canRideTransport(world.type[hit])
+        ? hit
+        : -1;
+    const riders = listPickupCandidates(world, localPlayerId, focus, x, y);
+    if (riders.length === 0) return false;
+    const assignments = assignTransportsToRiders(world, ids, riders);
+    if (assignments.length === 0) return false;
+    const transports = [];
+    const seen = new Set();
+    for (let a = 0; a < assignments.length; a++) {
+      const id = assignments[a].transportId;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      transports.push(id);
+    }
+    const { tx, ty } = moveDestinations(transports, g.x, g.z);
+    enqueueCommand({
+      type: CMD.MOVE,
+      entities: transports,
+      tx,
+      ty,
+      transportPickup: assignments,
+    });
+    onOrder?.(g.x, g.z, g.y, CMD.MOVE);
+    playVillagerMove();
+    return true;
+  }
+
+  /**
    * RMB tap (no pan) / touch 2-finger when no build UI - force MOVE to ground.
-   * No unit pick; ignores enemies. Camera latches pan + click on the same travel.
+   * Ignores enemies. A friendly vehicle loads selected riders; a selected
+   * vehicle drives over and picks riders up. Camera latches pan + click together.
    */
   function forceMoveAt(clientX, clientY) {
     return forceMoveWith(clientAim(clientX, clientY));
@@ -2724,7 +2887,13 @@ export function createGameInput(opts) {
     }
     if (!hasOrderableSelection()) return false;
     lastTap = null;
-    const structHit = pickBuildingAtRay(aim.ray());
+    const ids = selectedIds();
+    const ray = aim.ray();
+    const hits = pickUnitsAtRay(ray);
+    const hit = hits.length > 0 ? hits[0] : -1;
+    if (issueBoardTransport(hit, ids)) return true;
+    if (issueTransportPickup(ids, aim, hit)) return true;
+    const structHit = pickBuildingAtRay(ray);
     if (structHit?.kind === 'door') {
       const epoch = ++worldClickEpoch;
       void orderAt(aim, CMD.ATTACK_MOVE, -1, epoch, structHit);
@@ -3095,8 +3264,8 @@ export function createGameInput(opts) {
   }
 
   /**
-   * RMB tap: cancel placement / close build UI. Rally-capable buildings keep
-   * selection so forceMoveAt can plant a force-move rally.
+   * RMB tap: cancel placement / close build UI. An armed production building
+   * keeps its selection so forceMoveAt can plant a force-move rally.
    */
   function dismissMenus() {
     if (!canUseInput()) return false;
@@ -3174,6 +3343,7 @@ export function createGameInput(opts) {
     isPlacing,
     getSelectedBuilding: () => selectedBuilding,
     setSelectedBuilding(sel) {
+      disarmBuildingWaypoint();
       notifyBuildingSelected(sel);
     },
     canUseInput,
@@ -3220,6 +3390,7 @@ export function createGameInput(opts) {
         }
       }
       if (sameFollowUnits(units) && sameFollowBuildings(list)) return;
+      disarmBuildingWaypoint();
       clearUnitSelectionBits();
       for (let k = 0; k < units.length; k++) selectEntity(units[k], false);
       selectedBuilding = list[0] ?? null;

@@ -103,8 +103,11 @@ function createWindPlugin(name, code, params) {
 function attach(meshes, plugin) {
   for (const mesh of meshes) {
     const mat = mesh.material;
-    if (!mat || mat.plugins) continue;
-    mat.plugins = [plugin];
+    if (!mat) continue;
+    // TeamColor already carries the glimmer plugin. Append so a flag cloth
+    // keeps both, instead of dropping the flutter.
+    const list = mat.plugins ?? (mat.plugins = []);
+    if (!list.some((p) => p === plugin || p.name === plugin.name)) list.push(plugin);
     windMaterials.add(mat);
   }
 }

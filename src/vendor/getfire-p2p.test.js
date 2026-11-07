@@ -1,7 +1,7 @@
 import { it } from 'node:test';
 import assert from 'node:assert/strict';
 
-it('keeps a peer whose transient disconnected state recovers during grace', async (t) => {
+it('waits for the reliable channel and keeps a peer that recovers during grace', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const prior = {
     window: globalThis.window,
@@ -11,6 +11,7 @@ it('keeps a peer whose transient disconnected state recovers during grace', asyn
   };
   const channels = [];
   const peerConnections = [];
+  const dataChannels = [];
 
   class FakePeerConnection {
     constructor(config) {
@@ -22,11 +23,14 @@ it('keeps a peer whose transient disconnected state recovers during grace', asyn
     }
 
     createDataChannel() {
-      return {
+      const channel = {
         readyState: 'connecting',
-        send() {},
+        sent: [],
+        send(message) { this.sent.push(message); },
         close() { this.readyState = 'closed'; },
       };
+      dataChannels.push(channel);
+      return channel;
     }
 
     async createOffer() {
@@ -78,9 +82,13 @@ it('keeps a peer whose transient disconnected state recovers during grace', asyn
     };
     const connected = [];
     const disconnected = [];
-    const p2p = globalThis.window.GETFIREP2P({
+    let p2p;
+    p2p = globalThis.window.GETFIREP2P({
       roomType: 'test',
-      onPeerConnected: (peerId) => connected.push(peerId),
+      onPeerConnected: (peerId) => {
+        connected.push(peerId);
+        p2p.sendData({ type: 'lobby_hello' }, peerId);
+      },
       onPeerDisconnected: (peerId) => disconnected.push(peerId),
     });
     p2p.joinMatchLobby('test-room');
@@ -95,9 +103,22 @@ it('keeps a peer whose transient disconnected state recovers during grace', asyn
     });
 
     const connection = peerConnections[0];
+    const dataChannel = dataChannels[0];
+    connection.iceConnectionState = 'connected';
+    connection.oniceconnectionstatechange();
     connection.connectionState = 'connected';
     connection.onconnectionstatechange();
+
+    assert.deepEqual(connected, []);
+    assert.deepEqual(p2p.getConnectedPeers(), []);
+    assert.deepEqual(dataChannel.sent, []);
+
+    dataChannel.readyState = 'open';
+    dataChannel.onopen();
+
+    assert.deepEqual(connected, ['peer-a']);
     assert.deepEqual(p2p.getConnectedPeers(), ['peer-a']);
+    assert.equal(JSON.parse(dataChannel.sent[0]).content.type, 'lobby_hello');
 
     connection.connectionState = 'disconnected';
     connection.onconnectionstatechange();
@@ -112,6 +133,10 @@ it('keeps a peer whose transient disconnected state recovers during grace', asyn
     assert.equal(connection.closed, false);
     assert.deepEqual(connected, ['peer-a', 'peer-a']);
     assert.deepEqual(p2p.getConnectedPeers(), ['peer-a']);
+    assert.equal(
+      dataChannel.sent.map((message) => JSON.parse(message)).filter((message) => message.type === 'game_data').length,
+      2,
+    );
     p2p.disconnect();
   } finally {
     globalThis.window = prior.window;

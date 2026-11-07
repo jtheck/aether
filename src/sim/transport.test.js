@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
 import * as fx from './fixed.js';
-import { createWorld, spawn } from './world.js';
+import { createWorld, ORDER, spawn } from './world.js';
 import { UNIT } from './unitTypes.js';
 import { step } from './step.js';
 import { CMD } from './commands.js';
 import { createField } from './field.js';
 import { kill } from './damage.js';
 import {
+  applyTransportPickup,
+  assignTransportsToRiders,
+  listPickupCandidates,
   loadUnit,
   unloadPassengers,
   canLoad,
@@ -50,12 +53,13 @@ function rejectsTransportInTransport() {
   assert.equal(loadUnit(w, siege, wagon), false);
 }
 
-function rejectsMonks() {
+function loadsMonks() {
   const w = createWorld(9);
   const wagon = spawn(w, { x: 0, y: 0, type: UNIT.WAGON, owner: 0 });
   const monk = spawn(w, { x: fx.fromFloat(1), y: 0, type: UNIT.MONK, owner: 0 });
-  assert.equal(canLoad(w, monk, wagon), false);
-  assert.equal(loadUnit(w, monk, wagon), false);
+  assert.equal(canLoad(w, monk, wagon), true);
+  assert.equal(loadUnit(w, monk, wagon), true);
+  assert.equal(isCarried(w, monk), true);
 }
 
 function unloadDropsInCircle() {
@@ -245,9 +249,88 @@ function clickEmbarkLoadsNearest() {
   assert.equal(isCarried(w, far), false, 'far rider not assigned - stays out');
 }
 
+/** Right-click pickup: nearest riders inside the radius fill free seats. */
+function pickupAssignsNearest() {
+  const w = createWorld(20);
+  const wagon = spawn(w, { x: 0, y: 0, type: UNIT.WAGON, owner: 0 });
+  const near = spawn(w, { x: fx.fromFloat(3), y: 0, type: UNIT.WARRIOR, owner: 0 });
+  const mid = spawn(w, { x: fx.fromFloat(6), y: 0, type: UNIT.ARCHER, owner: 0 });
+  const far = spawn(w, { x: fx.fromFloat(40), y: 0, type: UNIT.WARRIOR, owner: 0 });
+  const foe = spawn(w, { x: fx.fromFloat(2), y: 0, type: UNIT.WARRIOR, owner: 1 });
+  const clickX = w.px[near];
+  const clickY = w.py[near];
+  const riders = listPickupCandidates(w, 0, far, clickX, clickY);
+  assert.ok(riders.includes(near) && riders.includes(mid), 'squad near the click is eligible');
+  assert.ok(riders.includes(far), 'the unit under the cursor is eligible even when far');
+  assert.equal(riders.includes(foe), false);
+  assert.equal(riders.includes(wagon), false);
+  const assignments = assignTransportsToRiders(w, [wagon], riders.filter((id) => id !== far));
+  assert.equal(assignments.length, 2);
+  assert.equal(assignments[0].riderId, near);
+}
+
+/** Selected vehicle drives to the riders. The riders stay put until loaded. */
+function vehicleDrivesToPickup() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(8);
+  const wagon = spawn(w, { x: 0, y: 0, type: UNIT.WAGON, owner: 0 });
+  const rider = spawn(w, { x: fx.fromFloat(24), y: 0, type: UNIT.ARCHER, owner: 0 });
+  const assignments = assignTransportsToRiders(w, [wagon], [rider]);
+  step(w, field, [
+    {
+      type: CMD.MOVE,
+      entities: [wagon],
+      tx: [w.px[rider]],
+      ty: [w.py[rider]],
+      transportPickup: assignments,
+    },
+  ]);
+  assert.equal(w.transportWait[rider], 1);
+  assert.equal(w.order[rider], ORDER.IDLE);
+  let sawWagonMove = false;
+  for (let t = 0; t < 800; t++) {
+    step(w, field, []);
+    if (!isCarried(w, rider)) {
+      assert.equal(w.order[rider], ORDER.IDLE, 'rider holds while the wagon comes');
+      assert.equal(w.hasTarget[rider], 0);
+    }
+    if (w.px[wagon] !== 0) sawWagonMove = true;
+    if (isCarried(w, rider)) break;
+  }
+  assert.equal(isCarried(w, rider), true, 'wagon loads the rider on arrival');
+  assert.equal(w.carriedBy[rider], wagon);
+  assert.equal(sawWagonMove, true);
+  assert.equal(w.transportWait[rider], 0);
+}
+
+/** A later move order on the wagon cancels a pickup that has not arrived. */
+function moveCancelsPickup() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(6);
+  const wagon = spawn(w, { x: 0, y: 0, type: UNIT.WAGON, owner: 0 });
+  const rider = spawn(w, { x: fx.fromFloat(30), y: 0, type: UNIT.WARRIOR, owner: 0 });
+  applyTransportPickup(w, [{ riderId: rider, transportId: wagon }]);
+  step(w, field, []);
+  assert.equal(w.transportTarget[rider], wagon);
+  step(w, field, [
+    {
+      type: CMD.MOVE,
+      entities: [wagon],
+      tx: [fx.fromFloat(-10)],
+      ty: [0],
+    },
+  ]);
+  assert.equal(w.transportTarget[rider], -1);
+  assert.equal(w.transportWait[rider], 0);
+  for (let t = 0; t < 40; t++) step(w, field, []);
+  assert.equal(isCarried(w, rider), false);
+}
+
 loadRespectsCapacity();
 rejectsTransportInTransport();
-rejectsMonks();
+loadsMonks();
 unloadDropsInCircle();
 spillOnDeath();
 carriedSkipsCombat();
@@ -256,4 +339,7 @@ autoLoadOnAttackMove();
 dirigibleCapacitySix();
 nearestRidersFillCapacity();
 clickEmbarkLoadsNearest();
+pickupAssignsNearest();
+vehicleDrivesToPickup();
+moveCancelsPickup();
 console.log('transport.test.js: ok');

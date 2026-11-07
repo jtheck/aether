@@ -42,6 +42,7 @@ import { createCurtainWalls } from './walls.js';
 import { EXPOSURE, SKY_HORIZON, SKY_HORIZON_SUN, SKY_ZENITH } from './celestial.js';
 import { resumeMeshes, softDetachMesh, suspendMeshes } from './meshLifecycle.js';
 import { classifyGridTile, placementFillKind, placementGridWindow } from './placementGrid.js';
+import { tickTeamColorGlimmer } from './teamColor.js';
 import { tickWind } from './windSway.js';
 import { ATLAS_GRID, SHEET_JUNCTION, TERRAIN_LOOK, tileLayer } from './terrainLayers.js';
 import { PAGE_BUCKET_BASE, createTerrainMaterials, loadTerrainAtlas } from './terrainAtlas.js';
@@ -560,6 +561,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       const t0 = profile ? performance.now() : 0;
       specGlint.update(activeCamera, deltaMs);
       tickWind();
+      tickTeamColorGlimmer();
       const tGlint = profile ? performance.now() : 0;
       backdrop.update();
       const tBackdrop = profile ? performance.now() : 0;

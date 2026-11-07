@@ -35,6 +35,7 @@ import {
   VILLAGE_FIRST_VILLAGER_ACC,
   BUILDING_MENUS,
   getBuildingMenu,
+  actionMenuForSelection,
   mergeBuildingMenus,
   buildingOffersMenuItem,
   capActionMenu,
@@ -1049,6 +1050,16 @@ describe('village and workshop menus', () => {
     assert.equal(buildingOffersMenuItem('tavern', 'upgrade', 'patronage'), true);
     assert.equal(buildingOffersMenuItem('mine', 'building', 'derrick'), true);
     assert.equal(buildingOffersMenuItem('barracks', 'building', 'derrick'), false);
+  });
+
+  it('drops upgrades when several buildings share a menu', () => {
+    const menu = mergeBuildingMenus(['barracks', 'tavern', 'mine']);
+    const shared = actionMenuForSelection(menu, 3);
+    assert.deepEqual(shared.units.map((u) => u.id), ['warrior', 'archer', 'warlock']);
+    assert.deepEqual(shared.upgrades, []);
+    assert.deepEqual(shared.buildings, []);
+    assert.equal(actionMenuForSelection(menu, 1), menu);
+    assert.equal(actionMenuForSelection(null, 2), null);
   });
 
   it('caps a combined menu without dropping an entire side', () => {

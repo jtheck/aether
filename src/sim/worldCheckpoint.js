@@ -44,7 +44,7 @@ const ENTITY_U8 = [
   'hasTarget', 'order', 'navWpCount', 'navWpIndex', 'pathRequest', 'pathSlowAware',
   'rallyHopCount', 'rallyHop1Order', 'rallyHop2Order',
   'stuckTicks', 'repathCount', 'lobTrail', 'type', 'owner', 'alive', 'carriedKind',
-  'gatherDefensive', 'gatherAct', 'manualHold', 'attackFocus', 'named', 'leashActive',
+  'gatherDefensive', 'gatherAct', 'manualHold', 'attackFocus', 'named', 'leashActive', 'transportWait',
   'kills',
 ];
 
@@ -165,6 +165,7 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   if (!ent.arrays.leashDrop && w.leashDrop) w.leashDrop.fill(-1);
   if (!ent.arrays.gatherAct && w.gatherAct) w.gatherAct.fill(0);
   if (!ent.arrays.manualHold && w.manualHold) w.manualHold.fill(0);
+  if (!ent.arrays.transportWait && w.transportWait) w.transportWait.fill(0);
   if (!ent.arrays.brigandIdle && w.brigandIdle) w.brigandIdle.fill(0);
   if (!ent.arrays.kills && w.kills) w.kills.fill(0);
   resetDamageCredit(w);

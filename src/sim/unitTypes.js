@@ -486,6 +486,14 @@ export function unitFootprint(typeId) {
   return Math.max(1.0, def.size / 6);
 }
 
+/** Floor for soft separation when both footprints are small. */
+export const PAIR_SEP_FLOOR = 2.9;
+
+/** Center distance at which soft separation starts pushing this pair. */
+export function pairSeparationDist(typeA, typeB) {
+  return Math.max(PAIR_SEP_FLOOR, unitFootprint(typeA) + unitFootprint(typeB));
+}
+
 /** Default speed scale on slow tiles (trees / mud / rock rims). */
 export const DEFAULT_SLOW_MUL = 0.45;
 

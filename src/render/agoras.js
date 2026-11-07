@@ -584,7 +584,7 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
       const yaw = a.yaw != null ? a.yaw : Math.atan2(-a.x, -a.z);
       const x = a.x;
       const z = a.z;
-      const y = groundYAt(a.x, a.z);
+      const y = groundYAt(a.x, a.z) + (Number.isFinite(a.lift) ? a.lift : 0);
       const dist = Math.hypot(eye.x - x, eye.y - y, eye.z - z) || FLAG_DIST_REF;
       const scale = scaleFor ? scaleFor(dist) : flagScaleForDist(dist);
       const pose = poseFor ? poseFor(a, i, now) : null;
@@ -941,6 +941,7 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
       rallyGhost = {
         x: pos.x,
         z: pos.z,
+        lift: Number.isFinite(pos.lift) ? pos.lift : 0,
         points,
         yaw: 0,
         owner: pos.owner | 0,

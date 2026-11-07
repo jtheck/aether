@@ -157,6 +157,7 @@ function wanderEngineer(w, field, i) {
 
 function canIdleWander(w, i) {
   if (!w.alive[i] || isCarried(w, i)) return false;
+  if (w.transportWait?.[i] && (w.transportTarget?.[i] ?? -1) >= 0) return false;
   if (w.order[i] !== ORDER.IDLE) return false;
   if ((w.distractCd?.[i] | 0) > 0) return false;
   if ((w.navWpCount[i] | 0) > 0 || (w.pathRequest[i] | 0) !== 0) return false;

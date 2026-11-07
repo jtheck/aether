@@ -2,7 +2,7 @@
 // Passengers are discovered by scanning carriedBy[i] === transportId.
 
 import * as fx from './fixed.js';
-import { getUnitDef, isMechanical, isTransport, UNIT } from './unitTypes.js';
+import { getUnitDef, isMechanical, isTransport } from './unitTypes.js';
 import { clearPath, queuePath } from './path.js';
 import { clearEngagement } from './engagement.js';
 import { ORDER } from './world.js';
@@ -18,14 +18,16 @@ const TRANSPORT_CHASE_REPATH_SQ = fx.mul(TRANSPORT_CHASE_REPATH, TRANSPORT_CHASE
 export const TRANSPORT_UNLOAD_SPREAD = fx.fromFloat(3);
 /** Walk-to spread around unload click target. */
 export const TRANSPORT_UNLOAD_WALK_SPREAD = fx.fromFloat(4);
+/** Right-click pickup grabs friendly riders this close to the click. */
+export const TRANSPORT_PICKUP_RADIUS = fx.fromFloat(8);
+const TRANSPORT_PICKUP_RADIUS_SQ = fx.mul(TRANSPORT_PICKUP_RADIUS, TRANSPORT_PICKUP_RADIUS);
 
 export function transportCapacityOf(typeId) {
   return getUnitDef(typeId).transportCapacity ?? 0;
 }
 
-/** People ride. Monks and vehicles stay on the ground. */
+/** People ride, including monks. Vehicles stay on the ground. */
 export function canRideTransport(typeId) {
-  if (typeId === UNIT.MONK) return false;
   if (isTransport(typeId) || isMechanical(typeId)) return false;
   return true;
 }
@@ -64,10 +66,15 @@ export function canLoad(w, rider, transport) {
   return passengerCount(w, transport) < cap;
 }
 
+function clearTransportSeek(w, rider) {
+  w.transportTarget[rider] = -1;
+  if (w.transportWait) w.transportWait[rider] = 0;
+}
+
 export function loadUnit(w, rider, transport) {
   if (!canLoad(w, rider, transport)) return false;
   w.carriedBy[rider] = transport;
-  w.transportTarget[rider] = -1;
+  clearTransportSeek(w, rider);
   w.order[rider] = ORDER.IDLE;
   w.targetEntity[rider] = -1;
   if (w.targetBuilding) w.targetBuilding[rider] = -1;
@@ -95,7 +102,7 @@ export function unloadPassengers(w, transport, walkTx = null, walkTy = null) {
   for (let k = 0; k < n; k++) {
     const rider = passengers[k];
     w.carriedBy[rider] = -1;
-    w.transportTarget[rider] = -1;
+    clearTransportSeek(w, rider);
 
     const angle = (k / n) * Math.PI * 2;
     const cos = fx.fromFloat(Math.cos(angle));
@@ -128,27 +135,30 @@ export function unloadPassengers(w, transport, walkTx = null, walkTy = null) {
   return unloaded;
 }
 
+function canSeekTransport(w, rider, transport) {
+  return (
+    rider >= 0 &&
+    transport >= 0 &&
+    rider < w.count &&
+    transport < w.count &&
+    w.alive[rider] &&
+    w.alive[transport] &&
+    w.owner[rider] === w.owner[transport] &&
+    isTransport(w.type[transport]) &&
+    canRideTransport(w.type[rider]) &&
+    !isCarried(w, rider)
+  );
+}
+
 /** Stamp riders to seek a transport (click-to-load). Capacity checked at load. */
 export function applyTransportAssignments(w, assignments) {
   if (!assignments || assignments.length === 0) return;
   for (let a = 0; a < assignments.length; a++) {
     const rider = assignments[a].riderId | 0;
     const transport = assignments[a].transportId | 0;
-    if (
-      rider < 0 ||
-      transport < 0 ||
-      rider >= w.count ||
-      transport >= w.count ||
-      !w.alive[rider] ||
-      !w.alive[transport] ||
-      w.owner[rider] !== w.owner[transport] ||
-      !isTransport(w.type[transport]) ||
-      !canRideTransport(w.type[rider]) ||
-      isCarried(w, rider)
-    ) {
-      continue;
-    }
+    if (!canSeekTransport(w, rider, transport)) continue;
     w.transportTarget[rider] = transport;
+    if (w.transportWait) w.transportWait[rider] = 0;
     w.order[rider] = ORDER.MOVE;
     w.targetEntity[rider] = -1;
     if (w.targetBuilding) w.targetBuilding[rider] = -1;
@@ -167,9 +177,11 @@ export function transportAutoLoadSystem(w) {
     const t = w.transportTarget[i];
     if (t < 0) continue;
     if (t >= w.count || !w.alive[t] || !isTransport(w.type[t])) {
-      w.transportTarget[i] = -1;
+      clearTransportSeek(w, i);
       continue;
     }
+    // Vehicle is coming to this rider. Hold still; pickup chase does the load.
+    if (w.transportWait?.[i]) continue;
     const d2 = fx.dist2(w.px[i], w.py[i], w.px[t], w.py[t]);
     if (d2 <= TRANSPORT_LOAD_RANGE_SQ) {
       if (loadUnit(w, i, t)) continue;
@@ -191,6 +203,7 @@ export function transportAutoLoadSystem(w) {
       w.navDestY[i] = w.py[t];
     }
   }
+  transportPickupChase(w);
 }
 
 /** Keep passengers glued to their transport. */
@@ -248,4 +261,170 @@ export function assignNearestRidersToTransport(w, transportId, candidateIds) {
     assignments.push({ riderId: ranked[i].rider, transportId });
   }
   return assignments;
+}
+
+/**
+ * Friendly riders a selected vehicle should drive to.
+ * The unit under the cursor is always included. Everyone else must sit inside
+ * TRANSPORT_PICKUP_RADIUS of the click. Nearest to the click first.
+ * @returns {number[]}
+ */
+export function listPickupCandidates(w, owner, focusId, x, y) {
+  const ranked = [];
+  for (let i = 0; i < w.count; i++) {
+    if (!w.alive[i] || w.owner[i] !== owner || isCarried(w, i)) continue;
+    if (!canRideTransport(w.type[i])) continue;
+    const d2 = fx.dist2(w.px[i], w.py[i], x, y);
+    if (i !== focusId && d2 > TRANSPORT_PICKUP_RADIUS_SQ) continue;
+    ranked.push({ rider: i, d2 });
+  }
+  ranked.sort((a, b) => (a.d2 - b.d2) || (a.rider - b.rider));
+  const out = [];
+  for (let k = 0; k < ranked.length; k++) out.push(ranked[k].rider);
+  return out;
+}
+
+/**
+ * Fill selected transports from a nearest-first rider list.
+ * Each rider goes to the closest transport that still has a free seat.
+ * @returns {{ riderId: number, transportId: number }[]}
+ */
+export function assignTransportsToRiders(w, transportIds, riderIds) {
+  if (!transportIds?.length || !riderIds?.length) return [];
+  const transports = [];
+  const slots = [];
+  for (let k = 0; k < transportIds.length; k++) {
+    const id = transportIds[k] | 0;
+    if (id < 0 || id >= w.count || !w.alive[id] || !isTransport(w.type[id])) continue;
+    const free = transportCapacityOf(w.type[id]) - passengerCount(w, id);
+    if (free <= 0) continue;
+    transports.push(id);
+    slots.push(free);
+  }
+  if (transports.length === 0) return [];
+
+  const assignments = [];
+  for (let r = 0; r < riderIds.length; r++) {
+    const rider = riderIds[r] | 0;
+    let best = -1;
+    let bestD2 = 0;
+    for (let t = 0; t < transports.length; t++) {
+      if (slots[t] <= 0) continue;
+      const transport = transports[t];
+      if (!canSeekTransport(w, rider, transport)) continue;
+      const d2 = fx.dist2(w.px[rider], w.py[rider], w.px[transport], w.py[transport]);
+      if (best < 0 || d2 < bestD2 || (d2 === bestD2 && transport < transports[best])) {
+        best = t;
+        bestD2 = d2;
+      }
+    }
+    if (best < 0) continue;
+    slots[best]--;
+    assignments.push({ riderId: rider, transportId: transports[best] });
+  }
+  return assignments;
+}
+
+/** Riders hold. The transport drives to them and loads in range. */
+export function applyTransportPickup(w, assignments) {
+  if (!assignments || assignments.length === 0) return;
+  for (let a = 0; a < assignments.length; a++) {
+    const rider = assignments[a].riderId | 0;
+    const transport = assignments[a].transportId | 0;
+    if (!canSeekTransport(w, rider, transport)) continue;
+    w.transportTarget[rider] = transport;
+    if (w.transportWait) w.transportWait[rider] = 1;
+    w.order[rider] = ORDER.IDLE;
+    w.targetEntity[rider] = -1;
+    if (w.targetBuilding) w.targetBuilding[rider] = -1;
+    clearEngagement(w, rider);
+    w.hasTarget[rider] = 0;
+    w.vx[rider] = 0;
+    w.vy[rider] = 0;
+    clearPath(w, rider);
+  }
+}
+
+/** A new order on the vehicle drops riders who were waiting for it to arrive. */
+export function releaseTransportPickup(w, transport) {
+  if (!w.transportWait || transport < 0) return;
+  for (let i = 0; i < w.count; i++) {
+    if (w.transportWait[i] && w.transportTarget[i] === transport) clearTransportSeek(w, i);
+  }
+}
+
+let pickupStamp = new Int32Array(0);
+let pickupSlot = new Int32Array(0);
+let pickupGen = 1;
+
+/** Drive each transport onto its nearest waiting rider and load in range. */
+function transportPickupChase(w) {
+  const wait = w.transportWait;
+  if (!wait) return;
+
+  const n = w.count | 0;
+  if (pickupStamp.length < n) {
+    const stamp = new Int32Array(n);
+    stamp.set(pickupStamp);
+    pickupStamp = stamp;
+    const slot = new Int32Array(n);
+    slot.set(pickupSlot);
+    pickupSlot = slot;
+  }
+  if (pickupGen >= 0x7fffffff) {
+    pickupStamp.fill(0);
+    pickupGen = 1;
+  }
+  const gen = pickupGen++;
+
+  const transports = [];
+  const bestRider = [];
+  const bestD2 = [];
+
+  for (let i = 0; i < n; i++) {
+    if (!wait[i] || !w.alive[i] || isCarried(w, i)) continue;
+    const t = w.transportTarget[i];
+    if (t < 0 || t >= w.count || !w.alive[t] || !isTransport(w.type[t])) {
+      clearTransportSeek(w, i);
+      continue;
+    }
+    const d2 = fx.dist2(w.px[i], w.py[i], w.px[t], w.py[t]);
+    if (d2 <= TRANSPORT_LOAD_RANGE_SQ) {
+      if (loadUnit(w, i, t)) continue;
+    }
+    let slot = pickupStamp[t] === gen ? pickupSlot[t] : -1;
+    if (slot < 0) {
+      slot = transports.length;
+      pickupStamp[t] = gen;
+      pickupSlot[t] = slot;
+      transports.push(t);
+      bestRider.push(i);
+      bestD2.push(d2);
+    } else if (d2 < bestD2[slot] || (d2 === bestD2[slot] && i < bestRider[slot])) {
+      bestRider[slot] = i;
+      bestD2[slot] = d2;
+    }
+  }
+
+  for (let s = 0; s < transports.length; s++) {
+    const t = transports[s];
+    const rider = bestRider[s];
+    w.order[t] = ORDER.MOVE;
+    w.targetEntity[t] = -1;
+    if (w.targetBuilding) w.targetBuilding[t] = -1;
+    clearEngagement(w, t);
+    w.tx[t] = w.px[rider];
+    w.ty[t] = w.py[rider];
+    w.hasTarget[t] = 1;
+    const drift2 = fx.dist2(w.navDestX[t], w.navDestY[t], w.px[rider], w.py[rider]);
+    if (
+      (w.navWpCount[t] === 0 && w.pathRequest[t] === 0) ||
+      drift2 > TRANSPORT_CHASE_REPATH_SQ
+    ) {
+      queuePath(w, t, w.px[rider], w.py[rider]);
+    } else {
+      w.navDestX[t] = w.px[rider];
+      w.navDestY[t] = w.py[rider];
+    }
+  }
 }

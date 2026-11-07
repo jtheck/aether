@@ -576,6 +576,23 @@ export function mergeBuildingMenus(typeIds) {
   };
 }
 
+/**
+ * One selected building keeps its full menu. Several keep units only:
+ * tech and building upgrades drop off the shared radial.
+ * @param {{ units?: T[], upgrades?: T[], buildings?: T[] } | null | undefined} menu
+ * @param {number} count
+ * @template T
+ */
+export function actionMenuForSelection(menu, count) {
+  if ((count | 0) <= 1) return menu ?? null;
+  if (!menu) return null;
+  return {
+    units: menu.units ?? [],
+    upgrades: [],
+    buildings: [],
+  };
+}
+
 /** Whether that placeable type can queue this unit, tech, or building upgrade. */
 export function buildingOffersMenuItem(typeId, kind, itemId) {
   const raw = BUILDING_MENUS[typeId];

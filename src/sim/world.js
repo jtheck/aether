@@ -261,6 +261,8 @@ export function createWorld(seed) {
     // transport - carriedBy / transportTarget are −1 when unset
     carriedBy: new Int32Array(MAX_ENTITIES).fill(-1),
     transportTarget: new Int32Array(MAX_ENTITIES).fill(-1),
+    /** 1 = rider holds still while their transport drives over to load them. */
+    transportWait: new Uint8Array(MAX_ENTITIES),
 
     // gameplay
     hp: new Int32Array(MAX_ENTITIES),
@@ -357,6 +359,7 @@ export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed, faceX, 
   w.squadId[i] = 0;
   w.carriedBy[i] = -1;
   w.transportTarget[i] = -1;
+  if (w.transportWait) w.transportWait[i] = 0;
   if (w.named) w.named[i] = named ? 1 : 0;
   w.hp[i] = hp ?? (named ? namedUnitHp(def.hp) : def.hp);
   w.type[i] = type;

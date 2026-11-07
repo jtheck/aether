@@ -1100,7 +1100,7 @@ describe('headset select', () => {
 });
 
 describe('headset rally', () => {
-  it('trigger rays plant force-move and attack-move rallies on a selected barracks', () => {
+  it('trigger rays plant rallies only after the barracks is selected again', () => {
     const cmds = [];
     const input = createGameInput({
       canvas: {
@@ -1126,14 +1126,139 @@ describe('headset rally', () => {
     });
     input.setSelectedBuilding({ kind: 'building', index: 0 });
     const aim = { ox: 40, oy: 50, oz: 0, dx: 0, dy: -1, dz: 0 };
+    const next = { ox: 80, oy: 50, oz: 0, dx: 0, dy: -1, dz: 0 };
+    assert.equal(input.forceMoveAtRay(aim), false);
+    assert.equal(cmds.some((c) => c.type === CMD.SET_RALLY), false);
+    assert.equal(input.selectAtRay({ ox: 0, oy: 50, oz: 0, dx: 0, dy: -1, dz: 0 }), true);
     assert.equal(input.forceMoveAtRay(aim), true);
-    assert.equal(input.attackMoveAtRay(aim), true);
-    assert.equal(cmds.length, 2);
-    assert.equal(cmds[0].type, CMD.SET_RALLY);
-    assert.equal(cmds[0].order, ORDER.MOVE);
-    assert.equal(cmds[1].type, CMD.SET_RALLY);
-    assert.equal(cmds[1].order, ORDER.ATTACK_MOVE);
-    assert.equal(cmds[0].buildingIndex, 0);
+    assert.equal(input.attackMoveAtRay(next), true);
+    const planted = cmds.filter((c) => c.type === CMD.SET_RALLY);
+    assert.equal(planted.length, 2);
+    assert.equal(planted[0].type, CMD.SET_RALLY);
+    assert.equal(planted[0].order, ORDER.MOVE);
+    assert.equal(planted[1].type, CMD.SET_RALLY);
+    assert.equal(planted[1].order, ORDER.ATTACK_MOVE);
+    assert.equal(planted[0].buildingIndex, 0);
+    assert.equal(planted[0].hopFrom, -1);
+    assert.equal(planted[1].hopFrom, 0);
+    assert.equal(input.forceMoveAtRay({ ox: 120, oy: 50, oz: 0, dx: 0, dy: -1, dz: 0 }), false);
+  });
+
+  it('drayage keeps the chain open for one more hop', () => {
+    const cmds = [];
+    const input = createGameInput({
+      canvas: {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      },
+      renderer: {
+        pickSelectionHud: () => null,
+        pickControlGroupHud: () => null,
+        groundYAt: () => 0,
+        setSelectionBox: () => {},
+        rayToGround: (ray) => {
+          const t = -ray.oy / ray.dy;
+          return { x: ray.ox + ray.dx * t, y: 0, z: ray.oz + ray.dz * t };
+        },
+      },
+      world: { count: 0, alive: [], owner: [], type: [], carriedBy: [] },
+      selected: new Uint8Array(4),
+      localPlayerId: 0,
+      getUnitWorldPos: () => ({ x: 0, y: 0, z: 0 }),
+      enqueueCommand: (cmd) => cmds.push(cmd),
+      getAgoras: () => [],
+      getBuildings: () => [{ owner: 0, type: 'barracks', x: 0, z: 0, hp: 100 }],
+      rallyHopCap: () => 2,
+    });
+    input.setSelectedBuilding({ kind: 'building', index: 0 });
+    assert.equal(input.selectAtRay({ ox: 0, oy: 50, oz: 0, dx: 0, dy: -1, dz: 0 }), true);
+    const rays = [40, 80, 120];
+    for (let i = 0; i < rays.length; i++) {
+      assert.equal(
+        input.forceMoveAtRay({ ox: rays[i], oy: 50, oz: 0, dx: 0, dy: -1, dz: 0 }),
+        true,
+      );
+    }
+    const planted = cmds.filter((c) => c.type === CMD.SET_RALLY);
+    assert.deepEqual(planted.map((c) => c.hopFrom), [-1, 0, 1]);
+    assert.equal(input.forceMoveAtRay({ ox: 160, oy: 50, oz: 0, dx: 0, dy: -1, dz: 0 }), false);
+  });
+
+  it('the first building select does not arm a rally, the second does', () => {
+    const cmds = [];
+    const input = createGameInput({
+      canvas: {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      },
+      renderer: {
+        pickSelectionHud: () => null,
+        pickControlGroupHud: () => null,
+        groundYAt: () => 0,
+        setSelectionBox: () => {},
+        rayToGround: (ray) => {
+          const t = -ray.oy / ray.dy;
+          return { x: ray.ox + ray.dx * t, y: 0, z: ray.oz + ray.dz * t };
+        },
+      },
+      world: { count: 0, alive: [], owner: [], type: [], carriedBy: [] },
+      selected: new Uint8Array(4),
+      localPlayerId: 0,
+      getUnitWorldPos: () => ({ x: 0, y: 0, z: 0 }),
+      enqueueCommand: (cmd) => cmds.push(cmd),
+      getAgoras: () => [],
+      getBuildings: () => [{ owner: 0, type: 'barracks', x: 0, z: 0, hp: 100 }],
+    });
+    const onBuilding = { ox: 0, oy: 50, oz: 0, dx: 0, dy: -1, dz: 0 };
+    const aim = { ox: 40, oy: 50, oz: 0, dx: 0, dy: -1, dz: 0 };
+    assert.equal(input.selectAtRay(onBuilding), true);
+    assert.equal(input.forceMoveAtRay(aim), false);
+    assert.equal(cmds.some((c) => c.type === CMD.SET_RALLY), false);
+    assert.equal(input.selectAtRay(onBuilding), true);
+    assert.equal(input.getSelectedBuilding()?.kind, 'building');
+    assert.equal(input.forceMoveAtRay(aim), true);
+    const planted = cmds.filter((c) => c.type === CMD.SET_RALLY);
+    assert.equal(planted.length, 1);
+    assert.equal(planted[0].hopFrom, -1);
+  });
+
+  it('selecting one building of a group again arms a rally for the whole group', () => {
+    const cmds = [];
+    const buildings = [
+      { owner: 0, type: 'barracks', x: 0, z: 0, hp: 100 },
+      { owner: 0, type: 'barracks', x: 30, z: 0, hp: 100 },
+    ];
+    const input = createGameInput({
+      canvas: {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      },
+      renderer: {
+        pickSelectionHud: () => null,
+        pickControlGroupHud: () => null,
+        groundYAt: () => 0,
+        setSelectionBox: () => {},
+        rayToGround: (ray) => {
+          const t = -ray.oy / ray.dy;
+          return { x: ray.ox + ray.dx * t, y: 0, z: ray.oz + ray.dz * t };
+        },
+      },
+      world: { count: 0, alive: [], owner: [], type: [], carriedBy: [] },
+      selected: new Uint8Array(4),
+      localPlayerId: 0,
+      getUnitWorldPos: () => ({ x: 0, y: 0, z: 0 }),
+      enqueueCommand: (cmd) => cmds.push(cmd),
+      getAgoras: () => [],
+      getBuildings: () => buildings,
+    });
+    input.applyFollowSelection([], [
+      { kind: 'building', index: 0 },
+      { kind: 'building', index: 1 },
+    ]);
+    assert.equal(input.forceMoveAtRay({ ox: 40, oy: 50, oz: 0, dx: 0, dy: -1, dz: 0 }), false);
+    assert.equal(input.selectAtRay({ ox: 0, oy: 50, oz: 0, dx: 0, dy: -1, dz: 0 }), true);
+    assert.equal(input.getFollowSelection().buildings.length, 2);
+    assert.equal(input.forceMoveAtRay({ ox: 40, oy: 50, oz: 0, dx: 0, dy: -1, dz: 0 }), true);
+    const rallies = cmds.filter((c) => c.type === CMD.SET_RALLY);
+    assert.equal(rallies.length, 2);
+    assert.deepEqual(rallies.map((c) => c.hopFrom), [-1, -1]);
   });
 
   it('a lasso around a planted flag selects it so the next order extends', () => {

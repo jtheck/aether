@@ -478,6 +478,7 @@ function placementClearsCoveringResources() {
   assert.ok(paintSceneryBrush(field, 20, 20, SCENERY.TREE, 0).length > 0);
   assert.ok(placeRockAt(field, 30, 30, SCENERY.ROCK_MOSS));
   assert.ok(paintSceneryBrush(field, 8, 8, SCENERY.TREE, 0).length > 0);
+  takeRockUpdates(field);
   const dirty = clearSceneryCoveringTiles(field, [
     { tx: 20, tz: 20 },
     { tx: 30, tz: 30 },
@@ -488,6 +489,10 @@ function placementClearsCoveringResources() {
   assert.equal(field.sceneryType[tileAt(field, 30, 30)], SCENERY.NONE);
   assert.equal(field.rockStock[tileAt(field, 30, 30)], 0);
   assert.equal(passAt(field, 30, 30), 1);
+  const cleared = takeRockUpdates(field);
+  assert.ok(cleared, 'clearing a rock publishes the empty tile');
+  assert.equal(cleared.stock[0], 0);
+  assert.equal(cleared.tiles[0], tileAt(field, 30, 30));
   assert.equal(field.sceneryType[tileAt(field, 8, 8)], SCENERY.TREE);
 }
 

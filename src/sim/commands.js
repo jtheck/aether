@@ -25,11 +25,13 @@ import { kill } from './combat.js';
 import { livingByOwner } from './world.js';
 import { clearEngagement } from './engagement.js';
 import { applyCastCombo } from './combos.js';
-import { isFlyer, isMechanical, UNIT, unitAttacksBuildings } from './unitTypes.js';
+import { isFlyer, isMechanical, isTransport, UNIT, unitAttacksBuildings } from './unitTypes.js';
 import { becomeBrigand, revertBrigand } from './brigand.js';
 import {
   applyTransportAssignments,
+  applyTransportPickup,
   isCarried,
+  releaseTransportPickup,
   unloadPassengers,
 } from './transport.js';
 import { beginRepair } from './repair.js';
@@ -90,7 +92,7 @@ export const CMD = {
   UPGRADE_BUILDING: 19,
 };
 
-/** @typedef {{ type: number, entities: number[], tx?: number[]|number, ty?: number[]|number, target?: number, abilityId?: string, transportAssignments?: { riderId: number, transportId: number }[] }} Command */
+/** @typedef {{ type: number, entities: number[], tx?: number[]|number, ty?: number[]|number, target?: number, abilityId?: string, transportAssignments?: { riderId: number, transportId: number }[], transportPickup?: { riderId: number, transportId: number }[] }} Command */
 
 export function applyCommands(world, field, commands) {
   if (!commands || commands.length === 0) return;
@@ -108,6 +110,9 @@ export function applyCommands(world, field, commands) {
         applyMove(world, field, cmd.entities, cmd.tx, cmd.ty, ORDER.MOVE);
         if (cmd.transportAssignments?.length) {
           applyTransportAssignments(world, cmd.transportAssignments);
+        }
+        if (cmd.transportPickup?.length) {
+          applyTransportPickup(world, cmd.transportPickup);
         }
         break;
       case CMD.ATTACK:
@@ -236,6 +241,12 @@ function gatherJitter(entityId, maxFixed) {
   };
 }
 
+function dropTransportSeek(world, i) {
+  if (isTransport(world.type[i])) releaseTransportPickup(world, i);
+  world.transportTarget[i] = -1;
+  if (world.transportWait) world.transportWait[i] = 0;
+}
+
 function applyMove(world, field, ids, tx, ty, order) {
   if (order === ORDER.ATTACK_MOVE && world.doors?.length && tx?.length) {
     const di = nearestShutDoor(world, tx[0], ty[0], fx.fromFloat(DOOR_CLICK_REACH_F));
@@ -267,7 +278,7 @@ function applyMove(world, field, ids, tx, ty, order) {
     const i = ids[k];
     if (!world.alive[i] || isCarried(world, i)) continue;
     revertBrigand(world, i);
-    world.transportTarget[i] = -1;
+    dropTransportSeek(world, i);
     const clickX = tx[k];
     const clickY = ty[k];
     // A click on an agora / camp / mine hands in a carried load, then they stand.
@@ -346,7 +357,7 @@ function applyAttack(world, field, ids, target, buildingIndex, doorIndex) {
       becomeBrigand(world, i);
       if (!unitAttacksBuildings(world.type[i])) continue;
       releaseGatherOrder(world, i);
-      world.transportTarget[i] = -1;
+      dropTransportSeek(world, i);
       clearUnitRallyHops(world, i);
       world.order[i] = ORDER.ATTACK;
       world.targetEntity[i] = -1;
@@ -371,7 +382,7 @@ function applyAttack(world, field, ids, target, buildingIndex, doorIndex) {
       becomeBrigand(world, i);
       if (!unitAttacksBuildings(world.type[i])) continue;
       releaseGatherOrder(world, i);
-      world.transportTarget[i] = -1;
+      dropTransportSeek(world, i);
       clearUnitRallyHops(world, i);
       world.order[i] = ORDER.ATTACK;
       world.targetEntity[i] = -1;
@@ -391,7 +402,7 @@ function applyAttack(world, field, ids, target, buildingIndex, doorIndex) {
     const i = ids[k];
     if (!world.alive[i] || isCarried(world, i)) continue;
     becomeBrigand(world, i);
-    world.transportTarget[i] = -1;
+    dropTransportSeek(world, i);
     // Engineers convert ally-mechanical attacks into repair orders.
     if (
       world.type[i] === UNIT.ENGINEER &&
@@ -422,7 +433,7 @@ function applyStop(world, ids) {
     if (!world.alive[i] || isCarried(world, i)) continue;
     revertBrigand(world, i);
     releaseGatherOrder(world, i);
-    world.transportTarget[i] = -1;
+    dropTransportSeek(world, i);
     clearUnitRallyHops(world, i);
     world.order[i] = ORDER.IDLE;
     clearAttackFocus(world, i);
@@ -441,6 +452,7 @@ function applyUnload(world, field, ids, tx, ty) {
   for (let k = 0; k < ids.length; k++) {
     const i = ids[k];
     if (!world.alive[i] || isCarried(world, i)) continue;
+    releaseTransportPickup(world, i);
     const walkTx = sharedAim ? tx : tx?.[k] ?? null;
     const walkTy = sharedAim ? ty : ty?.[k] ?? null;
     unloadPassengers(world, i, walkTx, walkTy);

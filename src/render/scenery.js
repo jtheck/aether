@@ -952,6 +952,24 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
         const release = [];
         for (let i = 0; i < batch.instances.length; i++) {
           const p = batch.instances[i];
+          // A mined-out or footprint-cleared rock can miss its stock update
+          // and stay at the last scale. The cluster mesh is several stones,
+          // so that reads as empty rocks still standing.
+          if (rocks && (p.tileIndex | 0) >= 0) {
+            const sk = field.sceneryType?.[p.tileIndex] ?? 0;
+            const st = field.rockStock?.[p.tileIndex] | 0;
+            const gone = sk < SCENERY.ROCK_PLAIN || st <= 0;
+            const dying = !!p.scaling && (p.targetScale ?? 1) <= 0.001 && (p.stock | 0) <= 0;
+            if (gone && !dying) {
+              p.stock = 0;
+              p.fellDelayMs = 0;
+              if ((p.stockScale ?? 0) <= 0.001 && !p.scaling) {
+                release.push(i);
+                continue;
+              }
+              beginScaleAnim(p, 0, TREE_SHRINK_MS, 'stageDrop');
+            }
+          }
           const scaleActive = p.fellDelayMs > 0 || p.scaling;
           const burnActive = tintTrees && (treeDoomed(p) || (p.char ?? 0) > 0);
           const sinkActive = tintTrees && p.sinking;

@@ -122,25 +122,43 @@ export const PLAYER_NAMES = [
   'Lodestar', 'Keystone', 'Player',
 ];
 
+const CYAN = { hex: '#12A8B4', name: 'Cyan' };
+const AMETHYST = { hex: '#6E28B0', name: 'Amethyst' };
+const GOLD = { hex: '#E0A000', name: 'Gold' };
+const EMERALD = { hex: '#0B9E5A', name: 'Emerald' };
+const COPPER = { hex: '#D4784A', name: 'Copper' };
+
+/**
+ * Richer originals for the hues the SC2 set leaves dull: teal, purple,
+ * yellow, green, and brown. A fresh profile rolls from this list.
+ */
+export const PLAYER_COLOR_DEFAULTS = [CYAN, AMETHYST, GOLD, EMERALD, COPPER];
+
 /**
  * SC2 melee / versus lobby colours, deepened so they read as jewel tones
  * on TeamColor meshes instead of the chalky in-game picker swatches.
- * White is first so a missing preference falls back to a readable default.
+ * The originals above sit beside the dull slot they answer.
+ * White is first so an invalid choice falls back to a readable default.
  */
 export const PLAYER_COLORS = [
   { hex: '#C8CBD0', name: 'White' },
   { hex: '#951018', name: 'Red' },
   { hex: '#0A38B8', name: 'Blue' },
   { hex: '#127088', name: 'Teal' },
+  CYAN,
   { hex: '#4E0078', name: 'Purple' },
+  AMETHYST,
   { hex: '#C4A810', name: 'Yellow' },
+  GOLD,
   { hex: '#C8600C', name: 'Orange' },
   { hex: '#147000', name: 'Green' },
+  EMERALD,
   { hex: '#B850B0', name: 'Light Pink' },
   { hex: '#1C08A0', name: 'Violet' },
   { hex: '#4A4C72', name: 'Light Grey' },
   { hex: '#0C4E38', name: 'Dark Green' },
   { hex: '#4E2A04', name: 'Brown' },
+  COPPER,
   { hex: '#3CB038', name: 'Light Green' },
   { hex: '#232323', name: 'Dark Grey' },
   { hex: '#B82880', name: 'Pink' },
@@ -429,7 +447,7 @@ export function setPlayerName(name) {
 export function getPlayerColor() {
   const saved = normalizeHex(read(COLOR_KEY));
   if (saved && PLAYER_COLORS.some((c) => c.hex === saved)) return saved;
-  const rolled = randomOf(PLAYER_COLORS).hex;
+  const rolled = randomOf(PLAYER_COLOR_DEFAULTS).hex;
   write(COLOR_KEY, rolled);
   return rolled;
 }

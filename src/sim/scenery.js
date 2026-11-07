@@ -893,6 +893,9 @@ function stampClear(field, tx, tz) {
     field.rockStockHash = mixRockHash(field.rockStockHash | 0, i, 0);
     if (prevR >= 0) shrinkRockFootprint(field, i, prevR, -1);
     refreshRockSlow(field);
+    // Same publish path as damageRock. A building footprint wipe used to
+    // clear the node and leave the cluster mesh standing.
+    markRockDirty(field, i);
     changed = true;
   }
   return changed;

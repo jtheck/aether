@@ -3,9 +3,12 @@
 // Unlit so outdoor PBR does not grade the swatch. The picker hex is display
 // sRGB (name row, health bar). The mesh shader still applies exposure, gamma,
 // and contrast, so the instance color is the inverse of that grade.
+// A fragment plugin runs a soft sheen across the swatch. VAT stays on the
+// PBR vertex shader.
 
 import {
   createTexture2DFromPixels,
+  markMaterialUboDirty,
   setPbrUnlit,
 } from '../vendor/lite/liteVendor.js';
 import { CONTRAST, EXPOSURE } from './celestial.js';
@@ -56,6 +59,108 @@ export function sceneTeamRgb(displayRgb, contrast = CONTRAST) {
 /** Shared 1×1 white + ORM so authored TeamColor maps cannot fight the tint. */
 let teamColorMaps = null;
 
+// One wash across the part, in the part's own bounds. A world grid tiled
+// through buildings and stretched a vertical flag. The thin axis is dropped
+// so cloth sheens across its face. Instance origin only staggers the clock.
+const GLIMMER_VERT = `
+out.gLocal = position.xyz;
+out.gOrigin = world3.xz;
+`;
+const GLIMMER = `
+let ext = max(material.gSize, vec3<f32>(0.001));
+let p = saturate((input.gLocal - material.gMin) / ext);
+let span = max(max(ext.x, ext.y), ext.z);
+let axis = vec3<f32>(0.72, 0.64, 0.26) * (ext / span);
+let along = dot(p, axis) / max(dot(vec3<f32>(1.0), axis), 0.001);
+let travel = 0.5 + 0.5 * sin(material.glimmerT * 0.55 + dot(input.gOrigin, vec2<f32>(0.017, 0.013)));
+let band = saturate(1.0 - abs(along - travel) * 2.2);
+let sheen = band;
+let gH = normalize(V + vec3<f32>(0.2, 0.75, 0.35));
+let gFacing = pow(saturate(dot(normalize(N), gH)), 4.0);
+let wash = sheen * (0.45 + 0.55 * gFacing);
+color = min(color + color * wash * 0.85 + vec3<f32>(wash * 0.12), vec3<f32>(1.0));
+`;
+
+/** @type {Set<object>} */
+const glimmerMaterials = new Set();
+let glimmerTime = 0;
+
+function sheenBounds(mesh) {
+  let min = mesh.boundMin;
+  let max = mesh.boundMax;
+  const pos = !min || !max ? mesh._cpuPositions : null;
+  if (pos?.length >= 3) {
+    min = [pos[0], pos[1], pos[2]];
+    max = [pos[0], pos[1], pos[2]];
+    for (let i = 3; i < pos.length; i += 3) {
+      if (pos[i] < min[0]) min[0] = pos[i];
+      if (pos[i + 1] < min[1]) min[1] = pos[i + 1];
+      if (pos[i + 2] < min[2]) min[2] = pos[i + 2];
+      if (pos[i] > max[0]) max[0] = pos[i];
+      if (pos[i + 1] > max[1]) max[1] = pos[i + 1];
+      if (pos[i + 2] > max[2]) max[2] = pos[i + 2];
+    }
+  }
+  if (!min || !max) return { min: [0, 0, 0], size: [1, 1, 1] };
+  return {
+    min: [min[0], min[1], min[2]],
+    size: [
+      Math.max(max[0] - min[0], 1e-3),
+      Math.max(max[1] - min[1], 1e-3),
+      Math.max(max[2] - min[2], 1e-3),
+    ],
+  };
+}
+
+function createTeamGlimmerPlugin(bounds) {
+  const min = bounds.min;
+  const size = bounds.size;
+  return {
+    name: 'team-glimmer',
+    getUniforms: () => ({
+      ubo: [
+        { name: 'glimmerT', type: 'f32' },
+        { name: 'gMin', type: 'vec3<f32>' },
+        { name: 'gSize', type: 'vec3<f32>' },
+      ],
+    }),
+    getVaryings: () => [
+      { name: 'gLocal', type: 'vec3<f32>' },
+      { name: 'gOrigin', type: 'vec2<f32>' },
+    ],
+    getCustomCode(shaderType) {
+      if (shaderType === 'vertex') return { CUSTOM_VERTEX_MAIN_END: GLIMMER_VERT };
+      if (shaderType === 'fragment') return { CUSTOM_FRAGMENT_BEFORE_FRAGCOLOR: GLIMMER };
+      return null;
+    },
+    writeUbo(data, offsets) {
+      const t = offsets.get('glimmerT');
+      if (t != null) data[t / 4] = glimmerTime;
+      const m = offsets.get('gMin');
+      if (m != null) {
+        const o = m / 4;
+        data[o] = min[0];
+        data[o + 1] = min[1];
+        data[o + 2] = min[2];
+      }
+      const s = offsets.get('gSize');
+      if (s != null) {
+        const o = s / 4;
+        data[o] = size[0];
+        data[o + 1] = size[1];
+        data[o + 2] = size[2];
+      }
+    },
+  };
+}
+
+/** Once per frame. No-op until a TeamColor material exists. */
+export function tickTeamColorGlimmer() {
+  if (!glimmerMaterials.size) return;
+  glimmerTime = performance.now() / 1000;
+  for (const mat of glimmerMaterials) markMaterialUboDirty(mat);
+}
+
 function getTeamColorMaps(engine) {
   if (teamColorMaps) return teamColorMaps;
   const white = createTexture2DFromPixels(engine, new Uint8Array([255, 255, 255, 255]), 1, 1, {
@@ -99,7 +204,9 @@ export function prepareTeamColorMaterial(engine, mesh, donorMat = null) {
     enableSpecularAA: true,
     _buildGroup: build,
     _uboVersion: 0,
+    plugins: [createTeamGlimmerPlugin(sheenBounds(mesh))],
   };
+  glimmerMaterials.add(mesh.material);
   const u = TEAM_COLOR_UNLIT;
   setPbrUnlit(mesh.material, [u, u, u]);
   return true;

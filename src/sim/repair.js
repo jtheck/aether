@@ -1,9 +1,9 @@
 // Engineer repair - slow HP restore for mechanical allies (buildings later).
 
 import * as fx from './fixed.js';
-import { UNIT, getUnitDef, isMechanical } from './unitTypes.js';
+import { UNIT, getUnitDef, isMechanical, pairSeparationDist } from './unitTypes.js';
 import { unitMaxHp } from './namedUnit.js';
-import { clearPath, queuePath } from './path.js';
+import { FINAL_ARRIVE, clearPath, queuePath } from './path.js';
 import { clearEngagement } from './engagement.js';
 import { ORDER } from './world.js';
 import { isCarried } from './transport.js';
@@ -14,9 +14,8 @@ import {
   spatialCellId,
 } from './spatialGrid.js';
 
-/** Stand-off / work range for repairs. */
+/** Stand-off / work range for repairs. Big hulls stand further out (see repairReach). */
 export const REPAIR_RANGE = fx.fromFloat(4);
-const REPAIR_RANGE_SQ = fx.mul(REPAIR_RANGE, REPAIR_RANGE);
 
 /** Auto-seek radius while idle. */
 export const REPAIR_AGGRO = fx.fromFloat(28);
@@ -66,8 +65,44 @@ export function beginRepair(w, engineer, target) {
   clearEngagement(w, engineer);
   w.hasTarget[engineer] = 0;
   w.transportTarget[engineer] = -1;
-  queuePath(w, engineer, w.px[target], w.py[target]);
+  const stand = repairStandPoint(w, engineer, target);
+  if (fx.dist2(w.px[engineer], w.py[engineer], w.px[target], w.py[target]) <= stand.reachSq) {
+    clearPath(w, engineer);
+    w.vx[engineer] = 0;
+    w.vy[engineer] = 0;
+  } else {
+    queuePath(w, engineer, stand.x, stand.y);
+  }
   return true;
+}
+
+/**
+ * Center distance at which the engineer stops and works.
+ * At least REPAIR_RANGE, and never inside the pair's soft-separation bubble —
+ * the siege wagon's hull is wider than REPAIR_RANGE, so walking to its center
+ * shoved it every tick.
+ */
+function repairReach(engineerType, targetType) {
+  const sep = fx.fromFloat(pairSeparationDist(engineerType, targetType));
+  return sep > REPAIR_RANGE ? sep : REPAIR_RANGE;
+}
+
+/** Point on the near side of the hull, outside the push radius. */
+function repairStandPoint(w, engineer, target) {
+  const reach = repairReach(w.type[engineer], w.type[target]);
+  const dx = w.px[engineer] - w.px[target];
+  const dy = w.py[engineer] - w.py[target];
+  const dist = fx.len(dx, dy);
+  const nx = dist > 0 ? fx.div(dx, dist) : fx.ONE;
+  const ny = dist > 0 ? fx.div(dy, dist) : 0;
+  // Path arrival stops up to FINAL_ARRIVE short of the ring. Count that band
+  // as in range so the engineer works there instead of stepping into the hull.
+  const work = reach + FINAL_ARRIVE;
+  return {
+    x: w.px[target] + fx.mul(nx, reach),
+    y: w.py[target] + fx.mul(ny, reach),
+    reachSq: fx.mul(work, work),
+  };
 }
 
 function endRepair(w, i) {
@@ -162,18 +197,20 @@ export function repairSystem(w) {
       continue;
     }
 
+    const stand = repairStandPoint(w, i, target);
     const d2 = fx.dist2(w.px[i], w.py[i], w.px[target], w.py[target]);
-    if (d2 <= REPAIR_RANGE_SQ) {
+    if (d2 <= stand.reachSq) {
       w.vx[i] = 0;
       w.vy[i] = 0;
       clearPath(w, i);
       if (!pulseRepair(w, i, target)) endRepair(w, i);
     } else {
-      // Chase the (possibly moving) mechanical without thrashing paths.
-      w.navDestX[i] = w.px[target];
-      w.navDestY[i] = w.py[target];
+      // Chase a point beside the hull, not its center, so the approach
+      // doesn't walk through the vehicle. Repath only when idle.
+      w.navDestX[i] = stand.x;
+      w.navDestY[i] = stand.y;
       if (w.navWpCount[i] === 0 && w.pathRequest[i] === 0) {
-        queuePath(w, i, w.px[target], w.py[target]);
+        queuePath(w, i, stand.x, stand.y);
       }
     }
   }

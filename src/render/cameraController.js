@@ -1119,9 +1119,9 @@ export function createCameraController(camera, canvas, opts = {}) {
     e.preventDefault();
     keyStates[key] = true;
     noteUserAim();
-    if (key === 'w' || key === 'pageup') {
+    if (key === 'r' || key === 'pageup') {
       camera.alpha += KEY_ROT_SPEED;
-    } else if (key === 'r' || key === 'pagedown') {
+    } else if (key === 'w' || key === 'pagedown') {
       camera.alpha -= KEY_ROT_SPEED;
     } else if (key === 'z') {
       applyZoomInput(3.0);
@@ -1135,10 +1135,10 @@ export function createCameraController(camera, canvas, opts = {}) {
   }
 
   function applyHeldKeys() {
-    if (keyStates.w || keyStates.pageup) {
+    if (keyStates.r || keyStates.pageup) {
       markNudged();
       camera.alpha += KEY_ROT_SPEED;
-    } else if (keyStates.r || keyStates.pagedown) {
+    } else if (keyStates.w || keyStates.pagedown) {
       markNudged();
       camera.alpha -= KEY_ROT_SPEED;
     }

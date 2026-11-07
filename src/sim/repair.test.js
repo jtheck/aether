@@ -78,8 +78,30 @@ function autoSeeksDamagedNearby() {
   assert.ok(w.hp[wagon] >= 30 + REPAIR_AMOUNT, 'idle engineer eventually repairs');
 }
 
+function siegeWagonStaysPut() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(14);
+  const eng = spawn(w, { x: fx.fromFloat(12), y: 0, type: UNIT.ENGINEER, owner: 0 });
+  const wagon = spawn(w, {
+    x: 0,
+    y: 0,
+    type: UNIT.SIEGE_WAGON,
+    owner: 0,
+    hp: 40,
+  });
+  const x0 = w.px[wagon];
+  const y0 = w.py[wagon];
+  step(w, field, [{ type: CMD.ATTACK, entities: [eng], target: wagon }]);
+  for (let t = 0; t < 400; t++) step(w, field, []);
+  assert.equal(w.px[wagon], x0, 'siege wagon was not shoved on x');
+  assert.equal(w.py[wagon], y0, 'siege wagon was not shoved on y');
+  assert.ok(w.hp[wagon] > 40, 'engineer still repaired it');
+}
+
 engineerRepairsMechanical();
 ignoresNonMechanical();
 noAttackDamage();
 autoSeeksDamagedNearby();
+siegeWagonStaysPut();
 console.log('repair.test.js: ok');

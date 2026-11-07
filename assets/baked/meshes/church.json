@@ -73,11 +73,11 @@
       "emissiveImage": null
     },
     {
-      "name": "window",
+      "name": "TeamColor",
       "baseColorFactor": [
-        0.006374228745698929,
-        0.07198837399482727,
-        0,
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
         1
       ],
       "metallicFactor": 0,
@@ -227,7 +227,7 @@
       }
     },
     {
-      "materialName": "window",
+      "materialName": "TeamColor",
       "materialIndex": 3,
       "reverseWinding": true,
       "boundMin": [

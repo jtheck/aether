@@ -10,14 +10,15 @@
 //   Y / B           unit ability at that hand's beam: cast, unload a
 //                   loaded transport, or found an agora.
 //   X / A           cancel: back out of a pie or ghost-place, or clear the selection.
-//   Left stick      fly. Click jumps home (selects the agora, like a double B).
-//   Right stick     yaws and lifts. Click jumps to the selection.
+//   Sticks          pad camera: both the same way slides, opposite up/down
+//                   yaws, pinch zooms out. Click jumps (left home, right
+//                   the selection) and, while held, yaws / zooms with both.
 // Control groups stay on the desktop and pad; the headset has no buttons for them.
 //
 // Pie menu open (agora build / building actions): point a beam at a slice.
 // A trigger or a grip on that slice picks it. A trigger that misses the pie
 // issues the same order as in play (rally when buildings are selected).
-// The sticks keep flying and yawing.
+// The two-stick camera keeps moving while a pie is open.
 // Ghost-place: the beam walks the ghost. Facing is where the beam sits
 // inside the plot. Either trigger stamps. X / A backs out.
 // A hand's aim beam shows while a finger rests on its trigger, and always in

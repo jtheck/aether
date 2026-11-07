@@ -7,7 +7,10 @@ import {
   fitRadialInViewport,
   fitRadialMenuXr,
   radialMenuViewDepth,
+  xrRadialFar,
+  XR_RADIAL_FAR_SCREEN_FRAC,
   XR_RADIAL_HIDE_DEPTH,
+  XR_RADIAL_MAX_SCREEN_FRAC,
   XR_RADIAL_SCALE_MUL,
   apparentScreenRadius,
   stepRadialEdgeOpacity,
@@ -303,6 +306,16 @@ describe('fitRadialMenuXr', () => {
     });
     assert.ok(out.hudScale < loose * XR_RADIAL_SCALE_MUL + 1e-6);
     assert.equal(out.x, posed.x);
+  });
+
+  it('grows a far menu and leaves a close one on the tight cap', () => {
+    const close = xrRadialFar(12);
+    assert.equal(close.scaleMul, XR_RADIAL_SCALE_MUL);
+    assert.equal(close.screenFrac, XR_RADIAL_MAX_SCREEN_FRAC);
+    const far = xrRadialFar(120);
+    assert.equal(far.scaleMul, 1);
+    assert.equal(far.screenFrac, XR_RADIAL_FAR_SCREEN_FRAC);
+    assert.ok(far.distCapFrac > close.distCapFrac);
   });
 
   it('hides when the menu is at or behind the eye along view', () => {

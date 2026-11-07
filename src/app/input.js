@@ -1,7 +1,8 @@
 // app/input.js - wires camera + game selection behind a single pointer hub.
-// Mouse + touch + standard-mapping gamepad (leash cursor, LT/RT orders, LB/RB
-// paint-select, B / D-pad Left cast, D-pad U/R/D + Y/X/A control groups).
-// Place overlay: aim walks the ghost; A / LT / RT stamp, B cancels, bumpers yaw.
+// Mouse + touch + standard-mapping gamepad (leash cursor, LB/RB orders, LT/RT
+// paint-select, B / D-pad Left cast and cancel, D-pad Up is the red group,
+// L3 / R3 tap arms rally mode; hold one and press a group to add).
+// Place overlay: aim walks the ghost; A / LB / RB stamp, B cancels, triggers yaw.
 // Pad play hides the OS pointer and shows the field mark. Mouse motion or
 // click yields both so a pad on the desk cannot steal the camera.
 // Menu A on a text field opens the in-game keyboard.
@@ -93,6 +94,13 @@ export function setupInput(opts) {
       aimOx = ox;
       aimOy = oy;
       renderer.setGamepadCursorOffset?.(ox, oy);
+      if (!padAiming) return;
+      const c = aimClient();
+      if (c) game.previewArmedWaypoint?.(c.clientX, c.clientY);
+    },
+    onRallyArm() {
+      const c = aimClient();
+      game.armPadRally?.(c?.clientX ?? null, c?.clientY ?? null);
     },
     onAttackMove() {
       const c = aimClient();
@@ -122,7 +130,10 @@ export function setupInput(opts) {
       if (c) game.castAbilityAt?.(c.clientX, c.clientY);
     },
     onControlGroupDown(id) {
-      game.handleControlGroupDown?.(id);
+      game.pressControlGroup?.(id);
+    },
+    onControlGroupAdd(id) {
+      game.handleControlGroupDown?.(id, { addNow: true });
     },
     onControlGroupUp(id) {
       game.handleControlGroupUp?.(id);

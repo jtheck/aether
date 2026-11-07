@@ -13,6 +13,7 @@ import {
   tileCenterY,
 } from './field.js';
 import * as fx from './fixed.js';
+import { SCENERY } from './scenery.js';
 import {
   serializeBuildings,
   isPlaceableBuilding,
@@ -424,6 +425,28 @@ describe('buildings place', () => {
       assert.equal(isPassable(field, tx, tz), true);
       assert.equal(isSlowTile(field, tx, tz), true);
     }
+  });
+
+  it('fells trees on the pad and leaves a nearby rock', () => {
+    const field = buildField(9, { width: 64, height: 64 });
+    const x = 40;
+    const z = 40;
+    clearClaim(field, 'tower', x, z);
+    const tiles = footprintTiles('tower', x, z);
+    const tree = tiles[0];
+    const treeTile = tree.tz * field.width + tree.tx;
+    field.sceneryType[treeTile] = SCENERY.TREE;
+    field.treeStock[treeTile] = 40;
+    const rockTx = tiles[tiles.length - 1].tx + 2;
+    const rockTz = tiles[tiles.length - 1].tz;
+    const rockTile = rockTz * field.width + rockTx;
+    field.sceneryType[rockTile] = SCENERY.ROCK_MOSS;
+    field.rockStock[rockTile] = 270;
+    const snap = snapFloat('tower', x, z);
+    applyStructureOccupancyAt(field, 'tower', snap.xFixed, snap.zFixed, false);
+    assert.equal(field.treeStock[treeTile], 0);
+    assert.equal(field.sceneryType[rockTile], SCENERY.ROCK_MOSS);
+    assert.equal(field.rockStock[rockTile], 270);
   });
 
   it('rejects place on blocked or structure-slow tiles, allows tree slow', () => {

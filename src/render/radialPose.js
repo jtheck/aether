@@ -398,12 +398,32 @@ export function fitRadialInViewport(opts) {
   return { x, y, z, hudScale, opacity, hidden: opacity <= 0 };
 }
 
-/** Slightly smaller than desktop steady-state in the headset. */
+/** Slightly smaller than desktop steady-state in the headset, up close. */
 export const XR_RADIAL_SCALE_MUL = 0.86;
 /** Stop growing world scale beyond this eye distance (screen size falls off after). */
 export const XR_RADIAL_DIST_CAP_FRAC = 0.88;
-/** Max on-screen disc radius as a fraction of the shorter viewport axis. */
+/** Max on-screen disc radius as a fraction of the shorter viewport axis, up close. */
 export const XR_RADIAL_MAX_SCREEN_FRAC = 0.34;
+/** View depth where the far-menu growth starts and finishes. */
+export const XR_RADIAL_FAR_START = 36;
+export const XR_RADIAL_FAR_END = 96;
+/** On-screen cap once the menu is far. A bit larger than the close cap. */
+export const XR_RADIAL_FAR_SCREEN_FRAC = 0.42;
+
+/**
+ * Close menus keep the tight cap. Farther ones grow toward desktop scale
+ * and a slightly larger on-screen size.
+ * @param {number} depth
+ */
+export function xrRadialFar(depth) {
+  const t = smoothstep(XR_RADIAL_FAR_START, XR_RADIAL_FAR_END, depth);
+  return {
+    scaleMul: XR_RADIAL_SCALE_MUL + (1 - XR_RADIAL_SCALE_MUL) * t,
+    distCapFrac: XR_RADIAL_DIST_CAP_FRAC + (1 - XR_RADIAL_DIST_CAP_FRAC) * t,
+    screenFrac: XR_RADIAL_MAX_SCREEN_FRAC
+      + (XR_RADIAL_FAR_SCREEN_FRAC - XR_RADIAL_MAX_SCREEN_FRAC) * t,
+  };
+}
 /** View depth at or behind the eye: menu is hidden (world units). */
 export const XR_RADIAL_HIDE_DEPTH = 2.5;
 /** Fade out while closer than this along the view axis (world units). */
@@ -466,16 +486,17 @@ export function fitRadialMenuXr(opts) {
     };
   }
 
-  const cap = (Number.isFinite(placeDist) ? placeDist : 70) * XR_RADIAL_DIST_CAP_FRAC;
+  const far = xrRadialFar(depth);
+  const cap = (Number.isFinite(placeDist) ? placeDist : 70) * far.distCapFrac;
   const dist = Math.min(Math.max(depth, XR_RADIAL_HIDE_DEPTH), cap);
-  let hudScale = scaleForDist(dist) * XR_RADIAL_SCALE_MUL;
+  let hudScale = scaleForDist(dist) * far.scaleMul;
   let shrinkFade = 1;
   const w2s = opts.worldToScreen;
   const vp = opts.getViewport?.();
   const vw = vp?.width ?? 0;
   const vh = vp?.height ?? 0;
   if (w2s && vw >= 8 && vh >= 8 && worldRadius > 0) {
-    const maxR = Math.min(vw, vh) * XR_RADIAL_MAX_SCREEN_FRAC;
+    const maxR = Math.min(vw, vh) * far.screenFrac;
     const r = apparentScreenRadius(
       eye,
       posed.x,

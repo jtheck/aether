@@ -43,6 +43,25 @@ export function coalesceSharedRallyMarkers(markers) {
   return out;
 }
 
+/**
+ * Banner faces back along the path into the flag.
+ * A pinched tip is skipped so a cursor nudge does not spin it.
+ * A flag sitting on its source faces map center.
+ * @param {{ x: number, z: number }[] | null | undefined} points
+ */
+export function rallyArrivalYaw(points, x, z) {
+  const px = Number(x) || 0;
+  const pz = Number(z) || 0;
+  if (points && points.length >= 2) {
+    for (let i = points.length - 2; i >= 0; i--) {
+      const dx = px - points[i].x;
+      const dz = pz - points[i].z;
+      if (dx * dx + dz * dz > 0.25) return Math.atan2(dx, dz);
+    }
+  }
+  return Math.atan2(-px, -pz);
+}
+
 /** Positive remainder in [0, period). */
 export function wrapPeriod(v, period) {
   if (!(period > 0)) return 0;

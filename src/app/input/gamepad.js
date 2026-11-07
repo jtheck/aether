@@ -3,22 +3,28 @@
 // Both sticks look/aim. Opposite up/down yaws (LS up + RS down = right);
 // pinch (LS→ RS←) zooms out, open (LS← RS→) zooms in. Both throws feed the speed.
 // A split hold damps look and homes the field target.
-// L3 or R3 puts both sticks into rotate/zoom. HUD menus keep those gestures:
+// L3 or R3: a tap arms rally mode on the selected production building. Hold
+// one and a control-group button adds the selection to that group. HUD menus
+// keep the two-stick gestures:
 // pan only when both sticks are in; a lone stick still tabs. An open agora /
-// action radial aims with a lone stick (A / LT / RT confirm, B back); both
-// sticks still pan. Ghost-place: aim walks the ghost, A / LT / RT stamp, B
-// cancels, LB / RB + stick drag yaws (not bumper taps). Play reports onAim
+// action radial aims with a lone stick (A / LB / RB confirm, B / D-pad Left back); both
+// sticks still pan. Ghost-place: aim walks the ghost, A / LB / RB stamp, B /
+// D-pad Left cancels, LT / RT + stick drag yaws (not a trigger tap). Play reports onAim
 // so a field cursor can roam the view
 // (stick moves, release parks), then camera at the edges. Mouse / pointer
 // use yields that mark until a new button or a fresh stick throw - a held
-// stick or worn rest must not steal the camera back. LT / RT issue orders
+// stick or worn rest must not steal the camera back. LB / RB issue orders
 // at that aim (A-move / force-move) unless a menu, radial, or place overlay
-// owns them. LB / RB paint-select (brush lasso; both bumpers double the
-// max radius).
-// D-pad U/R/D and Y/X/A are the left/right control-group stacks (tap / hold /
-// second-tap jump). B and D-pad Left cast at the aim. Menu A on a text field
-// opens the in-game keyboard. On that keyboard, D-pad and both sticks walk the
-// key grid; LB / RB backspace.
+// owns them. LT / RT paint-select (brush lasso; trigger pressure sets the
+// radius, from a light pull to a full squeeze).
+// D-pad Up is the red group, where the home agora starts. D-pad Right / Down and Y/X/A are the other
+// control groups (press selects, hold assigns, second press jumps; hold L3 / R3
+// and press one to add). A tap of L3 / R3 arms rally mode.
+// B and D-pad Left are the
+// same button: cast at the aim, and back out or cancel a menu, radial, or
+// place. Menu A on a text field opens the in-game keyboard. On that keyboard,
+// D-pad up/down/right and both sticks walk the key grid; D-pad Left closes
+// it; LT / RT backspace.
 
 import { leashLimit, settleCursorLeash, stepCursorLeash } from './gamepadCursor.js';
 import { radialStickPick } from './radialStick.js';
@@ -183,11 +189,11 @@ export function buttonEdges(cur, prev) {
   return down;
 }
 
-/** Play-order edges: LT = attack-move, RT = force-move. */
+/** Play-order edges: LB = attack-move, RB = force-move. */
 export function playOrderIntent(edges) {
   return {
-    attackMove: !!edges?.[PAD.LT],
-    forceMove: !!edges?.[PAD.RT],
+    attackMove: !!edges?.[PAD.LB],
+    forceMove: !!edges?.[PAD.RB],
   };
 }
 
@@ -207,7 +213,7 @@ export function padHasActivity(read, edges) {
   if (lookStickPair(read?.lx, read?.ly).live || lookStickPair(read?.rx, read?.ry).live) {
     return true;
   }
-  return (read?.lt ?? 0) > 0.5 || (read?.rt ?? 0) > 0.5;
+  return triggerSelectAmount(read) > TRIGGER_SELECT_ENTER;
 }
 
 /** After a mouse yield, ignore a sloppy rest; a real throw still reclaims. */
@@ -231,8 +237,8 @@ export function padCanReclaimFromPointer(read, edges, stickArmed) {
 }
 
 /**
- * Left HUD stack (red / green / black) then right (blue / yellow / white).
- * U/R/D skip D-pad Left; Y/X/A skip B - those two leftover buttons cast.
+ * Left HUD stack: Up is red (home agora), Right is green, Down is black.
+ * Y/X/A are blue / yellow / white. D-pad Left shares B.
  */
 export const PAD_CONTROL_GROUP_BUTTONS = [
   [PAD.UP, 0],
@@ -262,49 +268,85 @@ export function buttonReleased(cur, prev) {
 
 /**
  * Play control-group edges. Several downs/ups can land in one frame.
+ * `skipButton` drops one pad button (A confirming a pie or stamping a ghost).
  * @param {boolean[]} downEdges
  * @param {boolean[]} upEdges
+ * @param {number} [skipButton]
  */
-export function playControlGroupIntent(downEdges, upEdges) {
+export function playControlGroupIntent(downEdges, upEdges, skipButton = -1) {
   const downs = [];
   const ups = [];
   for (let i = 0; i < PAD_CONTROL_GROUP_BUTTONS.length; i++) {
     const [btn, id] = PAD_CONTROL_GROUP_BUTTONS[i];
+    if (btn === skipButton) continue;
     if (downEdges?.[btn]) downs.push(id);
     if (upEdges?.[btn]) ups.push(id);
   }
   return { downs, ups };
 }
 
-/** B or D-pad Left - cast primary ability at the aim. */
-export function playCastIntent(edges) {
+/** B and D-pad Left: cast, and every back / cancel B already owns. */
+export function padBEdge(edges) {
   return !!(edges?.[PAD.B] || edges?.[PAD.LEFT]);
 }
 
-/** A / LT / RT - activate a menu button, radial slice, or place stamp. */
+/** B or D-pad Left - cast primary ability at the aim. */
+export function playCastIntent(edges) {
+  return padBEdge(edges);
+}
+
+/** A / LB / RB - activate a menu button, radial slice, or place stamp. */
 export function playConfirmIntent(edges) {
-  return !!(edges?.[PAD.A] || edges?.[PAD.LT] || edges?.[PAD.RT]);
+  return !!(edges?.[PAD.A] || edges?.[PAD.LB] || edges?.[PAD.RB]);
 }
 
 /**
- * Ghost-place: confirm / cancel. Yaw is LB/RB + stick drag, not a bumper tap.
+ * Ghost-place: confirm / cancel. Yaw is LT/RT + stick drag, not a trigger tap.
  * @param {boolean[]} edges
  */
 export function placePadIntent(edges) {
   return {
     confirm: playConfirmIntent(edges),
-    cancel: !!edges?.[PAD.B],
+    cancel: padBEdge(edges),
   };
 }
 
-/** Either bumper held - paint-select at the aim. */
-export function playSelectHeld(buttons) {
-  return !!(buttons?.[PAD.LB] || buttons?.[PAD.RB]);
+/** Pull past this to start a paint-select. Below the digital click (0.5). */
+export const TRIGGER_SELECT_ENTER = 0.15;
+/** Stay in the stroke down to here so a soft trigger does not flicker. */
+export const TRIGGER_SELECT_LEAVE = 0.08;
+
+/**
+ * Stronger of the two trigger axes, 0..1.
+ * @param {{ lt?: number, rt?: number } | null | undefined} read
+ */
+export function triggerSelectAmount(read) {
+  const lt = Number.isFinite(read?.lt) ? read.lt : 0;
+  const rt = Number.isFinite(read?.rt) ? read.rt : 0;
+  const raw = lt > rt ? lt : rt;
+  if (!(raw > 0)) return 0;
+  return raw > 1 ? 1 : raw;
 }
 
-/** Both bumpers - brush jumps to double the single-bumper max. */
-export function playSelectBoth(buttons) {
-  return !!(buttons?.[PAD.LB] && buttons?.[PAD.RB]);
+/**
+ * 0 just as paint-select engages, 1 at a full squeeze.
+ * @param {number} amount
+ */
+export function triggerBrushPressure(amount) {
+  const a = Number.isFinite(amount) ? amount : 0;
+  if (!(a > TRIGGER_SELECT_ENTER)) return 0;
+  const t = (a - TRIGGER_SELECT_ENTER) / (1 - TRIGGER_SELECT_ENTER);
+  return t > 1 ? 1 : t;
+}
+
+/**
+ * Either trigger pulled - paint-select at the aim.
+ * @param {{ lt?: number, rt?: number } | null | undefined} read
+ * @param {boolean} [wasHeld]
+ */
+export function playSelectHeld(read, wasHeld = false) {
+  const gate = wasHeld ? TRIGGER_SELECT_LEAVE : TRIGGER_SELECT_ENTER;
+  return triggerSelectAmount(read) > gate;
 }
 
 /**
@@ -416,10 +458,6 @@ export function menuNavIntent(read, focused) {
   const b = read?.buttons ?? [];
   if (b[PAD.UP]) tab = -1;
   if (b[PAD.DOWN]) tab = 1;
-  if (b[PAD.LEFT]) {
-    if (horizAdjust) adj = -1;
-    else tab = -1;
-  }
   if (b[PAD.RIGHT]) {
     if (horizAdjust) adj = 1;
     else tab = 1;
@@ -436,21 +474,21 @@ export function menuNavIntent(read, focused) {
     else tab = x > 0 ? 1 : -1;
   }
   if (horizAdjust) {
-    if (b[PAD.LB]) adj = -1;
-    if (b[PAD.RB]) adj = 1;
+    if (b[PAD.LT]) adj = -1;
+    if (b[PAD.RT]) adj = 1;
   }
   return { tab, adj };
 }
 
 /**
- * Keyboard grid: D-pad and either stick. Dominant axis wins so diagonals do not
- * skip a cell. Bumpers are backspace (see osKbdBackspaceHeld).
+ * Keyboard grid: D-pad up/down/right and either stick. Dominant axis wins so
+ * diagonals do not skip a cell. D-pad Left closes the keyboard. Triggers are
+ * backspace (see osKbdBackspaceHeld).
  */
 export function osKbdNavIntent(read) {
   const b = read?.buttons ?? [];
   let dx = 0;
   let dy = 0;
-  if (b[PAD.LEFT]) dx = -1;
   if (b[PAD.RIGHT]) dx = 1;
   if (b[PAD.UP]) dy = -1;
   if (b[PAD.DOWN]) dy = 1;
@@ -473,7 +511,7 @@ export function osKbdNavCode(dx, dy) {
 
 export function osKbdBackspaceHeld(read) {
   const b = read?.buttons ?? [];
-  return !!(b[PAD.LB] || b[PAD.RB]);
+  return !!(b[PAD.LT] || b[PAD.RT]);
 }
 
 /**
@@ -619,6 +657,25 @@ export function stepMenuFocus(items, current, dir) {
   return next ?? null;
 }
 
+/**
+ * One frame of the two-stick camera, in the same units the desktop pad applies.
+ * Pan is stick throw (both sticks, same direction). `yaw` is the rotate delta
+ * (negative turns right). `zoom` is world units (positive zooms out).
+ * A lone stick does not pan. Stick-click (L3 / R3) turns both sticks into yaw / zoom.
+ * @param {{ lx?: number, ly?: number, rx?: number, ry?: number, buttons?: boolean[] }} read
+ * @param {number} [radius]
+ */
+export function stickCameraStep(read, radius = 80) {
+  const { lookX, lookY, rotX, rotY, splitYaw, splitZoom, bothLook } = stickPlayAxes(read);
+  const r = Number(radius) > 1 ? Number(radius) : 80;
+  return {
+    panRight: bothLook ? -lookX || 0 : 0,
+    panForward: bothLook ? -lookY || 0 : 0,
+    yaw: (-splitYaw * STICK_SPLIT_YAW - rotX * ROT_SENS) || 0,
+    zoom: splitZoom * STICK_SPLIT_ZOOM * r + rotY * ZOOM_SENS,
+  };
+}
+
 function applyLookRotateZoom(camera, camLx, camLy, rx, ry, splitYaw, splitZoom) {
   if (!camera) return;
   if (camLx || camLy) camera.nudgeLookPan?.(-camLx || 0, -camLy || 0);
@@ -676,15 +733,17 @@ function showMenuMain(doc) {
  * @param {(el: Element) => void} [opts.onTextEdit] - A on a text field (in-game keyboard)
  * @param {(ox: number, oy: number) => void} [opts.onCursor] - leash offset from view center
  * @param {() => { width?: number, height?: number } | null} [opts.getViewport]
- * @param {() => void} [opts.onAttackMove] - LT press
- * @param {() => void} [opts.onForceMove] - RT press
+ * @param {() => void} [opts.onAttackMove] - LB press
+ * @param {() => void} [opts.onForceMove] - RB press
  * @param {() => void} [opts.onCast] - B / D-pad Left press
- * @param {(id: number) => void} [opts.onControlGroupDown] - U/R/D / Y/X/A press
+ * @param {(id: number) => void} [opts.onControlGroupDown] - Up is red (home agora); Right / Down / Y/X/A are the other groups
+ * @param {(id: number) => void} [opts.onControlGroupAdd] - same buttons while L3 or R3 is held
+ * @param {() => void} [opts.onRallyArm] - L3 or R3 released without a group add
  * @param {(id: number) => void} [opts.onControlGroupUp] - matching release
  * @param {() => void} [opts.onControlGroupCancel] - menu / idle / disconnect mid-hold
- * @param {(chord?: { both: boolean }) => void} [opts.onSelectStart] - LB / RB press
- * @param {(chord?: { both: boolean }) => void} [opts.onSelectHold] - LB / RB held (after sticks this frame)
- * @param {(chord?: { both: boolean }) => void} [opts.onSelectEnd] - LB / RB release
+ * @param {(chord?: { pressure: number }) => void} [opts.onSelectStart] - LT / RT pull
+ * @param {(chord?: { pressure: number }) => void} [opts.onSelectHold] - LT / RT held (after sticks this frame)
+ * @param {(chord?: { pressure: number }) => void} [opts.onSelectEnd] - LT / RT release
  * @param {() => void} [opts.onSelectCancel] - menu / idle / disconnect mid-drag
  * @param {(doc: Document) => Element | null} [opts.menuRoot]
  * @param {(root: Element | null) => Element[]} [opts.listFocusables]
@@ -694,13 +753,13 @@ function showMenuMain(doc) {
  * @param {() => { inner?: object[], outer?: object[] } | null} [opts.getRadialTargets]
  * @param {(pick: object | null) => void} [opts.onRadialHover]
  * @param {(pick: object) => void} [opts.onRadialConfirm]
- * @param {() => void} [opts.onRadialCancel]
+ * @param {() => void} [opts.onRadialCancel] - B / D-pad Left
  * @param {() => boolean} [opts.yieldPad] - extra park (page hidden is already covered)
  * @param {boolean | (() => boolean)} [opts.placing] - ghost / rally place overlay
  * @param {() => void} [opts.onPlaceAim] - after sticks, walk the ghost to the aim
- * @param {() => void} [opts.onPlaceConfirm] - A / LT / RT
- * @param {() => void} [opts.onPlaceCancel] - B
- * @param {() => void} [opts.onPlaceRotateDrag] - LB/RB held, aim still walks the ghost
+ * @param {() => void} [opts.onPlaceConfirm] - A / LB / RB
+ * @param {() => void} [opts.onPlaceCancel] - B / D-pad Left
+ * @param {() => void} [opts.onPlaceRotateDrag] - LT/RT held, aim still walks the ghost
  * @param {(el: Element | null) => boolean} [opts.isTyping]
  */
 export function createGamepadAdapter(opts = {}) {
@@ -743,11 +802,16 @@ export function createGamepadAdapter(opts = {}) {
   let aimOy = 0;
   let padSelecting = false;
   let padGroupId = null;
+  /** L3 / R3 is down. A group add during the press spends it. */
+  let stickClickGesture = false;
+  let stickClickAdded = false;
   let radialHeldRing = null;
   let pointerYielded = false;
   let stickReclaimArmed = false;
   /** Radial confirm while the stick is still out. Hold that throw off the cursor. */
   let menuStickCarry = false;
+  /** Paint-select / place-yaw hysteresis for a soft trigger. */
+  let triggerLatched = false;
 
   function resetEdges() {
     prevButtons = [];
@@ -757,6 +821,15 @@ export function createGamepadAdapter(opts = {}) {
     tabLastAt = 0;
     adjHeldAt = 0;
     adjLastAt = 0;
+    triggerLatched = false;
+    stickClickGesture = false;
+    stickClickAdded = false;
+  }
+
+  function sampleTriggerSelect(read) {
+    const held = playSelectHeld(read, triggerLatched);
+    triggerLatched = held;
+    return held;
   }
 
   function resetAimOffset() {
@@ -777,9 +850,25 @@ export function createGamepadAdapter(opts = {}) {
     opts.onControlGroupCancel?.();
   }
 
+  function applyControlGroups(edges, released, skipButton = -1, buttons) {
+    const groups = playControlGroupIntent(edges, released, skipButton);
+    const add = !!(buttons?.[PAD.L3] || buttons?.[PAD.R3]);
+    if (add && groups.downs.length > 0) stickClickAdded = true;
+    for (let i = 0; i < groups.downs.length; i++) {
+      padGroupId = groups.downs[i];
+      if (add) opts.onControlGroupAdd?.(groups.downs[i]);
+      else opts.onControlGroupDown?.(groups.downs[i]);
+    }
+    for (let i = 0; i < groups.ups.length; i++) {
+      const id = groups.ups[i];
+      if (padGroupId === id) padGroupId = null;
+      opts.onControlGroupUp?.(id);
+    }
+  }
+
   function aim(on, source) {
-    if (!on) resetAimOffset();
     opts.onAim?.(!!on, source);
+    if (!on) resetAimOffset();
   }
 
   function yieldToPointer() {
@@ -789,6 +878,24 @@ export function createGamepadAdapter(opts = {}) {
     cancelPadSelect();
     cancelPadGroup();
     aim(false);
+  }
+
+  /** Stick clicks are the group-add modifier on this pad, not a camera mode. */
+  function playCameraRead(read) {
+    const buttons = read?.buttons;
+    if (!buttons?.[PAD.L3] && !buttons?.[PAD.R3]) return read;
+    const next = buttons.slice();
+    next[PAD.L3] = false;
+    next[PAD.R3] = false;
+    return { ...read, buttons: next };
+  }
+
+  function finishStickClick(held, allowArm) {
+    if (!held && stickClickGesture && !stickClickAdded && allowArm) opts.onRallyArm?.();
+    if (!held) {
+      stickClickGesture = false;
+      stickClickAdded = false;
+    }
   }
 
   function lookSticksQuiet(read) {
@@ -866,7 +973,7 @@ export function createGamepadAdapter(opts = {}) {
 
   function handleMenu(menuRoot, read, edges, t) {
     if (menuRoot?.id === OS_KBD_ID) {
-      if (edges[PAD.START] || edges[PAD.BACK] || edges[PAD.B]) {
+      if (edges[PAD.START] || edges[PAD.BACK] || padBEdge(edges)) {
         closeOsKbd(root);
         return;
       }
@@ -893,7 +1000,7 @@ export function createGamepadAdapter(opts = {}) {
       }
       return;
     }
-    if ((menuRoot?.id === 'help_pop' || menuRoot?.id === 'skins_pop' || menuRoot?.id === 'ladder_pop' || menuRoot?.id === 'ladder_hist' || menuRoot?.id === 'ladder_go') && (edges[PAD.B] || edges[PAD.START] || edges[PAD.BACK])) {
+    if ((menuRoot?.id === 'help_pop' || menuRoot?.id === 'skins_pop' || menuRoot?.id === 'ladder_pop' || menuRoot?.id === 'ladder_hist' || menuRoot?.id === 'ladder_go') && (padBEdge(edges) || edges[PAD.START] || edges[PAD.BACK])) {
       blurInside(menuRoot, root);
       const closeId = menuRoot.id === 'skins_pop' ? 'skins_close'
         : menuRoot.id === 'ladder_hist' ? 'ladder_hist_close'
@@ -903,12 +1010,12 @@ export function createGamepadAdapter(opts = {}) {
       root.getElementById(closeId)?.click?.();
       return;
     }
-    if (menuRoot?.id === 'replay-watch' && edges[PAD.B]) {
+    if (menuRoot?.id === 'replay-watch' && padBEdge(edges)) {
       blurInside(menuRoot, root);
       root.getElementById('replay-close')?.click?.();
       return;
     }
-    if (menuRoot?.id === 'match-lobby-overlay' && edges[PAD.B]) {
+    if (menuRoot?.id === 'match-lobby-overlay' && padBEdge(edges)) {
       blurInside(menuRoot, root);
       const min = root.getElementById('match-lobby-min');
       if (isMenuFocusable(min, menuRoot)) min.click?.();
@@ -921,7 +1028,7 @@ export function createGamepadAdapter(opts = {}) {
       clickMenuToggle(root, openMenu ? true : false);
       return;
     }
-    if (edges[PAD.B]) {
+    if (padBEdge(edges)) {
       const page = menuRoot.querySelector?.('.page.is-active')?.dataset?.page;
       if (page === 'settings') {
         showMenuMain(root);
@@ -1025,22 +1132,30 @@ export function createGamepadAdapter(opts = {}) {
       return;
     }
     const read = readStandardPad(pad);
+    const cameraRead = playCameraRead(read);
     if (menuStickCarry && lookSticksQuiet(read)) menuStickCarry = false;
     const edges = buttonEdges(read.buttons, prevButtons);
     const released = buttonReleased(read.buttons, prevButtons);
+    const stickNow = !!(read.buttons?.[PAD.L3] || read.buttons?.[PAD.R3]);
+    const stickWas = !!(prevButtons?.[PAD.L3] || prevButtons?.[PAD.R3]);
     prevButtons = read.buttons;
+    if (stickNow && !stickWas) {
+      stickClickGesture = true;
+      stickClickAdded = false;
+    }
     const placingNow = typeof opts.placing === 'function' ? !!opts.placing() : !!opts.placing;
     if (pointerYielded) {
       if (!padHasActivity(read, [])) stickReclaimArmed = true;
       // Ghost-place keeps the pad - a mouse pick of the building type used
-      // to swallow aim / bumper-yaw / A until a full stick recenter.
+      // to swallow aim / trigger-yaw / A until a full stick recenter.
       if (!placingNow && !padCanReclaimFromPointer(read, edges, stickReclaimArmed)) {
         const t = now();
         const menuRoot = resolveMenuRoot(root);
         if (menuRoot) {
-          handleMenu(menuRoot, replayHudRead(menuRoot, read), edges, t);
-          if (menuExclusive && menuRoot.id !== 'replay-watch') holdMenu(menuRoot, read);
+          handleMenu(menuRoot, replayHudRead(menuRoot, cameraRead), edges, t);
+          if (menuExclusive && menuRoot.id !== 'replay-watch') holdMenu(menuRoot, cameraRead);
         }
+        finishStickClick(stickNow, false);
         return;
       }
       pointerYielded = false;
@@ -1052,13 +1167,13 @@ export function createGamepadAdapter(opts = {}) {
 
     if (menuRoot) {
       const replayHud = menuRoot.id === 'replay-watch';
-      handleMenu(menuRoot, replayHud ? replayHudRead(menuRoot, read) : read, edges, t);
+      handleMenu(menuRoot, replayHud ? replayHudRead(menuRoot, cameraRead) : cameraRead, edges, t);
       if (replayHud) {
-        // The bar owns confirm, back, and the D-pad. Sticks and bumpers stay on the field.
+        // The bar owns confirm, back, and the D-pad. Sticks and triggers stay on the field.
         edges[PAD.A] = false;
         edges[PAD.B] = false;
-        edges[PAD.LT] = false;
-        edges[PAD.RT] = false;
+        edges[PAD.LB] = false;
+        edges[PAD.RB] = false;
         edges[PAD.UP] = false;
         edges[PAD.DOWN] = false;
         edges[PAD.LEFT] = false;
@@ -1066,7 +1181,8 @@ export function createGamepadAdapter(opts = {}) {
         edges[PAD.START] = false;
         edges[PAD.BACK] = false;
       } else if (menuExclusive) {
-        holdMenu(menuRoot, read);
+        holdMenu(menuRoot, cameraRead);
+        finishStickClick(stickNow, false);
         return;
       }
     }
@@ -1079,6 +1195,7 @@ export function createGamepadAdapter(opts = {}) {
         && over && !over.hidden
       ) {
         root.getElementById('match-lobby-min')?.click?.();
+        finishStickClick(stickNow, false);
         return;
       }
       const opened = clickMenuToggle(root, true);
@@ -1090,6 +1207,7 @@ export function createGamepadAdapter(opts = {}) {
           cancelPadSelect();
           cancelPadGroup();
           aim(false);
+          finishStickClick(stickNow, false);
           return;
         }
       }
@@ -1099,12 +1217,14 @@ export function createGamepadAdapter(opts = {}) {
       cancelPadSelect();
       cancelPadGroup();
       aim(false);
+      finishStickClick(stickNow, false);
       return;
     }
     if (isTyping(root?.activeElement)) {
       cancelPadSelect();
       cancelPadGroup();
       aim(false);
+      finishStickClick(stickNow, false);
       return;
     }
 
@@ -1112,47 +1232,51 @@ export function createGamepadAdapter(opts = {}) {
     if (placing) {
       // The build pie stays up in compact form while the ghost is out.
       // Driving that pie pins the preview on the agora until the pie closes.
+      // Control groups still select; A keeps stamping the ghost.
       radialHeldRing = null;
       cancelPadSelect();
-      cancelPadGroup();
       // The stick is still the pie throw. Keep the field mark off until it recenters.
       if (menuStickCarry) aim(false, 'radial');
       else aim(true);
-      applyPlay(read);
-      if (playSelectHeld(read.buttons)) opts.onPlaceRotateDrag?.();
+      applyPlay(cameraRead);
+      if (sampleTriggerSelect(read)) opts.onPlaceRotateDrag?.();
       else opts.onPlaceAim?.();
       const place = placePadIntent(edges);
+      applyControlGroups(edges, released, place.confirm ? PAD.A : -1, read.buttons);
       if (place.cancel) opts.onPlaceCancel?.();
       else if (place.confirm) opts.onPlaceConfirm?.();
+      finishStickClick(stickNow, false);
       return;
     }
 
     const radialOpen = typeof opts.radialOpen === 'function' ? !!opts.radialOpen() : !!opts.radialOpen;
     if (radialOpen) {
       cancelPadSelect();
-      cancelPadGroup();
       aim(false, 'radial');
-      applyMenuCamera(read);
-      const pick = radialStickPick(radialMenuRead(read), opts.getRadialTargets?.() ?? null, radialHeldRing);
+      applyMenuCamera(cameraRead);
+      const pick = radialStickPick(radialMenuRead(cameraRead), opts.getRadialTargets?.() ?? null, radialHeldRing);
       radialHeldRing = pick?.ring ?? null;
       opts.onRadialHover?.(pick);
-      if (edges[PAD.B]) opts.onRadialCancel?.();
-      else if (playConfirmIntent(edges) && pick) {
+      const confirming = playConfirmIntent(edges) && !!pick;
+      applyControlGroups(edges, released, confirming ? PAD.A : -1, read.buttons);
+      if (padBEdge(edges)) opts.onRadialCancel?.();
+      else if (confirming) {
         if (!lookSticksQuiet(read)) menuStickCarry = true;
         opts.onRadialConfirm?.(pick);
       }
+      finishStickClick(stickNow, true);
       return;
     }
     radialHeldRing = null;
 
     aim(true);
-    const selectHeld = playSelectHeld(read.buttons);
-    const chord = { both: playSelectBoth(read.buttons) };
+    const selectHeld = sampleTriggerSelect(read);
+    const chord = { pressure: triggerBrushPressure(triggerSelectAmount(read)) };
     if (selectHeld && !padSelecting) {
       padSelecting = true;
       opts.onSelectStart?.(chord);
     }
-    applyPlay(read);
+    applyPlay(cameraRead);
     if (padSelecting && selectHeld) opts.onSelectHold?.(chord);
     if (padSelecting && !selectHeld) {
       padSelecting = false;
@@ -1161,17 +1285,9 @@ export function createGamepadAdapter(opts = {}) {
     const orders = playOrderIntent(edges);
     if (orders.attackMove) opts.onAttackMove?.();
     if (orders.forceMove) opts.onForceMove?.();
-    const groups = playControlGroupIntent(edges, released);
-    for (let i = 0; i < groups.downs.length; i++) {
-      padGroupId = groups.downs[i];
-      opts.onControlGroupDown?.(groups.downs[i]);
-    }
-    for (let i = 0; i < groups.ups.length; i++) {
-      const id = groups.ups[i];
-      if (padGroupId === id) padGroupId = null;
-      opts.onControlGroupUp?.(id);
-    }
+    applyControlGroups(edges, released, -1, read.buttons);
     if (playCastIntent(edges)) opts.onCast?.();
+    finishStickClick(stickNow, true);
   }
 
   function loop() {

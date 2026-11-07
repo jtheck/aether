@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { coalesceSharedRallyMarkers, forEachRallyDash, wrapPeriod } from './rallyDash.js';
+import { coalesceSharedRallyMarkers, forEachRallyDash, rallyArrivalYaw, wrapPeriod } from './rallyDash.js';
 
 function spans(pathLen, offset, dashLen = 1.55, period = 2.6) {
   const out = [];
@@ -32,6 +32,29 @@ describe('rallyDash', () => {
       assert.ok(s[i][0] >= s[i - 1][1]);
       assert.ok(Math.abs(s[i][0] - s[i - 1][0] - 2.6) < 1e-9);
     }
+  });
+
+  it('turns a flag to the path that reaches it', () => {
+    const east = rallyArrivalYaw(
+      [{ x: 0, z: 0 }, { x: 10, z: 0 }],
+      10,
+      0,
+    );
+    const north = rallyArrivalYaw(
+      [{ x: 0, z: 0 }, { x: 0, z: 10 }],
+      0,
+      10,
+    );
+    assert.ok(Math.abs(east - Math.PI / 2) < 1e-9);
+    assert.ok(Math.abs(north) < 1e-9);
+    assert.ok(Math.abs(east - north) > 1);
+    // A pinched tip keeps the approach, not the last wiggle.
+    const held = rallyArrivalYaw(
+      [{ x: 0, z: 0 }, { x: 10, z: 0 }, { x: 10.2, z: 0.2 }],
+      10.2,
+      0.2,
+    );
+    assert.ok(Math.abs(held - east) < 0.05);
   });
 
   it('draws one shared flag and keeps each building path', () => {

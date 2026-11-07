@@ -49,19 +49,19 @@ function screenHas(pts, x, y) {
 }
 
 describe('brushRadiusTarget', () => {
-  it('stays at the floor when still, fills the max when sweeping, and doubles on both bumpers', () => {
-    assert.equal(brushRadiusTarget(0, false), BRUSH_RADIUS_MIN);
-    assert.equal(brushRadiusTarget(80, false), BRUSH_RADIUS_MAX);
-    assert.equal(brushRadiusTarget(0, true), BRUSH_RADIUS_BOTH);
+  it('stays at the floor on a light pull and fills the large brush on a full squeeze', () => {
+    assert.equal(brushRadiusTarget(0), BRUSH_RADIUS_MIN);
+    assert.equal(brushRadiusTarget(1), BRUSH_RADIUS_BOTH);
     assert.equal(BRUSH_RADIUS_BOTH, BRUSH_RADIUS_MAX * 2);
-    assert.ok(brushRadiusTarget(9, false) > BRUSH_RADIUS_MIN);
-    assert.ok(brushRadiusTarget(9, false) < BRUSH_RADIUS_MAX);
+    const mid = brushRadiusTarget(0.5);
+    assert.ok(mid > BRUSH_RADIUS_MIN);
+    assert.ok(mid < BRUSH_RADIUS_BOTH);
   });
 
-  it('snaps to the both-bumper size instead of easing', () => {
-    assert.equal(stepBrushRadius(BRUSH_RADIUS_MIN, BRUSH_RADIUS_BOTH, true), BRUSH_RADIUS_BOTH);
-    const eased = stepBrushRadius(BRUSH_RADIUS_MIN, BRUSH_RADIUS_MAX, false);
-    assert.ok(eased > BRUSH_RADIUS_MIN && eased < BRUSH_RADIUS_MAX);
+  it('eases toward the pressure target and snaps from an empty brush', () => {
+    assert.equal(stepBrushRadius(0, BRUSH_RADIUS_BOTH), BRUSH_RADIUS_BOTH);
+    const eased = stepBrushRadius(BRUSH_RADIUS_MIN, BRUSH_RADIUS_BOTH);
+    assert.ok(eased > BRUSH_RADIUS_MIN && eased < BRUSH_RADIUS_BOTH);
   });
 });
 

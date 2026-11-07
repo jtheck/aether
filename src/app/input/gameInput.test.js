@@ -21,7 +21,7 @@ import {
   twoFingerConsumesBuildUi,
 } from './buildingSelect.js';
 import { ABILITY_HOLD_MS, createGameInput } from './gameInput.js';
-import { CONTROL_GROUP_BLACK } from './controlGroups.js';
+import { CONTROL_GROUP_RED } from './controlGroups.js';
 import { CMD } from '../../sim/commands.js';
 import { ORDER } from '../../sim/world.js';
 
@@ -462,17 +462,17 @@ describe('gamepad select drag', () => {
     assert.equal(selected[1], 0);
   });
 
-  it('doubles the brush to max size when both bumpers are down', () => {
+  it('fills the brush on a full trigger squeeze', () => {
     const { input, selected, brushes } = makePadSelectHarness({ worldX: [100, 800] });
-    assert.equal(input.beginSelectDrag(200, 200, { both: true }), true);
-    assert.equal(input.updateSelectDrag(200, 200, { both: true }), true);
+    assert.equal(input.beginSelectDrag(200, 200, { pressure: 1 }), true);
+    assert.equal(input.updateSelectDrag(200, 200, { pressure: 1 }), true);
     assert.equal(brushes.at(-1), 144);
     assert.equal(input.endSelectDrag(200, 200), true);
     assert.equal(selected[0], 1);
     assert.equal(selected[1], 0);
   });
 
-  it('leaves a far unit outside a short single-bumper stroke', () => {
+  it('leaves a far unit outside a short light-trigger stroke', () => {
     const { input, selected, brushes } = makePadSelectHarness({ worldX: [100, 800] });
     assert.equal(input.beginSelectDrag(200, 200), true);
     assert.equal(input.updateSelectDrag(232, 200), true);
@@ -483,8 +483,8 @@ describe('gamepad select drag', () => {
   });
 });
 
-describe('gamepad trigger orders', () => {
-  it('attack-moves on LT and force-moves on RT', async () => {
+describe('gamepad orders', () => {
+  it('attack-moves and force-moves at the aim', async () => {
     const { input, cmds } = makeOrderHarness();
     assert.equal(input.attackMoveAt(200, 300), true);
     await new Promise((r) => setImmediate(r));
@@ -719,30 +719,84 @@ describe('gamepad control groups', () => {
     selected[0] = 0;
     selected[1] = 0;
     input.setSelectedBuffer(selected);
-    assert.equal(input.handleControlGroupDown(0), true);
-    assert.equal(input.handleControlGroupUp(0), true);
+    assert.equal(input.pressControlGroup(0), true);
     assert.equal(selected[0], 1);
     assert.equal(selected[1], 1);
+    assert.equal(input.handleControlGroupUp(0), true);
   });
 
-  it('hold-assign then tap-selects; cancel does not tap', () => {
+  it('a number key selects on keydown and does not tap again on keyup', () => {
+    const jumps = [];
+    const selected = new Uint8Array(4);
+    const world = {
+      count: 1,
+      alive: [1],
+      owner: [0],
+      type: [1],
+      carriedBy: [-1],
+      px: [0],
+      py: [0],
+    };
+    const input = createGameInput({
+      canvas: {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      },
+      renderer: {
+        pickSelectionHud: () => null,
+        pickControlGroupHud: () => null,
+        screenToGround: () => ({ x: 0, z: 0, y: 0 }),
+        setSelectionBox: () => {},
+        setControlGroupHold: () => {},
+        setControlGroupCount: () => {},
+      },
+      world,
+      selected,
+      localPlayerId: 0,
+      getUnitWorldPos: () => ({ x: 0, y: 0, z: 0 }),
+      enqueueCommand: () => {},
+      getAgoras: () => [],
+      getBuildings: () => [],
+      onControlGroupJump: (id) => jumps.push(id),
+    });
+    selected[0] = 1;
+    input.setSelectedBuffer(selected);
+    assert.equal(input.handleControlGroupDown(0, { assignNow: true }), true);
+    input.clearSelection();
+    assert.equal(selected[0], 0);
+
+    const down = {
+      code: 'Digit1',
+      repeat: false,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      preventDefault() {},
+    };
+    assert.equal(input.handleControlGroupKeyDown(down), true);
+    assert.equal(selected[0], 1);
+    assert.equal(input.handleControlGroupKeyUp({ code: 'Digit1' }), true);
+    assert.deepEqual(jumps, []);
+
+    assert.equal(input.handleControlGroupKeyDown(down), true);
+    assert.equal(input.handleControlGroupKeyUp({ code: 'Digit1' }), true);
+    assert.deepEqual(jumps, [0]);
+  });
+
+  it('hold-assign then press-selects; release does not select again', () => {
     const { input, selected } = makeGroupHarness();
     assert.equal(input.handleControlGroupDown(0, { assignNow: true }), true);
     input.clearSelection();
     assert.equal(selected[0], 0);
 
-    assert.equal(input.handleControlGroupDown(0), true);
-    assert.equal(input.handleControlGroupUp(0), true);
+    assert.equal(input.pressControlGroup(0), true);
     assert.equal(selected[0], 1);
-
     input.clearSelection();
-    assert.equal(input.handleControlGroupDown(5), true);
-    assert.equal(input.handleControlGroupCancel(), true);
-    assert.equal(input.handleControlGroupUp(5), false);
+    assert.equal(input.handleControlGroupUp(0), true);
     assert.equal(selected[0], 0);
   });
 
-  it('binds the owned agora to black on wire-up and after a reset', () => {
+  it('binds the owned agora to the red group on wire-up and after a reset', () => {
     const selected = new Uint8Array(4);
     const world = {
       count: 0,
@@ -775,15 +829,15 @@ describe('gamepad control groups', () => {
       getBuildings: () => [],
     });
 
-    assert.equal(input.handleControlGroupDown(CONTROL_GROUP_BLACK), true);
-    assert.equal(input.handleControlGroupUp(CONTROL_GROUP_BLACK), true);
+    assert.equal(input.pressControlGroup(CONTROL_GROUP_RED), true);
     assert.deepEqual(input.getSelectedBuilding(), { kind: 'agora', index: 1 });
+    assert.equal(input.handleControlGroupUp(CONTROL_GROUP_RED), true);
 
     input.clearSelection();
     input.clearControlGroups();
-    assert.equal(input.handleControlGroupDown(CONTROL_GROUP_BLACK), true);
-    assert.equal(input.handleControlGroupUp(CONTROL_GROUP_BLACK), true);
+    assert.equal(input.pressControlGroup(CONTROL_GROUP_RED), true);
     assert.deepEqual(input.getSelectedBuilding(), { kind: 'agora', index: 1 });
+    assert.equal(input.handleControlGroupUp(CONTROL_GROUP_RED), true);
   });
 });
 
@@ -1181,6 +1235,37 @@ describe('headset rally', () => {
     const planted = cmds.filter((c) => c.type === CMD.SET_RALLY);
     assert.deepEqual(planted.map((c) => c.hopFrom), [-1, 0, 1]);
     assert.equal(input.forceMoveAtRay({ ox: 160, oy: 50, oz: 0, dx: 0, dy: -1, dz: 0 }), false);
+  });
+
+  it('a stick click arms rally on the selected production building', () => {
+    const cmds = [];
+    const closed = [];
+    const input = createGameInput({
+      canvas: {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      },
+      renderer: {
+        pickSelectionHud: () => null,
+        pickControlGroupHud: () => null,
+        setSelectionBox: () => {},
+        screenToGround: (x, y) => ({ x, z: y }),
+      },
+      world: { count: 0, alive: [], owner: [], type: [], carriedBy: [] },
+      selected: new Uint8Array(4),
+      localPlayerId: 0,
+      getUnitWorldPos: () => ({ x: 0, y: 0, z: 0 }),
+      enqueueCommand: (cmd) => cmds.push(cmd),
+      getAgoras: () => [],
+      getBuildings: () => [{ owner: 0, type: 'barracks', x: 0, z: 0, hp: 100 }],
+      onRadialCancel: () => closed.push(1),
+    });
+    assert.equal(input.armPadRally(40, 0), false);
+    assert.deepEqual(closed, []);
+    input.applyFollowSelection([], [{ kind: 'building', index: 0 }]);
+    assert.equal(input.armPadRally(40, 0), true);
+    assert.deepEqual(closed, [1]);
+    assert.equal(input.forceMoveAt(40, 0), true);
+    assert.equal(cmds.filter((c) => c.type === CMD.SET_RALLY).length, 1);
   });
 
   it('the first building select does not arm a rally, the second does', () => {

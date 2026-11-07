@@ -1,8 +1,9 @@
 // Selection + orders (LMB). Camera pan / force-move on RMB via pointerHub.
-// Touch later synthesizes into the hub; gamepad LT/RT orders, LB/RB paint-select,
-// B / D-pad Left cast, D-pad U/R/D + Y/X/A control groups. Placement is the
+// Touch later synthesizes into the hub; gamepad LB/RB orders, LT/RT paint-select,
+// B / D-pad Left cast and cancel, D-pad Up is the red group (home agora), Right / Down + Y/X/A
+// are the other control groups. Placement is the
 // same loop on every device: aim walks the ghost, and the facing is where
-// that aim sits inside the plot. Mouse tap, pad A, and the trigger stamp.
+// that aim sits inside the plot. Mouse tap, pad A, and LB / RB stamp.
 // Touch sits the ghost on a drag or the first tap, then a later tap places
 // it. B / back / agora hub leaves. After a stamp the type stays so you can
 // plant more.
@@ -24,7 +25,7 @@ import {
   RALLY_EXTRA_HOP_MAX,
 } from '../../sim/buildings.js';
 import {
-  CONTROL_GROUP_BLACK,
+  CONTROL_GROUP_RED,
   CONTROL_GROUP_COUNT,
   CONTROL_GROUP_HOLD_MS,
   addUnitsToControlGroup,
@@ -71,7 +72,6 @@ import {
   brushViewStamps,
   lassoOuterLoop,
   stepBrushRadius,
-  stepBrushSpeed,
 } from './gamepadLasso.js';
 import { projectWorldToCanvas } from '../../render/screenProject.js';
 import { pickGatherNodeOnRay, rayHitYawBox, rayTToPoint } from './gatherPick.js';
@@ -88,8 +88,10 @@ const EMPTY_HITS = Object.freeze([]);
 
 /** v1 lasso drag threshold. */
 export const DRAG_THRESHOLD_PX = 25;
-/** Sentinel so a bumper drag does not collide with a live mouse pointerId. */
+/** Sentinel so a trigger drag does not collide with a live mouse pointerId. */
 const PAD_SELECT_PTR = -2;
+/** Squeeze past this and a still aim paints the disk instead of a point click. */
+const BRUSH_PAINT_PRESSURE = 0.12;
 const LASSO_SAMPLE_PX = 10;
 const LASSO_MAX_PTS = 80;
 /** Manual double-tap window - PointerEvent.detail is not a click count. */
@@ -133,6 +135,7 @@ export const ABILITY_HOLD_MS = 400;
  * @param {() => number} [opts.getPlacementYaw]
  * @param {(yaw: number) => void} [opts.setPlacementYaw]
  * @param {() => boolean} [opts.isRadialOpen]
+ * @param {() => void} [opts.onRadialCancel] - pad rally mode closes the building pie
  * @param {(clientX: number, clientY: number) => (string | null) | Promise<string | null>} [opts.pickRadialOption]
  * @param {(pick: string | { kind: 'building' | 'category' | 'unit' | 'upgrade' | 'pause' | 'cancel', id?: string }) => void} [opts.onRadialPick]
  * @param {(clientX: number, clientY: number) => void} [opts.onRadialHover]
@@ -179,6 +182,7 @@ export function createGameInput(opts) {
     getPlacementYaw,
     setPlacementYaw,
     isRadialOpen,
+    onRadialCancel,
     pickRadialOption,
     onRadialPick,
     onRadialHover,
@@ -278,10 +282,8 @@ export function createGameInput(opts) {
   const brushStamps = [];
   const brushHullScratch = [];
   let brushR = 0;
-  let brushSpeed = 0;
-  let brushLastX = NaN;
-  let brushLastY = NaN;
-  let brushBoth = false;
+  /** 0 = light trigger, 1 = full squeeze. */
+  let brushPressure = 0;
   let dragPointerId = null;
   let lmbDownPos = null;
   /** Latched once pointer exceeds DRAG_THRESHOLD_PX - keeps box updating inside the grace. */
@@ -410,10 +412,7 @@ export function createGameInput(opts) {
   function resetBrush() {
     brushStamps.length = 0;
     brushR = 0;
-    brushSpeed = 0;
-    brushLastX = NaN;
-    brushLastY = NaN;
-    brushBoth = false;
+    brushPressure = 0;
     renderer.setGamepadCursorBrush?.(0);
   }
 
@@ -588,15 +587,16 @@ export function createGameInput(opts) {
     const now = performance.now();
     const jump = isControlGroupDoubleTap(lastCtrlGroupTap, id, now);
     lastCtrlGroupTap = { id, t: now };
-    if (!selectControlGroup(id)) return;
+    if (!selectControlGroup(id)) return false;
     if (jump) onControlGroupJump?.(id);
+    return true;
   }
 
-  function bindOwnedAgoraToBlack() {
+  function bindOwnedAgora() {
     const index = firstOwnedAgoraIndex(getAgoras?.(), localPlayerId);
     if (index < 0) return;
-    if (!assignControlGroup(controlGroups, CONTROL_GROUP_BLACK, [], [{ kind: 'agora', index }])) return;
-    markControlGroupFilled(CONTROL_GROUP_BLACK);
+    if (!assignControlGroup(controlGroups, CONTROL_GROUP_RED, [], [{ kind: 'agora', index }])) return;
+    markControlGroupFilled(CONTROL_GROUP_RED);
   }
 
   function resetControlGroups() {
@@ -605,7 +605,7 @@ export function createGameInput(opts) {
     for (let i = 0; i < controlGroups.length; i++) {
       renderer.setControlGroupCount?.(i, 0);
     }
-    bindOwnedAgoraToBlack();
+    bindOwnedAgora();
   }
 
   function armCtrlGroupHold(id) {
@@ -631,6 +631,14 @@ export function createGameInput(opts) {
   /** Number-key hold (1-6) - separate from the pad pointer gesture. */
   let ctrlGroupKeyId = null;
   let ctrlGroupKeyAssigned = false;
+  /** Keyboard already selected on keydown; keyup must not tap again. */
+  let ctrlGroupKeySelected = false;
+  /**
+   * Selection at press time. A hold assigns this, so a keydown select
+   * does not overwrite the group with itself.
+   * @type {{ units: number[], buildings: { kind: string, index: number }[] } | null}
+   */
+  let ctrlGroupKeySnap = null;
   /** @type {ReturnType<typeof setTimeout> | null} */
   let ctrlGroupKeyTimer = null;
 
@@ -643,8 +651,33 @@ export function createGameInput(opts) {
   }
 
   /**
-   * Digit / numpad 1-6 and the gamepad face / D-pad stack: tap selects, second
-   * tap jumps the camera, hold assigns. Ctrl/Cmd+number assigns immediately.
+   * Put the pre-press selection back after a keyboard hold assigns it.
+   * Units skip the select ping; the player never left them on purpose.
+   * @param {{ units: number[], buildings: { kind: string, index: number }[] }} snap
+   */
+  function restoreControlGroupSnap(snap) {
+    const hasUnits = snap.units.length > 0;
+    const hasBuildings = snap.buildings.length > 0;
+    if (!hasUnits && !hasBuildings) {
+      clearSelection();
+      return;
+    }
+    if (hasUnits) {
+      clearUnitSelectionBits();
+      for (let k = 0; k < snap.units.length; k++) selectEntity(snap.units[k], false);
+      syncSelectionSquad();
+      onSelectionChanged?.();
+    } else {
+      clearUnitSelection();
+    }
+    if (hasBuildings) setBuildingSelection(snap.buildings, false, snap.buildings[0]);
+    else clearBuildingSelection();
+  }
+
+  /**
+   * Arms a hold-to-assign. Ctrl/Cmd assigns now; Shift adds now. A plain
+   * press snapshots the current selection, then the caller selects. The hold
+   * assigns that snapshot so the select does not overwrite the group.
    * @param {number} id
    * @param {{ assignNow?: boolean, addNow?: boolean }} [opts]
    */
@@ -655,6 +688,8 @@ export function createGameInput(opts) {
       clearCtrlGroupKeyHold();
       ctrlGroupKeyId = i;
       ctrlGroupKeyAssigned = true;
+      ctrlGroupKeySelected = false;
+      ctrlGroupKeySnap = null;
       assignCurrentToControlGroup(i);
       renderer.setControlGroupHold?.(i);
       return true;
@@ -663,6 +698,8 @@ export function createGameInput(opts) {
       clearCtrlGroupKeyHold();
       ctrlGroupKeyId = i;
       ctrlGroupKeyAssigned = true;
+      ctrlGroupKeySelected = false;
+      ctrlGroupKeySnap = null;
       addCurrentUnitsToControlGroup(i);
       renderer.setControlGroupHold?.(i);
       return true;
@@ -670,12 +707,20 @@ export function createGameInput(opts) {
     clearCtrlGroupKeyHold();
     ctrlGroupKeyId = i;
     ctrlGroupKeyAssigned = false;
+    ctrlGroupKeySelected = false;
+    const snap = snapshotControlGroupSelection();
+    ctrlGroupKeySnap = snap;
     renderer.setControlGroupHold?.(i);
     ctrlGroupKeyTimer = setTimeout(() => {
       ctrlGroupKeyTimer = null;
       if (ctrlGroupKeyId !== i) return;
       ctrlGroupKeyAssigned = true;
-      assignCurrentToControlGroup(i);
+      if (assignControlGroup(controlGroups, i, snap.units, snap.buildings)) {
+        markControlGroupFilled(i);
+      }
+      if (!ctrlGroupKeySelected) return;
+      ctrlGroupKeySelected = false;
+      restoreControlGroupSnap(snap);
     }, CONTROL_GROUP_HOLD_MS);
     return true;
   }
@@ -685,10 +730,13 @@ export function createGameInput(opts) {
     const i = id | 0;
     if (id == null || i !== +id || ctrlGroupKeyId !== i) return false;
     const assigned = ctrlGroupKeyAssigned;
+    const alreadySelected = ctrlGroupKeySelected;
     ctrlGroupKeyId = null;
     ctrlGroupKeyAssigned = false;
+    ctrlGroupKeySelected = false;
+    ctrlGroupKeySnap = null;
     clearCtrlGroupKeyHold();
-    if (!assigned && canUseInput()) tapControlGroup(i);
+    if (!assigned && !alreadySelected && canUseInput()) tapControlGroup(i);
     return true;
   }
 
@@ -696,14 +744,27 @@ export function createGameInput(opts) {
     if (ctrlGroupKeyId == null) return false;
     ctrlGroupKeyId = null;
     ctrlGroupKeyAssigned = false;
+    ctrlGroupKeySelected = false;
+    ctrlGroupKeySnap = null;
     clearCtrlGroupKeyHold();
     return true;
   }
 
   /**
-   * Digit / numpad 1-6: tap selects, second tap jumps the camera, hold assigns
-   * (same as the pads). Ctrl/Cmd+number assigns immediately; Shift+number adds
-   * selected units to the group.
+   * Face / D-pad and number keys: the press selects. A second press jumps
+   * the camera. Hold assigns the selection from before that select.
+   * Release only ends the hold.
+   * @param {number} id
+   */
+  function pressControlGroup(id) {
+    if (!handleControlGroupDown(id, {})) return false;
+    if (tapControlGroup(id)) ctrlGroupKeySelected = true;
+    return true;
+  }
+
+  /**
+   * Digit / numpad 1-6. Ctrl/Cmd+number assigns immediately; Shift+number
+   * adds selected units to the group.
    * @param {KeyboardEvent} e
    */
   function handleControlGroupKeyDown(e) {
@@ -718,7 +779,7 @@ export function createGameInput(opts) {
     if (e.shiftKey) {
       return handleControlGroupDown(id, { addNow: true });
     }
-    return handleControlGroupDown(id, {});
+    return pressControlGroup(id);
   }
 
   /** @param {KeyboardEvent} e */
@@ -1103,6 +1164,31 @@ export function createGameInput(opts) {
     if (clientX == null || clientY == null) return;
     const g = renderer.screenToGround?.(clientX, clientY);
     if (g) emitRallyMove(g.x, g.z);
+  }
+
+  /**
+   * Stick-click tap. The building is already selected; the cursor does not
+   * have to sit on it. A production building is required.
+   * @param {number | null} clientX
+   * @param {number | null} clientY
+   */
+  function armPadRally(clientX, clientY) {
+    if (!canIssueOrders()) return false;
+    let capable = false;
+    for (let i = 0; i < selectedBuildings.length; i++) {
+      const sel = selectedBuildings[i];
+      if (sel?.kind !== 'building') continue;
+      if (buildingOwnerOf(sel) !== localPlayerId) continue;
+      const b = getBuildings?.()?.[sel.index];
+      if (b && buildingCanRally(b.type)) {
+        capable = true;
+        break;
+      }
+    }
+    if (!capable) return false;
+    armBuildingWaypoint(clientX, clientY);
+    onRadialCancel?.();
+    return true;
   }
 
   function previewArmedWaypoint(clientX, clientY) {
@@ -2632,7 +2718,7 @@ export function createGameInput(opts) {
   }
 
   /**
-   * Gamepad LT / explicit A-move at a screen point. Picks hostiles / nodes;
+   * Gamepad LB / explicit A-move at a screen point. Picks hostiles / nodes;
    * does not re-select friendlies (that's LMB).
    */
   function attackMoveAt(clientX, clientY) {
@@ -2682,11 +2768,23 @@ export function createGameInput(opts) {
   }
 
   /**
-   * Gamepad LB / RB - paint a brush lasso at the aim. Radius follows stroke
-   * speed; both bumpers snap to double the single-bumper max.
+   * Trigger pressure 0..1. Omitted opts keep the pressure from the last sample.
+   * @param {{ pressure?: number }} [opts]
+   */
+  function readBrushPressure(opts) {
+    if (opts && Number.isFinite(opts.pressure)) {
+      const p = opts.pressure;
+      brushPressure = p > 1 ? 1 : p < 0 ? 0 : p;
+    }
+    return brushPressure;
+  }
+
+  /**
+   * Gamepad LT / RT - paint a brush lasso at the aim. Radius follows trigger
+   * pressure. A squeeze paints the disk even when the aim stays put.
    * @param {number} clientX
    * @param {number} clientY
-   * @param {{ both?: boolean }} [opts]
+   * @param {{ pressure?: number }} [opts]
    */
   function beginSelectDrag(clientX, clientY, opts) {
     if (!canUseInput()) return false;
@@ -2695,12 +2793,9 @@ export function createGameInput(opts) {
     boxStart = { x: clientX, y: clientY };
     lmbDownPos = { x: clientX, y: clientY };
     dragPointerId = PAD_SELECT_PTR;
-    brushBoth = !!opts?.both;
-    boxDragging = brushBoth;
-    brushLastX = clientX;
-    brushLastY = clientY;
-    const target = brushRadiusTarget(0, brushBoth);
-    brushR = stepBrushRadius(0, target, brushBoth);
+    const pressure = readBrushPressure(opts);
+    boxDragging = pressure >= BRUSH_PAINT_PRESSURE;
+    brushR = stepBrushRadius(0, brushRadiusTarget(pressure));
     appendBrushStamps(brushStamps, clientX, clientY, brushR);
     showBrushLasso(clientX, clientY);
     return true;
@@ -2709,20 +2804,13 @@ export function createGameInput(opts) {
   /**
    * @param {number} clientX
    * @param {number} clientY
-   * @param {{ both?: boolean }} [opts]
+   * @param {{ pressure?: number }} [opts]
    */
   function updateSelectDrag(clientX, clientY, opts) {
     if (!canUseInput() || dragPointerId !== PAD_SELECT_PTR || !boxStart) return false;
-    if (opts && 'both' in opts) brushBoth = !!opts.both;
-    if (brushBoth) boxDragging = true;
-    const instant = Number.isFinite(brushLastX)
-      ? Math.hypot(clientX - brushLastX, clientY - brushLastY)
-      : 0;
-    brushSpeed = stepBrushSpeed(brushSpeed, instant);
-    brushLastX = clientX;
-    brushLastY = clientY;
-    const target = brushRadiusTarget(brushSpeed, brushBoth);
-    brushR = stepBrushRadius(brushR, target, brushBoth);
+    const pressure = readBrushPressure(opts);
+    if (pressure >= BRUSH_PAINT_PRESSURE) boxDragging = true;
+    brushR = stepBrushRadius(brushR, brushRadiusTarget(pressure));
     const moved = Math.hypot(clientX - boxStart.x, clientY - boxStart.y);
     if (!boxDragging && moved > DRAG_THRESHOLD_PX) boxDragging = true;
     appendBrushStamps(brushStamps, clientX, clientY, brushR);
@@ -3195,7 +3283,7 @@ export function createGameInput(opts) {
   }
 
   /**
-   * Pad bumper hold and the headset grip used to orbit the ghost. Facing
+   * Pad trigger hold and the headset grip used to orbit the ghost. Facing
    * now comes from the aim inside the plot, so this is the same walk.
    */
   function rotatePlacementAt(clientX, clientY) {
@@ -3207,7 +3295,7 @@ export function createGameInput(opts) {
   }
 
   /**
-   * Gamepad A / LT / RT - stamp at the aim (or last preview).
+   * Gamepad A / LB / RB - stamp at the aim (or last preview).
    */
   function confirmPlacementAt(clientX, clientY) {
     if (!canIssueOrders() || !isPlacing()) return false;
@@ -3307,7 +3395,7 @@ export function createGameInput(opts) {
 
   // Boot / first wire-up: home agora is already on the table. Match resets
   // go through resetControlGroups() and bind again.
-  bindOwnedAgoraToBlack();
+  bindOwnedAgora();
 
   return {
     handlePointerDown,
@@ -3422,6 +3510,9 @@ export function createGameInput(opts) {
     hitControlGroupHud,
     hitSelectionHud,
     handleControlGroupDown,
+    pressControlGroup,
+    armPadRally,
+    previewArmedWaypoint,
     handleControlGroupUp,
     handleControlGroupCancel,
     handleControlGroupKeyDown,

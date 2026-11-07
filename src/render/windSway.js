@@ -8,7 +8,7 @@
 import { markMaterialUboDirty } from '../vendor/lite/liteVendor.js';
 
 /** Peak tree tip offset as a fraction of tree height at intensity 1 (idle breeze). */
-const TREE_AMPLITUDE = 0.015;
+const TREE_AMPLITUDE = 0.018;
 /** Peak wheat tip offset as a fraction of stalk height. */
 const WHEAT_AMPLITUDE = 0.035;
 /** Peak banner bottom-edge offset as a fraction of cloth height. */
@@ -39,7 +39,7 @@ let swH=clamp(position.y/material.swayH,0.0,1.0);
 let swB=finalWorld[3].xz;
 let swG=0.5+0.5*${gust('swB')};
 let swA=material.swayH*length(finalWorld[1].xyz)*${TREE_AMPLITUDE}*material.swayK*(0.6+1.2*swG*swG)*swH*swH;
-let swP=material.swayT*1.7+swB.x*0.04+swB.y*0.03+sin(swB.x*0.9+swB.y*1.3)*0.25;
+let swP=material.swayT*1.45+swB.x*0.04+swB.y*0.03+sin(swB.x*0.9+swB.y*1.3)*0.25;
 let swO=vec3<f32>(sin(swP),0.0,cos(swP*0.83+1.3))*swA;
 out.clipPos=out.clipPos+scene.viewProjection*vec4<f32>(swO,0.0);
 `;

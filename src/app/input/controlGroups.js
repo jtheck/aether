@@ -1,24 +1,28 @@
 // Local RTS control groups - coloured side pads assign on hold, select on
-// click, jump the camera on a second tap of the same pad / number key.
+// press, jump the camera on a second press of the same pad / number key.
 // Entity indices are stable within a match (spawn is append-only); a new world
 // must call clearControlGroups() so stale ids cannot select the next match.
 
 import { isBuildingAlive } from '../../sim/buildings.js';
 
 export const CONTROL_GROUP_COUNT = 6;
-/** Black pad - home agora is assigned here when a match starts. */
+/** Red pad, top of the left stack. Home agora is assigned here when a match starts. */
+export const CONTROL_GROUP_RED = 0;
+/** Black pad, bottom of the left stack. */
 export const CONTROL_GROUP_BLACK = 4;
 /** Hold this long on a pad to assign the current selection (click selects). */
 export const CONTROL_GROUP_HOLD_MS = 400;
 /** Second tap of the same group within this window centers the camera. */
 export const CONTROL_GROUP_DOUBLE_MS = 429;
 
+// Screen order, top to bottom: left 1–3 (red, green, black), right 4–6
+// (blue, yellow, white). Ids stay with the pad colours, not the key.
 const KEY_TO_GROUP = {
   Digit1: 0, Numpad1: 0,
   Digit2: 1, Numpad2: 1,
-  Digit3: 2, Numpad3: 2,
-  Digit4: 3, Numpad4: 3,
-  Digit5: 4, Numpad5: 4,
+  Digit3: 4, Numpad3: 4,
+  Digit4: 2, Numpad4: 2,
+  Digit5: 3, Numpad5: 3,
   Digit6: 5, Numpad6: 5,
 };
 

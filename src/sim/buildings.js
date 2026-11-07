@@ -19,7 +19,7 @@ import {
   isTerrainSlowTile,
 } from './field.js';
 import { fellTreeAt } from './trees.js';
-import { SCENERY, clearSceneryCoveringTiles, rockFootprintRadiusForStock } from './scenery.js';
+import { SCENERY, rockFootprintRadiusForStock } from './scenery.js';
 import { UNIT, getUnitDef, isFlyer, getUnitCost } from './unitTypes.js';
 import { unitPopCost } from './pop.js';
 import { ORDER } from './world.js';
@@ -1070,7 +1070,8 @@ export function applySerializedAgoraOccupancy(field, agoras) {
 
 /**
  * Stamp one structure onto pass / slow / structureSlowMask (OR, idempotent).
- * Clears trees and rocks covering the claim so a resource cannot share it.
+ * Trees on the pad fall. Rocks stay — the red disc already blocks placement,
+ * and the gold ring around a rock is only a walk slow.
  * @param {object} field
  * @param {string} typeId
  * @param {number} xFixed Q16.16
@@ -1078,11 +1079,6 @@ export function applySerializedAgoraOccupancy(field, agoras) {
  */
 export function applyStructureOccupancyAt(field, typeId, xFixed, zFixed, built = true) {
   if (!field?.pass || !getBuildingFootprint(typeId)) return;
-  const covered = [];
-  forEachFootprintTile(field, typeId, xFixed, zFixed, (tx, tz) => {
-    covered.push({ tx, tz });
-  });
-  clearSceneryCoveringTiles(field, covered);
   const structureSlow = ensureStructureSlowMask(field);
   if (!field.slowMask || field.slowMask.length !== structureSlow.length) {
     field.slowMask = new Uint8Array(structureSlow.length);

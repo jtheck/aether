@@ -1,3 +1,4 @@
+import { PAD, stickCameraStep } from './input/gamepad.js';
 import { setXrEyeFromPose } from '../render/xrEye.js';
 
 // Quest Touch. Trigger and grip are always the first two buttons.
@@ -223,10 +224,12 @@ function hand(sources, handedness) {
 
 /**
  * Headset rig for the match. The first frame parks the head on the desktop
- * camera. After that the left stick slides and the right stick yaws and lifts.
- * Look-down eases toward viewer yaw so every heading settles to the same pitch
- * without attaching the synthetic adjustment rigidly to small head motion.
- * While `rightStickBusy()` is true only the left stick flies.
+ * camera. After that the sticks use the pad's two-stick camera: both thrown
+ * the same way slide, opposite up/down yaws, pinch zooms out. A stick click
+ * (L3 / R3) turns both sticks into yaw and zoom. Look-down eases toward
+ * viewer yaw so every heading settles to the same pitch without attaching
+ * the synthetic adjustment rigidly to small head motion.
+ * While `rightStickBusy()` is true the sticks do not move the head.
  * @param {[number, number, number]} eye desktop camera world position
  * @param {object | null} [bounds]
  * @param {{ rightStickBusy?: () => boolean, facing?: [number, number] | null }} [opts]
@@ -253,7 +256,33 @@ export function createXrRig(eye, bounds = null, opts = {}) {
     lookLastTime: 0,
     eyeLastTime: 0,
     logged: false,
-    smooth: { mx: 0, my: 0, yaw: 0, lift: 0 },
+    smooth: { strafe: 0, forward: 0, yaw: 0, zoom: 0 },
+  };
+}
+
+/**
+ * Pad camera step from two Quest sticks. `yaw` is positive for a right turn,
+ * which is the sign `yawSpace` already uses. `zoom` is positive to pull back.
+ * @param {{ stickX?: number, stickY?: number, stickClick?: { pressed?: boolean } }} left
+ * @param {{ stickX?: number, stickY?: number, stickClick?: { pressed?: boolean } }} right
+ * @param {number} [radius]
+ */
+export function xrStickMotion(left, right, radius) {
+  const buttons = [];
+  buttons[PAD.L3] = !!left?.stickClick?.pressed;
+  buttons[PAD.R3] = !!right?.stickClick?.pressed;
+  const step = stickCameraStep({
+    lx: left?.stickX || 0,
+    ly: left?.stickY || 0,
+    rx: right?.stickX || 0,
+    ry: right?.stickY || 0,
+    buttons,
+  }, radius);
+  return {
+    strafe: step.panRight,
+    forward: step.panForward,
+    yaw: -step.yaw || 0,
+    zoom: step.zoom,
   };
 }
 
@@ -307,7 +336,7 @@ export function stepXrRig(rig, ctx, frame, time) {
       new XRRigidTransform(referenceOffset(head, dest)),
     );
     const s = rig.smooth;
-    s.mx = s.my = s.yaw = s.lift = 0;
+    s.strafe = s.forward = s.yaw = s.zoom = 0;
     rig.lastTime = time;
   } else {
     const sources = ctx.input?.inputSources ?? [];
@@ -327,29 +356,32 @@ export function stepXrRig(rig, ctx, frame, time) {
     const dt = Math.min(0.05, Math.max(0, (time - rig.lastTime) / 1000));
     rig.lastTime = time;
     if (dt > 0) {
-      const [rawMx, rawMy] = shapeStick(left.stickX, -left.stickY);
-      const [rawYaw, rawLift] = rig.rightStickBusy?.() ? [0, 0] : shapeStick(right.stickX, -right.stickY);
+      const raw = rig.rightStickBusy?.()
+        ? { strafe: 0, forward: 0, yaw: 0, zoom: 0 }
+        : xrStickMotion(left, right, Math.max(24, head[1]));
       const s = rig.smooth;
-      if (rawMx === 0 && rawMy === 0 && rawYaw === 0 && rawLift === 0) {
-        s.mx = s.my = s.yaw = s.lift = 0;
+      if (raw.strafe === 0 && raw.forward === 0 && raw.yaw === 0 && raw.zoom === 0) {
+        s.strafe = s.forward = s.yaw = s.zoom = 0;
       } else {
-        s.mx = damp(s.mx, rawMx, dt);
-        s.my = damp(s.my, rawMy, dt);
-        s.yaw = damp(s.yaw, rawYaw, dt);
-        s.lift = damp(s.lift, rawLift, dt);
-        const dist = rig.speed * dt;
+        // Pad rates are per 60 Hz tick. Damp those, then scale by real dt.
+        s.strafe = damp(s.strafe, raw.strafe, dt);
+        s.forward = damp(s.forward, raw.forward, dt);
+        s.yaw = damp(s.yaw, raw.yaw * 60, dt);
+        s.zoom = damp(s.zoom, raw.zoom * 60, dt);
+        const slide = rig.speed * dt * 0.5;
+        const zoom = s.zoom * dt;
+        const rise = zoom * Math.tan(XR_LOOK_DOWN);
         const dest = clampXrHead([
-          head[0] + (basis.right[0] * s.mx + basis.forward[0] * s.my) * dist,
-          head[1] + s.lift * dist,
-          head[2] + (basis.right[1] * s.mx + basis.forward[1] * s.my) * dist,
+          head[0] + basis.right[0] * s.strafe * slide
+            + basis.forward[0] * (s.forward * slide - zoom),
+          head[1] + rise,
+          head[2] + basis.right[1] * s.strafe * slide
+            + basis.forward[1] * (s.forward * slide - zoom),
         ], rig.bounds);
         next = loco.getOffsetReferenceSpace(
           new XRRigidTransform(referenceOffset(head, dest)),
         );
-        if (s.yaw !== 0) {
-          const yaw = s.yaw * dt * 1.4;
-          next = yawSpace(next, dest, yaw);
-        }
+        if (s.yaw !== 0) next = yawSpace(next, dest, s.yaw * dt);
       }
     }
   }

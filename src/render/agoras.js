@@ -25,7 +25,7 @@ import { USE_GPU_PICK } from './pickMode.js';
 import { ownerTint } from './ownerTints.js';
 import { isTeamColorMaterial, prepareTeamColorMaterial, sceneTeamRgb } from './teamColor.js';
 import { attachBannerFlutter } from './windSway.js';
-import { forEachRallyDash } from './rallyDash.js';
+import { forEachRallyDash, rallyArrivalYaw } from './rallyDash.js';
 import { MODEL_BASE_SCALE } from './modelScale.js';
 import { nearestMeshInstanceHit, pickPartsFromMeshes } from './meshPick.js';
 import {
@@ -89,6 +89,8 @@ function setThinInstanceCount(mesh, count) {
 
 /** Attack-move small ants / flag - same red as unit a-move pings. */
 const ATTACK_MOVE_TINT = [0.95, 0.22, 0.18];
+/** Committed rally stroke while a new placement ghost is up. */
+const RALLY_PRIOR_TINT = [0.32, 0.62, 0.98];
 
 function writeRallyColor(colors, slot, owner, alpha, attackMove) {
   if (attackMove) {
@@ -110,8 +112,13 @@ function writeWhiteColor(colors, slot, alpha) {
   colors[o + 3] = alpha;
 }
 
-/** Small ants: white (move) or red (a-move). Big ants: TeamColor only. */
-function writeRallyStrokeColor(colors, slot, owner, alpha, attackMove, bigAnts) {
+/** Small ants: white (move) or red (a-move). Big ants: TeamColor only.
+ * `prior` is the committed path under a placement ghost — one blue, dashes and chevrons. */
+function writeRallyStrokeColor(colors, slot, owner, alpha, attackMove, bigAnts, prior) {
+  if (prior) {
+    writeTint(colors, slot, RALLY_PRIOR_TINT, alpha);
+    return;
+  }
   if (bigAnts) {
     writeOwnerColor(colors, slot, owner, alpha);
     return;
@@ -697,7 +704,7 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
    * Small ants are white (move) or red (a-move); big ants are TeamColor only.
    * @returns {number} next free slot
    */
-  function writeDashedPath(batch, points, owner, startSlot, maxSlot, phase, ghost, attackMove) {
+  function writeDashedPath(batch, points, owner, startSlot, maxSlot, phase, ghost, attackMove, prior) {
     if (!batch || !points || points.length < 2) return startSlot;
     const period = RALLY_DASH + RALLY_GAP;
     /** @type {{ ax: number, az: number, ux: number, uz: number, len: number, s0: number }[]} */
@@ -748,7 +755,7 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
         if (!writeSegmentMatrix(batch.matrices, slot, x0, y0, z0, x1, y1, z1, radius)) {
           continue;
         }
-        writeRallyStrokeColor(batch.colors, slot, owner, baseAlpha * pulse, attackMove, bigAnts);
+        writeRallyStrokeColor(batch.colors, slot, owner, baseAlpha * pulse, attackMove, bigAnts, prior);
         if (bigAnts) {
           const o = slot * 4;
           batch.colors[o] = Math.min(1, batch.colors[o] * 1.25);
@@ -778,6 +785,24 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
     flushThinInstances(batch.mesh);
   }
 
+  /**
+   * Committed strokes turn blue under a placement ghost.
+   * Once the first flag is planted and the ghost is a later hop, that first
+   * leg stays the live color — it belongs to this placement, not the old path.
+   */
+  function rallyStrokeIsPrior(r) {
+    if (!rallyGhost) return false;
+    const extending = (rallyGhost.hopFrom | 0) >= 0 && rallyGhost.buildingIndex >= 0;
+    if (
+      extending &&
+      (r.hop | 0) === 0 &&
+      (r.buildingIndex | 0) === rallyGhost.buildingIndex
+    ) {
+      return false;
+    }
+    return true;
+  }
+
   function rewriteRallyLines() {
     if (!rallyLine) return;
     let n = 0;
@@ -795,6 +820,7 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
         dashPhase,
         false,
         r.attackMove,
+        rallyStrokeIsPrior(r),
       );
     }
     flushLineBatch(rallyLine, n);
@@ -897,7 +923,7 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
   }
 
   /**
-   * @param {{ x: number, z: number, fromX?: number, fromZ?: number, points?: { x: number, z: number }[], yaw?: number, owner?: number }[]} list
+   * @param {{ x: number, z: number, fromX?: number, fromZ?: number, points?: { x: number, z: number }[], owner?: number }[]} list
    */
   function placeRallyFlags(list) {
     const n = Math.min(MAX_RALLY_FLAGS, list?.length ?? 0);
@@ -915,11 +941,13 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
         x: a.x,
         z: a.z,
         points,
-        yaw: a.yaw != null ? a.yaw : 0,
+        yaw: rallyArrivalYaw(points, a.x, a.z),
         owner: a.owner | 0,
         attackMove: !!a.attackMove,
         noFlag: !!a.noFlag,
         noLine: !!a.noLine,
+        hop: a.hop | 0,
+        buildingIndex: a.buildingIndex | 0,
       });
     }
     rewriteRallyLines();
@@ -943,8 +971,10 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
         z: pos.z,
         lift: Number.isFinite(pos.lift) ? pos.lift : 0,
         points,
-        yaw: 0,
+        yaw: rallyArrivalYaw(points, pos.x, pos.z),
         owner: pos.owner | 0,
+        hopFrom: Number.isFinite(pos.hopFrom) ? pos.hopFrom | 0 : -1,
+        buildingIndex: Number.isFinite(pos.buildingIndex) ? pos.buildingIndex | 0 : -1,
       };
     }
     rewriteGhostLine();

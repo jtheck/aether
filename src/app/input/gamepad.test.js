@@ -31,12 +31,14 @@ import {
   playConfirmIntent,
   playControlGroupIntent,
   playOrderIntent,
-  playSelectBoth,
   playSelectHeld,
+  triggerBrushPressure,
+  triggerSelectAmount,
   stickHeld,
   stickMagnitude,
   radialMenuRead,
   stickCameraGesture,
+  stickCameraStep,
   stickPlayAxes,
   stickSplitOppose,
   stickSplitRotate,
@@ -240,34 +242,36 @@ describe('menuNavIntent', () => {
     const range = el('input', { type: 'range' });
     const left = [];
     left[PAD.LEFT] = true;
-    assert.deepEqual(menuNavIntent({ lx: 0, ly: 0, buttons: left }, range), { tab: 0, adj: -1 });
-    assert.deepEqual(menuNavIntent({ lx: 0, ly: 0, buttons: left }, null), { tab: -1, adj: 0 });
+    assert.deepEqual(menuNavIntent({ lx: 0, ly: 0, buttons: left }, range), { tab: 0, adj: 0 });
+    assert.deepEqual(menuNavIntent({ lx: -0.9, ly: 0, buttons: [] }, range), { tab: 0, adj: -1 });
+    assert.deepEqual(menuNavIntent({ lx: -0.9, ly: 0, buttons: [] }, null), { tab: -1, adj: 0 });
   });
 
-  it('left stick down tabs, and shoulders step a slider', () => {
+  it('left stick down tabs, and triggers step a slider', () => {
     assert.equal(menuNavIntent({ lx: 0, ly: 0.9, buttons: [] }, null).tab, 1);
     assert.equal(menuNavIntent({ lx: 0, ly: 0, rx: 0, ry: 0.9, buttons: [] }, null).tab, 1);
     const range = el('input', { type: 'range' });
-    const rb = [];
-    rb[PAD.RB] = true;
-    assert.equal(menuNavIntent({ lx: 0, ly: 0, buttons: rb }, range).adj, 1);
+    const rt = [];
+    rt[PAD.RT] = true;
+    assert.equal(menuNavIntent({ lx: 0, ly: 0, buttons: rt }, range).adj, 1);
     assert.equal(canAdjustMenuEl(range), true);
   });
 });
 
 describe('osKbdNavIntent', () => {
-  it('D-pad and both sticks walk the grid; bumpers are backspace', () => {
+  it('D-pad and both sticks walk the grid; triggers are backspace', () => {
     const down = [];
     down[PAD.DOWN] = true;
     assert.deepEqual(osKbdNavIntent({ lx: 0, ly: 0, rx: 0, ry: 0, buttons: down }), { dx: 0, dy: 1 });
     const left = [];
     left[PAD.LEFT] = true;
-    assert.deepEqual(osKbdNavIntent({ lx: 0, ly: 0, rx: 0, ry: 0, buttons: left }), { dx: -1, dy: 0 });
+    assert.deepEqual(osKbdNavIntent({ lx: 0, ly: 0, rx: 0, ry: 0, buttons: left }), { dx: 0, dy: 0 });
+    assert.deepEqual(osKbdNavIntent({ lx: -0.9, ly: 0, rx: 0, ry: 0, buttons: [] }), { dx: -1, dy: 0 });
     assert.deepEqual(osKbdNavIntent({ lx: 0, ly: 0.9, rx: 0, ry: 0, buttons: [] }), { dx: 0, dy: 1 });
     assert.deepEqual(osKbdNavIntent({ lx: 0, ly: 0, rx: 0, ry: -0.9, buttons: [] }), { dx: 0, dy: -1 });
-    const lb = [];
-    lb[PAD.LB] = true;
-    assert.equal(osKbdBackspaceHeld({ buttons: lb }), true);
+    const lt = [];
+    lt[PAD.LT] = true;
+    assert.equal(osKbdBackspaceHeld({ buttons: lt }), true);
     assert.equal(osKbdBackspaceHeld({ buttons: [] }), false);
   });
 });
@@ -405,62 +409,60 @@ describe('menu focus helpers', () => {
 });
 
 describe('playOrderIntent', () => {
-  it('maps LT to attack-move and RT to force-move', () => {
-    const lt = [];
-    lt[PAD.LT] = true;
-    const rt = [];
-    rt[PAD.RT] = true;
-    assert.deepEqual(playOrderIntent(lt), { attackMove: true, forceMove: false });
-    assert.deepEqual(playOrderIntent(rt), { attackMove: false, forceMove: true });
+  it('maps LB to attack-move and RB to force-move', () => {
+    const lb = [];
+    lb[PAD.LB] = true;
+    const rb = [];
+    rb[PAD.RB] = true;
+    assert.deepEqual(playOrderIntent(lb), { attackMove: true, forceMove: false });
+    assert.deepEqual(playOrderIntent(rb), { attackMove: false, forceMove: true });
     assert.deepEqual(playOrderIntent([]), { attackMove: false, forceMove: false });
   });
 
-  it('treats A and both triggers as confirm', () => {
+  it('treats A and both bumpers as confirm', () => {
     const a = [];
     a[PAD.A] = true;
-    const lt = [];
-    lt[PAD.LT] = true;
-    const rt = [];
-    rt[PAD.RT] = true;
+    const lb = [];
+    lb[PAD.LB] = true;
+    const rb = [];
+    rb[PAD.RB] = true;
     assert.equal(playConfirmIntent(a), true);
-    assert.equal(playConfirmIntent(lt), true);
-    assert.equal(playConfirmIntent(rt), true);
+    assert.equal(playConfirmIntent(lb), true);
+    assert.equal(playConfirmIntent(rb), true);
     assert.equal(playConfirmIntent([]), false);
   });
 
-  it('maps place A/B to stamp / cancel; yaw is a bumper hold, not a tap', () => {
+  it('maps place A/B to stamp / cancel; yaw is a trigger hold, not a tap', () => {
     const a = [];
     a[PAD.A] = true;
     assert.deepEqual(placePadIntent(a), { confirm: true, cancel: false });
     const b = [];
     b[PAD.B] = true;
     assert.deepEqual(placePadIntent(b), { confirm: false, cancel: true });
-    const lb = [];
-    lb[PAD.LB] = true;
-    assert.deepEqual(placePadIntent(lb), { confirm: false, cancel: false });
+    const left = [];
+    left[PAD.LEFT] = true;
+    assert.deepEqual(placePadIntent(left), { confirm: false, cancel: true });
+    const lt = [];
+    lt[PAD.LT] = true;
+    assert.deepEqual(placePadIntent(lt), { confirm: false, cancel: false });
   });
 
-  it('holds select on either bumper', () => {
-    const lb = [];
-    lb[PAD.LB] = true;
-    const rb = [];
-    rb[PAD.RB] = true;
-    const both = [];
-    both[PAD.LB] = true;
-    both[PAD.RB] = true;
-    assert.equal(playSelectHeld(lb), true);
-    assert.equal(playSelectHeld(rb), true);
-    assert.equal(playSelectHeld(both), true);
-    assert.equal(playSelectHeld([]), false);
-    assert.equal(playSelectBoth(lb), false);
-    assert.equal(playSelectBoth(rb), false);
-    assert.equal(playSelectBoth(both), true);
-    assert.equal(playSelectBoth([]), false);
+  it('holds select on either trigger and maps pressure from the pull', () => {
+    assert.equal(playSelectHeld({ lt: 1, rt: 0 }), true);
+    assert.equal(playSelectHeld({ lt: 0, rt: 1 }), true);
+    assert.equal(playSelectHeld({ lt: 0.2, rt: 0 }), true);
+    assert.equal(playSelectHeld({ lt: 0.1, rt: 0 }), false);
+    assert.equal(playSelectHeld({ lt: 0.1, rt: 0 }, true), true);
+    assert.equal(playSelectHeld({ lt: 0, rt: 0 }, true), false);
+    assert.equal(triggerBrushPressure(triggerSelectAmount({ lt: 1, rt: 0.2 })), 1);
+    assert.equal(triggerBrushPressure(triggerSelectAmount({ lt: 0.1, rt: 0 })), 0);
+    const mid = triggerBrushPressure(0.15 + 0.85 * 0.5);
+    assert.ok(Math.abs(mid - 0.5) < 1e-9);
   });
 });
 
 describe('play control groups / cast', () => {
-  it('maps U/R/D to the left stack and Y/X/A to the right', () => {
+  it('maps Up to red, Right/Down to the rest of the left stack, and Y/X/A to the right', () => {
     assert.equal(controlGroupIdFromPad(PAD.UP), 0);
     assert.equal(controlGroupIdFromPad(PAD.RIGHT), 1);
     assert.equal(controlGroupIdFromPad(PAD.DOWN), 4);
@@ -485,6 +487,19 @@ describe('play control groups / cast', () => {
     left[PAD.LEFT] = true;
     assert.equal(playCastIntent(left), true);
     assert.equal(playCastIntent([]), false);
+  });
+});
+
+describe('stickCameraStep', () => {
+  it('pans only with both sticks, and turns right when the left stick is up', () => {
+    const lone = stickCameraStep({ lx: 0, ly: -1, rx: 0, ry: 0, buttons: [] });
+    assert.equal(lone.panForward, 0);
+    const both = stickCameraStep({ lx: 0, ly: -1, rx: 0, ry: -1, buttons: [] });
+    assert.ok(both.panForward > 0);
+    assert.equal(both.yaw, 0);
+    const turn = stickCameraStep({ lx: 0, ly: -0.8, rx: 0, ry: 0.8, buttons: [] });
+    assert.ok(turn.yaw < 0);
+    assert.equal(turn.zoom, 0);
   });
 });
 
@@ -931,6 +946,14 @@ describe('createGamepadAdapter', () => {
     pad.tick();
     assert.equal(side.classList.contains('is-open'), false);
     assert.ok(menuBtn);
+
+    menuBtn.click();
+    assert.equal(side.classList.contains('is-open'), true);
+    const left = [];
+    left[PAD.LEFT] = btn(true);
+    pads = [stdPad({ buttons: left })];
+    pad.tick();
+    assert.equal(side.classList.contains('is-open'), false);
     pad.dispose();
   });
 
@@ -1010,7 +1033,7 @@ describe('createGamepadAdapter', () => {
     pad.dispose();
   });
 
-  it('D-pad and sticks move on the keyboard grid; bumpers backspace', () => {
+  it('D-pad and sticks move on the keyboard grid; triggers backspace', () => {
     const { doc, side } = menuDoc();
     const kbd = el('div', { id: 'os_kbd', hidden: false });
     const q = el('button', { dataset: { osKbd: 'q', osKbdRow: '0', osKbdCol: '0' } });
@@ -1044,9 +1067,9 @@ describe('createGamepadAdapter', () => {
     pad.tick();
     assert.equal(doc.activeElement, q);
 
-    const lb = [];
-    lb[PAD.LB] = btn(true);
-    pads = [stdPad({ buttons: lb })];
+    const lt = [];
+    lt[PAD.LT] = btn(true);
+    pads = [stdPad({ buttons: lt })];
     pad.tick();
     assert.equal(field.value, 'H');
     pad.dispose();
@@ -1075,13 +1098,13 @@ describe('createGamepadAdapter', () => {
     pad.dispose();
   });
 
-  it('LT and RT also click the focused menu control', () => {
+  it('LB and RB also click the focused menu control', () => {
     const { doc, side, solo } = menuDoc();
     side.classList.add('is-open');
     doc.activeElement = solo;
-    const lt = [];
-    lt[PAD.LT] = btn(true);
-    let pads = [stdPad({ buttons: lt })];
+    const lb = [];
+    lb[PAD.LB] = btn(true);
+    let pads = [stdPad({ buttons: lb })];
     const pad = createGamepadAdapter({
       camera: {},
       root: doc,
@@ -1092,9 +1115,9 @@ describe('createGamepadAdapter', () => {
     pad.tick();
     assert.equal(solo.clicks, 1);
 
-    const rt = [];
-    rt[PAD.RT] = btn(true);
-    pads = [stdPad({ buttons: rt })];
+    const rb = [];
+    rb[PAD.RB] = btn(true);
+    pads = [stdPad({ buttons: rb })];
     pad.tick();
     assert.equal(solo.clicks, 2);
     pad.dispose();
@@ -1288,13 +1311,13 @@ describe('createGamepadAdapter', () => {
     pad.dispose();
   });
 
-  it('LT attack-moves and RT force-moves on press, not hold or in the menu', () => {
+  it('LB attack-moves and RB force-moves on press, not hold or in the menu', () => {
     const attacks = [];
     const moves = [];
     const { doc, side } = menuDoc();
-    const lt = [];
-    lt[PAD.LT] = btn(true);
-    let pads = [stdPad({ buttons: lt })];
+    const lb = [];
+    lb[PAD.LB] = btn(true);
+    let pads = [stdPad({ buttons: lb })];
     const pad = createGamepadAdapter({
       camera: { nudgeLookPan() {} },
       active: () => true,
@@ -1311,16 +1334,16 @@ describe('createGamepadAdapter', () => {
     pad.tick();
     assert.equal(attacks.length, 1);
 
-    const rt = [];
-    rt[PAD.RT] = btn(true);
-    pads = [stdPad({ buttons: rt })];
+    const rb = [];
+    rb[PAD.RB] = btn(true);
+    pads = [stdPad({ buttons: rb })];
     pad.tick();
     assert.equal(moves.length, 1);
 
     side.classList.add('is-open');
     const both = [];
-    both[PAD.LT] = btn(true);
-    both[PAD.RT] = btn(true);
+    both[PAD.LB] = btn(true);
+    both[PAD.RB] = btn(true);
     pads = [stdPad({ buttons: both })];
     pad.tick();
     assert.equal(attacks.length, 1);
@@ -1491,33 +1514,40 @@ describe('createGamepadAdapter', () => {
     pad.dispose();
   });
 
-  it('reports both bumpers on the select chord', () => {
+  it('reports trigger pressure on the select chord', () => {
     const chords = [];
     const { doc } = menuDoc();
-    const both = [];
-    both[PAD.LB] = btn(true);
-    both[PAD.RB] = btn(true);
+    const full = [];
+    full[PAD.LT] = btn(true, 1);
+    let pads = [stdPad({ buttons: full })];
     const pad = createGamepadAdapter({
       camera: { nudgeLookPan() {} },
       active: () => true,
       root: doc,
-      getGamepads: () => [stdPad({ buttons: both })],
-      onSelectStart: (c) => chords.push(['start', !!c?.both]),
-      onSelectHold: (c) => chords.push(['hold', !!c?.both]),
+      getGamepads: () => pads,
+      onSelectStart: (c) => chords.push(['start', c?.pressure]),
+      onSelectHold: (c) => chords.push(['hold', c?.pressure]),
       autoStart: false,
     });
     pad.tick();
-    assert.deepEqual(chords[0], ['start', true]);
-    assert.deepEqual(chords[1], ['hold', true]);
+    assert.deepEqual(chords[0], ['start', 1]);
+    assert.deepEqual(chords[1], ['hold', 1]);
+
+    const mid = [];
+    mid[PAD.RT] = btn(true, 0.15 + 0.85 * 0.5);
+    pads = [stdPad({ buttons: mid })];
+    pad.tick();
+    assert.equal(chords.at(-1)[0], 'hold');
+    assert.ok(Math.abs(chords.at(-1)[1] - 0.5) < 1e-9);
     pad.dispose();
   });
 
-  it('LB and RB hold the same select drag', () => {
+  it('LT and RT hold the same select drag', () => {
     const phases = [];
     const { doc } = menuDoc();
-    const lb = [];
-    lb[PAD.LB] = btn(true);
-    let pads = [stdPad({ buttons: lb })];
+    const lt = [];
+    lt[PAD.LT] = btn(true);
+    let pads = [stdPad({ buttons: lt })];
     const pad = createGamepadAdapter({
       camera: { nudgeLookPan() {} },
       active: () => true,
@@ -1538,9 +1568,9 @@ describe('createGamepadAdapter', () => {
     assert.equal(phases.at(-1), 'end');
 
     phases.length = 0;
-    const rb = [];
-    rb[PAD.RB] = btn(true);
-    pads = [stdPad({ buttons: rb })];
+    const rt = [];
+    rt[PAD.RT] = btn(true);
+    pads = [stdPad({ buttons: rt })];
     pad.tick();
     assert.deepEqual(phases, ['start', 'hold']);
     pads = [stdPad({ buttons: [] })];
@@ -1549,47 +1579,108 @@ describe('createGamepadAdapter', () => {
     pad.dispose();
   });
 
-  it('L3 or R3 puts both sticks into rotate/zoom', () => {
-    const pans = [];
+  it('a stick click does not switch the sticks into rotate/zoom', () => {
     const rotates = [];
-    const zooms = [];
-    const cursors = [];
     const { doc } = menuDoc();
     const l3 = [];
     l3[PAD.L3] = btn(true);
     let pads = [stdPad({ axes: [1, 0, 0, -1], buttons: l3 })];
     const pad = createGamepadAdapter({
       camera: {
-        nudgeLookPan(x, z) { pans.push([x, z]); },
+        nudgeLookPan() {},
         nudgeRotate(a) { rotates.push(a); },
-        nudgeZoom(z) { zooms.push(z); },
+        nudgeZoom() {},
       },
       active: () => true,
       root: doc,
       getGamepads: () => pads,
       getViewport: () => ({ width: 800, height: 600 }),
-      onCursor: (ox, oy) => cursors.push([ox, oy]),
       autoStart: false,
     });
     pad.tick();
-    assert.equal(pans.length, 0);
-    assert.equal(cursors.at(-1)[0], 0);
-    assert.equal(cursors.at(-1)[1], 0);
-    assert.equal(rotates.length, 1);
-    assert.ok(rotates[0] < 0);
-    assert.ok(zooms.length >= 1);
+    assert.equal(rotates.length, 0);
 
-    pans.length = 0;
-    rotates.length = 0;
-    zooms.length = 0;
     const r3 = [];
     r3[PAD.R3] = btn(true);
     pads = [stdPad({ axes: [1, 0, 0, -1], buttons: r3 })];
     pad.tick();
-    assert.equal(pans.length, 0);
-    assert.equal(rotates.length, 1);
-    assert.ok(rotates[0] < 0);
-    assert.ok(zooms.length >= 1);
+    assert.equal(rotates.length, 0);
+    pad.dispose();
+  });
+
+  it('L3 or R3 held adds to a control group instead of selecting it', () => {
+    const downs = [];
+    const adds = [];
+    const ups = [];
+    const { doc } = menuDoc();
+    const held = [];
+    held[PAD.L3] = btn(true);
+    held[PAD.UP] = btn(true);
+    let pads = [stdPad({ buttons: held })];
+    const pad = createGamepadAdapter({
+      camera: { nudgeLookPan() {} },
+      active: () => true,
+      root: doc,
+      getGamepads: () => pads,
+      onControlGroupDown: (id) => downs.push(id),
+      onControlGroupAdd: (id) => adds.push(id),
+      onControlGroupUp: (id) => ups.push(id),
+      autoStart: false,
+    });
+    pad.tick();
+    assert.deepEqual(adds, [0]);
+    assert.deepEqual(downs, []);
+
+    const r3 = [];
+    r3[PAD.R3] = btn(true);
+    r3[PAD.Y] = btn(true);
+    pads = [stdPad({ buttons: r3 })];
+    pad.tick();
+    assert.deepEqual(ups, [0]);
+    assert.deepEqual(adds, [0, 2]);
+    assert.deepEqual(downs, []);
+    pad.dispose();
+  });
+
+  it('a stick click tap arms rally mode, and a group-add hold does not', () => {
+    const arms = [];
+    const adds = [];
+    const { doc } = menuDoc();
+    const l3 = [];
+    l3[PAD.L3] = btn(true);
+    let pads = [stdPad({ buttons: l3 })];
+    const pad = createGamepadAdapter({
+      camera: { nudgeLookPan() {} },
+      active: () => true,
+      root: doc,
+      getGamepads: () => pads,
+      onControlGroupAdd: (id) => adds.push(id),
+      onRallyArm: () => arms.push(1),
+      autoStart: false,
+    });
+    pad.tick();
+    assert.deepEqual(arms, []);
+    pads = [stdPad({ buttons: [] })];
+    pad.tick();
+    assert.deepEqual(arms, [1]);
+
+    const r3 = [];
+    r3[PAD.R3] = btn(true);
+    pads = [stdPad({ buttons: r3 })];
+    pad.tick();
+    pads = [stdPad({ buttons: [] })];
+    pad.tick();
+    assert.deepEqual(arms, [1, 1]);
+
+    const held = [];
+    held[PAD.L3] = btn(true);
+    held[PAD.UP] = btn(true);
+    pads = [stdPad({ buttons: held })];
+    pad.tick();
+    assert.deepEqual(adds, [0]);
+    pads = [stdPad({ buttons: [] })];
+    pad.tick();
+    assert.deepEqual(arms, [1, 1]);
     pad.dispose();
   });
 
@@ -1708,20 +1799,20 @@ describe('createGamepadAdapter', () => {
     pad.dispose();
   });
 
-  it('LT confirms an aimed radial slice', () => {
+  it('LB confirms an aimed radial slice', () => {
     const confirms = [];
     const { doc } = menuDoc();
     const targets = {
       inner: [{ kind: 'category', id: 'basic', ang: -Math.PI / 2 }],
       outer: [{ kind: 'building', id: 'house', ang: -Math.PI / 2 }],
     };
-    const lt = [];
-    lt[PAD.LT] = btn(true);
+    const lb = [];
+    lb[PAD.LB] = btn(true);
     const pad = createGamepadAdapter({
       camera: { nudgeLookPan() {} },
       active: () => true,
       root: doc,
-      getGamepads: () => [stdPad({ axes: [0, -0.45, 0, 0], buttons: lt })],
+      getGamepads: () => [stdPad({ axes: [0, -0.45, 0, 0], buttons: lb })],
       radialOpen: () => true,
       getRadialTargets: () => targets,
       onRadialConfirm: (pick) => confirms.push(pick),
@@ -1739,8 +1830,8 @@ describe('createGamepadAdapter', () => {
     const { doc } = menuDoc();
     const a = [];
     a[PAD.A] = btn(true);
-    const lb = [];
-    lb[PAD.LB] = btn(true);
+    const lt = [];
+    lt[PAD.LT] = btn(true);
     let pads = [stdPad({ axes: [1, 0, 0, 0], buttons: [] })];
     const pad = createGamepadAdapter({
       camera: { nudgeLookPan() {} },
@@ -1762,13 +1853,13 @@ describe('createGamepadAdapter', () => {
     pad.tick();
     assert.equal(confirms.length, 1);
 
-    pads = [stdPad({ axes: [1, 0, 0, 0], buttons: lb })];
+    pads = [stdPad({ axes: [1, 0, 0, 0], buttons: lt })];
     pad.tick();
     assert.deepEqual(rotates, [1]);
     pad.dispose();
   });
 
-  it('while placing, sticks still aim; A/LT stamp, B cancels, bumpers drag-yaw', () => {
+  it('while placing, sticks still aim; A/LB stamp, B cancels, triggers drag-yaw', () => {
     const pans = [];
     const aims = [];
     const confirms = [];
@@ -1805,16 +1896,16 @@ describe('createGamepadAdapter', () => {
     assert.equal(cancels.length, 1);
     assert.equal(aims.length, 2);
 
-    const lb = [];
-    lb[PAD.LB] = btn(true);
-    pads = [stdPad({ axes: [1, 0, 0, 0], buttons: lb })];
+    const lt = [];
+    lt[PAD.LT] = btn(true);
+    pads = [stdPad({ axes: [1, 0, 0, 0], buttons: lt })];
     pad.tick();
     assert.deepEqual(rotates, [1]);
     assert.equal(aims.length, 2);
 
-    const rt = [];
-    rt[PAD.RT] = btn(true);
-    pads = [stdPad({ buttons: rt })];
+    const rb = [];
+    rb[PAD.RB] = btn(true);
+    pads = [stdPad({ buttons: rb })];
     pad.tick();
     assert.equal(confirms.length, 2);
     pad.dispose();
@@ -1898,6 +1989,76 @@ describe('createGamepadAdapter', () => {
     pad.tick();
     const moved = cursors.at(-1);
     assert.ok(Math.hypot(moved[0], moved[1]) > 8);
+    pad.dispose();
+  });
+
+  it('selects control groups while a building radial is open, and A still confirms the slice', () => {
+    const downs = [];
+    const ups = [];
+    const confirms = [];
+    const { doc } = menuDoc();
+    const targets = {
+      inner: [{ kind: 'category', id: 'basic', ang: -Math.PI / 2 }],
+      outer: [{ kind: 'building', id: 'house', ang: -Math.PI / 2 }],
+    };
+    let buttons = [];
+    buttons[PAD.Y] = btn(true);
+    const pad = createGamepadAdapter({
+      camera: { nudgeLookPan() {} },
+      active: () => true,
+      root: doc,
+      getGamepads: () => [stdPad({ axes: [0, -0.45, 0, 0], buttons })],
+      radialOpen: () => true,
+      getRadialTargets: () => targets,
+      onRadialHover: () => {},
+      onRadialConfirm: (pick) => confirms.push(pick?.id),
+      onControlGroupDown: (id) => downs.push(id),
+      onControlGroupUp: (id) => ups.push(id),
+      autoStart: false,
+    });
+    pad.tick();
+    assert.deepEqual(downs, [2]);
+    assert.equal(confirms.length, 0);
+
+    buttons = [];
+    pad.tick();
+    assert.deepEqual(ups, [2]);
+
+    const a = [];
+    a[PAD.A] = btn(true);
+    buttons = a;
+    pad.tick();
+    assert.equal(confirms.at(-1), 'basic');
+    assert.deepEqual(downs, [2]);
+    pad.dispose();
+  });
+
+  it('selects a control group while placing, and A still stamps', () => {
+    const downs = [];
+    const confirms = [];
+    const { doc } = menuDoc();
+    let buttons = [];
+    buttons[PAD.Y] = btn(true);
+    const pad = createGamepadAdapter({
+      camera: { nudgeLookPan() {} },
+      active: () => true,
+      root: doc,
+      getGamepads: () => [stdPad({ buttons })],
+      placing: () => true,
+      onPlaceConfirm: () => confirms.push(1),
+      onControlGroupDown: (id) => downs.push(id),
+      autoStart: false,
+    });
+    pad.tick();
+    assert.deepEqual(downs, [2]);
+    assert.equal(confirms.length, 0);
+
+    const a = [];
+    a[PAD.A] = btn(true);
+    buttons = a;
+    pad.tick();
+    assert.equal(confirms.length, 1);
+    assert.deepEqual(downs, [2]);
     pad.dispose();
   });
 

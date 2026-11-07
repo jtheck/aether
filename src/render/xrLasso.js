@@ -4,12 +4,9 @@
 
 import {
   addToScene,
-  createCylinder,
   createMeshFromData,
   createShaderMaterial,
-  createStandardMaterial,
   invalidateRenderBundles,
-  setShaderUniform,
   setSubtreeVisible,
   updateMeshPositions,
 } from '../vendor/lite/liteVendor.js';
@@ -18,10 +15,12 @@ import { inwardNormals } from './selectionBox.js';
 const INK = [70 / 255, 230 / 255, 110 / 255];
 const MAX_QUADS = 640;
 const TIP_SEGMENTS = 20;
-const BEAM_SEGMENTS = 8;
+/** Rings along the pointer. One tube, so the bend is not a stack of joints. */
+const BEAM_RINGS = 24;
+const BEAM_SIDES = 8;
 /** Hand end of the beam as a fraction of the far end's width. */
 const BEAM_HAND_FRAC = 0.015;
-/** Subtle downward bow, capped in beam widths so long pointers stay readable. */
+/** Lift above the chord, capped in beam widths so long pointers stay readable. */
 const BEAM_BEND_FRAC = 0.055;
 const BEAM_BEND_WIDTHS = 10;
 const LIFT = 0.75;
@@ -127,25 +126,107 @@ function makeRibbonMesh(engine) {
   return { mesh, positions };
 }
 
-/** Quaternion turning +Y onto the unit vector (dx, dy, dz). */
-function quatFromUp(dx, dy, dz) {
-  if (dy < -0.999999) return [1, 0, 0, 0];
-  const x = dz;
-  const z = -dx;
-  const w = 1 + dy;
-  const len = Math.hypot(x, z, w) || 1;
-  return [x / len, 0, z / len, w / len];
+/** Unlit ink. Outward faces only — the shell is wound CCW. */
+function makeBeamMaterial() {
+  return createShaderMaterial({
+    name: 'xr-beam',
+    attributes: ['position'],
+    uniforms: [
+      'world',
+      'viewProjection',
+      { name: 'ink', type: 'vec3<f32>', defaultValue: INK },
+    ],
+    needAlphaBlending: true,
+    blendMode: 'alpha',
+    depthWrite: false,
+    backFaceCulling: true,
+    vertexSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+};
+@vertex fn mainVertex(input: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  let wp = shaderSystem.world * vec4<f32>(input.position, 1.0);
+  out.position = shaderSystem.viewProjection * wp;
+  return out;
+}`,
+    fragmentSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+};
+@fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
+  return vec4<f32>(shaderUniforms.ink, 0.7);
+}`,
+  });
 }
 
 /**
- * Point on a controller beam that keeps the exact ray endpoints while bowing
- * toward world-down, perpendicular to the ray.
+ * One tapered tube. Lite cylinders keep Babylon's winding, so CCW culling
+ * draws the inside and the end caps read as knuckles wherever the arc bends.
+ * `N = B × T` with angle increasing toward B, so these quads face outward.
+ */
+function makeBeamMesh(engine) {
+  const verts = BEAM_RINGS * BEAM_SIDES;
+  const positions = new Float32Array(verts * 3);
+  const normals = new Float32Array(verts * 3);
+  const uvs = new Float32Array(verts * 2);
+  const indices = new Uint32Array((BEAM_RINGS - 1) * BEAM_SIDES * 6);
+  let t = 0;
+  for (let i = 0; i < BEAM_RINGS - 1; i++) {
+    for (let j = 0; j < BEAM_SIDES; j++) {
+      const j2 = (j + 1) % BEAM_SIDES;
+      const a = i * BEAM_SIDES + j;
+      const b = i * BEAM_SIDES + j2;
+      const c = (i + 1) * BEAM_SIDES + j2;
+      const d = (i + 1) * BEAM_SIDES + j;
+      indices[t++] = a;
+      indices[t++] = b;
+      indices[t++] = d;
+      indices[t++] = b;
+      indices[t++] = c;
+      indices[t++] = d;
+    }
+  }
+  const mesh = createMeshFromData(engine, 'xr-beam', positions, normals, indices, uvs);
+  mesh.pickable = false;
+  mesh.receiveShadows = false;
+  mesh.renderOrder = 176;
+  mesh.boundMin = [-1e5, -1e5, -1e5];
+  mesh.boundMax = [1e5, 1e5, 1e5];
+  return { mesh, positions };
+}
+
+/** Right-handed frame for a unit tangent. `ref` is shared by every ring. */
+function beamBasis(tx, ty, tz, ref) {
+  let bx = ty * ref.z - tz * ref.y;
+  let by = tz * ref.x - tx * ref.z;
+  let bz = tx * ref.y - ty * ref.x;
+  const bl = Math.hypot(bx, by, bz);
+  if (bl < 1e-5) {
+    const alt = Math.abs(ref.y) > 0.5 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+    return beamBasis(tx, ty, tz, alt);
+  }
+  bx /= bl;
+  by /= bl;
+  bz /= bl;
+  return {
+    nx: by * tz - bz * ty,
+    ny: bz * tx - bx * tz,
+    nz: bx * ty - by * tx,
+    bx,
+    by,
+    bz,
+  };
+}
+
+/**
+ * Point on a controller beam that keeps the exact ray endpoints while arcing
+ * toward world-up, perpendicular to the ray. A downward sag leaves the hand
+ * going down and climbs back to the target; this rises, then comes down onto it.
  */
 export function bentBeamPoint(ray, length, bend, t) {
-  const downDot = -ray.dy;
-  let bx = -downDot * ray.dx;
-  let by = -1 - downDot * ray.dy;
-  let bz = -downDot * ray.dz;
+  const upDot = ray.dy;
+  let bx = -upDot * ray.dx;
+  let by = 1 - upDot * ray.dy;
+  let bz = -upDot * ray.dz;
   const bl = Math.hypot(bx, by, bz);
   if (bl > 1e-5) {
     bx /= bl;
@@ -174,30 +255,10 @@ export function createXrLassoOverlay(engine, scene, groundYAt) {
   setSubtreeVisible(ribbon.mesh, false);
   let quads = 0;
 
-  const beamMat = createStandardMaterial();
-  beamMat.diffuseColor = [...INK];
-  beamMat.emissiveColor = [...INK];
-  beamMat.specularColor = [0, 0, 0];
-  beamMat.disableLighting = true;
-  // Below 1 keeps Lite off the opaque render-bundle path for a mesh that moves every frame.
-  beamMat.alpha = 0.7;
-  const beams = [];
-  for (let i = 0; i < BEAM_SEGMENTS; i++) {
-    const a = i / BEAM_SEGMENTS;
-    const b = (i + 1) / BEAM_SEGMENTS;
-    const beam = createCylinder(engine, {
-      diameterBottom: BEAM_HAND_FRAC + (1 - BEAM_HAND_FRAC) * a,
-      diameterTop: BEAM_HAND_FRAC + (1 - BEAM_HAND_FRAC) * b,
-      height: 1,
-      tessellation: 10,
-    });
-    beam.pickable = false;
-    beam.receiveShadows = false;
-    beam.material = beamMat;
-    addToScene(scene, beam);
-    setSubtreeVisible(beam, false);
-    beams.push(beam);
-  }
+  const beam = makeBeamMesh(engine);
+  beam.mesh.material = makeBeamMaterial();
+  addToScene(scene, beam.mesh);
+  setSubtreeVisible(beam.mesh, false);
 
   function setQuads(n) {
     const idx = n * 6;
@@ -248,9 +309,7 @@ export function createXrLassoOverlay(engine, scene, groundYAt) {
   }
 
   function hideBeam() {
-    for (const beam of beams) {
-      if (beam.visible) setSubtreeVisible(beam, false);
-    }
+    if (beam.mesh.visible) setSubtreeVisible(beam.mesh, false);
   }
 
   function poseBeam(ray, length, width) {
@@ -259,35 +318,39 @@ export function createXrLassoOverlay(engine, scene, groundYAt) {
       return;
     }
     const bend = Math.min(length * BEAM_BEND_FRAC, width * BEAM_BEND_WIDTHS);
-    let a = bentBeamPoint(ray, length, bend, 0);
-    for (let i = 0; i < BEAM_SEGMENTS; i++) {
-      const beam = beams[i];
-      const b = bentBeamPoint(ray, length, bend, (i + 1) / BEAM_SEGMENTS);
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const dz = b.z - a.z;
-      const segmentLength = Math.hypot(dx, dy, dz);
-      beam.position.x = (a.x + b.x) * 0.5;
-      beam.position.y = (a.y + b.y) * 0.5;
-      beam.position.z = (a.z + b.z) * 0.5;
-      beam.scaling.x = width;
-      beam.scaling.y = segmentLength;
-      beam.scaling.z = width;
-      const q = quatFromUp(dx / segmentLength, dy / segmentLength, dz / segmentLength);
-      const rq = beam.rotationQuaternion;
-      if (rq) {
-        if (typeof rq.set === 'function') rq.set(q[0], q[1], q[2], q[3]);
-        else {
-          rq.x = q[0];
-          rq.y = q[1];
-          rq.z = q[2];
-          rq.w = q[3];
-        }
+    const ref = Math.abs(ray.dy) > 0.85 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+    const pos = beam.positions;
+    for (let i = 0; i < BEAM_RINGS; i++) {
+      const t = i / (BEAM_RINGS - 1);
+      const p = bentBeamPoint(ray, length, bend, t);
+      const ta = Math.max(0, t - 1e-3);
+      const tb = Math.min(1, t + 1e-3);
+      const a = bentBeamPoint(ray, length, bend, ta);
+      const b = bentBeamPoint(ray, length, bend, tb);
+      let dx = b.x - a.x;
+      let dy = b.y - a.y;
+      let dz = b.z - a.z;
+      const span = Math.hypot(dx, dy, dz) || 1;
+      dx /= span;
+      dy /= span;
+      dz /= span;
+      const basis = beamBasis(dx, dy, dz, ref);
+      const radius = width * (BEAM_HAND_FRAC + (1 - BEAM_HAND_FRAC) * t) * 0.5;
+      for (let j = 0; j < BEAM_SIDES; j++) {
+        const ang = (j / BEAM_SIDES) * Math.PI * 2;
+        const c = Math.cos(ang);
+        const s = Math.sin(ang);
+        const ox = basis.nx * c + basis.bx * s;
+        const oy = basis.ny * c + basis.by * s;
+        const oz = basis.nz * c + basis.bz * s;
+        const v = (i * BEAM_SIDES + j) * 3;
+        pos[v] = p.x + ox * radius;
+        pos[v + 1] = p.y + oy * radius;
+        pos[v + 2] = p.z + oz * radius;
       }
-      beam.markLocalDirty?.();
-      if (!beam.visible) setSubtreeVisible(beam, true);
-      a = b;
     }
+    updateMeshPositions(engine, beam.mesh, pos, 0, BEAM_RINGS * BEAM_SIDES);
+    if (!beam.mesh.visible) setSubtreeVisible(beam.mesh, true);
   }
 
   function hide() {

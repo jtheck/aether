@@ -6,6 +6,7 @@ import {
   referenceOffset,
   shapeStick,
   stickAxes,
+  xrStickMotion,
   xrJumpHead,
   lookDownOffset,
   smoothFlatDirection,
@@ -65,6 +66,36 @@ describe('readQuestTouch', () => {
     assert.equal(touch.trigger.pressed, false);
     assert.equal(touch.stickX, 0);
     assert.equal(touch.stickY, 0);
+  });
+});
+
+describe('xrStickMotion', () => {
+  it('slides only when both sticks throw the same way', () => {
+    const both = xrStickMotion(
+      { stickX: 0, stickY: -1 },
+      { stickX: 0, stickY: -1 },
+    );
+    assert.ok(both.forward > 0);
+    assert.equal(both.strafe, 0);
+    assert.equal(both.yaw, 0);
+    const lone = xrStickMotion({ stickX: 0, stickY: -1 }, { stickX: 0, stickY: 0 });
+    assert.equal(lone.forward, 0);
+    assert.equal(lone.strafe, 0);
+  });
+
+  it('yaws on opposite up/down and zooms out on a pinch', () => {
+    const yaw = xrStickMotion(
+      { stickX: 0, stickY: -0.8 },
+      { stickX: 0, stickY: 0.8 },
+    );
+    assert.ok(yaw.yaw > 0);
+    assert.equal(yaw.zoom, 0);
+    const pinch = xrStickMotion(
+      { stickX: 0.8, stickY: 0 },
+      { stickX: -0.8, stickY: 0 },
+    );
+    assert.ok(pinch.zoom > 0);
+    assert.equal(pinch.yaw, 0);
   });
 });
 

@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CONTROL_GROUP_BLACK,
+  CONTROL_GROUP_RED,
   CONTROL_GROUP_COUNT,
   CONTROL_GROUP_DOUBLE_MS,
   addUnitsToControlGroup,
@@ -27,6 +28,7 @@ function fakeWorld(entries) {
 
 describe('control groups', () => {
   it('picks the first agora owned by the local seat', () => {
+    assert.equal(CONTROL_GROUP_RED, 0);
     assert.equal(CONTROL_GROUP_BLACK, 4);
     assert.equal(firstOwnedAgoraIndex(null, 0), -1);
     assert.equal(firstOwnedAgoraIndex([], 0), -1);
@@ -34,10 +36,15 @@ describe('control groups', () => {
     assert.equal(firstOwnedAgoraIndex([{ owner: 1 }], 0), -1);
   });
 
-  it('maps number keys 1-6 (and numpad) onto the six pads', () => {
+  it('maps number keys 1-6 (and numpad) onto the on-screen stacks', () => {
     assert.equal(controlGroupIdFromCode('Digit1'), 0);
+    assert.equal(controlGroupIdFromCode('Digit2'), 1);
+    assert.equal(controlGroupIdFromCode('Digit3'), 4);
+    assert.equal(controlGroupIdFromCode('Digit4'), 2);
+    assert.equal(controlGroupIdFromCode('Digit5'), 3);
     assert.equal(controlGroupIdFromCode('Digit6'), 5);
-    assert.equal(controlGroupIdFromCode('Numpad3'), 2);
+    assert.equal(controlGroupIdFromCode('Numpad3'), 4);
+    assert.equal(controlGroupIdFromCode('Numpad4'), 2);
     assert.equal(controlGroupIdFromCode('Digit7'), null);
     assert.equal(controlGroupIdFromCode('KeyQ'), null);
   });

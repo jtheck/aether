@@ -1,12 +1,12 @@
 // Drawn-lasso hatch follows the outer hull, not the raw stroke.
-// Gamepad paints that hull with a circular brush (speed-sized; both bumpers = 2× max).
+// Gamepad paints that hull with a circular brush. Trigger pressure sets the
+// radius: a light pull stays at the floor, a full squeeze reaches 2× the
+// old single-bumper ceiling.
 
-/** Single-bumper floor - still a real stamp, not a hairline. */
+/** Light-trigger floor - still a real stamp, not a hairline. */
 export const BRUSH_RADIUS_MIN = 36;
-/** Single-bumper ceiling. Both bumpers use 2× this. */
+/** Former single-bumper ceiling. A full squeeze reaches 2× this. */
 export const BRUSH_RADIUS_MAX = 72;
-/** Per-frame travel (px) that fills the single-bumper range. */
-export const BRUSH_SPEED_PX = 18;
 export const BRUSH_RADIUS_BOTH = BRUSH_RADIUS_MAX * 2;
 export const BRUSH_CIRCLE_N = 8;
 export const BRUSH_STAMP_MIN = 8;
@@ -67,38 +67,25 @@ export function lassoOuterLoop(pts) {
 }
 
 /**
- * Live brush radius in CSS pixels. One bumper eases with stroke speed;
- * both bumpers snap to double the single-bumper max.
- * @param {number} [speed]
- * @param {boolean} [both]
+ * Live brush radius in CSS pixels from trigger pressure.
+ * 0 is a light pull; 1 is a full squeeze.
+ * @param {number} [pressure]
  */
-export function brushRadiusTarget(speed, both) {
-  if (both) return BRUSH_RADIUS_BOTH;
-  const s = Number.isFinite(speed) && speed > 0 ? speed : 0;
-  const t = Math.max(0, Math.min(1, s / BRUSH_SPEED_PX));
+export function brushRadiusTarget(pressure) {
+  const p = Number.isFinite(pressure) ? pressure : 0;
+  const t = p > 1 ? 1 : p < 0 ? 0 : p;
   const e = t * t * (3 - 2 * t);
-  return BRUSH_RADIUS_MIN + (BRUSH_RADIUS_MAX - BRUSH_RADIUS_MIN) * e;
+  return BRUSH_RADIUS_MIN + (BRUSH_RADIUS_BOTH - BRUSH_RADIUS_MIN) * e;
 }
 
 /**
  * @param {number} prev
  * @param {number} target
- * @param {boolean} [both]
  */
-export function stepBrushRadius(prev, target, both = false) {
+export function stepBrushRadius(prev, target) {
   const next = Number.isFinite(target) ? target : BRUSH_RADIUS_MIN;
-  if (both || !Number.isFinite(prev) || prev <= 0) return next;
+  if (!Number.isFinite(prev) || prev <= 0) return next;
   return prev + (next - prev) * BRUSH_SMOOTH;
-}
-
-/**
- * @param {number} prev
- * @param {number} instant
- */
-export function stepBrushSpeed(prev, instant) {
-  const v = Number.isFinite(instant) && instant > 0 ? instant : 0;
-  if (!Number.isFinite(prev) || prev <= 0) return v;
-  return prev + (v - prev) * BRUSH_SMOOTH;
 }
 
 /**

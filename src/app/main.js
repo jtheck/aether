@@ -2141,20 +2141,21 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     return ownerHasDrayage(owner) ? { slowAware: true } : null;
   }
 
-  function rallyMarkerFor(b, rx, rz, fromX, fromZ, points, attackMove) {
+  function rallyMarkerFor(b, rx, rz, fromX, fromZ, points, attackMove, hop, buildingIndex) {
     return {
       x: rx,
       z: rz,
       fromX: fromX ?? b.x,
       fromZ: fromZ ?? b.z,
       points,
-      yaw: b.yaw ?? 0,
       owner: b.owner | 0,
       attackMove: !!attackMove,
+      hop: hop | 0,
+      buildingIndex: buildingIndex | 0,
     };
   }
 
-  function rallyChainMarkers(b) {
+  function rallyChainMarkers(b, buildingIndex) {
     const flags = listRallyFlags(b);
     if (!flags.length) return [];
     const pathOpts = rallyPathOptsForOwner(b.owner);
@@ -2181,6 +2182,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           fromZ,
           points,
           (f.order | 0) === ORDER.ATTACK_MOVE,
+          f.hop,
+          buildingIndex,
         ),
       );
     }
@@ -2234,6 +2237,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       fromZ,
       points,
       owner: localPlayerId,
+      hopFrom: hopFrom | 0,
+      buildingIndex: (session.buildings ?? []).indexOf(b),
     });
   }
 
@@ -2249,7 +2254,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       seen.add(bi);
       const b = buildings[bi];
       if (!b?.hasRally || (b.owner | 0) !== localPlayerId) continue;
-      const chain = rallyChainMarkers(b);
+      const chain = rallyChainMarkers(b, bi);
       for (let k = 0; k < chain.length; k++) markers.push(chain[k]);
     }
     renderer.placeRallyFlags?.(coalesceSharedRallyMarkers(markers));

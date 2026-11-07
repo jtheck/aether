@@ -65,16 +65,20 @@
     };
     let onMatchLobbyConnected = config.onMatchLobbyConnected || function(lobbyName) {};
 
-    // WebRTC configuration. TURN is deliberately injected by the application:
-    // a dead public relay is worse than an explicit STUN-only connection because
-    // it makes restrictive networks appear covered when they are not.
+    // Google STUN is the fallback. The app replaces it by passing the
+    // https://getfire.net/api/v1/ice list as config.iceServers. A missing or
+    // empty list stays on Google.
     const defaultIceServers = [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
     ];
-    const iceServers = Array.isArray(config.iceServers)
-      ? config.iceServers
-      : defaultIceServers;
+    const passedIceServers = Array.isArray(config.iceServers)
+      ? config.iceServers.filter((server) => {
+          const urls = Array.isArray(server?.urls) ? server.urls : [server?.urls];
+          return urls.some((url) => typeof url === 'string' && url.length > 0);
+        })
+      : [];
+    const iceServers = passedIceServers.length ? passedIceServers : defaultIceServers;
     const rtcConfig = {
       iceServers,
     };

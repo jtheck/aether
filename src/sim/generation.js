@@ -5,7 +5,7 @@
  */
 import { SIM_RULES_GENERATION, SIM_RULES_SHA256 } from './rulesEpoch.js';
 
-export const SIM_GENERATION = 5;
+export const SIM_GENERATION = 6;
 export const SIM_RULES_ID = SIM_RULES_SHA256.slice(0, 12);
 
 if (SIM_RULES_GENERATION !== SIM_GENERATION) {

@@ -23,6 +23,7 @@
 // - Commands and tick confirms must be owned by the userId for their playerId.
 
 import { p2pDevModeFromLocation } from './net.js';
+import { loadFireIceServers } from './fireIce.js';
 import { getPlayerColor, getPlayerName, getUnitSkins } from './settings.js';
 import { ownerColorsFromRoster, sanitizeOwnerColor } from '../render/ownerTints.js';
 import { aetherSteam } from './steam.js';
@@ -5521,20 +5522,23 @@ export function createKothShard(options = {}) {
 
   onStatus('Joining King of the Hill…');
 
-  p2p = globalThis.GETFIREP2P({
-    roomType: LOBBY,
-    devMode: p2pDevModeFromLocation(),
-    iceServers: options.iceServers,
-    onGameLobbyMessage,
-    onMatchLobbyConnected,
-    onDataChannelMessage: onDataMessage,
-    onPeerConnected,
-    onPeerDisconnected,
-    onPeerLinkFailed,
-    onBroadcastMessage,
-  });
-
   (async () => {
+    const passed = Array.isArray(options.iceServers) && options.iceServers.length
+      ? options.iceServers
+      : null;
+    const iceServers = passed ?? await loadFireIceServers();
+    p2p = globalThis.GETFIREP2P({
+      roomType: LOBBY,
+      devMode: p2pDevModeFromLocation(),
+      iceServers: iceServers ?? undefined,
+      onGameLobbyMessage,
+      onMatchLobbyConnected,
+      onDataChannelMessage: onDataMessage,
+      onPeerConnected,
+      onPeerDisconnected,
+      onPeerLinkFailed,
+      onBroadcastMessage,
+    });
     const ok = await waitForP2pConsumer(p2p);
     if (!ok) throw new Error('GetFire signaling failed');
     localUserId = p2p.getUserId?.() ?? null;

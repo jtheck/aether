@@ -10,6 +10,7 @@ import {
   hasCurrentSimRules,
 } from '../sim/generation.js';
 import { compactFrameForTransport, expandTransportFrame } from '../network/lockstepWire.js';
+import { loadFireIceServers } from './fireIce.js';
 
 const LOBBY = networkChannel('aether-v2');
 const MATCH_TIMEOUT_MS = 120_000;
@@ -252,17 +253,20 @@ export function createNetMatch(options = {}) {
 
   onStatus('Joining match lobby…');
 
-  p2p = globalThis.GETFIREP2P({
-    roomType: networkChannel('aether-v2'),
-    devMode: p2pDevModeFromLocation(),
-    iceServers: options.iceServers,
-    onGameLobbyMessage,
-    onDataChannelMessage: onDataMessage,
-    onPeerConnected,
-    onPeerDisconnected,
-  });
-
   (async () => {
+    const passed = Array.isArray(options.iceServers) && options.iceServers.length
+      ? options.iceServers
+      : null;
+    const iceServers = passed ?? await loadFireIceServers();
+    p2p = globalThis.GETFIREP2P({
+      roomType: networkChannel('aether-v2'),
+      devMode: p2pDevModeFromLocation(),
+      iceServers: iceServers ?? undefined,
+      onGameLobbyMessage,
+      onDataChannelMessage: onDataMessage,
+      onPeerConnected,
+      onPeerDisconnected,
+    });
     const ok = await waitForP2pConsumer(p2p);
     if (!ok) {
       matchReject(

@@ -47,6 +47,7 @@ import {
   STRESS_AI_PROFILES,
   stressShareVisionOwners,
 } from '../sim/ai.js';
+import { freeplaySkirmAiPlayer, matchAiPlayer } from '../sim/aiScript.js';
 import { CMD } from '../sim/commands.js';
 import { villageVillagerProgress } from '../sim/buildingProduction.js';
 import { constructionRingFill } from '../sim/construction.js';
@@ -112,6 +113,7 @@ import { createXrRig, jumpXrRig, stepXrRig } from './xrRig.js';
 import { createXrControls } from './xrControls.js';
 import { clearXrEye } from '../render/xrEye.js';
 import { rimKeyForBuildingType, sharedRimKey } from '../render/workRadiusRings.js';
+import { coalesceSharedRallyMarkers } from '../render/rallyDash.js';
 import { createFogOfWar } from '../render/fogOfWar.js';
 import { shareVisionOwnersFromCfg, spectatorFollowFog } from '../render/visionShare.js';
 import { selectionGroupsFromBuildings, selectionGroupsFromUnits } from '../render/selectionHud.js';
@@ -565,7 +567,7 @@ async function main() {
         localPlayerId: PLAYER,
         humanPlayers: [PLAYER],
         activeSlots: [PLAYER, AI_OWNER],
-        aiPlayers: [{ owner: AI_OWNER, temperament: 'passive' }],
+        aiPlayers: [freeplaySkirmAiPlayer(AI_OWNER)],
         fog: fogOverrideFromSearch() ?? true,
         sharedVision: true,
       };
@@ -581,7 +583,7 @@ async function main() {
       localPlayerId: PLAYER,
       humanPlayers: [PLAYER],
       activeSlots: [PLAYER, AI_OWNER],
-      aiPlayers: [{ owner: AI_OWNER, temperament: 'passive' }],
+      aiPlayers: [freeplaySkirmAiPlayer(AI_OWNER)],
       fog: fogOverrideFromSearch() ?? true,
       sharedVision: true,
     };
@@ -2215,7 +2217,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       const chain = rallyChainMarkers(b);
       for (let k = 0; k < chain.length; k++) markers.push(chain[k]);
     }
-    renderer.placeRallyFlags?.(markers);
+    renderer.placeRallyFlags?.(coalesceSharedRallyMarkers(markers));
   }
 
   function beginRallyPlacement() {
@@ -5502,8 +5504,11 @@ async function startSoloAiMatch(ctx, opts = {}) {
   ctx.localSoloHold = true;
   try {
     const armyPerSide = garden ? 0 : (opts.armyPerSide ?? ctx.session.state?.armyPerSide ?? 0);
-    const aiEntry = { owner: AI_OWNER, temperament };
-    if (difficulty != null) aiEntry.difficulty = difficulty;
+    const aiEntry = matchAiPlayer(AI_OWNER, {
+      temperament,
+      difficulty,
+      script: opts.script,
+    });
     await applyLiveConfig(ctx, {
       mode,
       localSolo: true,

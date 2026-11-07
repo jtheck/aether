@@ -109,7 +109,7 @@ export {
   NeutralToneMapping,
 } from '@babylonjs/lite';
 
-import { attachVat as liteAttachVat } from '@babylonjs/lite';
+import { attachVat as liteAttachVat, enablePbrMaterialPluginVertexData } from '@babylonjs/lite';
 // Relative paths so esbuild can resolve past package "exports", and so this
 // Map is the same instance vat-baker / pbr-compose use inside the bundle.
 import { _getPbrExts, _registerPbrExt } from '../node_modules/@babylonjs/lite/lib/material/pbr/pbr-flags.js';
@@ -117,6 +117,10 @@ import { pbrExt as vatPbrExt } from '../node_modules/@babylonjs/lite/lib/materia
 
 // Register at module load - before any scene pipelines are composed.
 _registerPbrExt(vatPbrExt);
+// PBR material plugins with vertex-stage code (tree sway). Same reason: must be
+// registered before any PBR pipeline is composed. Materials without `plugins`
+// are unaffected.
+enablePbrMaterialPluginVertexData();
 
 export function attachVat(engine, mesh, baked, clip) {
   const handle = liteAttachVat(engine, mesh, baked, clip);

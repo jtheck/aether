@@ -48,6 +48,7 @@ import { USE_GPU_PICK } from '../../render/pickMode.js';
 import { inputLatency } from '../inputLatency.js';
 import {
   boxSelectWinner,
+  rallyFlagsSharingPoint,
   inspectForeignOnClick,
   lassoStaysLoop,
   mergeBuildingSels,
@@ -1123,6 +1124,19 @@ export function createGameInput(opts) {
   }
 
   /**
+   * A click on a stacked multi-select flag selects that hop for every
+   * building sharing the point, so the next order extends them together.
+   * @param {{ kind: 'rally', index: number, hop: number, x: number, z: number }} flag
+   * @param {boolean} add
+   * @param {{ clientX: number, clientY: number } | undefined} [ptr]
+   */
+  function selectSharedRallyFlag(flag, add, ptr) {
+    const cluster = rallyFlagsSharingPoint(flag, visibleRallyFlags());
+    clearUnitSelection();
+    setBuildingSelection(cluster, add, cluster[0], ptr);
+  }
+
+  /**
    * Replace or shift-add buildings. Empty `list` is a no-op unless replacing
    * (`add` false), which clears. Shift-add refuses mixed owners.
    * @param {{ kind: 'agora' | 'building' | 'rally', index: number, hop?: number }[]} list
@@ -1703,8 +1717,7 @@ export function createGameInput(opts) {
     }
     const flag = pickRallyFlagAtRay(ray);
     if (flag) {
-      clearUnitSelection();
-      setBuildingSelection([flag], add, flag);
+      selectSharedRallyFlag(flag, add);
       return true;
     }
     const bld = pickBuildingAtRay(ray);
@@ -2319,9 +2332,7 @@ export function createGameInput(opts) {
     }
     if (bld?.kind === 'rally') {
       lastTap = { t: tapAt, x: e.clientX, y: e.clientY, kind: 'rally' };
-      const ptr = { clientX: e.clientX, clientY: e.clientY };
-      clearUnitSelection();
-      setBuildingSelection([bld], false, bld, ptr);
+      selectSharedRallyFlag(bld, false, { clientX: e.clientX, clientY: e.clientY });
       return;
     }
     if (bld) {

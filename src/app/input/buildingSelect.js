@@ -1,3 +1,28 @@
+/** World-float slop for flags planted by one shared click. */
+const RALLY_SHARE_EPS2 = 0.05 * 0.05;
+
+/**
+ * Every visible flag that is the same hop on the same point as `flag`.
+ * A multi-select plants one rally per building; those stacks are one flag.
+ * @param {{ hop?: number, x: number, z: number } | null | undefined} flag
+ * @param {{ hop?: number, x: number, z: number }[] | null | undefined} flags
+ */
+export function rallyFlagsSharingPoint(flag, flags) {
+  if (!flag) return [];
+  const hop = flag.hop | 0;
+  const out = [];
+  const list = flags ?? [];
+  for (let i = 0; i < list.length; i++) {
+    const f = list[i];
+    if ((f.hop | 0) !== hop) continue;
+    const dx = f.x - flag.x;
+    const dz = f.z - flag.z;
+    if (dx * dx + dz * dz > RALLY_SHARE_EPS2) continue;
+    out.push(f);
+  }
+  return out.length ? out : [flag];
+}
+
 /** @param {{ kind: string, index: number, hop?: number }} s */
 export function buildingSelKey(s) {
   if (s.kind === 'rally') return `rally:${s.index}:${s.hop | 0}`;

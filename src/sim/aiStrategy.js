@@ -10,6 +10,12 @@ import * as fx from './fixed.js';
 import { agoraCaptureScore, agoraForOwner, AGORA_OCCUPATION_RADIUS } from './agora.js';
 import { isAlly, isHostile } from './teams.js';
 import { getUnitDef } from './unitTypes.js';
+import {
+  agoraSeenByOwner,
+  aiUsesFairVision,
+  entitySeenByOwner,
+} from './matchVision.js';
+import { desireCastBonus } from './aiDesire.js';
 
 export const AI_STANCE = {
   /** No army orders - unit sim aggro is the only fight. */
@@ -77,6 +83,7 @@ export function parseAiDifficulty(raw, fallback = AI_DIFFICULTY.NORMAL) {
  *   defendRangeF: number,
  *   castChance: number,
  *   castCap: number,
+ *   vision: import('./matchVision.js').AiVisionMode,
  * }} AiStrategyDef
  */
 
@@ -164,6 +171,20 @@ export function resolveAiStrategy(entry) {
   let pathOverride;
   /** @type {number | string | undefined} */
   let difficultyOverride;
+  /** @type {number | undefined} */
+  let heatOverride;
+  /** @type {number | undefined} */
+  let guardAtOverride;
+  /** @type {number | undefined} */
+  let reactIntervalOverride;
+  /** @type {number | undefined} */
+  let defendRangeOverride;
+  /** @type {number | undefined} */
+  let castChanceOverride;
+  /** @type {number | undefined} */
+  let castCapOverride;
+  /** @type {import('./matchVision.js').AiVisionMode | undefined} */
+  let visionMode;
   if (typeof entry === 'number') {
     owner = entry | 0;
   } else if (entry && typeof entry === 'object') {
@@ -173,24 +194,45 @@ export function resolveAiStrategy(entry) {
     if (entry.stance) stanceOverride = String(entry.stance);
     if (entry.path) pathOverride = String(entry.path);
     if (entry.difficulty != null) difficultyOverride = entry.difficulty;
+    if (entry.heat != null) heatOverride = entry.heat | 0;
+    if (entry.guardAt != null) guardAtOverride = Number(entry.guardAt);
+    if (entry.reactInterval != null) reactIntervalOverride = entry.reactInterval | 0;
+    if (entry.defendRangeF != null) defendRangeOverride = Number(entry.defendRangeF);
+    if (entry.castChance != null) castChanceOverride = entry.castChance | 0;
+    if (entry.castCap != null) castCapOverride = entry.castCap | 0;
+    if (entry.vision === 'fair' || entry.vision === 'omniscient') visionMode = entry.vision;
   }
   const base = AI_STRATEGIES[temperament] || AI_STRATEGIES.steady;
+  const desireFx = desireCastBonus(
+    entry && typeof entry === 'object' ? entry.desires : null,
+  );
+  const castChanceBase = castChanceOverride != null
+    ? castChanceOverride
+    : base.castChance;
+  const castCapBase = castCapOverride != null ? castCapOverride : base.castCap;
   return {
     owner,
     temperament,
     economy: economyOverride != null ? economyOverride : base.economy,
     path: pathOverride || base.path,
     stance: stanceOverride || base.stance,
-    heat: base.heat,
+    heat: heatOverride != null ? heatOverride : base.heat,
     difficulty: parseAiDifficulty(
       difficultyOverride,
       base.difficulty ?? base.heat,
     ),
-    guardAt: base.guardAt,
-    reactInterval: base.reactInterval,
-    defendRangeF: base.defendRangeF,
-    castChance: base.castChance,
-    castCap: base.castCap,
+    guardAt: guardAtOverride != null ? guardAtOverride : base.guardAt,
+    reactInterval: reactIntervalOverride != null ? reactIntervalOverride : base.reactInterval,
+    defendRangeF: defendRangeOverride != null ? defendRangeOverride : base.defendRangeF,
+    castChance: Math.min(
+      100,
+      (castChanceBase | 0) + (desireFx.castChance | 0),
+    ),
+    castCap: Math.min(
+      12,
+      (castCapBase | 0) + (desireFx.castCap | 0),
+    ),
+    vision: visionMode ?? 'omniscient',
   };
 }
 
@@ -199,11 +241,19 @@ export function resolveAiStrategy(entry) {
  * No memory: they only know what is showing. Sitting on a quiet enemy
  * pad is not a show (that pad's bar is dark).
  */
-export function shownHostiles(w, owner, defendRangeF = 0) {
+/**
+ * @param {object} w
+ * @param {number} owner
+ * @param {number} [defendRangeF]
+ * @param {object} [field]
+ * @param {{ vision?: string }} [strategy]
+ */
+export function shownHostiles(w, owner, defendRangeF = 0, field = null, strategy = null) {
   const home = agoraForOwner(w.agoras, owner);
   const pad2 = fx.mul(AGORA_OCCUPATION_RADIUS, AGORA_OCCUPATION_RADIUS);
   const yardR = defendRangeF > 0 ? fx.fromFloat(defendRangeF) : 0;
   const yard2 = yardR ? fx.mul(yardR, yardR) : 0;
+  const fair = aiUsesFairVision(strategy) && field;
   let onHomePad = 0;
   let inYard = 0;
   let onEnemyPad = 0;
@@ -215,12 +265,15 @@ export function shownHostiles(w, owner, defendRangeF = 0) {
       const a = agoras[i];
       if (isAlly(a.owner | 0, owner) || isAlly(a.founder | 0, owner)) continue;
       const s = agoraCaptureScore(a);
+      if (s <= 0) continue;
+      if (fair && !agoraSeenByOwner(w, field, owner, a)) continue;
       if (s > enemyScore) enemyScore = s;
-      if (s > 0) liveEnemy.push(a);
+      liveEnemy.push(a);
     }
   }
   for (let i = 0; i < w.count; i++) {
     if (!w.alive[i] || !isHostile(owner, w.owner[i])) continue;
+    if (fair && !entitySeenByOwner(w, field, owner, i)) continue;
     const military = getUnitDef(w.type[i]).category === 'military';
     if (home) {
       const d = fx.dist2(w.px[i], w.py[i], home.x, home.z);
@@ -261,15 +314,29 @@ export function replyCount(shown, have, heat) {
  * @param {object} w
  * @param {{ owner: number, heat: number, guardAt: number, defendRangeF?: number }} strategy
  */
-export function captureIntent(w, strategy) {
+/**
+ * @param {object} w
+ * @param {object} strategy
+ * @param {object} [field]
+ */
+export function captureIntent(w, strategy, field = null) {
   const owner = strategy.owner | 0;
   const home = agoraForOwner(w.agoras, owner);
   const homeScore = agoraCaptureScore(home);
-  const shown = shownHostiles(w, owner, strategy.defendRangeF ?? 0);
+  const shown = shownHostiles(w, owner, strategy.defendRangeF ?? 0, field, strategy);
   // Quiet pad scores 0 - never treat "any agora exists" as a show.
   const guard = homeScore > 0 && homeScore >= (strategy.guardAt ?? 9);
   const occupyEnds = (w.agoraOccupyEndsMatch ?? 1) !== 0;
-  const contest = pickContestAgora(w, owner, strategy.heat, occupyEnds, homeScore, shown);
+  const contest = pickContestAgora(
+    w,
+    owner,
+    strategy.heat,
+    occupyEnds,
+    homeScore,
+    shown,
+    field,
+    strategy,
+  );
   return {
     home,
     homeScore,
@@ -282,11 +349,12 @@ export function captureIntent(w, strategy) {
   };
 }
 
-function pickContestAgora(w, owner, heat, occupyEnds, homeScore, shown) {
+function pickContestAgora(w, owner, heat, occupyEnds, homeScore, shown, field, strategy) {
   if (heat < 3) return null;
   if (!shown.padPlay) return null;
   if (!occupyEnds && heat < 4) return null;
   if (homeScore >= 1 && heat < 4) return null;
+  const fair = aiUsesFairVision(strategy) && field;
   const agoras = w.agoras;
   if (!agoras) return null;
   let best = null;
@@ -297,6 +365,7 @@ function pickContestAgora(w, owner, heat, occupyEnds, homeScore, shown) {
     if ((a.captured | 0)) continue;
     const score = agoraCaptureScore(a);
     if (score <= 0) continue;
+    if (fair && !agoraSeenByOwner(w, field, owner, a)) continue;
     if (score > bestScore) {
       bestScore = score;
       best = a;

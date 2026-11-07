@@ -18,7 +18,7 @@ export const BALLOON_MS = 3200;
  * Sprint away from the fight, then the fade. Long enough that the line off
  * the board can be read, still short of a walk.
  */
-export const FLEE_MS = 1400;
+export const FLEE_MS = 4200;
 
 /** Last slice of the balloon is the fade, after the shot into the sky. */
 const BALLOON_FADE_AT = 0.88;

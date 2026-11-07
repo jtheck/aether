@@ -44,6 +44,12 @@ import {
 } from './gather.js';
 import { AI_DIFFICULTY, AI_PATH, captureIntent, resolveAiStrategy } from './aiStrategy.js';
 import {
+  AI_DESIRE_SKIP_UNITS,
+  desireBuildOrder,
+  desireForUnit,
+  desireTrainOrder,
+} from './aiDesire.js';
+import {
   MAX_RESOURCE_SLOTS,
   SILO_ATTACH_RANGE_F,
   SILO_SOURCE_TYPE,
@@ -123,15 +129,15 @@ export function generateEconomyCommands(w, field, entry) {
 
   const inv = countBuildings(w, owner);
   const villagers = collectVillagers(w, owner);
-  const capture = captureIntent(w, strategy);
+  const capture = captureIntent(w, strategy, field);
   const pressure = bankPressure(w, owner, bank, strategy.difficulty);
 
   /** @type {import('./commands.js').Command[]} */
   const cmds = [];
 
   // Capture ringing - hotter seats cut the farm queue and train first.
-  if (capture.urgent && strategy.heat >= 2) {
-    const train = chooseTrain(w, owner, bank, strategy, capture, pressure);
+  if (capture.urgent && strategy.heat >= 1) {
+    const train = chooseTrain(w, owner, bank, strategy, capture, pressure, entry);
     if (train) {
       cmds.push(train);
       return cmds;
@@ -162,7 +168,7 @@ export function generateEconomyCommands(w, field, entry) {
   gather.idle = villagers.idle.length;
   const build = siloAt
     ? 'silo'
-    : chooseBuild(w, owner, bank, inv, villagers.total, order, strategy, capture, pressure, gather);
+    : chooseBuild(w, owner, bank, inv, villagers.total, order, strategy, capture, pressure, gather, entry);
   if (build) {
     const around = siloAt
       ? { x: siloAt.x, y: siloAt.z }
@@ -189,7 +195,7 @@ export function generateEconomyCommands(w, field, entry) {
   }
 
   // ── Step 3: research or train (eco path only when dumping a full bank) ───
-  const spend = chooseSpend(w, owner, bank, strategy, capture, pressure);
+  const spend = chooseSpend(w, owner, bank, strategy, capture, pressure, entry);
   if (spend) {
     cmds.push(spend);
     return cmds;
@@ -240,6 +246,9 @@ function countBuildings(w, owner) {
     tavern: 0,
     lab: 0,
     moonwell: 0,
+    church: 0,
+    tower: 0,
+    grove: 0,
     /** Farms still under construction. */
     farmSites: 0,
   };
@@ -249,6 +258,7 @@ function countBuildings(w, owner) {
     const bd = buildings[b];
     if (bd.owner !== owner) continue;
     if (bd.type in inv) inv[bd.type]++;
+    else inv[bd.type] = 1;
     if (bd.type === 'farm' && !buildingIsFinished(bd)) inv.farmSites++;
   }
   return inv;
@@ -733,6 +743,11 @@ function ecoBaselineReady(inv) {
   return inv.village >= 1 && inv.farm >= 1;
 }
 
+function underAttack(capture) {
+  if (!capture) return false;
+  return (capture.shown | 0) > 0 || !!capture.guard || !!capture.urgent;
+}
+
 /**
  * Camps / mines still pulling their weight (sites, or finished with nodes in
  * reach), plus the nearest node of each class no camp / mine already covers.
@@ -954,12 +969,50 @@ function nearestUncoveredNode(field, kind, px, py, sites, type) {
 }
 
 /** Priority ladder → which building to place this tick (or null). */
-function chooseBuild(w, owner, bank, inv, villagerCount, order, strategy, capture, pressure, gather) {
+function chooseDesireBuilding(w, owner, bank, inv, desireIds, heat) {
+  for (const d of desireBuildOrder(desireIds, heat)) {
+    const type = d.building;
+    if ((inv[type] | 0) > 0) continue;
+    if (!ownerMeetsBuildingRequires(w.buildings, owner, type)) continue;
+    if (!affordable(bank, getBuildingCost(type))) continue;
+    return type;
+  }
+  return null;
+}
+
+function chooseBuild(w, owner, bank, inv, villagerCount, order, strategy, capture, pressure, gather, entry) {
   const need = order[0];
   const dump = !!pressure?.dump;
   const full = kindSet(pressure?.overflowing);
   // 1) A village first - the population engine.
   if (inv.village === 0 && affordable(bank, getBuildingCost('village'))) return 'village';
+  // Under attack: barracks before more farms when we can afford it (or mine for stone).
+  if (
+    inv.village >= 1
+    && (strategy.heat | 0) >= 2
+    && underAttack(capture)
+    && (inv.barracks | 0) === 0
+  ) {
+    const hall = choosePathBuilding(w, owner, bank, inv, AI_PATH.ARMY);
+    if (hall) return hall;
+    if (
+      (inv.mine | 0) === 0
+      && gather.mineTile >= 0
+      && affordable(bank, getBuildingCost('mine'))
+    ) {
+      return 'mine';
+    }
+  }
+  const desireHall = chooseDesireBuilding(
+    w,
+    owner,
+    bank,
+    inv,
+    entry?.desires,
+    strategy.heat | 0,
+  );
+  if (desireHall) return desireHall;
+
   // Eco path: a second village once the first one has grown the pop.
   if (
     strategy.path === AI_PATH.ECO
@@ -1150,15 +1203,35 @@ function pathBuildAnchor(base, type) {
   return { x: fx.fromFloat(bx + fX * ARMY_FORWARD), y: fx.fromFloat(bz + fZ * ARMY_FORWARD) };
 }
 
-function chooseSpend(w, owner, bank, strategy, capture, pressure) {
+function unitTypeForTrainKey(unitKey) {
+  switch (unitKey) {
+    case 'warrior': return UNIT.WARRIOR;
+    case 'archer': return UNIT.ARCHER;
+    case 'monk': return UNIT.MONK;
+    case 'warlock': return UNIT.WARLOCK;
+    case 'priest': return UNIT.PRIEST;
+    case 'wizard': return UNIT.WIZARD;
+    case 'shaman': return UNIT.SHAMAN;
+    case 'myco': return UNIT.MYCO;
+    default: return -1;
+  }
+}
+
+function chooseSpend(w, owner, bank, strategy, capture, pressure, entry) {
   const dump = !!pressure?.dump;
   if (strategy.path === AI_PATH.ECO && !dump) return null;
   if (!(capture?.urgent && strategy.heat >= 3)) {
     const research = chooseResearch(w, owner, bank, strategy.path, dump);
     if (research) return research;
   }
-  if (strategy.path === AI_PATH.ARMY || dump || (capture?.urgent && strategy.heat >= 2)) {
-    return chooseTrain(w, owner, bank, strategy, capture, pressure);
+  if (
+    strategy.path === AI_PATH.ARMY
+    || dump
+    || (capture?.urgent && strategy.heat >= 2)
+    || ((capture?.shown | 0) > 0 && (strategy.heat | 0) >= 2)
+    || (capture?.guard && strategy.heat >= 1 && strategy.path === AI_PATH.ECO)
+  ) {
+    return chooseTrain(w, owner, bank, strategy, capture, pressure, entry);
   }
   return null;
 }
@@ -1220,19 +1293,40 @@ function hasUpgradeTrack(b, techId) {
   return false;
 }
 
-function chooseTrain(w, owner, bank, strategy, capture, pressure) {
-  const keys = ['warrior', 'archer'];
+function chooseTrain(w, owner, bank, strategy, capture, pressure, entry) {
+  const padEco = capture?.guard && strategy.path === AI_PATH.ECO && (strategy.heat | 0) <= 2;
+  const heat = strategy.heat | 0;
+  const desireKeys = desireTrainOrder(entry?.desires, heat);
+  const fallback = padEco ? ['monk', 'warrior', 'archer'] : ['warrior', 'archer'];
+  /** @type {string[]} */
+  const keys = [];
+  const seen = new Set();
+  for (const list of [desireKeys, fallback]) {
+    for (let i = 0; i < list.length; i++) {
+      const key = list[i];
+      if (AI_DESIRE_SKIP_UNITS.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      keys.push(key);
+    }
+  }
   const bonus = capture?.urgent
-    ? Math.max((strategy.heat | 0) * 2, (capture.shown | 0) * (strategy.heat | 0))
+    ? Math.max(heat * 2, (capture.shown | 0) * heat)
     : 0;
   const overflowBonus = pressure?.dump
     ? 2 + (strategy.difficulty | 0) * 3
     : 0;
   for (let k = 0; k < keys.length; k++) {
     const unitKey = keys[k];
-    const cap = (TRAIN_CAP[unitKey] | 0) + bonus + overflowBonus;
+    const def = desireForUnit(entry?.desires, unitKey);
+    const baseCap = def
+      ? def.trainCap | 0
+      : unitKey === 'monk'
+        ? 1
+        : (TRAIN_CAP[unitKey] | 0);
+    const cap = baseCap + bonus + overflowBonus;
     if (livingAndQueued(w, owner, unitKey) >= cap) continue;
-    const unitType = unitKey === 'warrior' ? UNIT.WARRIOR : UNIT.ARCHER;
+    const unitType = unitTypeForTrainKey(unitKey);
+    if (unitType < 0) continue;
     if (!canAffordBank(bank, getUnitCost(unitType))) continue;
     const bi = finishedBuildingWithUnit(w, owner, unitKey);
     if (bi < 0) continue;
@@ -1253,7 +1347,8 @@ function finishedBuildingWithUnit(w, owner, unitKey) {
 }
 
 function livingAndQueued(w, owner, unitKey) {
-  const unitType = unitKey === 'warrior' ? UNIT.WARRIOR : UNIT.ARCHER;
+  const unitType = unitTypeForTrainKey(unitKey);
+  if (unitType < 0) return 0;
   let n = 0;
   for (let i = 0; i < w.count; i++) {
     if (w.alive[i] && w.owner[i] === owner && w.type[i] === unitType) n++;

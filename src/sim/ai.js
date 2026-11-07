@@ -20,6 +20,7 @@ import {
   replyCount,
   resolveAiStrategy,
 } from './aiStrategy.js';
+import { aiUsesFairVision, entitySeenByOwner } from './matchVision.js';
 
 export {
   AI_DIFFICULTY,
@@ -107,7 +108,13 @@ export function resolveSessionAiPlayers(cfg = {}, current = []) {
  * @param {number | { temperament?: string }} [opts] - legacy 3rd arg was playerOwner (ignored)
  * @returns {import('./commands.js').Command[]}
  */
-export function generateAiCommands(world, aiConfig, opts = {}) {
+/**
+ * @param {object} world
+ * @param {number | object} aiConfig
+ * @param {object | null} [field]
+ * @param {object} [opts]
+ */
+export function generateAiCommands(world, aiConfig, field = null, opts = {}) {
   if (aiConfig == null) return [];
   let entry = aiConfig;
   if (typeof aiConfig === 'number' && opts && typeof opts === 'object' && opts.temperament) {
@@ -116,7 +123,7 @@ export function generateAiCommands(world, aiConfig, opts = {}) {
   const strategy = resolveAiStrategy(entry);
   const aiOwner = strategy.owner;
   if (aiOwner < 0) return [];
-  const capture = captureIntent(world, strategy);
+  const capture = captureIntent(world, strategy, field);
   if (strategy.stance === AI_STANCE.HOLD && !capture.guard) return [];
 
   const interval = capture.urgent ? strategy.reactInterval : ARMY_DECIDE_INTERVAL;
@@ -126,7 +133,7 @@ export function generateAiCommands(world, aiConfig, opts = {}) {
   const army = militaryCentroid(world, aiOwner);
   if (!army) return [];
 
-  const threat = pickArmyAim(world, aiOwner, strategy, army, capture);
+  const threat = pickArmyAim(world, aiOwner, strategy, army, capture, field);
   if (!threat) return [];
 
   const want = strategy.stance === AI_STANCE.ATTACK
@@ -159,20 +166,27 @@ function homePoint(world, owner) {
   return a ? { x: a.x, y: a.z } : null;
 }
 
-function pickArmyAim(world, aiOwner, strategy, army, capture) {
+function pickArmyAim(world, aiOwner, strategy, army, capture, field) {
   if (capture.guard && capture.home) {
-    return hostileCentroid(world, aiOwner, capture.home, 22)
+    return hostileCentroid(world, aiOwner, capture.home, 22, field, strategy)
       ?? { x: capture.home.x, y: capture.home.z };
   }
   if (capture.contest) {
-    return hostileCentroid(world, aiOwner, capture.contest, 22)
+    return hostileCentroid(world, aiOwner, capture.contest, 22, field, strategy)
       ?? { x: capture.contest.x, y: capture.contest.z };
   }
   if (strategy.stance === AI_STANCE.ATTACK) {
-    return hostileCentroid(world, aiOwner, null, 0);
+    return hostileCentroid(world, aiOwner, null, 0, field, strategy);
   }
   if (strategy.stance === AI_STANCE.HOLD) return null;
-  return hostileCentroid(world, aiOwner, homePoint(world, aiOwner) ?? army, strategy.defendRangeF);
+  return hostileCentroid(
+    world,
+    aiOwner,
+    homePoint(world, aiOwner) ?? army,
+    strategy.defendRangeF,
+    field,
+    strategy,
+  );
 }
 
 function pickReplyIds(world, owner, aim, want, reissue) {
@@ -231,13 +245,15 @@ function militaryCentroid(world, owner) {
  * @param {{ x: number, y: number } | null} origin
  * @param {number} rangeF
  */
-function hostileCentroid(world, aiOwner, origin, rangeF) {
+function hostileCentroid(world, aiOwner, origin, rangeF, field = null, strategy = null) {
+  const fair = aiUsesFairVision(strategy) && field;
   const range2 = rangeF > 0 ? fx.mul(fx.fromFloat(rangeF), fx.fromFloat(rangeF)) : 0;
   let ex = 0;
   let ey = 0;
   let ec = 0;
   for (let j = 0; j < world.count; j++) {
     if (!world.alive[j] || !isHostile(aiOwner, world.owner[j])) continue;
+    if (fair && !entitySeenByOwner(world, field, aiOwner, j)) continue;
     if (origin && rangeF > 0) {
       const dx = world.px[j] - origin.x;
       const dy = world.py[j] - origin.y;

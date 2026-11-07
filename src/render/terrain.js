@@ -42,6 +42,7 @@ import { createCurtainWalls } from './walls.js';
 import { EXPOSURE, SKY_HORIZON, SKY_HORIZON_SUN, SKY_ZENITH } from './celestial.js';
 import { resumeMeshes, softDetachMesh, suspendMeshes } from './meshLifecycle.js';
 import { classifyGridTile, placementFillKind, placementGridWindow } from './placementGrid.js';
+import { tickWind } from './windSway.js';
 import { ATLAS_GRID, SHEET_JUNCTION, TERRAIN_LOOK, tileLayer } from './terrainLayers.js';
 import { PAGE_BUCKET_BASE, createTerrainMaterials, loadTerrainAtlas } from './terrainAtlas.js';
 import * as fx from '../sim/fixed.js';
@@ -558,6 +559,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       if (disposed) return;
       const t0 = profile ? performance.now() : 0;
       specGlint.update(activeCamera, deltaMs);
+      tickWind();
       const tGlint = profile ? performance.now() : 0;
       backdrop.update();
       const tBackdrop = profile ? performance.now() : 0;
@@ -1005,6 +1007,7 @@ function createGroundSpecGlint(engine, scene) {
         { name: 'specColor', type: 'vec3<f32>', defaultValue: [0.38, 0.50, 0.62] },
         { name: 'specPower', type: 'f32', defaultValue: 28 },
         { name: 'specGain', type: 'f32', defaultValue: 0.42 },
+        { name: 'time', type: 'f32', defaultValue: 0 },
       ],
       samplers: ['wetness'],
       needAlphaBlending: true,
@@ -1032,12 +1035,39 @@ function createGroundSpecGlint(engine, scene) {
 @fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
   let w = textureSample(wetness, wetnessSampler, input.uv).a;
   if (w < 0.004) { discard; }
-  let N = vec3<f32>(0.0, 1.0, 0.0);
+  let t = shaderUniforms.time;
+  let p = input.worldPos.xz;
+  // Slow large-scale phase warps (tens of tiles) so the small ripples never tile.
+  let w1 = sin(p.x * 0.11 + p.y * 0.07 + t * 0.05) * 3.0 + sin(p.x * 0.037 - p.y * 0.05) * 4.0;
+  let w2 = sin(p.y * 0.13 - p.x * 0.05 - t * 0.04) * 3.0 + sin(p.y * 0.041 + p.x * 0.029) * 4.0;
+  // Sun-glint slope: few, wide, gentle swells. High frequency here is what made
+  // a million tiny tall hills in the reflection.
+  let rx = sin(p.x * 0.16 + t * 0.7 + w1) + sin(p.y * 0.22 - t * 0.5 + p.x * 0.08 + w2);
+  let rz = sin(p.y * 0.18 + t * 0.6 + w2) + sin(p.x * 0.2 + t * 0.8 - p.y * 0.1 + w1);
+  // Same gust band as trees, wheat and banners (windSway.js): keep direction, speed, and clock in step.
+  let g = 0.5 + 0.5 * sin(dot(p, vec2<f32>(0.014, 0.011)) - t * 0.5);
+  let gust = 0.6 + 1.2 * g * g;
+  let N = normalize(vec3<f32>(rx * 0.03 * gust, 1.0, rz * 0.03 * gust));
   let L = normalize(-shaderUniforms.sunDir);
   let V = normalize(shaderSystem.cameraPosition - input.worldPos);
   let H = normalize(V + L);
   let spec = pow(max(dot(N, H), 0.0), max(shaderUniforms.specPower, 1.0)) * shaderUniforms.specGain;
-  return vec4<f32>(shaderUniforms.specColor * spec, w);
+  // Angle-independent ripple lines so the surface moves even off the sun glint.
+  // Two broad layers at different scales and headings, warped by w1/w2, then a
+  // patchy mask so ripples gather in areas instead of covering everything evenly.
+  let q = p * 0.28;
+  let ra = sin(q.x + t * 0.5 + sin(q.y * 1.3 + t * 0.3) * 1.7 + w1);
+  let rb = sin(q.y - t * 0.4 + sin(q.x * 1.7 - t * 0.25) * 1.7 + w2);
+  let q2 = vec2<f32>(p.x * 0.14 + p.y * 0.08, p.y * 0.16 - p.x * 0.06);
+  let rc = sin(q2.x - t * 0.35 + sin(q2.y * 1.4 + t * 0.2) * 1.9 - w2);
+  let rd = sin(q2.y + t * 0.3 + sin(q2.x * 1.2 - t * 0.15) * 1.9 - w1);
+  let rip1 = pow(max(1.0 - abs(ra + rb) * 0.5, 0.0), 6.0);
+  let rip2 = pow(max(1.0 - abs(rc + rd) * 0.5, 0.0), 6.0);
+  let clump = smoothstep(-0.2, 0.6, sin(p.x * 0.083 + t * 0.06 + w2 * 0.3) * sin(p.y * 0.067 - t * 0.05 + w1 * 0.3));
+  let ripple = (rip1 * 0.7 + rip2 * 0.6) * (0.7 + 0.3 * clump);
+  // Gust only nudges the universal ripple brightness; the glint slope takes the full swing.
+  let rippleGust = 0.85 + 0.3 * g * g;
+  return vec4<f32>(shaderUniforms.specColor * spec + vec3<f32>(0.5, 0.65, 0.8) * ripple * 0.22 * rippleGust, w);
 }`,
     });
     setShaderTexture(material, 'wetness', texture);
@@ -1140,7 +1170,11 @@ function createGroundSpecGlint(engine, scene) {
   }
 
   function update(camera, deltaMs = TERRAIN_LOD_MS) {
-    if (material) setShaderUniform(material, 'sunDir', readSunDir(scene));
+    if (material) {
+      setShaderUniform(material, 'sunDir', readSunDir(scene));
+      // Render clock only. Never sim ticks, so replays and lockstep stay untouched.
+      setShaderUniform(material, 'time', performance.now() / 1000);
+    }
     if (!lod || !chunks.length || !camera) return;
     elapsed += deltaMs;
     const look = terrainLookXZ(camera);

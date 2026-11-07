@@ -24,6 +24,7 @@ import { AGORA_PHASE_TUG, AGORA_RITE_FINALE } from '../sim/agora.js';
 import { USE_GPU_PICK } from './pickMode.js';
 import { ownerTint } from './ownerTints.js';
 import { isTeamColorMaterial, prepareTeamColorMaterial, sceneTeamRgb } from './teamColor.js';
+import { attachBannerFlutter } from './windSway.js';
 import { forEachRallyDash } from './rallyDash.js';
 import { MODEL_BASE_SCALE } from './modelScale.js';
 import { nearestMeshInstanceHit, pickPartsFromMeshes } from './meshPick.js';
@@ -514,10 +515,15 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
     try {
       const parts = await loadBakedUnitMeshParts(engine, FLAG_MODEL_URL);
       if (forPick) flagPickParts = pickPartsFromMeshes(parts);
+      // Team-color prep swaps the material object, so it goes first; the flutter
+      // plugin must be on the final materials before any part reaches the scene.
+      for (const mesh of parts) {
+        if (isTeamColorMaterial(mesh.material)) prepareTeamColorMaterial(engine, mesh);
+      }
+      attachBannerFlutter(parts);
       for (let p = 0; p < parts.length; p++) {
         const mesh = parts[p];
         mesh.pickable = pickable;
-        if (isTeamColorMaterial(mesh.material)) prepareTeamColorMaterial(engine, mesh);
         const isTeamColor = isTeamColorMaterial(mesh.material);
         const matrices = new Float32Array(cap * 16);
         const colors = new Float32Array(cap * 4);
@@ -777,6 +783,7 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
     let n = 0;
     for (let i = 0; i < rallyCache.length; i++) {
       const r = rallyCache[i];
+      if (r.noLine) continue;
       const pts =
         r.points?.length >= 2 ? r.points : fallbackPoints(r);
       n = writeDashedPath(
@@ -816,6 +823,17 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
     flushLineBatch(ghostLine, n);
   }
 
+  const rallyFlagDraw = [];
+
+  function rallyFlagsToDraw() {
+    rallyFlagDraw.length = 0;
+    for (let i = 0; i < rallyCache.length; i++) {
+      const r = rallyCache[i];
+      if (!r.noFlag) rallyFlagDraw.push(r);
+    }
+    return rallyFlagDraw;
+  }
+
   function rewriteFlags(camera) {
     if (camera) lastFlagCamera = camera;
     const cam = camera ?? lastFlagCamera;
@@ -828,7 +846,7 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
     writeFlagBatch(agoraFlagLayers, agoraCache, eye, flagScaleForDist, (a) => {
       return agoraFlagDrawPose(flagActs.get(agoraFlagKey(a.x, a.z)), typeof performance !== 'undefined' ? performance.now() : 0);
     });
-    writeFlagBatch(rallyFlagLayers, rallyCache, eye);
+    writeFlagBatch(rallyFlagLayers, rallyFlagsToDraw(), eye);
     if (rallyGhost) {
       writeFlagBatch(ghostFlagLayers, [rallyGhost], eye);
     } else {
@@ -900,6 +918,8 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
         yaw: a.yaw != null ? a.yaw : 0,
         owner: a.owner | 0,
         attackMove: !!a.attackMove,
+        noFlag: !!a.noFlag,
+        noLine: !!a.noLine,
       });
     }
     rewriteRallyLines();

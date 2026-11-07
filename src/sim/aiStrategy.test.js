@@ -61,6 +61,19 @@ describe('resolveAiStrategy', () => {
     assert.equal(s.difficulty, AI_DIFFICULTY.EXPERT);
     assert.equal(parseAiDifficulty('hard'), AI_DIFFICULTY.HARD);
   });
+
+  it('accepts live patches on heat and reactInterval', () => {
+    const s = resolveAiStrategy({
+      owner: 1,
+      temperament: 'passive',
+      heat: 3,
+      guardAt: 0.05,
+      reactInterval: 20,
+    });
+    assert.equal(s.heat, 3);
+    assert.equal(s.guardAt, 0.05);
+    assert.equal(s.reactInterval, 20);
+  });
 });
 
 function seedYard(aiX, foeX) {

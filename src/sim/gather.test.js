@@ -539,7 +539,7 @@ function farmClaimsSharedIdleBeforeCamp() {
   assert.equal(w.gatherTile[vill], farmTile, 'farm claims them before the camp');
 }
 
-function farmPullsCampCrewOutsideItsCircle() {
+function farmLeavesCampCrewOutsideItsCircle() {
   const field = createField(1);
   field.pass.fill(1);
   const w = createWorld(62);
@@ -559,7 +559,8 @@ function farmPullsCampCrewOutsideItsCircle() {
 
   for (let t = 0; t < 40; t++) step(w, field, []);
 
-  assert.equal(w.gatherTile[vill], farmTile, 'open farm pulls camp crew even from outside its circle');
+  assert.equal(w.gatherTile[vill], tree, 'open farm does not pull camp crew from outside its circle');
+  assert.notEqual(w.gatherTile[vill], farmTile);
 }
 
 function farmLeavesHandGathererOutsideCamp() {
@@ -923,7 +924,7 @@ campRecruitsWoodNotRock();
 farmCapsAtOneWorker();
 farmManualGatherHonorsCap();
 farmClaimsSharedIdleBeforeCamp();
-farmPullsCampCrewOutsideItsCircle();
+farmLeavesCampCrewOutsideItsCircle();
 farmLeavesHandGathererOutsideCamp();
 emptyFarmPaysATenth();
 campCrewExtendsRadius();

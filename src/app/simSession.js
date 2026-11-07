@@ -353,6 +353,15 @@ export class SimSession {
     return this.state?.count ?? this._count ?? 0;
   }
 
+  /**
+   * Patch match AI entries without rebuilding the world (see sim/aiScript.js).
+   * @param {Array<number | object>} aiPlayers
+   */
+  setAiPlayers(aiPlayers) {
+    this.aiPlayers = excludeHumanAiPlayers(aiPlayers ?? [], this.humanPlayers);
+    this.client?.setAiPlayers?.(this.aiPlayers, this.humanPlayers);
+  }
+
   /** First tick index not yet committed (in-flight counts as reserved). */
   _nextOpenTick() {
     return this.confirmedTick + 1 + (this.waitingForWorker ? 1 : 0);

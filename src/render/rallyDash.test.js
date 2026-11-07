@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { forEachRallyDash, wrapPeriod } from './rallyDash.js';
+import { coalesceSharedRallyMarkers, forEachRallyDash, wrapPeriod } from './rallyDash.js';
 
 function spans(pathLen, offset, dashLen = 1.55, period = 2.6) {
   const out = [];
@@ -32,5 +32,28 @@ describe('rallyDash', () => {
       assert.ok(s[i][0] >= s[i - 1][1]);
       assert.ok(Math.abs(s[i][0] - s[i - 1][0] - 2.6) < 1e-9);
     }
+  });
+
+  it('draws one shared flag and keeps each building path', () => {
+    const shared = { x: 20, z: 4, owner: 0, attackMove: false };
+    const hop = {
+      x: 40,
+      z: 4,
+      owner: 0,
+      attackMove: false,
+      points: [{ x: 20, z: 4 }, { x: 40, z: 4 }],
+    };
+    const out = coalesceSharedRallyMarkers([
+      { ...shared, fromX: 0, fromZ: 0, points: [{ x: 0, z: 0 }, { x: 20, z: 4 }] },
+      { ...shared, fromX: 8, fromZ: 0, points: [{ x: 8, z: 0 }, { x: 20, z: 4 }] },
+      { ...hop },
+      { ...hop },
+    ]);
+    assert.equal(out.length, 3);
+    assert.equal(out[0].noFlag, undefined);
+    assert.equal(out[1].noFlag, true);
+    assert.equal(out[1].noLine, undefined);
+    assert.equal(out[2].noFlag, undefined);
+    assert.equal(out[2].noLine, undefined);
   });
 });

@@ -58,6 +58,15 @@ export class SimClient {
     this.worker.postMessage({ type: 'setProfileSim', enabled: !!enabled });
   }
 
+  /** Live match-AI roster + scripts (freeplay skirm, menu overrides). */
+  setAiPlayers(aiPlayers, humanPlayers = []) {
+    this.worker.postMessage({
+      type: 'setAiPlayers',
+      aiPlayers: aiPlayers ?? [],
+      humanPlayers: humanPlayers ?? [],
+    });
+  }
+
   /** Await one tick commit (catch-up replay). */
   commitTickAsync(tick, frames) {
     return new Promise((resolve, reject) => {

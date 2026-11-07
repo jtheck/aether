@@ -23,6 +23,7 @@ import { capacityFor } from '../sim/capacity.js';
 import { USE_GPU_PICK } from './pickMode.js';
 import { ownerTint } from './ownerTints.js';
 import { isTeamColorMaterial, prepareTeamColorMaterial, sceneTeamRgb } from './teamColor.js';
+import { attachWheatSway } from './windSway.js';
 import { nearestMeshInstanceHit, pickPartsFromMeshes } from './meshPick.js';
 
 /** Start small; grow by powers of two when place() needs more. */
@@ -407,6 +408,8 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
           mesh.pickable = USE_GPU_PICK;
           if (isTeamColorMaterial(mesh.material)) prepareTeamColorMaterial(engine, mesh);
         }
+        // Clones share the template's material, so the plugin reaches every farm.
+        if (url.endsWith('/farm.glb')) attachWheatSway(parts);
         const fxSockets = (parts[0]?.fxSockets ?? []).map((s) => ({
           name: s.name,
           x: s.x,

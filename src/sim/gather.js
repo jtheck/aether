@@ -1167,61 +1167,18 @@ function farmStillWantsWorker(w, field, b) {
 }
 
 /**
- * Idle villager standing where a camp or mine with crew room would recruit.
- * Farms claim these before that camp or mine does.
- */
-function idleInsideOpenCampOrMine(w, field, owner, px, py) {
-  const buildings = w.buildings;
-  if (!buildings) return false;
-  for (let bIdx = 0; bIdx < buildings.length; bIdx++) {
-    const b = buildings[bIdx];
-    if ((b.owner | 0) !== (owner | 0)) continue;
-    if (b.type !== 'camp' && b.type !== 'mine') continue;
-    if (!dropOffCanRecruit(w, field, b)) continue;
-    const radius = campWorkRadius(w, b, field);
-    if (inDropOffReach(buildings, b, px, py, radius)) return true;
-  }
-  return false;
-}
-
-/**
- * Wood / rock gatherer whose node sits in an owned camp or mine circle.
- * Hand-gathering outside those circles is left alone.
- */
-function gatheringForCampOrMine(w, field, i) {
-  if (w.order[i] !== ORDER.GATHER) return false;
-  const tile = w.gatherTile[i] | 0;
-  if (tile < 0 || field.foodNode?.[tile]) return false;
-  const width = field.width | 0;
-  const px = tileCenterX(tile % width);
-  const py = tileCenterY((tile / width) | 0);
-  const owner = w.owner[i] | 0;
-  const buildings = w.buildings;
-  if (!buildings) return false;
-  for (let b = 0; b < buildings.length; b++) {
-    const bd = buildings[b];
-    if ((bd.owner | 0) !== owner) continue;
-    if (bd.type !== 'camp' && bd.type !== 'mine') continue;
-    if (withinDropOffWorkReach(w, field, bd, px, py)) return true;
-  }
-  return false;
-}
-
-/**
- * Someone an open farm may take: an idle villager in its own circle or in a
- * camp/mine that still has room, or a camp/mine crew member. Parked orders
- * (manualHold) and idle villagers still carrying a load are left alone.
+ * Someone an open farm may take: an idle villager inside its own circle. Parked
+ * orders (manualHold) and idle villagers still carrying a load are left alone.
  */
 function farmClaimCandidate(w, field, b, i) {
   if (!w.alive[i] || w.owner[i] !== b.owner || w.type[i] !== UNIT.VILLAGER) return false;
   if (w.manualHold?.[i]) return false;
-  if (w.order[i] === ORDER.IDLE) {
-    if ((w.carriedAmt[i] | 0) > 0) return false;
-    const radius = campWorkRadius(w, b, field);
-    if (inDropOffReach(w.buildings, b, w.px[i], w.py[i], radius)) return true;
-    return idleInsideOpenCampOrMine(w, field, b.owner, w.px[i], w.py[i]);
-  }
-  return gatheringForCampOrMine(w, field, i);
+  // Only idle villagers standing inside this farm's own circle. Anyone under an
+  // order (including camp/mine crew) or standing out of reach is left alone.
+  if (w.order[i] !== ORDER.IDLE) return false;
+  if ((w.carriedAmt[i] | 0) > 0) return false;
+  const radius = campWorkRadius(w, b, field);
+  return inDropOffReach(w.buildings, b, w.px[i], w.py[i], radius);
 }
 
 /**

@@ -23,7 +23,9 @@ import {
 } from '../sim/worldSetup.js';
 import { step } from '../sim/step.js';
 import { excludeHumanAiPlayers, generateAiCommands } from '../sim/ai.js';
+import { effectiveAiEntry } from '../sim/aiScript.js';
 import { generateEconomyCommands } from '../sim/aiEconomy.js';
+import { generatePadDefenseCommands } from '../sim/aiPadDefense.js';
 import { mergeFrames } from '../sim/commandFrame.js';
 import { checksum } from '../sim/checksum.js';
 import { serializeAgoras } from '../sim/agora.js';
@@ -87,13 +89,27 @@ let world;
 let field;
 let views;
 let aiPlayers = [];
+let humanPlayers = [];
+/** @type {import('../sim/aiScript.js').AiScriptRuntime[]} */
+let aiScriptRuntime = [];
+
+function resetAiScriptRuntime() {
+  aiScriptRuntime = [];
+}
 
 function commandsForTick(frames) {
   let cmds = mergeFrames(frames);
   for (let p = 0; p < aiPlayers.length; p++) {
-    const entry = aiPlayers[p];
-    const ai = generateAiCommands(world, entry);
+    if (!aiScriptRuntime[p]) {
+      aiScriptRuntime[p] = { patch: {}, fired: [], lastFire: [] };
+    }
+    const entry = world
+      ? effectiveAiEntry(world, aiPlayers[p], aiScriptRuntime[p], field)
+      : aiPlayers[p];
+    const ai = generateAiCommands(world, entry, field);
     if (ai.length) cmds = cmds ? [...cmds, ...ai] : ai;
+    const pad = generatePadDefenseCommands(world, field, entry);
+    if (pad.length) cmds = cmds ? [...cmds, ...pad] : pad;
     const eco = generateEconomyCommands(world, field, entry);
     if (eco.length) cmds = cmds ? [...cmds, ...eco] : eco;
   }
@@ -107,9 +123,16 @@ function commandsForTickTimed(frames) {
   const mergeMs = performance.now() - t0;
   const t1 = performance.now();
   for (let p = 0; p < aiPlayers.length; p++) {
-    const entry = aiPlayers[p];
-    const ai = generateAiCommands(world, entry);
+    if (!aiScriptRuntime[p]) {
+      aiScriptRuntime[p] = { patch: {}, fired: [], lastFire: [] };
+    }
+    const entry = world
+      ? effectiveAiEntry(world, aiPlayers[p], aiScriptRuntime[p], field)
+      : aiPlayers[p];
+    const ai = generateAiCommands(world, entry, field);
     if (ai.length) cmds = cmds ? [...cmds, ...ai] : ai;
+    const pad = generatePadDefenseCommands(world, field, entry);
+    if (pad.length) cmds = cmds ? [...cmds, ...pad] : pad;
     const eco = generateEconomyCommands(world, field, entry);
     if (eco.length) cmds = cmds ? [...cmds, ...eco] : eco;
   }
@@ -121,10 +144,12 @@ self.onmessage = (e) => {
   try {
     if (msg.type === 'init') {
       views = mapSharedState(msg.sab);
+      humanPlayers = msg.config.humanPlayers ?? [];
       aiPlayers = excludeHumanAiPlayers(
         msg.config.aiPlayers ?? [],
-        msg.config.humanPlayers ?? [],
+        humanPlayers,
       );
+      resetAiScriptRuntime();
       const garden = msg.config.garden ? decodeGarden(msg.config.garden) : null;
       const keepOwners = garden
         ? placementOwnersToKeep(garden, {
@@ -233,6 +258,11 @@ self.onmessage = (e) => {
     } else if (msg.type === 'setProfileSim') {
       if (world) world.profileSim = !!msg.enabled;
       postMessage({ type: 'profileSim', enabled: !!world?.profileSim });
+    } else if (msg.type === 'setAiPlayers') {
+      humanPlayers = msg.humanPlayers ?? humanPlayers;
+      aiPlayers = excludeHumanAiPlayers(msg.aiPlayers ?? [], humanPlayers);
+      resetAiScriptRuntime();
+      postMessage({ type: 'aiPlayers', aiPlayers });
     } else if (msg.type === 'commitTick') {
       const expect = (msg.tick | 0);
       if (expect > 0 && expect !== world.tick + 1) {

@@ -1193,6 +1193,69 @@ describe('headset rally', () => {
     assert.equal(rally.hopFrom, 0);
   });
 
+  it('a shared multi-select flag extends every building on the point', () => {
+    const cmds = [];
+    const buildings = [
+      {
+        owner: 0,
+        type: 'barracks',
+        x: 0,
+        z: 0,
+        hp: 100,
+        hasRally: 1,
+        rallyX: 20,
+        rallyZ: 0,
+        yaw: 0,
+      },
+      {
+        owner: 0,
+        type: 'barracks',
+        x: 8,
+        z: 0,
+        hp: 100,
+        hasRally: 1,
+        rallyX: 20,
+        rallyZ: 0,
+        yaw: 1.2,
+      },
+    ];
+    const input = createGameInput({
+      canvas: {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      },
+      renderer: {
+        pickSelectionHud: () => null,
+        pickControlGroupHud: () => null,
+        groundYAt: () => 0,
+        setSelectionBox: () => {},
+        rayToGround: (ray) => {
+          const t = -ray.oy / ray.dy;
+          return { x: ray.ox + ray.dx * t, y: 0, z: ray.oz + ray.dz * t };
+        },
+      },
+      world: { count: 0, alive: [], owner: [], type: [], carriedBy: [] },
+      selected: new Uint8Array(4),
+      localPlayerId: 0,
+      getUnitWorldPos: () => ({ x: 0, y: 0, z: 0 }),
+      enqueueCommand: (cmd) => cmds.push(cmd),
+      getAgoras: () => [],
+      getBuildings: () => buildings,
+    });
+    input.applyFollowSelection([], [
+      { kind: 'building', index: 0 },
+      { kind: 'building', index: 1 },
+    ]);
+    const ray = { ox: 20, oy: 50, oz: 0, dx: 0, dy: -1, dz: 0 };
+    assert.equal(input.selectAtRay(ray), true);
+    const aim = { ox: 40, oy: 50, oz: 0, dx: 0, dy: -1, dz: 0 };
+    assert.equal(input.forceMoveAtRay(aim), true);
+    const rallies = cmds.filter((c) => c.type === CMD.SET_RALLY);
+    assert.equal(rallies.length, 2);
+    assert.deepEqual(rallies.map((c) => c.buildingIndex).sort(), [0, 1]);
+    assert.equal(rallies[0].hopFrom, 0);
+    assert.equal(rallies[1].hopFrom, 0);
+  });
+
   it('a grip tap on a planted flag selects it', () => {
     const input = createGameInput({
       canvas: {

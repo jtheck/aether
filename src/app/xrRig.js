@@ -17,6 +17,8 @@ const JUMP_BACK = 0.8;
 export const XR_LOOK_DOWN = 0.36;
 /** Slow tail after the synthetic tilt has caught most of a head turn. */
 export const XR_LOOK_FOLLOW = 2.25;
+/** Pinch and stick-click zoom, a little quicker than the desktop pad step. */
+const XR_ZOOM_SCALE = 1.25;
 /** Initial catch-up rate while the tilt is well behind the viewer yaw. */
 export const XR_LOOK_SNAP = 12;
 const XR_LOOK_SNAP_ARC = Math.PI / 6;
@@ -262,7 +264,9 @@ export function createXrRig(eye, bounds = null, opts = {}) {
 
 /**
  * Pad camera step from two Quest sticks. `yaw` is positive for a right turn,
- * which is the sign `yawSpace` already uses. `zoom` is positive to pull back.
+ * which is the sign `yawSpace` already uses. `strafe` is viewer-right: a
+ * right throw moves right (the pad step drags an orbit target the other way).
+ * `zoom` is positive to pull back.
  * @param {{ stickX?: number, stickY?: number, stickClick?: { pressed?: boolean } }} left
  * @param {{ stickX?: number, stickY?: number, stickClick?: { pressed?: boolean } }} right
  * @param {number} [radius]
@@ -279,10 +283,10 @@ export function xrStickMotion(left, right, radius) {
     buttons,
   }, radius);
   return {
-    strafe: step.panRight,
+    strafe: -step.panRight || 0,
     forward: step.panForward,
     yaw: -step.yaw || 0,
-    zoom: step.zoom,
+    zoom: step.zoom * XR_ZOOM_SCALE,
   };
 }
 

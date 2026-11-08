@@ -159,6 +159,7 @@ import { setupInput } from './input.js';
 import { canvasCenterClient } from './input/gamepadCursor.js';
 import { isCameraFollowTypingTarget, selectionCentroidXZ, shouldHoldSelectionFollow } from './input/cameraFollow.js';
 import { menuHotkeyPick } from './input/menuHotkeys.js';
+import { createQueueHoldTimer, unitQueueKey } from './input/queueHold.js';
 import { isControlGroupDoubleTap } from './input/controlGroups.js';
 import {
   aggregateBuildingTracks,
@@ -3680,6 +3681,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
     },
   });
+  const unitKeyHold = createQueueHoldTimer();
   window.addEventListener('keydown', (e) => {
     if ((sideMenu.isHelpOpen?.() || sideMenu.isSkinsOpen?.()) && e.code !== 'Escape') {
       const inSkinControl = sideMenu.isSkinsOpen?.()
@@ -3709,7 +3711,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         return;
       }
     }
-    if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.repeat) {
+      if (unitKeyHold.key) e.preventDefault();
+      return;
+    }
     if (e.code === 'KeyO') {
       if (isCameraFollowTypingTarget(document.activeElement)) return;
       e.preventDefault();
@@ -3748,6 +3754,20 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       e.preventDefault();
       if (!bootInteractive || !menuPick) return;
       inputApi.confirmRadialPick?.(menuPick);
+      const unitId = unitQueueKey(menuPick);
+      if (unitId) {
+        const code = e.code;
+        unitKeyHold.start(code, () => {
+          const again = menuHotkeyPick(renderer.getRadialStickTargets?.() ?? null, code);
+          if (unitQueueKey(again) !== unitId) {
+            unitKeyHold.stop();
+            return;
+          }
+          inputApi.confirmRadialPick?.(again);
+        });
+      } else {
+        unitKeyHold.stop();
+      }
       return;
     }
     if (
@@ -3834,14 +3854,19 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   }
 
   window.addEventListener('keyup', (e) => {
+    unitKeyHold.stop(e.code);
     inputApi.handleControlGroupKeyUp?.(e);
     if (e.code === 'Space') releaseSpaceFollow();
     if (e.code === 'KeyO') screenshotHud.release();
   }, true);
   document.addEventListener('focusin', (e) => {
-    if (isCameraFollowTypingTarget(e.target)) releaseSpaceFollow();
+    if (isCameraFollowTypingTarget(e.target)) {
+      releaseSpaceFollow();
+      unitKeyHold.stop();
+    }
   });
   window.addEventListener('blur', () => {
+    unitKeyHold.stop();
     releaseSpaceFollow();
     screenshotHud.release();
     renderer.cameraController?.takeUserAim?.();
@@ -3854,6 +3879,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     viewFollow?.setPageHidden?.(hidden);
     renderer.cameraController?.takeUserAim?.();
     if (hidden) {
+      unitKeyHold.stop();
       releaseSpaceFollow();
       screenshotHud.release();
     }

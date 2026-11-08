@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createXrControls } from './xrControls.js';
+import { QUEUE_HOLD_DELAY_MS, QUEUE_HOLD_INTERVAL_MS } from './input/queueHold.js';
 
 const EYE_Y = 100;
 
@@ -90,11 +91,13 @@ function harness(spots = {}) {
     confirmRadialPick: note('confirmRadial'),
     cancelRadial: note('cancelRadial'),
   };
+  let nowMs = 0;
   const controls = createXrControls({
     renderer,
     getInput: () => input,
     jumps: { home: () => spots.home ?? null, selection: () => spots.selection ?? null },
     onJump: (x, z) => jumped.push([x, z]),
+    now: () => nowMs,
   });
   const left = makeHand('left');
   const right = makeHand('right');
@@ -102,6 +105,7 @@ function harness(spots = {}) {
   return {
     controls, state, left, right, shown, calls, ctx, jumped,
     step: () => controls.step(ctx),
+    advance: (ms) => { nowMs += ms; },
     kinds: () => calls.map((c) => c.kind),
     of: (kind) => calls.filter((c) => c.kind === kind),
     lastShown: (hand) => shown.filter((e) => e.hand === hand).at(-1)?.s,
@@ -249,6 +253,42 @@ describe('xr controls: pie menu', () => {
     tap(h, h.right.secondary);
     assert.equal(h.of('cancelRadial').length, 1);
     assert.equal(h.of('cast').length, 0);
+  });
+
+  it('holding the trigger on a unit keeps queuing', () => {
+    const h = harness();
+    h.state.radial = true;
+    h.state.beamPick = { kind: 'unit', id: 'archer' };
+    h.right.trigger(true);
+    h.step();
+    assert.equal(h.of('confirmRadial').length, 1);
+    assert.equal(h.of('attackMove').length, 0);
+    h.advance(QUEUE_HOLD_DELAY_MS - 1);
+    h.step();
+    assert.equal(h.of('confirmRadial').length, 1);
+    h.advance(1);
+    h.step();
+    assert.equal(h.of('confirmRadial').length, 2);
+    h.advance(QUEUE_HOLD_INTERVAL_MS);
+    h.step();
+    assert.equal(h.of('confirmRadial').length, 3);
+    h.right.trigger(false);
+    h.step();
+    h.advance(2000);
+    h.step();
+    assert.equal(h.of('confirmRadial').length, 3);
+  });
+
+  it('holding the trigger on a building picks once', () => {
+    const h = harness();
+    h.state.radial = true;
+    h.state.beamPick = { kind: 'building', id: 'wall' };
+    h.right.trigger(true);
+    h.step();
+    h.advance(2000);
+    h.step();
+    h.step();
+    assert.equal(h.of('confirmRadial').length, 1);
   });
 
   it('a trigger that misses the pie still force-moves and attack-moves', () => {

@@ -39,6 +39,7 @@ function makeHarness(hud = {}) {
   const game = {
     hitControlGroupHud: (x, y) => hud.ctrl?.(x, y) ?? false,
     hitSelectionHud: (x, y) => hud.sel?.(x, y) ?? false,
+    hitRadial: (x, y) => hud.radial?.(x, y) ?? false,
     isPlacing: () => false,
     hasBuildUi: () => false,
     handlePointerDown(e) { downs.push({ x: e.clientX, y: e.clientY }); },
@@ -267,6 +268,19 @@ describe('touch edge band', () => {
 });
 
 describe('center tap vs pan hold', () => {
+  it('a finger held on a menu option stays down instead of panning', async () => {
+    const { touch, pans, downs, ups } = makeHarness({
+      radial: (x, y) => x === 400 && y === 300,
+    });
+    touch.handlePointerDown(ptr({ clientX: 400, clientY: 300 }));
+    assert.equal(downs.length, 1);
+    await sleep(CENTER_PAN_HOLD_MS + 40);
+    assert.equal(pans.length, 0);
+    assert.equal(downs.length, 1);
+    touch.handlePointerUp(ptr({ type: 'pointerup', clientX: 400, clientY: 300 }));
+    assert.equal(ups.length, 1);
+  });
+
   it('a still center lift after the pan-hold delay is still a tap', async () => {
     const { touch, pans, downs, ups } = makeHarness();
     touch.handlePointerDown(ptr({ clientX: 400, clientY: 300 }));

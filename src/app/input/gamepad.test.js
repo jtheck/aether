@@ -1,4 +1,5 @@
 import { describe, it } from 'node:test';
+import { QUEUE_HOLD_DELAY_MS, QUEUE_HOLD_INTERVAL_MS } from './queueHold.js';
 import assert from 'node:assert/strict';
 import {
   PAD,
@@ -2172,6 +2173,68 @@ describe('createGamepadAdapter', () => {
     });
     pad.tick();
     assert.deepEqual(pans, []);
+    pad.dispose();
+  });
+
+  it('holding confirm on a unit keeps queuing; a building does not', () => {
+    let t = 5000;
+    const confirms = [];
+    const { doc } = menuDoc();
+    const units = {
+      inner: [],
+      outer: [{ kind: 'unit', id: 'archer', ang: -Math.PI / 2 }],
+    };
+    const buildings = {
+      inner: [{ kind: 'category', id: 'basic', ang: -Math.PI / 2 }],
+      outer: [{ kind: 'building', id: 'house', ang: -Math.PI / 2 }],
+    };
+    let targets = units;
+    const a = [];
+    a[PAD.A] = btn(true);
+    let buttons = a;
+    let axes = [0, -0.7, 0, 0];
+    const pad = createGamepadAdapter({
+      camera: { nudgeLookPan() {} },
+      active: () => true,
+      root: doc,
+      now: () => t,
+      getGamepads: () => [stdPad({ axes, buttons })],
+      radialOpen: () => true,
+      getRadialTargets: () => targets,
+      onRadialHover: () => {},
+      onRadialConfirm: (pick) => confirms.push(pick?.id),
+      autoStart: false,
+    });
+    pad.tick();
+    assert.deepEqual(confirms, ['archer']);
+    t += QUEUE_HOLD_DELAY_MS - 1;
+    pad.tick();
+    assert.deepEqual(confirms, ['archer']);
+    t += 1;
+    pad.tick();
+    assert.deepEqual(confirms, ['archer', 'archer']);
+    t += QUEUE_HOLD_INTERVAL_MS;
+    pad.tick();
+    assert.deepEqual(confirms, ['archer', 'archer', 'archer']);
+
+    buttons = [];
+    t += 1000;
+    pad.tick();
+    assert.equal(confirms.length, 3);
+    buttons = a;
+    pad.tick();
+    assert.deepEqual(confirms, ['archer', 'archer', 'archer', 'archer']);
+
+    confirms.length = 0;
+    buttons = [];
+    pad.tick();
+    targets = buildings;
+    axes = [0, -0.45, 0, 0];
+    buttons = a;
+    pad.tick();
+    t += 5000;
+    pad.tick();
+    assert.deepEqual(confirms, ['basic']);
     pad.dispose();
   });
 });

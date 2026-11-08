@@ -7,7 +7,8 @@
 // one and a control-group button adds the selection to that group. HUD menus
 // keep the two-stick gestures:
 // pan only when both sticks are in; a lone stick still tabs. An open agora /
-// action radial aims with a lone stick (A / LB / RB confirm, B / D-pad Left back); both
+// action radial aims with a lone stick (A / LB / RB confirm, and holding one
+// on a unit keeps queuing; B / D-pad Left back); both
 // sticks still pan. Ghost-place: aim walks the ghost, A / LB / RB stamp, B /
 // D-pad Left cancels, LT / RT + stick drag yaws (not a trigger tap). Play reports onAim
 // so a field cursor can roam the view
@@ -28,6 +29,7 @@
 
 import { leashLimit, settleCursorLeash, stepCursorLeash } from './gamepadCursor.js';
 import { radialStickPick } from './radialStick.js';
+import { nextQueueHold, unitQueueKey } from './queueHold.js';
 import { OS_KBD_ID, closeOsKbd, listOsKbdKeys, osKbdRoot, pressOsKbdAction, stepOsKbdFocus } from '../osKbd.js';
 
 export const PAD = {
@@ -810,6 +812,12 @@ export function createGamepadAdapter(opts = {}) {
   let stickReclaimArmed = false;
   /** Radial confirm while the stick is still out. Hold that throw off the cursor. */
   let menuStickCarry = false;
+  /** Unit option held with A / LB / RB. Null id means the hold is idle. */
+  let trainHold = { id: null, heldAt: 0, lastAt: 0 };
+
+  function clearTrainHold() {
+    trainHold = { id: null, heldAt: 0, lastAt: 0 };
+  }
   /** Paint-select / place-yaw hysteresis for a soft trigger. */
   let triggerLatched = false;
 
@@ -1117,6 +1125,8 @@ export function createGamepadAdapter(opts = {}) {
   }
 
   function tick() {
+    let keepTrainHold = false;
+    try {
     if (parked) return;
     if (shouldPark()) {
       parkPad();
@@ -1163,6 +1173,7 @@ export function createGamepadAdapter(opts = {}) {
     }
     if (padHasActivity(read, edges)) opts.onActivity?.();
     const t = now();
+    let radialConfirmBlocked = false;
     const menuRoot = resolveMenuRoot(root);
 
     if (menuRoot) {
@@ -1170,6 +1181,7 @@ export function createGamepadAdapter(opts = {}) {
       handleMenu(menuRoot, replayHud ? replayHudRead(menuRoot, cameraRead) : cameraRead, edges, t);
       if (replayHud) {
         // The bar owns confirm, back, and the D-pad. Sticks and triggers stay on the field.
+        radialConfirmBlocked = true;
         edges[PAD.A] = false;
         edges[PAD.B] = false;
         edges[PAD.LB] = false;
@@ -1259,8 +1271,20 @@ export function createGamepadAdapter(opts = {}) {
       opts.onRadialHover?.(pick);
       const confirming = playConfirmIntent(edges) && !!pick;
       applyControlGroups(edges, released, confirming ? PAD.A : -1, read.buttons);
+      const confirmDown = !radialConfirmBlocked && !!(
+        read.buttons?.[PAD.A] || read.buttons?.[PAD.LB] || read.buttons?.[PAD.RB]
+      );
+      const heldUnit = confirmDown ? unitQueueKey(pick) : null;
       if (padBEdge(edges)) opts.onRadialCancel?.();
-      else if (confirming) {
+      else if (heldUnit) {
+        const next = nextQueueHold(trainHold, heldUnit, t);
+        trainHold = { id: next.id, heldAt: next.heldAt, lastAt: next.lastAt };
+        keepTrainHold = true;
+        if (next.fire) {
+          if (!lookSticksQuiet(read)) menuStickCarry = true;
+          opts.onRadialConfirm?.(pick);
+        }
+      } else if (confirming) {
         if (!lookSticksQuiet(read)) menuStickCarry = true;
         opts.onRadialConfirm?.(pick);
       }
@@ -1288,6 +1312,9 @@ export function createGamepadAdapter(opts = {}) {
     applyControlGroups(edges, released, -1, read.buttons);
     if (playCastIntent(edges)) opts.onCast?.();
     finishStickClick(stickNow, true);
+    } finally {
+      if (!keepTrainHold) clearTrainHold();
+    }
   }
 
   function loop() {

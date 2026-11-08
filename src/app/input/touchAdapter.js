@@ -404,7 +404,10 @@ export function createTouchAdapter({ canvas, camera, game }) {
       game.isPlacing?.()
       || game.hitControlGroupHud?.(t.startX, t.startY)
       || game.hitSelectionHud?.(t.startX, t.startY)
+      || game.hitRadial?.(t.startX, t.startY)
     ) {
+      // A menu pad is a button. Hold stays down so a unit can keep queuing
+      // instead of the finger turning into a camera pan.
       beginSolo(id, t);
       return;
     }

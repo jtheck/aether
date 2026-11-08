@@ -495,6 +495,8 @@ const SELECTION_COLLAR_VEHICLE_SCALE = 3.4 * 0.9;
 
 /** v1 click-command marker (`game/ui.js` createTargetMarker). */
 const ORDER_MARKER_URL = '/assets/models/target.glb';
+/** Slam arrow on issued orders. Off for now; particle rings still fire. */
+const SHOW_ORDER_ARROWS = false;
 /**
  * Park this far along eye→hit (clamped). Same screen XY as the click, in front
  * of world geo. Scale tracks placeDist so apparent size stays steady.
@@ -3883,7 +3885,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
    * World scale ∝ placeDist → steady on-screen size at any zoom / click distance.
    */
   function updateOrderMarker() {
-    if (!orderPing) {
+    if (!SHOW_ORDER_ARROWS || !orderPing) {
       hideOrderMarker();
       return;
     }
@@ -5030,9 +5032,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
      * Pick a radial option (CPU disc hit - pie / pad; agora pie only). Sync-friendly.
      * @param {number} clientX
      * @param {number} clientY
-     * @returns {Promise<{ kind: 'building' | 'category' | 'unit' | 'upgrade' | 'pause' | 'cancel', id?: string } | null>}
+     * @returns {{ kind: 'building' | 'category' | 'unit' | 'upgrade' | 'pause' | 'cancel', id?: string } | null}
      */
-    async pickBuildingRadial(clientX, clientY) {
+    pickBuildingRadial(clientX, clientY) {
       const ray = radialPickingRay(clientX, clientY);
       if (buildingRadial.isOpen()) {
         return buildingRadial.pickOptionAtRay?.(ray) ?? null;
@@ -6231,6 +6233,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
           lifetime: 0.28,
           startSize: 1.4 * zoom,
           endSize: 0.12 * zoom,
+          // Past the shared 360-unit FX cull the splash vanished while still readable.
+          cull: false,
         });
         // Attack-move ground ring - hot red flat wash (force-move gets cyan below).
         if (!forceMove) {
@@ -6245,6 +6249,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
             lifetime: 0.38,
             startSize: 1.9 * zoom,
             endSize: 0.06 * zoom,
+            cull: false,
           });
           // Soft expanding pulse so the ring silhouette reads at a glance.
           particles.emit({
@@ -6256,6 +6261,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
             startSize: 2.2 * zoom,
             endSize: 12 * zoom,
             drag: 0.05,
+            cull: false,
           });
         }
       }
@@ -6271,6 +6277,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
           lifetime: 0.4,
           startSize: 2.0 * zoom,
           endSize: 0.06 * zoom,
+          cull: false,
         });
       }
       updateOrderMarker();

@@ -1504,3 +1504,97 @@ describe('headset rally', () => {
   });
 });
 
+describe('unit queue hold', () => {
+  function holdHarness(pickAt) {
+    const picks = [];
+    const pending = [];
+    let seq = 1;
+    const input = createGameInput({
+      canvas: {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      },
+      renderer: {
+        pickSelectionHud: () => null,
+        pickControlGroupHud: () => null,
+        screenToGround: () => ({ x: 0, z: 0, y: 0 }),
+        setSelectionBox: () => {},
+      },
+      world: { count: 0, alive: [], owner: [], type: [], carriedBy: [] },
+      selected: new Uint8Array(4),
+      localPlayerId: 0,
+      getUnitWorldPos: () => ({ x: 0, y: 0, z: 0 }),
+      enqueueCommand: () => {},
+      isRadialOpen: () => true,
+      hitRadial: () => true,
+      pickRadialOption: (x, y) => pickAt(x, y),
+      onRadialPick: (pick) => picks.push(pick),
+      setQueueTimer: (fn) => {
+        const id = seq++;
+        pending.push({ id, fn });
+        return id;
+      },
+      clearQueueTimer: (id) => {
+        const i = pending.findIndex((job) => job.id === id);
+        if (i >= 0) pending.splice(i, 1);
+      },
+    });
+    const ptr = (type, x, y) => ({
+      type,
+      button: 0,
+      pointerId: 1,
+      pointerType: 'mouse',
+      clientX: x,
+      clientY: y,
+      shiftKey: false,
+      ctrlKey: false,
+      metaKey: false,
+    });
+    return {
+      picks,
+      pending,
+      down: (x, y) => input.handlePointerDown(ptr('pointerdown', x, y)),
+      move: (x, y) => input.handlePointerMove(ptr('pointermove', x, y)),
+      up: (x, y) => input.handlePointerUp(ptr('pointerup', x, y)),
+      flush() {
+        const job = pending.shift();
+        assert.ok(job);
+        job.fn();
+      },
+    };
+  }
+
+  it('a tap trains one and a hold keeps training the same unit', async () => {
+    const h = holdHarness((x) => (
+      x < 200 ? { kind: 'unit', id: 'archer' } : { kind: 'unit', id: 'warrior' }
+    ));
+    h.down(100, 100);
+    assert.equal(h.pending.length, 1);
+    assert.deepEqual(h.picks.map((p) => p.id), ['archer']);
+    await h.up(100, 100);
+    assert.equal(h.pending.length, 0);
+    assert.deepEqual(h.picks.map((p) => p.id), ['archer']);
+
+    h.down(100, 100);
+    h.flush();
+    h.flush();
+    assert.deepEqual(h.picks.map((p) => p.id), ['archer', 'archer', 'archer', 'archer']);
+    h.move(400, 100);
+    h.flush();
+    assert.deepEqual(h.picks.map((p) => p.id), ['archer', 'archer', 'archer', 'archer']);
+    h.move(100, 100);
+    h.flush();
+    assert.deepEqual(h.picks.map((p) => p.id), ['archer', 'archer', 'archer', 'archer', 'archer']);
+    await h.up(100, 100);
+    assert.equal(h.picks.length, 5);
+    assert.equal(h.pending.length, 0);
+  });
+
+  it('a building option does not repeat while held', async () => {
+    const h = holdHarness(() => ({ kind: 'building', id: 'house' }));
+    h.down(100, 100);
+    assert.equal(h.pending.length, 0);
+    await h.up(100, 100);
+    assert.deepEqual(h.picks.map((p) => p.id), ['house']);
+  });
+});
+

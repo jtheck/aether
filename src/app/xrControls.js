@@ -16,7 +16,8 @@
 // Control groups stay on the desktop and pad; the headset has no buttons for them.
 //
 // Pie menu open (agora build / building actions): point a beam at a slice.
-// A trigger or a grip on that slice picks it. A trigger that misses the pie
+// A trigger or a grip on that slice picks it. Holding either on a unit
+// keeps queuing. A trigger that misses the pie
 // issues the same order as in play (rally when buildings are selected).
 // The two-stick camera keeps moving while a pie is open.
 // Ghost-place: the beam walks the ghost. Facing is where the beam sits
@@ -26,6 +27,7 @@
 
 import { readQuestTouch } from './xrRig.js';
 import { beamState, createXrSelect, sourceRay } from './xrSelect.js';
+import { nextQueueHold, unitQueueKey } from './input/queueHold.js';
 
 const HANDS = /** @type {const} */ (['left', 'right']);
 const BUTTONS = /** @type {const} */ (['trigger', 'grip', 'primary', 'secondary', 'stickClick']);
@@ -49,7 +51,13 @@ function pickKey(pick) {
  *   onJump?: (x: number, z: number) => void,
  * }} opts
  */
-export function createXrControls({ renderer, getInput, jumps = {}, onJump }) {
+export function createXrControls({
+  renderer,
+  getInput,
+  jumps = {},
+  onJump,
+  now = () => performance.now(),
+}) {
   const select = createXrSelect({ renderer, getInput });
   /** Last frame's buttons per hand. */
   const prev = { left: blankHand(), right: blankHand() };
@@ -58,6 +66,11 @@ export function createXrControls({ renderer, getInput, jumps = {}, onJump }) {
   /** Hands whose aim beam is up (not the select gesture's). */
   const beamUp = { left: false, right: false };
   let hoverKey = '';
+  let trainHold = { id: null, heldAt: 0, lastAt: 0 };
+
+  function clearTrainHold() {
+    trainHold = { id: null, heldAt: 0, lastAt: 0 };
+  }
 
   function radialOpen() {
     return !!getInput()?.isRadialOpen?.();
@@ -121,12 +134,22 @@ export function createXrControls({ renderer, getInput, jumps = {}, onJump }) {
     hover(input, beam[aimHand] ?? beam[other] ?? null);
     for (const hand of HANDS) {
       const d = hands[hand].down;
+      const h = hands[hand];
       if (d.secondary) {
+        clearTrainHold();
         input.cancelRadial?.();
         return;
       }
+      const unitId = (h.held.trigger || h.held.grip) ? unitQueueKey(beam[hand]) : null;
+      if (unitId) {
+        if (h.held.grip) claimed.add(h.src?.source);
+        const next = nextQueueHold(trainHold, unitId, now());
+        trainHold = { id: next.id, heldAt: next.heldAt, lastAt: next.lastAt };
+        if (next.fire) input.confirmRadialPick?.(beam[hand]);
+        return;
+      }
       if (d.grip && beam[hand]) {
-        claimed.add(hands[hand].src?.source);
+        claimed.add(h.src?.source);
         input.confirmRadialPick?.(beam[hand]);
         return;
       }
@@ -135,6 +158,7 @@ export function createXrControls({ renderer, getInput, jumps = {}, onJump }) {
         return;
       }
     }
+    clearTrainHold();
     issueTriggerOrders(input, hands);
   }
 
@@ -203,7 +227,10 @@ export function createXrControls({ renderer, getInput, jumps = {}, onJump }) {
     const input = getInput();
     const placing = !!input?.isPlacing?.();
     const radial = !placing && radialOpen();
-    if (!radial) hoverKey = '';
+    if (!radial) {
+      hoverKey = '';
+      clearTrainHold();
+    }
     /** @type {Set<object>} */
     const claimed = new Set();
     if (input && radial) stepRadial(input, hands, claimed);

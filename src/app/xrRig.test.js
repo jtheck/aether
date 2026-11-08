@@ -81,6 +81,11 @@ describe('xrStickMotion', () => {
     const lone = xrStickMotion({ stickX: 0, stickY: -1 }, { stickX: 0, stickY: 0 });
     assert.equal(lone.forward, 0);
     assert.equal(lone.strafe, 0);
+    const right = xrStickMotion({ stickX: 1, stickY: 0 }, { stickX: 1, stickY: 0 });
+    assert.ok(right.strafe > 0);
+    assert.equal(right.forward, 0);
+    const left = xrStickMotion({ stickX: -1, stickY: 0 }, { stickX: -1, stickY: 0 });
+    assert.ok(left.strafe < 0);
   });
 
   it('yaws on opposite up/down and zooms out on a pinch', () => {

@@ -75,6 +75,7 @@ import {
 } from './gamepadLasso.js';
 import { projectWorldToCanvas } from '../../render/screenProject.js';
 import { pickGatherNodeOnRay, rayHitYawBox, rayTToPoint } from './gatherPick.js';
+import { createQueueHoldTimer, unitQueueKey } from './queueHold.js';
 
 /** Footprint box height - tall enough for a tower, not a circumcircle. */
 const BUILDING_PICK_HEIGHT = 10;
@@ -192,6 +193,8 @@ export function createGameInput(opts) {
     isStructureVisible,
     getField,
     onControlGroupJump,
+    setQueueTimer,
+    clearQueueTimer,
   } = opts;
 
   let localPlayerId = initialPlayerId;
@@ -290,6 +293,16 @@ export function createGameInput(opts) {
   let boxDragging = false;
   /** Pointer-down started on the build radial - never box-select this gesture. */
   let radialGesture = false;
+  /**
+   * Unit pad held down. The press trains one immediately; after a beat,
+   * more trains land until the button comes up.
+   * @type {{ pointerId: number, id: string, x: number, y: number, fired: number } | null}
+   */
+  let unitHold = null;
+  const unitHoldTimer = createQueueHoldTimer({
+    setTimer: setQueueTimer,
+    clearTimer: clearQueueTimer,
+  });
   /** Pointer-down started on a bottom selection-strip chip - select that type on up. */
   let selHudGesture = false;
   /** Pad id (0..5) when pointer-down started on a control-group button. */
@@ -2245,6 +2258,34 @@ export function createGameInput(opts) {
     }
   }
 
+  function clearUnitQueueHold() {
+    unitHold = null;
+    unitHoldTimer.stop();
+  }
+
+  /** Press on a unit pad trains one now, then more for as long as it stays down. */
+  function armUnitQueueHold(x, y, pointerId) {
+    clearUnitQueueHold();
+    const picked = pickRadialOption?.(x, y) ?? null;
+    if (picked && typeof picked.then === 'function') return;
+    const id = unitQueueKey(picked);
+    if (!id) return;
+    unitHold = { pointerId, id, x, y, fired: 1 };
+    onRadialPick?.(picked);
+    unitHoldTimer.start(id, () => {
+      if (!unitHold) return;
+      if (!isRadialOpen?.()) {
+        clearUnitQueueHold();
+        return;
+      }
+      const again = pickRadialOption?.(unitHold.x, unitHold.y) ?? null;
+      if (again && typeof again.then === 'function') return;
+      if (!unitHold || unitQueueKey(again) !== unitHold.id) return;
+      unitHold.fired += 1;
+      onRadialPick?.(again);
+    });
+  }
+
   function handlePointerDown(e) {
     if (!canUseInput()) return false;
     if (e.button !== 0) return false;
@@ -2306,12 +2347,18 @@ export function createGameInput(opts) {
     // Sync only - GPU picks here starve the picker and race pointerup.
     // Touch: still-hold is one-finger pan; cast is double-tap on enemy/ground.
     radialGesture = Boolean(isRadialOpen?.() && hitRadial?.(e.clientX, e.clientY));
+    if (radialGesture) armUnitQueueHold(e.clientX, e.clientY, e.pointerId);
+    else clearUnitQueueHold();
     if (!radialGesture && e.pointerType !== 'touch') void armAbilityHold(e.clientX, e.clientY);
     return true;
   }
 
   function handlePointerMove(e) {
     if (!canUseInput()) return false;
+    if (unitHold && e.pointerId === unitHold.pointerId) {
+      unitHold.x = e.clientX;
+      unitHold.y = e.clientY;
+    }
 
     // Chip / control-group press holds the gesture - no box-select.
     if (selHudGesture || ctrlGroupGesture != null) return true;
@@ -2573,6 +2620,14 @@ export function createGameInput(opts) {
     if (dragPointerId === null) return false;
     if (e.pointerId !== dragPointerId && e.type !== 'pointercancel') return false;
 
+    // Stop the hold before any await so a late tick cannot train after release.
+    const releasedHold = unitHold;
+    clearUnitQueueHold();
+    const deliverRadialPick = (picked) => {
+      if (releasedHold && releasedHold.fired > 0 && unitQueueKey(picked) === releasedHold.id) return;
+      onRadialPick?.(picked);
+    };
+
     // Capture before any await - GPU picks under stress can take longer than DOUBLE_MS.
     const tapAt = performance.now();
     const d = lmbDownPos;
@@ -2621,7 +2676,7 @@ export function createGameInput(opts) {
         if (isPlacingRally?.()) {
           if (radialKind === 'pick') {
             lastTap = null;
-            onRadialPick?.(picked);
+            deliverRadialPick(picked);
             radialHandled = true;
           } else if (radialKind === 'hub' || radialKind === 'chrome') {
             lastTap = null;
@@ -2657,7 +2712,7 @@ export function createGameInput(opts) {
           });
           lastTap = null;
           if (release === 'pick') {
-            onRadialPick?.(picked);
+            deliverRadialPick(picked);
           } else if (release === 'exit') {
             cancelPlacement();
           } else if (release === 'confirm' && canIssueOrders()) {
@@ -2677,7 +2732,7 @@ export function createGameInput(opts) {
           });
           if (kind === 'pick') {
             lastTap = null;
-            onRadialPick?.(picked);
+            deliverRadialPick(picked);
             radialHandled = true;
           } else if (kind === 'hub') {
             // Empty hole sits on the selected building - re-select / select-all.
@@ -3231,6 +3286,7 @@ export function createGameInput(opts) {
     abilityHoldGen++;
     clearAbilityHold();
     clearCtrlGroupHold();
+    clearUnitQueueHold();
     abilityHoldFired = false;
     radialGesture = false;
     selHudGesture = false;
@@ -3492,6 +3548,7 @@ export function createGameInput(opts) {
         abilityHoldGen++;
         clearAbilityHold();
         clearCtrlGroupHold();
+        clearUnitQueueHold();
         handleControlGroupCancel();
         clearSelection();
       }
@@ -3503,12 +3560,16 @@ export function createGameInput(opts) {
         abilityHoldGen++;
         clearAbilityHold();
         clearCtrlGroupHold();
+        clearUnitQueueHold();
         handleControlGroupCancel();
         clearSelection();
       }
     },
     hitControlGroupHud,
     hitSelectionHud,
+    hitRadial(clientX, clientY) {
+      return !!(isRadialOpen?.() && hitRadial?.(clientX, clientY));
+    },
     handleControlGroupDown,
     pressControlGroup,
     armPadRally,

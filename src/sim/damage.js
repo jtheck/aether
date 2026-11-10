@@ -62,7 +62,7 @@ function tryRetaliate(w, victim, attacker) {
   if (order !== w.ORDER.IDLE && order !== w.ORDER.ATTACK_MOVE) return;
   if ((w.leashDrop?.[victim] ?? -1) === attacker) return;
   const def = getUnitDef(w.type[victim]);
-  if (def.category !== 'military') return;
+  if (def.category !== 'military' && !def.firesOnMove) return;
 
   w.targetEntity[victim] = attacker;
   w.order[victim] = w.ORDER.ATTACK;

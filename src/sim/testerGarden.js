@@ -34,7 +34,11 @@ const BUILD_STEP_X = 6;
 const BUILD_STEP_Z = 6;
 /** Unit column just east of the west agora (stay well short of midfield). */
 const UNIT_TX = 56;
-const UNIT_TZ0 = 28;
+/**
+ * One row per unit type. 7 tiles apart, started so the last row of the
+ * current roster still lands inside the 144-tile board.
+ */
+const UNIT_TZ0 = 20;
 const UNIT_STEP_Z = 7;
 
 function mirrorTx(tx) {

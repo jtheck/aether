@@ -2,7 +2,7 @@
 
 import { refreshTerrainDerived, TERRAIN, TILE_SIZE_F } from '../sim/field.js';
 import { paintTerrainBrush } from '../sim/tableShape.js';
-import { objectiveWorldPos } from './objectives.js';
+import { isCueObjective, objectiveWorldPos } from './objectives.js';
 
 export const EXIT_RING_TINT = Object.freeze([1, 0.78, 0.18]);
 
@@ -119,7 +119,7 @@ export function createExitMarks(opts = {}) {
 
   return {
     set(list, nextField, { hidden: hide = false } = {}) {
-      zones = (list || []).filter((o) => !o.completed);
+      zones = (list || []).filter((o) => !o.completed && !isCueObjective(o));
       field = nextField || null;
       hidden = hide || !zones.length;
       paint();

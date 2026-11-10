@@ -13,6 +13,10 @@ export const PROJECTILE = {
   SHADOW_BOLT: 7,
   ICE_BOLT: 8,
   LOCUST_SWARM: 9,
+  /** Small fireball dropped from a flyer. Short, mostly downward. */
+  CINDER: 10,
+  /** Same little fireball, thrown from a ground barrel. */
+  CANNON: 11,
 };
 
 export const PROJECTILE_MESH = {
@@ -118,6 +122,8 @@ export const PROJECTILE_DEFS = [
     aimScatter: fx.fromFloat(0.12),
     mesh: PROJECTILE_MESH.ORB,
     scale: [1.45, 1.45, 1.45],
+    /** Shared fireball mesh, trail, and impact burst. */
+    fireball: 1,
     color: [1, 0.55, 0.16],
     // Thrown from the hand, crashes into the ground (not a dolphin hop).
     lob: 1,
@@ -223,6 +229,65 @@ export const PROJECTILE_DEFS = [
     arcHeight: 1.35,
     /** Swarm is particles only - hide the core orb. */
     hidden: 1,
+    renderCapacity: 4096,
+  },
+  {
+    id: PROJECTILE.CINDER,
+    name: 'Cinder',
+    // Quick spit from flyer altitude (FLY_HEIGHT is 16). The arc rises off the hull, then comes down.
+    speed: fx.fromFloat(6.5),
+    maxTicks: 24,
+    hitRadius: fx.fromFloat(1.7),
+    homing: 0,
+    blockedByTerrain: 0,
+    pierce: 1,
+    splashRadius: fx.fromFloat(2.6),
+    friendlyFireMultiplier: 0.25,
+    aimScatter: 0,
+    mesh: PROJECTILE_MESH.ORB,
+    scale: [0.9, 0.9, 0.9],
+    fireball: 1,
+    /** Trail and splash relative to the siege fireball. */
+    fxScale: 0.8,
+    color: [1, 0.48, 0.12],
+    lob: 1,
+    launchHeight: 15,
+    impactHeight: 0.4,
+    arcHeight: 11,
+    lobRangeFactor: 0,
+    lobPeakCap: 12,
+    /** Burst timing and aim wobble are uneven. */
+    sporadic: 1,
+    renderCapacity: 4096,
+  },
+  {
+    id: PROJECTILE.CANNON,
+    name: 'Cannon',
+    // Slow enough that the climb reads. The lob itself is the tall part.
+    speed: fx.fromFloat(2.2),
+    maxTicks: 72,
+    hitRadius: fx.fromFloat(2.6),
+    homing: 0,
+    blockedByTerrain: 0,
+    pierce: 1,
+    splashRadius: fx.fromFloat(7),
+    friendlyFireMultiplier: 0.25,
+    ignitesTrees: 1,
+    leavesGroundFire: 1,
+    blastLob: 1,
+    aimScatter: fx.fromFloat(0.03),
+    mesh: PROJECTILE_MESH.ORB,
+    scale: [2.8, 2.8, 2.8],
+    fireball: 1,
+    fxScale: 1.85,
+    color: [1, 0.42, 0.08],
+    lob: 1,
+    // Straight up off the barrel, then out to the impact.
+    launchHeight: 3.2,
+    impactHeight: 0.4,
+    arcHeight: 36,
+    lobRangeFactor: 0,
+    lobPeakCap: 40,
     renderCapacity: 4096,
   },
 ];

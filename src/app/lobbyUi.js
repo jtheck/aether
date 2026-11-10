@@ -511,12 +511,13 @@ export function customMapSelectOptions(workshopItems, current, localMaps, modeId
  * @param {() => boolean} [opts.isLadderQueued]
  * @param {() => string | null} [opts.getUserId]
  * @param {() => void} [opts.onCloseMenu]
+ * @param {() => void} [opts.onLobbyVisible]
  * @param {() => void | Promise<void>} [opts.onDismissSoloScore]
  * @param {(userId: string) => void} [opts.onFollowReplay]
  * @param {() => string | null} [opts.getFollowUser]
  */
 export function setupLobbyUi({
-  gameLobby, matchLobby, isKothLive, isLadderQueued, getUserId, onCloseMenu, onDismissSoloScore, onFollowReplay, getFollowUser, getKing,
+  gameLobby, matchLobby, isKothLive, isLadderQueued, getUserId, onCloseMenu, onLobbyVisible, onDismissSoloScore, onFollowReplay, getFollowUser, getKing,
 }) {
   const drawersRoot = document.getElementById('menu-lobbies');
   const sidebar = document.getElementById('menu-match');
@@ -690,6 +691,7 @@ export function setupLobbyUi({
     const open = [...drawers].map(([m, ui]) => `${m}:${ui.toggle?.getAttribute('aria-expanded')}`).join();
     const lists = MODE_IDS.map((m) => gameLobby.listLobbies(m).map((l) => `${l.roomId}:${l.playerCount}`).join(',')).join('|');
     const matchOverOn = Boolean(matchOverEl) && !matchOverEl.hidden;
+    const splashUp = Boolean(document.getElementById('boot-splash'));
     const sig = [
       live, active, open, lists,
       state?.phase, state?.playerCount, state?.countdownEndsAt,
@@ -710,14 +712,13 @@ export function setupLobbyUi({
       state?.watching,
       state?.ranked,
       Boolean(matchLobby.hasForfeited?.()),
-      overlayParked, matchOverOn,
+      overlayParked, matchOverOn, splashUp,
       Boolean(isLadderQueued?.()),
     ].join('/');
     if (sig === lastSig) return;
     lastSig = sig;
     const queued = Boolean(isLadderQueued?.());
     const busy = live || active || queued;
-    drawersRoot.classList.toggle('is-dimmed', busy);
     const practice = document.getElementById('menu-solo');
     practice?.classList.toggle('is-dimmed', busy);
     for (const id of ['practice-toggle', 'solo_ai_b', 'open_replay_b', 'unit_tester_b', 'stressful_b']) {
@@ -730,6 +731,7 @@ export function setupLobbyUi({
     }
 
     for (const [mode, ui] of drawers) {
+      ui.el.classList.toggle('is-dimmed', busy);
       const open = ui.toggle?.getAttribute('aria-expanded') === 'true';
       setHidden(ui.body, !open);
       if (ui.create) ui.create.disabled = busy;
@@ -745,11 +747,13 @@ export function setupLobbyUi({
     const stallTitle = formatLockstepStallTitle(namesForLockstepWaiters(state?.seats, waiterIds))
       || 'Waiting for players…';
     const ranked = Boolean(state?.ranked);
-    const showOverlay = cardOpen
+    const showOverlay = splashUp
       ? false
-      : ranked
-        ? matchOverOn
-        : (active && (!inPlay || stalled)) || matchOverOn;
+      : cardOpen
+        ? false
+        : ranked
+          ? matchOverOn
+          : (active && (!inPlay || stalled)) || matchOverOn;
     // No room: the score card stands alone. A fresh lobby must not wear it.
     const scoreOnly = Boolean(matchOverOn && !active);
     overlay?.classList.toggle('is-ranked-result', Boolean((ranked && matchOverOn) || scoreOnly));
@@ -767,7 +771,10 @@ export function setupLobbyUi({
       overlayMin.textContent = compact ? '+' : '−';
       overlayMin.setAttribute('aria-label', compact ? 'Expand lobby' : 'Minimize lobby');
     }
-    if (overlayOpening) onCloseMenu?.();
+    if (overlayOpening) {
+      onCloseMenu?.();
+      if (active) onLobbyVisible?.();
+    }
     if (!active || !state) return;
 
     const mode = getMode(state.mode);
@@ -825,8 +832,9 @@ export function setupLobbyUi({
     setHidden(sideConcede, !canConcede);
     setHidden(panelConcede, !canConcede);
     if (canConcede) {
-      setText(sideConcede, 'Forfeit');
-      setText(panelConcede, 'Forfeit');
+      const label = state.mode === 'adventure' ? 'Surrender' : 'Forfeit';
+      setText(sideConcede, label);
+      setText(panelConcede, label);
     }
 
     const note = inPlay && stalled
@@ -983,7 +991,9 @@ export function setupLobbyUi({
   sideLeave?.addEventListener('click', leaveOrDismissSoloScore);
   panelLeave?.addEventListener('click', leaveOrDismissSoloScore);
   function concedeMatch() {
-    matchLobby.concede?.();
+    const state = matchLobby.getState?.();
+    if (state?.mode === 'adventure') matchLobby.surrender?.();
+    else matchLobby.concede?.();
     refresh();
   }
   sideConcede?.addEventListener('click', concedeMatch);

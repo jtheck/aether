@@ -24,6 +24,10 @@ export const UNIT = {
   CHAMPION: 14,
   /** Workshop artillery - lobbed fireballs at long range. */
   SIEGE_WAGON: 15,
+  /** Uncrewed flyer. Short dropping fireballs. */
+  WAR_BALLOON: 16,
+  /** Uncrewed ground gun. Short dropping fireballs. */
+  TANK: 17,
 };
 
 export const ATTACK_DELIVERY = {
@@ -406,6 +410,71 @@ export const UNIT_DEFS = [
     mechanical: true,
     slowMul: 0.78,
   },
+  {
+    id: UNIT.WAR_BALLOON,
+    name: 'War Balloon',
+    category: 'air',
+    hp: 65,
+    /** Slower than the dirigible (3.2) so the haul stays the fast ship. */
+    speed: fx.fromFloat(2.1),
+    size: 11.0,
+    footprint: 2.8,
+    /** Snappier yaw and spool than the dirigible's wide float. */
+    steer: 0.42,
+    accel: 0.24,
+    decel: 0.32,
+    pickRadius: 3.6,
+    pickHeight: 1.35,
+    color: [0.82, 0.38, 0.18],
+    attackDamage: 2,
+    attackRange: fx.fromFloat(58),
+    attackCooldown: 8,
+    /** Extra ticks, rolled per burst, so the rhythm is not a metronome. */
+    attackCooldownJitter: 12,
+    aggroRange: fx.fromFloat(76),
+    attackDelivery: ATTACK_DELIVERY.PROJECTILE,
+    projectileType: PROJECTILE.CINDER,
+    /** Uneven fan. Edges land wide, and the gaps between balls are not even. */
+    volley: 7,
+    volleySpread: fx.fromFloat(32),
+    minRange: fx.fromFloat(8),
+    preferredRange: fx.fromFloat(46),
+    primaryAbility: null,
+    mechanical: true,
+    fly: true,
+    /** Idle fights hold still. Attack-move can fire without leaving its course. */
+    firesOnMove: true,
+  },
+  {
+    id: UNIT.TANK,
+    name: 'Tank',
+    category: 'military',
+    hp: 85,
+    /** Much slower than the APC (2.8). */
+    speed: fx.fromFloat(1.15),
+    size: 10.5,
+    footprint: 3.2,
+    /** Snappier pivot than the APC's armored haul. */
+    steer: 0.40,
+    accel: 0.16,
+    decel: 0.22,
+    pickRadius: 4.6,
+    pickHeight: 1.2,
+    color: [0.42, 0.36, 0.24],
+    attackDamage: 16,
+    attackRange: fx.fromFloat(52),
+    attackCooldown: 80,
+    aggroRange: fx.fromFloat(54),
+    attackDelivery: ATTACK_DELIVERY.PROJECTILE,
+    projectileType: PROJECTILE.CANNON,
+    minRange: fx.fromFloat(12),
+    preferredRange: fx.fromFloat(38),
+    primaryAbility: null,
+    mechanical: true,
+    slowMul: 0.85,
+    /** Ground fire and fireballs do not hurt this hull. */
+    fireImmune: true,
+  },
 ];
 
 export function getUnitDef(typeId) {
@@ -435,7 +504,9 @@ export const UNIT_COST = Object.freeze({
   [UNIT.WAGON]: { wood: 40, stone: 10 },
   [UNIT.SIEGE_WAGON]: { wood: 70, stone: 25 },
   [UNIT.DIRIGIBLE]: { wood: 70, mineral: 5 },
+  [UNIT.WAR_BALLOON]: { wood: 80, mineral: 10 },
   [UNIT.APC]: { wood: 30, stone: 40 },
+  [UNIT.TANK]: { wood: 50, stone: 45 },
 });
 
 /** Resource cost to train a unit type ({} when free/undefined). */
@@ -523,6 +594,11 @@ export function isMechanical(typeId) {
 
 export function isFlyer(typeId) {
   return !!getUnitDef(typeId).fly;
+}
+
+/** Ground-fire patches and fireball splash skip this unit. */
+export function unitImmuneToFire(typeId) {
+  return !!getUnitDef(typeId).fireImmune;
 }
 
 /** A* prices slow tiles so the unit walks around woods / mud (monk, engineer). */

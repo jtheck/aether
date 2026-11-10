@@ -3,6 +3,7 @@
 
 import * as fx from './fixed.js';
 import { applyDamage } from './damage.js';
+import { unitImmuneToFire } from './unitTypes.js';
 import { isHostile } from './teams.js';
 import {
   queryCellBounds,
@@ -156,7 +157,7 @@ function damageUnitsInZone(w, slot) {
     for (let x = bounds.minX; x <= bounds.maxX; x++) {
       let i = grid.head[spatialCellId(x, z, grid)];
       while (i >= 0) {
-        if (w.alive[i] && fx.dist2(cx, cy, w.px[i], w.py[i]) <= radius2) {
+        if (w.alive[i] && !unitImmuneToFire(w.type[i]) && fx.dist2(cx, cy, w.px[i], w.py[i]) <= radius2) {
           let dmg = baseDamage;
           if (!isHostile(owner, w.owner[i])) {
             if (friendlyMulQ8 <= 0) {

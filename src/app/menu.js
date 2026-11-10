@@ -59,6 +59,9 @@ import { focusMenuEl } from './input/gamepad.js';
  * @param {boolean} [opts.xrSupported]
  * @param {() => boolean} [opts.getXrActive]
  * @param {() => unknown} [opts.onToggleXr]
+ * @param {() => void} [opts.onTogglePause]
+ * @param {() => boolean} [opts.isPlayPaused]
+ * @param {() => boolean} [opts.canTogglePause]
  */
 export function setupMenu({
   renderer,
@@ -71,6 +74,9 @@ export function setupMenu({
   xrSupported = false,
   getXrActive,
   onToggleXr,
+  onTogglePause,
+  isPlayPaused,
+  canTogglePause,
 }) {
   // Shadow dimensions are locked in at renderer construction, so anything other
   // than the tier we booted with only takes effect on reload. MSAA sample count
@@ -134,6 +140,7 @@ export function setupMenu({
     });
   }
   const exitBtn = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#fullscreen_exit_b'));
+  const pauseBtn = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#menu_pause_b'));
 
   function showPage(name) {
     for (const page of pages) page.classList.toggle('is-active', page.dataset.page === name);
@@ -308,6 +315,18 @@ export function setupMenu({
     }
     paintSkins();
     paintProfile();
+    paintPause();
+  }
+
+  function paintPause() {
+    if (!pauseBtn) return;
+    const paused = !!isPlayPaused?.();
+    const label = paused ? 'Resume [P]' : 'Pause [P]';
+    if (pauseBtn.textContent !== label) pauseBtn.textContent = label;
+    pauseBtn.title = paused ? 'Resume' : 'Pause';
+    pauseBtn.setAttribute('aria-pressed', paused ? 'true' : 'false');
+    const allowed = canTogglePause ? !!canTogglePause() : true;
+    if (pauseBtn.disabled !== !allowed) pauseBtn.disabled = !allowed;
   }
 
   function isOpen() {
@@ -508,6 +527,14 @@ export function setupMenu({
     await toggleFullscreen();
     paintExit();
   });
+  pauseBtn?.addEventListener('click', () => {
+    onTogglePause?.();
+    paintPause();
+  });
+  pauseBtn?.addEventListener('keydown', (e) => {
+    if (e.code === 'KeyP') return;
+    e.stopPropagation();
+  });
 
   const unsubFullscreen = subscribeFullscreen(paintExit);
 
@@ -547,6 +574,7 @@ export function setupMenu({
     },
     /** Keep the sliders honest when B/F toggle outside the menu. */
     refresh: syncFromState,
+    paintPause,
     /** Show/hide the menu button; closes the drawer when locking. */
     setAvailable(on) {
       button.hidden = !on;

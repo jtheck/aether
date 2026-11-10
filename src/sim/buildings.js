@@ -430,8 +430,21 @@ export const BUILDING_MENU_UNITS = {
   wagon: UNIT.WAGON,
   siege_wagon: UNIT.SIEGE_WAGON,
   dirigible: UNIT.DIRIGIBLE,
+  war_balloon: UNIT.WAR_BALLOON,
   apc: UNIT.APC,
+  tank: UNIT.TANK,
 };
+
+/** Train keys that stay locked until this owner-wide tech is finished. */
+const UNIT_TRAIN_TECH = Object.freeze({
+  war_balloon: 'artillery',
+  tank: 'artillery',
+});
+
+/** Tech id required to queue this train key, or null. */
+export function unitTrainTech(unitKey) {
+  return UNIT_TRAIN_TECH[unitKey] ?? null;
+}
 
 /** Upgrade GLBs (radial icons). Assign per building via BUILDING_MENUS. */
 export const UPGRADE_MODEL_URLS = /** @type {const} */ ({
@@ -490,10 +503,10 @@ export const BUILDING_MENUS = {
   lab: { upgrades: ['artillery'] },
   barracks: { units: ['warrior', 'archer'], upgrades: ['drayage'] },
   workshop: { units: ['wagon', 'siege_wagon'], upgrades: ['armor', 'scribes'] },
-  factory: { units: ['apc'] },
+  factory: { units: ['apc', 'tank'] },
   church: { units: ['priest'] },
   moonwell: { upgrades: ['prospecting', 'stewardship'] },
-  perch: { units: ['dirigible'] },
+  perch: { units: ['dirigible', 'war_balloon'] },
   grove: { units: ['shaman'] },
 };
 
@@ -519,6 +532,7 @@ export function getBuildingMenu(typeId) {
       name: def?.name ?? key,
       unitType,
       cost,
+      tech: unitTrainTech(key),
     });
   }
 
@@ -931,12 +945,12 @@ function footprintCoreOrigin(fp, xFixed, zFixed) {
   if (fp.w & 1) {
     coreX0 = worldToTile(xFixed) - ((fp.w - 1) >> 1);
   } else {
-    coreX0 = nearestGridLineIndex(xFixed) - (fp.w >> 1);
+    coreX0 = nearestGridLineIndex(xFixed, 'x') - (fp.w >> 1);
   }
   if (fp.h & 1) {
     coreZ0 = worldToTileZ(zFixed) - ((fp.h - 1) >> 1);
   } else {
-    coreZ0 = nearestGridLineIndex(zFixed) - (fp.h >> 1);
+    coreZ0 = nearestGridLineIndex(zFixed, 'z') - (fp.h >> 1);
   }
   return { coreX0, coreZ0 };
 }
@@ -1339,7 +1353,7 @@ export function defaultRallyWorld(typeId, xF, zF, yawF) {
 }
 
 /**
- * True when every trainable unit on this building is a flyer (e.g. perch → dirigible).
+ * True when every trainable unit on this building is a flyer (perch → dirigible, war balloon).
  * Air rallies are straight-line - no ground A*.
  * @param {string} typeId
  */
@@ -1756,6 +1770,8 @@ export function applyQueueTrain(w, cmd) {
   if (unitType == null) return;
   const menu = BUILDING_MENUS[b.type];
   if (!menu?.units?.includes(unitKey)) return;
+  const techId = unitTrainTech(unitKey);
+  if (techId && !ownerHasTech(w, playerId, TECH_BY_ID[techId])) return;
   if (!spendResources(w, b.owner | 0, getUnitCost(unitType))) return;
   if (!b.tracks) b.tracks = [];
   let track = null;

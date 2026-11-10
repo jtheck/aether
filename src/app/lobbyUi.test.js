@@ -407,6 +407,12 @@ function lobbyDom() {
         else globalThis.document = prev;
       };
     },
+    installSplash() {
+      byId.set('boot-splash', new FakeEl('div'));
+    },
+    removeSplash() {
+      byId.delete('boot-splash');
+    },
   };
 }
 
@@ -733,8 +739,83 @@ describe('match lobby overlay', () => {
       assert.equal(left, 1);
       assert.equal(dom.practice.className.includes('is-dimmed'), true);
       assert.equal(dom.solo.disabled, true);
-      assert.equal(dom.drawers.className.includes('is-dimmed'), true);
+      assert.equal(dom.drawers.className.includes('is-dimmed'), false);
+      assert.equal(dom.drawers.querySelector('[data-mode="onevsone"]').className.includes('is-dimmed'), true);
       assert.equal(dom.sideConcede.hidden, true);
+    } finally {
+      restore();
+    }
+  });
+
+  it('surrenders an adventure match and opens the lobby card', () => {
+    const dom = lobbyDom();
+    const restore = dom.install();
+    try {
+      let surrendered = 0;
+      let conceded = 0;
+      const state = {
+        ...waitingState('adventure'),
+        phase: 'playing',
+      };
+      const ui = setupLobbyUi({
+        gameLobby: { listLobbies: () => [], listen() {}, unlisten() {} },
+        matchLobby: {
+          isActive: () => true,
+          getState: () => state,
+          canStart: () => true,
+          startBlockReason: () => '',
+          countdownMs: () => 0,
+          lockstepStalled: () => false,
+          hasForfeited: () => false,
+          surrender() {
+            surrendered += 1;
+            state.phase = 'waiting';
+          },
+          concede() { conceded += 1; },
+        },
+        getUserId: () => 'u1',
+      });
+      assert.equal(dom.sideConcede.hidden, false);
+      assert.equal(dom.panelConcede.hidden, false);
+      assert.equal(dom.sideConcede.textContent, 'Surrender');
+      assert.equal(dom.panelConcede.textContent, 'Surrender');
+      assert.equal(dom.sideLeave.textContent, 'Leave lobby');
+      assert.equal(dom.overlay.hidden, true);
+      dom.sideConcede.click();
+      assert.equal(surrendered, 1);
+      assert.equal(conceded, 0);
+      ui.refresh();
+      assert.equal(dom.sideConcede.hidden, true);
+      assert.equal(dom.overlay.hidden, false);
+    } finally {
+      restore();
+    }
+  });
+
+  it('hides the lobby card while the splash is up', () => {
+    const dom = lobbyDom();
+    const restore = dom.install();
+    try {
+      const state = waitingState('adventure');
+      const ui = setupLobbyUi({
+        gameLobby: { listLobbies: () => [], listen() {}, unlisten() {} },
+        matchLobby: {
+          isActive: () => true,
+          getState: () => state,
+          canStart: () => true,
+          startBlockReason: () => '',
+          countdownMs: () => 0,
+          lockstepStalled: () => false,
+        },
+        getUserId: () => 'u1',
+      });
+      assert.equal(dom.overlay.hidden, false);
+      dom.installSplash();
+      ui.refresh();
+      assert.equal(dom.overlay.hidden, true);
+      dom.removeSplash();
+      ui.refresh();
+      assert.equal(dom.overlay.hidden, false);
     } finally {
       restore();
     }
@@ -835,7 +916,8 @@ describe('match lobby overlay', () => {
       });
       assert.equal(dom.practice.className.includes('is-dimmed'), true);
       assert.equal(dom.solo.disabled, true);
-      assert.equal(dom.drawers.className.includes('is-dimmed'), true);
+      assert.equal(dom.drawers.className.includes('is-dimmed'), false);
+      assert.equal(dom.drawers.querySelector('[data-mode="onevsone"]').className.includes('is-dimmed'), true);
       assert.equal(dom.create('onevsone').disabled, true);
       assert.equal(koth.disabled, true);
     } finally {

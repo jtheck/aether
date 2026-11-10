@@ -5,12 +5,26 @@ import { createStoryHud } from './hud.js';
 import { createStoryPlayer } from './player.js';
 import { createStorySpeech, LINE_STYLE_LOOK, narratorLines } from './speech.js';
 import { createStoryTransport } from './transport.js';
-import { activeReel, normalizeStory } from './timeline.js';
+import { CLIP_CAMERA, activeReel, normalizeStory } from './timeline.js';
+import { OBJ_CUE } from './objectives.js';
 
 function reelForWhen(story, when = 'start') {
   const s = normalizeStory(story);
   if (when === 'win') return s.reels.find((r) => r.when === 'win') || null;
-  return s.reels.find((r) => r.when === 'start') || activeReel(s, 'intro');
+  if (when === 'start') return s.reels.find((r) => r.when === 'start') || activeReel(s, 'intro');
+  return s.reels.find((r) => r.id === when) || null;
+}
+
+function splashCovering() {
+  return typeof document !== 'undefined' && !!document.getElementById('boot-splash');
+}
+
+function samePose(a, b) {
+  if (!a || !b) return false;
+  return Math.abs(a.x - b.x) < 0.01
+    && Math.abs(a.z - b.z) < 0.01
+    && Math.abs((a.radius ?? 0) - (b.radius ?? 0)) < 0.01
+    && Math.abs((a.alpha ?? 0) - (b.alpha ?? 0)) < 0.001;
 }
 
 function worldFromTile(field, tx, tz) {
@@ -57,7 +71,12 @@ export function createMatchStory(opts = {}) {
 
   let player = null;
   let playing = false;
+  /** Camera beats lock orders. A line-only beat does not. */
+  let locking = false;
   let lastShot = null;
+  let lastPose = null;
+  /** Intro is armed at 00:00 and waiting for the splash to clear. */
+  let heldForSplash = false;
   /** Clip ids already copied into chat for this reel. */
   const spokenSeen = new Set();
 
@@ -85,19 +104,21 @@ export function createMatchStory(opts = {}) {
     const field = opts.getField?.();
     if (s?.camera && cam && field) {
       const shot = s.camera.id || `${s.camera.tx}|${s.camera.tz}|${s.camera.radius}`;
-      if (shot !== lastShot) {
+      const live = s.camera.char ? opts.getSpeakerPos?.(s.camera.char) : null;
+      const tile = worldFromTile(field, s.camera.tx, s.camera.tz);
+      const pose = {
+        x: live?.x ?? tile.x,
+        z: live?.z ?? tile.z,
+        radius: s.camera.radius,
+        alpha: s.camera.alpha,
+      };
+      // The sample is the camera, on the same tick as the line. An ease
+      // lands about a second after the text that shares its time.
+      if (shot !== lastShot || !samePose(lastPose, pose)) {
+        if (shot !== lastShot) cam.stopFollow?.();
         lastShot = shot;
-        const live = s.camera.char ? opts.getSpeakerPos?.(s.camera.char) : null;
-        const tile = worldFromTile(field, s.camera.tx, s.camera.tz);
-        const pose = {
-          x: live?.x ?? tile.x,
-          z: live?.z ?? tile.z,
-          radius: s.camera.radius,
-          alpha: s.camera.alpha,
-        };
-        cam.stopFollow?.();
-        if (cam.easePose) cam.easePose(pose, { unclamped: true });
-        else cam.setPose?.(pose, { unclamped: true });
+        lastPose = pose;
+        cam.setPose?.(pose, { unclamped: true });
       }
     }
     const lines = s?.lines ?? (s?.line ? [s.line] : []);
@@ -120,16 +141,20 @@ export function createMatchStory(opts = {}) {
 
   function stop() {
     if (!playing) return;
+    const locked = locking;
     playing = false;
+    locking = false;
     lastShot = null;
+    lastPose = null;
+    heldForSplash = false;
     unbindSkip();
     player?.stop();
     transport.detach();
     hud.hide();
     speech.hide();
-    // Drop any cinematic vision share when the reel ends or is skipped.
+    // Live sight ends with the reel. Buildings already seen stay as last-known.
     opts.onReveal?.(null);
-    opts.onCinematic?.(false);
+    if (locked) opts.onCinematic?.(false);
   }
 
   function onKey(e) {
@@ -168,13 +193,36 @@ export function createMatchStory(opts = {}) {
       },
     });
     playing = true;
-    // Share vision with the reel's factions so spawns / distant action read on camera.
+    const walk = when !== 'start' && when !== 'win';
+    locking = !walk || reel.clips.some((clip) => clip.kind === CLIP_CAMERA);
+    // Share vision while this reel plays. Stopping drops live sight.
     opts.onReveal?.(reel.reveal ?? null);
-    opts.onCinematic?.(true);
-    transport.attach(player);
-    bindSkip();
+    if (locking) {
+      opts.onCinematic?.(true);
+      transport.attach(player);
+      bindSkip();
+    }
     player.play();
+    // The reel would otherwise burn its opening under the splash. Hold 00:00
+    // until the map is actually on screen, then the line and the camera start together.
+    if (when === 'start' && splashCovering()) {
+      player.hold();
+      heldForSplash = true;
+    }
     return true;
+  }
+
+  function resume() {
+    if (!heldForSplash) return;
+    heldForSplash = false;
+    if (playing && player) player.play();
+  }
+
+  function playCue(obj, story) {
+    if (playing || obj?.kind !== OBJ_CUE) return false;
+    const id = String(obj.params?.reel || '').trim();
+    if (!id) return false;
+    return playReel(story, id);
   }
 
   function playIntro(story) {
@@ -192,10 +240,13 @@ export function createMatchStory(opts = {}) {
 
   return {
     playIntro,
+    resume,
     playWin,
+    playCue,
     skip,
     stop,
     tick,
-    driving: () => playing,
+    driving: () => playing && locking,
+    busy: () => playing,
   };
 }

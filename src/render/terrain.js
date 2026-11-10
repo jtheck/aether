@@ -312,8 +312,10 @@ function createTerrainChunkLod(engine, scene, field, chunkSize, atlasByChunk, lo
  */
 export function primeFieldAssets(engine) {
   if (!engine) return;
-  void loadTerrainAtlas(engine).catch(() => {});
+  // Trees and rocks first. The terrain sheets are large; starting them first
+  // filled the connection pool and the forest popped in after the board.
   prefetchSceneryAssets(engine);
+  void loadTerrainAtlas(engine).catch(() => {});
   prefetchDoodadModels(engine);
 }
 
@@ -325,11 +327,12 @@ export function primeFieldAssets(engine) {
  * @returns {Promise<{ meshes: object[], update: (camera: object, deltaMs: number) => void, dispose: () => void }>}
  */
 export async function createTerrainFromField(engine, scene, field, camera, opts = {}) {
-  if (!opts.skipScenery) {
-    prefetchSceneryAssets(engine);
-    prefetchDoodadModels(engine);
-  }
-  const atlas = await loadTerrainAtlas(engine);
+  // Forest fetches go out first. The terrain-sheet promise starts immediately
+  // after so the downloads overlap, but the 3D trees and rocks are instanced
+  // before the ground meshes, and this function does not return (the caller
+  // reveals then) until those models have replaced the cards.
+  if (!opts.skipScenery) prefetchSceneryAssets(engine);
+  const atlasPromise = loadTerrainAtlas(engine);
   const active = createActiveCellLookup(field);
   const cell = Math.max(1, field.tableShape?.cellSize || field.chunkSize || 16);
   const chunksAcross = Math.max(
@@ -347,44 +350,9 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     : Infinity;
   const resourceMesh = terrainLodOn ? SCENERY_MESH_CHUNKS * terrainSpan : Infinity;
   const resourceDrop = terrainLodOn ? SCENERY_BILLBOARD_CHUNKS * terrainSpan : Infinity;
-  // Chunk repaints composite junction cells synchronously, so keep pixels resident.
-  let holdsAtlasSource = false;
-  try {
-    if (chunkSize) {
-      await atlas.retainSource();
-      holdsAtlasSource = true;
-    }
-    await atlas.prepareJunctions(junctionKeysOf(field, active));
-  } catch (err) {
-    console.warn('[terrain] junction cells unavailable', err);
-  }
-  const releaseAtlasSource = () => {
-    if (!holdsAtlasSource) return;
-    holdsAtlasSource = false;
-    atlas.releaseSource();
-  };
-  /** @type {Map<string, object[]>} */
-  const atlasByChunk = new Map();
-  const specMap = createGroundSpecMap(engine);
-  specMap.rebuild(field);
-  const atlasLook = { atlas, materials: createTerrainMaterials(atlas, specMap.texture) };
-  const specGlint = createGroundSpecGlint(engine, scene);
-  specGlint.rebuild(field, active, specMap.texture, specMap.uv, { addToScene: false });
-  let atlasRev = 0;
-  const atlasMeshes = chunkSize
-    ? buildChunkedAtlasMeshes(engine, field, atlasLook, active, chunkSize, atlasByChunk, atlasRev, specMap.uv)
-    : buildAtlasMeshes(engine, field, atlasLook, active, specMap.uv);
   const holdScene = opts.deferScene === true;
-  const terrainLod = terrainLodOn
-    ? createTerrainChunkLod(engine, scene, field, chunkSize, atlasByChunk, { deferScene: holdScene })
-    : null;
-  const backdrop = buildEnvironmentMeshes(engine, scene, field);
-  const built = [
-    ...backdrop.meshes,
-    ...buildTableFrameMeshes(engine, field, active),
-    ...atlasMeshes,
-    ...specGlint.meshes,
-  ];
+  /** @type {object[]} */
+  const built = [];
   let disposed = false;
   let liveField = field;
   // deferScene keeps every new mesh out of the scene until present(), so a map
@@ -395,6 +363,8 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
   /** Shadow/setup callbacks for meshes that arrived before present(). */
   const pendingNotes = [];
   const notedMeshes = new WeakSet();
+  /** @type {ReturnType<typeof createTerrainChunkLod> | null} */
+  let terrainLod = null;
   function showMesh(mesh) {
     if (!mesh || shownMeshes.has(mesh)) return;
     shownMeshes.add(mesh);
@@ -418,11 +388,34 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
   }
   function present() {
     if (disposed || sceneGate.open) return;
+    // Tree/rock GLBs are one cached mesh per kind. The previous board is
+    // disposed just before this and that detach zeros their instance counts,
+    // so a reveal without a rewrite draws the ground and pops the forest in
+    // on a later LOD pass. Billboards are new meshes and are not the ones
+    // that vanish. Rewrite while the gate is still closed, then flush on add.
+    scenery?.update?.(camera, 0, true);
     sceneGate.open = true;
     for (let i = 0; i < built.length; i++) showMesh(built[i]);
     terrainLod?.present?.();
     for (let i = 0; i < pendingNotes.length; i++) opts.onModelMesh?.(pendingNotes[i]);
     pendingNotes.length = 0;
+  }
+  function bareTerrain() {
+    return {
+      meshes: [],
+      modelsReady: Promise.resolve(),
+      update() {},
+      forEachBurningTree() {},
+      applyTreeUpdates() {},
+      applyRockUpdates() {},
+      applyAuthoredSceneryTiles() {},
+      applyFogDim() {},
+      applyFogTiles() {},
+      present() {},
+      pingHarvest() { return false; },
+      pickGatherOnRay() { return null; },
+      dispose() {},
+    };
   }
   /** @type {((x: number, z: number) => number) | null} */
   let fogFactor = null;
@@ -437,47 +430,9 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
   });
   let doodads = emptyDoodads();
   let sceneryShown = true;
-  const doodadsReady = opts.skipScenery
-    ? Promise.resolve()
-    : createDoodadsFromField(
-      engine,
-      scene,
-      field,
-      (x, z) => surfaceHeightAt(liveField, x, z),
-      { drop: tileDrop, deferScene: holdScene },
-    ).then((d) => {
-      if (disposed) {
-        d.dispose();
-        return;
-      }
-      doodads = d;
-      d.setShown?.(sceneryShown);
-      for (const mesh of d.meshes) {
-        if (built.indexOf(mesh) < 0) built.push(mesh);
-        if (holdScene && sceneGate.open) showMesh(mesh);
-      }
-      if (fogFactor) d.applyFogDim(fogFactor);
-    }).catch((err) => {
-      console.warn('[doodads] failed', err);
-    });
   const emptyBackdrops = () => ({ meshes: [], dispose() {} });
   let backdrops = emptyBackdrops();
   let backdropGen = 0;
-  const backdropsReady = opts.skipScenery
-    ? Promise.resolve()
-    : createBackdropsFromField(engine, scene, field, { deferScene: holdScene }).then((b) => {
-      if (disposed) {
-        b.dispose();
-        return;
-      }
-      backdrops = b;
-      for (const mesh of b.meshes) {
-        if (built.indexOf(mesh) < 0) built.push(mesh);
-        if (holdScene && sceneGate.open) showMesh(mesh);
-      }
-    }).catch((err) => {
-      console.warn('[backdrops] failed', err);
-    });
   let scenery = opts.skipScenery
     ? { meshes: [], modelsReady: Promise.resolve(), update() {}, applyAuthoredTiles() {}, dispose() {} }
     : await createSceneryFromField(
@@ -506,6 +461,99 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
         },
       },
     );
+  if (opts.signal?.aborted) {
+    disposed = true;
+    scenery.dispose?.();
+    built.length = 0;
+    return bareTerrain();
+  }
+  try {
+    // Resolves after the LOD rewrite that puts 3D meshes in and hides the cards.
+    await (scenery.modelsReady ?? Promise.resolve());
+  } catch (err) {
+    console.warn('[terrain] scenery models failed', err);
+  }
+  if (opts.signal?.aborted) {
+    disposed = true;
+    scenery.dispose?.();
+    built.length = 0;
+    return bareTerrain();
+  }
+  if (!opts.skipScenery) prefetchDoodadModels(engine);
+  const atlas = await atlasPromise;
+  // Chunk repaints composite junction cells synchronously, so keep pixels resident.
+  let holdsAtlasSource = false;
+  try {
+    if (chunkSize) {
+      await atlas.retainSource();
+      holdsAtlasSource = true;
+    }
+    await atlas.prepareJunctions(junctionKeysOf(field, active));
+  } catch (err) {
+    console.warn('[terrain] junction cells unavailable', err);
+  }
+  const releaseAtlasSource = () => {
+    if (!holdsAtlasSource) return;
+    holdsAtlasSource = false;
+    atlas.releaseSource();
+  };
+  /** @type {Map<string, object[]>} */
+  const atlasByChunk = new Map();
+  const specMap = createGroundSpecMap(engine);
+  specMap.rebuild(field);
+  const atlasLook = { atlas, materials: createTerrainMaterials(atlas, specMap.texture) };
+  const specGlint = createGroundSpecGlint(engine, scene);
+  specGlint.rebuild(field, active, specMap.texture, specMap.uv, { addToScene: false });
+  let atlasRev = 0;
+  const atlasMeshes = chunkSize
+    ? buildChunkedAtlasMeshes(engine, field, atlasLook, active, chunkSize, atlasByChunk, atlasRev, specMap.uv)
+    : buildAtlasMeshes(engine, field, atlasLook, active, specMap.uv);
+  terrainLod = terrainLodOn
+    ? createTerrainChunkLod(engine, scene, field, chunkSize, atlasByChunk, { deferScene: holdScene })
+    : null;
+  const backdrop = buildEnvironmentMeshes(engine, scene, field);
+  for (const mesh of backdrop.meshes) built.push(mesh);
+  for (const mesh of buildTableFrameMeshes(engine, field, active)) built.push(mesh);
+  for (const mesh of atlasMeshes) built.push(mesh);
+  for (const mesh of specGlint.meshes) built.push(mesh);
+  const doodadsReady = opts.skipScenery
+    ? Promise.resolve()
+    : createDoodadsFromField(
+      engine,
+      scene,
+      field,
+      (x, z) => surfaceHeightAt(liveField, x, z),
+      { drop: tileDrop, deferScene: holdScene },
+    ).then((d) => {
+      if (disposed) {
+        d.dispose();
+        return;
+      }
+      doodads = d;
+      d.setShown?.(sceneryShown);
+      for (const mesh of d.meshes) {
+        if (built.indexOf(mesh) < 0) built.push(mesh);
+        if (holdScene && sceneGate.open) showMesh(mesh);
+      }
+      if (fogFactor) d.applyFogDim(fogFactor);
+    }).catch((err) => {
+      console.warn('[doodads] failed', err);
+    });
+  const backdropsReady = opts.skipScenery
+    ? Promise.resolve()
+    : createBackdropsFromField(engine, scene, field, { deferScene: holdScene }).then((b) => {
+      if (disposed) {
+        b.dispose();
+        return;
+      }
+      backdrops = b;
+      for (const mesh of b.meshes) {
+        if (built.indexOf(mesh) < 0) built.push(mesh);
+        if (holdScene && sceneGate.open) showMesh(mesh);
+      }
+    }).catch((err) => {
+      console.warn('[backdrops] failed', err);
+    });
   const curtainWalls = opts.skipWalls || opts.signal?.aborted
     ? { meshes: [], dispose() {} }
     : await createCurtainWalls(engine, scene, field, (x, z) => surfaceHeightAt(liveField, x, z));
@@ -521,21 +569,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     built.length = 0;
     doodads.dispose();
     backdrops.dispose();
-    return {
-      meshes: [],
-      modelsReady: Promise.resolve(),
-      update() {},
-      forEachBurningTree() {},
-      applyTreeUpdates() {},
-      applyRockUpdates() {},
-      applyAuthoredSceneryTiles() {},
-      applyFogDim() {},
-      applyFogTiles() {},
-      present() {},
-      pingHarvest() { return false; },
-      pickGatherOnRay() { return null; },
-      dispose() {},
-    };
+    return bareTerrain();
   }
   for (const mesh of scenery.meshes) {
     if (built.indexOf(mesh) < 0) built.push(mesh);

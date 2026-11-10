@@ -1,5 +1,5 @@
-// Block mouse / keyboard history navigation so a live match is not dumped
-// by a thumb button or Alt+Left. Toolbar Back in the browser chrome still works.
+// Block mouse, keyboard, and toolbar Back / Forward so a live match or the
+// forge is not dumped. Typing fields still get Backspace and Alt+arrow.
 
 const LISTEN_OPTS = { capture: true };
 
@@ -44,10 +44,21 @@ export function isBrowserNavKey(e, typing = false) {
  * @param {object} [root]
  * @returns {() => void}
  */
+/** One dummy entry so the toolbar Back button stays on this page. */
+function holdBrowserHistory(win) {
+  const hist = win.history;
+  if (!hist?.pushState || !win.addEventListener) return () => {};
+  const stay = () => hist.pushState({ stay: true }, '', win.location?.href || '');
+  stay();
+  win.addEventListener('popstate', stay);
+  return () => win.removeEventListener('popstate', stay);
+}
+
 export function installNavGuard(root = globalThis) {
   const win = root.window ?? root;
   const doc = root.document ?? win.document;
   if (!win?.addEventListener || !doc) return () => {};
+  const releaseHistory = holdBrowserHistory(win);
 
   function onMouse(e) {
     if (isBrowserNavMouseButton(e.button)) e.preventDefault();
@@ -64,6 +75,7 @@ export function installNavGuard(root = globalThis) {
   win.addEventListener('keydown', onKey, LISTEN_OPTS);
 
   return () => {
+    releaseHistory();
     win.removeEventListener('pointerdown', onMouse, LISTEN_OPTS);
     win.removeEventListener('mousedown', onMouse, LISTEN_OPTS);
     win.removeEventListener('mouseup', onMouse, LISTEN_OPTS);

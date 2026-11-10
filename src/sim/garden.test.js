@@ -913,6 +913,9 @@ describe('garden codec', () => {
     for (const u of g.units.filter((x) => x.owner === 0)) {
       assert.ok(g.units.some((o) => o.owner === 1 && o.type === u.type && o.tx === last - u.tx && o.tz === u.tz));
     }
+    for (const u of g.units) {
+      assert.ok(u.tx >= 0 && u.tz >= 0 && u.tx < g.width && u.tz < g.height, `unit ${u.type} off the board`);
+    }
 
     const field = fieldFromGarden(json);
     const world = createWorld(g.seed);

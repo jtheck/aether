@@ -253,6 +253,101 @@ describe('chase leash', () => {
   });
 });
 
+describe('war balloon attack-move', () => {
+  it('fires along a march without being steered off it', () => {
+    const w = createWorld(37);
+    const field = openField();
+    const balloon = spawn(w, {
+      x: 0,
+      y: 0,
+      type: UNIT.WAR_BALLOON,
+      owner: 0,
+    });
+    spawn(w, {
+      x: fx.fromInt(12),
+      y: fx.fromInt(36),
+      type: UNIT.WARRIOR,
+      owner: 1,
+      hp: 5000,
+    });
+    const dest = fx.fromInt(80);
+    applyCommands(w, field, [
+      { type: CMD.ATTACK_MOVE, entities: [balloon], tx: [dest], ty: [0] },
+    ]);
+    const x0 = w.px[balloon];
+    let fired = false;
+    for (let t = 0; t < 10; t++) {
+      step(w, field);
+      if (w.projectiles.activeCount > 0) fired = true;
+    }
+    assert.equal(w.order[balloon], ORDER.ATTACK_MOVE);
+    assert.equal(w.tx[balloon], dest);
+    assert.equal(w.ty[balloon], 0);
+    assert.ok(fired, 'shots leave while the course stays set');
+    assert.ok(w.px[balloon] > x0, 'the balloon keeps moving');
+    assert.ok(Math.abs(w.py[balloon]) < fx.fromInt(4), 'shooting does not pull it off the march');
+  });
+
+  it('shoots while standing still', () => {
+    const w = createWorld(38);
+    const field = openField();
+    const balloon = spawn(w, {
+      x: 0,
+      y: 0,
+      type: UNIT.WAR_BALLOON,
+      owner: 0,
+    });
+    spawn(w, {
+      x: fx.fromInt(24),
+      y: 0,
+      type: UNIT.WARRIOR,
+      owner: 1,
+      hp: 5000,
+    });
+    let fired = false;
+    for (let t = 0; t < 16; t++) {
+      step(w, field);
+      if (w.projectiles.activeCount > 0) fired = true;
+    }
+    assert.equal(w.order[balloon], ORDER.ATTACK);
+    assert.ok(fired, 'a stopped balloon still fires');
+    assert.ok(Math.abs(w.px[balloon]) < fx.fromInt(4), 'it does not have to travel in order to shoot');
+    assert.ok(Math.abs(w.py[balloon]) < fx.fromInt(4));
+  });
+
+  it('closes to range, then holds still to shoot', () => {
+    const w = createWorld(39);
+    const field = openField();
+    const balloon = spawn(w, {
+      x: 0,
+      y: 0,
+      type: UNIT.WAR_BALLOON,
+      owner: 0,
+    });
+    const foe = spawn(w, {
+      x: fx.fromInt(8),
+      y: fx.fromInt(70),
+      type: UNIT.WARRIOR,
+      owner: 1,
+      hp: 5000,
+    });
+    const range = getUnitDef(UNIT.WAR_BALLOON).attackRange;
+    const startD2 = fx.dist2(w.px[balloon], w.py[balloon], w.px[foe], w.py[foe]);
+    assert.ok(startD2 > fx.mul(range, range));
+    let fired = false;
+    for (let t = 0; t < 50; t++) {
+      step(w, field);
+      if (w.projectiles.activeCount > 0) fired = true;
+    }
+    const endD2 = fx.dist2(w.px[balloon], w.py[balloon], w.px[foe], w.py[foe]);
+    assert.equal(w.order[balloon], ORDER.ATTACK);
+    assert.ok(endD2 < startD2, 'it moves in until it can fire');
+    assert.ok(fired, 'shots start once the foe is in range');
+    assert.equal(w.vx[balloon], 0);
+    assert.equal(w.vy[balloon], 0);
+  });
+});
+
 describe('frost attack slow', () => {
   it('recovers attack cooldown at the same 0.28 rate as movement', () => {
     const w = createWorld(36);

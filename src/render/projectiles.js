@@ -73,7 +73,7 @@ function createArchetypeMesh(engine, def) {
   if (def.mesh === PROJECTILE_MESH.ARROW) {
     return createArrowMesh(engine, `projectile-${def.name.toLowerCase()}`);
   }
-  if (def.id === PROJECTILE.FIREBALL) return createFireballMesh(engine);
+  if (def.fireball) return createFireballMesh(engine);
   const segments = def.mesh === PROJECTILE_MESH.ROCK ? 6 : 8;
   return createSphere(engine, {
     diameter: 1,
@@ -216,7 +216,7 @@ export function createProjectileRenderer(engine, scene, groundYAt, onProjectile,
   for (const def of PROJECTILE_DEFS) {
     const mesh = createArchetypeMesh(engine, def);
     mesh.pickable = false;
-    const isFireball = def.id === PROJECTILE.FIREBALL;
+    const isFireball = !!def.fireball;
     const isShadow = def.id === PROJECTILE.SHADOW_BOLT;
     const isHoly = def.id === PROJECTILE.HOLY_SLASH;
     const isIce = def.id === PROJECTILE.ICE_BOLT;
@@ -313,7 +313,7 @@ export function createProjectileRenderer(engine, scene, groundYAt, onProjectile,
         dropped++;
         continue;
       }
-      const eye = def.id === PROJECTILE.FIREBALL ? opts.getEye?.() ?? null : null;
+      const eye = def.fireball ? opts.getEye?.() ?? null : null;
       if (eye) {
         writeFacingOrb(batch.matrices, slot, x, y, z, def.scale[0], eye);
       } else {

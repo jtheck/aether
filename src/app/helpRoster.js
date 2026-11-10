@@ -40,8 +40,8 @@ export function helpPips(value, max) {
 const UNIT_NOTE = {
   [UNIT.VILLAGER]: 'Gathers and builds. Comes from the Village.',
   [UNIT.BRIGAND]: 'Temporary torch fighter. Ability or pointed attack; reverts when idle or sent to work.',
-  [UNIT.WARRIOR]: 'Melee. Trained at the Barracks. Becomes a Champion after five wounded enemies fall nearby.',
-  [UNIT.CHAMPION]: 'Melee. A warrior who was still nearby when five wounded enemies fell.',
+  [UNIT.WARRIOR]: 'Melee. Trained at the Barracks. Becomes a Champion after felling five enemies.',
+  [UNIT.CHAMPION]: 'Melee. A warrior who has seen battle.',
   [UNIT.ARCHER]: 'Ranged. Trained at the Barracks.',
   [UNIT.WARLOCK]: 'Ranged. Fireball. Trained at the Tavern.',
   [UNIT.PRIEST]: 'Ranged. Holy armor. Does not attack buildings. Trained at the Church.',
@@ -53,7 +53,9 @@ const UNIT_NOTE = {
   [UNIT.WAGON]: 'Carries 4. Trained at the Workshop.',
   [UNIT.SIEGE_WAGON]: 'Slow. Fireballs at long range. Trained at the Workshop.',
   [UNIT.DIRIGIBLE]: 'Flies. Carries 6. Trained at the Perch.',
+  [UNIT.WAR_BALLOON]: 'Flies. Shoots while holding still or while moving. Sporadic spray of fireballs. Trained at the Perch. Needs Artillery.',
   [UNIT.APC]: 'Melee. Carries 6. Trained at the Factory.',
+  [UNIT.TANK]: 'Very slow. Immune to fire. One giant fireball, slow reload. Trained at the Factory. Needs Artillery.',
 };
 
 const BUILDING_NOTE = {
@@ -69,10 +71,10 @@ const BUILDING_NOTE = {
   lab: 'Researches Artillery. Needs a Camp.',
   barracks: 'Trains Warriors and Archers. Researches Drayage. Needs a Village.',
   workshop: 'Builds Wagons and Siege Wagons. Researches Armor and Scribes. Needs a Village.',
-  factory: 'Makes APCs.',
+  factory: 'Makes APCs and Tanks.',
   church: 'Trains Priests.',
   moonwell: 'Researches Prospecting and Stewardship.',
-  perch: 'Harbor Dirigibles.',
+  perch: 'Harbors Dirigibles and War Balloons.',
   grove: 'Train Shaman.',
 };
 
@@ -90,7 +92,7 @@ const HELP_RESOURCES = Object.freeze([
 const UPGRADE_NOTE = {
   patronage: 'Researched at the Tavern.',
   armor: 'Researched at the Workshop.',
-  artillery: 'Researched at the Lab.',
+  artillery: 'Researched at the Lab. Unlocks the War Balloon and the Tank.',
   drayage: 'Adds another rally point. Researched at the Barracks.',
   prospecting: 'Researched at the Moon Well.',
   scribes: 'You can hold more before income is taxed. Researched at the Workshop.',
@@ -113,8 +115,8 @@ export const HELP_UNIT_ROWS = Object.freeze([
   [UNIT.PRIEST, null],
   [UNIT.SHAMAN, null],
   [UNIT.WAGON, UNIT.SIEGE_WAGON],
-  [UNIT.DIRIGIBLE, null],
-  [UNIT.APC, null],
+  [UNIT.DIRIGIBLE, UNIT.WAR_BALLOON],
+  [UNIT.APC, UNIT.TANK],
 ]);
 
 /** v1 upgradeTo display names for help placeholders (not in sim yet). */
@@ -124,8 +126,6 @@ const HELP_UNIT_FUTURE_NAME = Object.freeze({
   [UNIT.WIZARD]: 'Elemental',
   [UNIT.WARLOCK]: 'Geomancer',
   [UNIT.ARCHER]: 'Marksman',
-  [UNIT.DIRIGIBLE]: 'War Balloon',
-  [UNIT.APC]: 'Tank',
   [UNIT.PRIEST]: 'Valkyrie',
   [UNIT.MYCO]: 'Alchemist',
   [UNIT.SHAMAN]: 'Druid',

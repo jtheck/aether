@@ -158,7 +158,7 @@ function fill(el, rows, playerId, openId) {
   el.appendChild(table);
 }
 
-export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPlace, onQueueChange }) {
+export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPlace, onQueueChange, inKothLobby }) {
   const openBtn = document.getElementById('ladder-open');
   const pop = document.getElementById('ladder_pop');
   const closeBtn = document.getElementById('ladder_close');
@@ -259,7 +259,17 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPl
     goPreview.hidden = true;
   });
 
+  function queueLocked() {
+    return matchLobby.isActive() || Boolean(inKothLobby?.());
+  }
+
+  function syncQueue() {
+    if (!findBtn) return;
+    findBtn.disabled = !searching && queueLocked();
+  }
+
   function paint() {
+    syncQueue();
     const view = ladderSlices(board.rows || [], playerId, page);
     page = view.page;
     const season = seasonInfo(board.season || '2026-1');
@@ -446,11 +456,12 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPl
   }
 
   async function beginSearch() {
-    if (holdMatch || matchLobby.isActive() || searching) return;
+    if (holdMatch || queueLocked() || searching) return;
     searching = true;
     onQueueChange?.(true);
     note = '';
     if (findBtn) findBtn.textContent = cancelLabel();
+    syncQueue();
     if (boardId === 'teams' || boardId === 'koth') {
       let ready = false;
       try { ready = await ladderQueueReady(boardId); } catch { ready = false; }
@@ -710,6 +721,7 @@ export function setupLadderDialog({ matchLobby, getUserId, onCloseMenu, onKothPl
   }
 
   function refresh() {
+    syncQueue();
     const state = matchLobby.isActive() ? matchLobby.getState() : null;
     if (state?.ranked && state.phase === 'playing') played = true;
     if (played && (!state || state.phase === 'idle')) {

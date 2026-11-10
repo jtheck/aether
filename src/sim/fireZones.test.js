@@ -153,6 +153,44 @@ function stepWalkThroughDamages() {
   assert.ok(w.hp[foe] < hpBefore);
 }
 
+function tankIgnoresGroundFireAndFireballSplash() {
+  const { w, field } = makeArena();
+  const tank = spawn(w, { type: UNIT.TANK, owner: 1, x: fx.fromFloat(8), y: 0 });
+  const foe = spawn(w, { type: UNIT.WARRIOR, owner: 1, x: fx.fromFloat(8), y: fx.fromFloat(1) });
+  const tankHp = w.hp[tank];
+  const foeHp = w.hp[foe];
+  spawnFireZone(w, {
+    x: fx.fromFloat(8),
+    y: fx.fromFloat(0),
+    radius: fx.fromFloat(4),
+    owner: 0,
+    source: -1,
+    damage: FIRE_ZONE_DAMAGE,
+    friendlyMul: 0,
+  });
+  for (let t = 0; t < FIRE_ZONE_DAMAGE_INTERVAL; t++) fireZoneSystem(w);
+  assert.equal(w.hp[tank], tankHp, 'ground fire skips the tank');
+  assert.ok(w.hp[foe] < foeHp, 'ground fire still burns everyone else');
+
+  const afterZone = w.hp[foe];
+  spawnProjectile(w, {
+    type: PROJECTILE.CANNON,
+    owner: 0,
+    source: -1,
+    target: -1,
+    x: fx.fromFloat(8),
+    y: fx.fromFloat(0),
+    aimX: fx.fromFloat(8),
+    aimY: fx.fromFloat(0),
+    aimScatter: 0,
+    damage: 16,
+  });
+  for (let t = 0; t < 40 && w.projectiles.activeCount; t++) projectileSystem(w, field);
+  assert.equal(w.projectiles.activeCount, 0);
+  assert.equal(w.hp[tank], tankHp, 'fireball splash skips the tank');
+  assert.ok(w.hp[foe] < afterZone, 'fireball splash still hits everyone else');
+}
+
 function burnsFarmsHarderThanOtherBuildings() {
   const { w, field } = makeArena();
   const farm = createBuilding({ owner: 1, type: 'farm', x: 0, z: 0, hp: 200 });
@@ -183,5 +221,6 @@ expiresAndPublishes();
 fireballSplashLeavesZone();
 fireballOnWaterLeavesNoZone();
 stepWalkThroughDamages();
+tankIgnoresGroundFireAndFireballSplash();
 burnsFarmsHarderThanOtherBuildings();
 console.log('fireZones.test.js: ok');

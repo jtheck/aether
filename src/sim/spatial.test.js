@@ -26,7 +26,9 @@ function expectedTargets(w) {
     if (!w.alive[i]) continue;
     if (i % ACQUIRE_PHASES !== w.tick % ACQUIRE_PHASES) continue;
     const def = getUnitDef(w.type[i]);
-    if (def.category !== 'military' || def.aggroRange === 0) continue;
+    if (!(def.aggroRange > 0)) continue;
+    if (def.category !== 'military' && !def.firesOnMove) continue;
+    if (def.firesOnMove && w.order[i] === ORDER.ATTACK_MOVE) continue;
     if (w.order[i] === ORDER.IDLE && !unitIdleHunts(w.type[i])) continue;
     const aggro2 = fx.mul(def.aggroRange, def.aggroRange);
     let best = -1;

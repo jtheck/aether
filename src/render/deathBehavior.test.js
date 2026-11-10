@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   BALLOON_MS,
+  BALLOON_POP_MS,
   DEATH_KIND,
   DEATH_SHRINK_MS,
   FLEE_MS,
@@ -22,10 +23,13 @@ function angle(ax, az, bx, bz) {
 describe('death behavior', () => {
   it('picks a balloon for dirigibles and a sprint for villagers and brigands', () => {
     assert.equal(deathKindForType(UNIT.DIRIGIBLE), DEATH_KIND.BALLOON);
+    assert.equal(deathKindForType(UNIT.WAR_BALLOON), DEATH_KIND.BALLOON_POP);
     assert.equal(deathKindForType(UNIT.VILLAGER), DEATH_KIND.FLEE);
     assert.equal(deathKindForType(UNIT.BRIGAND), DEATH_KIND.FLEE);
     assert.equal(deathKindForType(UNIT.WARRIOR), DEATH_KIND.SHRINK);
     assert.equal(deathDurationMs(DEATH_KIND.BALLOON), BALLOON_MS);
+    assert.equal(deathDurationMs(DEATH_KIND.BALLOON_POP), BALLOON_POP_MS);
+    assert.ok(BALLOON_POP_MS > BALLOON_MS);
     assert.equal(deathDurationMs(DEATH_KIND.FLEE), FLEE_MS);
     assert.equal(deathDurationMs(DEATH_KIND.SHRINK), DEATH_SHRINK_MS);
   });
@@ -65,6 +69,19 @@ describe('death behavior', () => {
       assert.equal(sampleBalloon(0.97, seed).scale, 0.25);
       assert.equal(sampleBalloon(1, seed).alpha, 0);
       assert.equal(sampleBalloon(1, seed).scale, 0.25);
+
+      const popRide = sampleBalloon(0.9, seed, true);
+      const ride = sampleBalloon(0.9, seed);
+      assert.equal(popRide.x, ride.x);
+      assert.equal(popRide.y, ride.y);
+      assert.equal(popRide.z, ride.z);
+      assert.equal(popRide.alpha, 1);
+      assert.equal(popRide.scale, ride.scale);
+      const popped = sampleBalloon(1, seed, true);
+      assert.equal(popped.alpha, 0);
+      assert.equal(popped.scale, 0);
+      assert.equal(popped.x, sampleBalloon(1, seed).x);
+      assert.equal(popped.y, sampleBalloon(1, seed).y);
     }
   });
 

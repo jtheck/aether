@@ -110,8 +110,9 @@ export function createFireballFx(emit) {
   }
 
   function emitGather(ball, gatherT) {
+    const s = ball.scale;
     const count = 4 + (gatherT > 0.4 ? 2 : 0);
-    const reach = 3.2 - gatherT * 1.4;
+    const reach = (3.2 - gatherT * 1.4) * s;
     for (let i = 0; i < count; i++) {
       const ang = Math.random() * Math.PI * 2;
       const elev = (Math.random() - 0.28) * 1.25;
@@ -134,8 +135,8 @@ export function createFireballFx(emit) {
         gravity: [0, 1.1, 0],
         color: [c[0], c[1], c[2], c[3] * (0.55 + gatherT * 0.45)],
         lifetime: 0.36 + Math.random() * 0.22,
-        startSize: puffSize(1.45),
-        endSize: puffSize(0.36),
+        startSize: puffSize(1.45 * s),
+        endSize: puffSize(0.36 * s),
         drag: 0.85,
       });
     }
@@ -152,14 +153,15 @@ export function createFireballFx(emit) {
         gravity: [0, 0.4, 0],
         color: [c[0], c[1], c[2], 0.7 + gatherT * 0.28],
         lifetime: 0.28 + Math.random() * 0.16,
-        startSize: puffSize(1.7 + gatherT * 0.8),
-        endSize: puffSize(0.85),
+        startSize: puffSize((1.7 + gatherT * 0.8) * s),
+        endSize: puffSize(0.85 * s),
         drag: 1.4,
       });
     }
   }
 
   function emitHelix(ball, arms) {
+    const s = ball.scale;
     const b = basis(ball.vx, ball.vy, ball.vz);
     const count = arms > 0 ? arms : 1;
     const c0 = tint();
@@ -167,12 +169,12 @@ export function createFireballFx(emit) {
       const a = ball.phase + (count === 1 ? 0 : arm * Math.PI);
       const cs = Math.cos(a);
       const sn = Math.sin(a);
-      const rad = HELIX_R + Math.sin(ball.phase * 1.6 + arm) * 0.08;
+      const rad = (HELIX_R + Math.sin(ball.phase * 1.6 + arm) * 0.08) * s;
       const px = ball.cx + b.rx * cs * rad + b.ux * sn * rad;
       const py = ball.cy + b.ry * cs * rad + b.uy * sn * rad;
       const pz = ball.cz + b.rz * cs * rad + b.uz * sn * rad;
       const c = arm === 0 ? c0 : tint();
-      const size = puffSize(3.1);
+      const size = puffSize(3.1 * s);
       // Ride a little, then slip behind - full inherit made the swirl lift with the orb.
       const ride = 0.22;
       const swirl = 0.45;
@@ -195,6 +197,7 @@ export function createFireballFx(emit) {
   }
 
   function emitLaunch(ball) {
+    const s = ball.scale;
     for (let i = 0; i < 10; i++) {
       const ang = (i / 10) * Math.PI * 2;
       const c = tint();
@@ -202,15 +205,15 @@ export function createFireballFx(emit) {
         ...puff(),
         position: [ball.cx, ball.cy, ball.cz],
         velocity: [
-          Math.cos(ang) * (1.4 + Math.random() * 1.1),
-          0.5 + Math.random() * 0.9,
-          Math.sin(ang) * (1.4 + Math.random() * 1.1),
+          Math.cos(ang) * (1.4 + Math.random() * 1.1) * s,
+          (0.5 + Math.random() * 0.9) * s,
+          Math.sin(ang) * (1.4 + Math.random() * 1.1) * s,
         ],
         gravity: [0, 0.45, 0],
         color: [c[0], c[1], c[2], 0.85],
         lifetime: 0.24 + Math.random() * 0.14,
-        startSize: puffSize(1.15),
-        endSize: puffSize(0.28),
+        startSize: puffSize(1.15 * s),
+        endSize: puffSize(0.28 * s),
         drag: 1.3,
       });
     }
@@ -230,7 +233,7 @@ export function createFireballFx(emit) {
     for (const ball of live.values()) ball.seen = false;
   }
 
-  function track(slot, generation, x, y, z, vx, vy, vz, winding) {
+  function track(slot, generation, x, y, z, vx, vy, vz, winding, scale = 1) {
     const key = keyOf(slot, generation);
     let ball = live.get(key);
     if (!ball) {
@@ -241,6 +244,7 @@ export function createFireballFx(emit) {
         vx,
         vy,
         vz,
+        scale: scale > 0 ? scale : 1,
         winding: !!winding,
         bornAt: clock,
         phase: Math.random() * Math.PI * 2,

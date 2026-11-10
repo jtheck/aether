@@ -329,6 +329,7 @@
     ],
     "/assets/models/silo.glb": [],
     "/assets/models/stewardship.glb": [],
+    "/assets/models/tank.glb": [],
     "/assets/models/target.glb": [],
     "/assets/models/tavern.glb": [
       {
@@ -459,6 +460,7 @@
         "roll": 0
       }
     ],
+    "/assets/models/warballoon.glb": [],
     "/assets/models/warlock.glb": [
       {
         "name": "hex_anchor",

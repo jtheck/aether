@@ -107,6 +107,8 @@ export function createStorySheet({ onSeek, onSelect, onNudge } = {}) {
         block.textContent = clip.speaker || clip.text || 'line';
       } else if (Number.isFinite(clip.fromTx) && (clip.fromTx !== clip.tx || clip.fromTz !== clip.tz)) {
         block.textContent = `${clip.fromTx | 0},${clip.fromTz | 0}→${clip.tx | 0},${clip.tz | 0}`;
+      } else if (!Number.isFinite(clip.fromTx)) {
+        block.textContent = `→${clip.tx | 0},${clip.tz | 0}`;
       } else {
         block.textContent = `${clip.tx | 0},${clip.tz | 0}`;
       }
@@ -114,7 +116,7 @@ export function createStorySheet({ onSeek, onSelect, onNudge } = {}) {
         ? clip.text
         : Number.isFinite(clip.fromTx)
           ? `camera ${clip.fromTx},${clip.fromTz} → ${clip.tx},${clip.tz}`
-          : `camera ${clip.tx},${clip.tz}`;
+          : `linked to the previous shot, ends ${clip.tx},${clip.tz}`;
       block.addEventListener('pointermove', (ev) => {
         if (gesture) return;
         block.style.cursor = dragMode(ev, block) === 'move' ? 'grab' : 'ew-resize';

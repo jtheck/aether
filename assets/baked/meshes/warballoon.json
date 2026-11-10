@@ -1,0 +1,126 @@
+{
+  "sourceUrl": "/assets/models/warballoon.glb",
+  "version": 3,
+  "sockets": [],
+  "materials": [
+    {
+      "name": "TeamColor",
+      "baseColorFactor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material.001",
+      "baseColorFactor": [
+        0.06844722479581833,
+        0.07503829151391983,
+        1,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "TeamColor",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "boundMin": [
+        -3.2748217582702637,
+        -1.7007014751434326,
+        -8.212141990661621
+      ],
+      "boundMax": [
+        2.808878183364868,
+        7.046494483947754,
+        2.798508882522583
+      ],
+      "positions": {
+        "offset": 0,
+        "length": 1380,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 5520,
+        "length": 1380,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 11040,
+        "length": 780,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 14160,
+        "length": 920,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.001",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "boundMin": [
+        -3.104067325592041,
+        -0.4868917167186737,
+        -6.31956672668457
+      ],
+      "boundMax": [
+        2.6336545944213867,
+        5.90841817855835,
+        7.172504901885986
+      ],
+      "positions": {
+        "offset": 17840,
+        "length": 2880,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 29360,
+        "length": 2880,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 40880,
+        "length": 960,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 44720,
+        "length": 1920,
+        "type": "f32"
+      }
+    }
+  ]
+}

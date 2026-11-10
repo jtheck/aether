@@ -124,6 +124,7 @@ import { createStorySpeech, narratorLines } from '../story/speech.js';
 import { findNamedUnit, mergeStoryParty, namedUnits, normalizeSpeaker, storyPartyPlacements } from '../story/cast.js';
 import { OBJ_KINDS, TERMINAL_KINDS, isTerminalObjective, normalizeObjectives } from '../story/objectives.js';
 import { createStorySheet } from './storySheet.js';
+import { installNavGuard } from '../app/navGuard.js';
 import { createHistory } from './history.js';
 import {
   WAVE_ERAS,
@@ -159,6 +160,7 @@ import { createWallMaterials, createWallMesh } from '../render/walls.js';
 import {
   BACKDROP,
   BACKDROP_DEFS,
+  backdropAlongRay,
   defaultBackdropY,
   freshBackdrop,
   nearestBackdrop,
@@ -769,11 +771,44 @@ function triggerPanel(obj) {
   for (const name of OBJ_KINDS) {
     const opt = document.createElement('option');
     opt.value = name;
-    opt.textContent = name;
+    opt.textContent = kindWord(name);
     kind.appendChild(opt);
   }
   kind.value = OBJ_KINDS.includes(obj.kind) ? obj.kind : 'reach';
   wrap.appendChild(labeledZoneControl('Kind', kind));
+
+  const cue = obj.kind === 'cue';
+  if (cue) {
+    const radius = zoneInput(obj, 'radius', obj.r);
+    radius.min = '1';
+    wrap.appendChild(labeledZoneControl('Radius', radius, 'Tiles. The ring shows in the editor only.'));
+    const beat = document.createElement('select');
+    beat.dataset.zoneField = 'reel';
+    beat.dataset.zoneId = obj.id;
+    beat.dataset.zoneParam = 'reel';
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = 'None';
+    beat.appendChild(none);
+    const cur = String(obj.params?.reel || '');
+    let listed = false;
+    for (const reel of beatReels()) {
+      const opt = document.createElement('option');
+      opt.value = reel.id;
+      opt.textContent = reelLabel(reel);
+      beat.appendChild(opt);
+      if (reel.id === cur) listed = true;
+    }
+    if (cur && !listed) {
+      const opt = document.createElement('option');
+      opt.value = cur;
+      opt.textContent = cur;
+      beat.appendChild(opt);
+    }
+    beat.value = cur;
+    wrap.appendChild(labeledZoneControl('Beat', beat, 'Authored on the Story tab. That board supplies the lines and any camera moves.'));
+    return wrap;
+  }
 
   const ends = document.createElement('select');
   ends.dataset.zoneField = 'terminal';
@@ -894,7 +929,9 @@ function applyZoneField(obj, input) {
     const text = String(input.value || '').trim();
     if (text) obj[fieldName] = text;
     else delete obj[fieldName];
-  } else if (fieldName === 'escort' || fieldName === 'branch' || fieldName === 'fail') {
+  } else if (fieldName === 'reel') {
+    setZoneParam(obj, 'reel', String(input.value || '').trim());
+  } else if (fieldName === 'escort' || fieldName === 'branch' || fieldName === 'fail' || fieldName === 'speaker' || fieldName === 'line') {
     setZoneParam(obj, input.dataset.zoneParam, String(input.value || '').trim());
   } else if (fieldName === 'seconds' || fieldName === 'hold' || fieldName === 'detect') {
     const n = Number(input.value);
@@ -1480,6 +1517,7 @@ function renderArmySides() {
 }
 
 function kindWord(kind) {
+  if (kind === 'cue') return 'Chat';
   const s = String(kind || 'reach');
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
@@ -3090,19 +3128,39 @@ function poseProps() {
   });
 }
 
-function propGesture(pos) {
-  if (!pos) return false;
-  if (state.propArmed) return true;
-  return nearestBackdrop(propList(), pos.x, pos.z) >= 0;
+function rayGroundT(ray, pos) {
+  if (!ray || !pos) return 1;
+  if (Math.abs(ray.dx) >= Math.abs(ray.dz) && Math.abs(ray.dx) > 1e-8) return (pos.x - ray.x) / ray.dx;
+  if (Math.abs(ray.dz) > 1e-8) return (pos.z - ray.z) / ray.dz;
+  if (Math.abs(ray.dy) > 1e-8) return -ray.y / ray.dy;
+  return 1;
 }
 
-function placeOrGrabProp(pos) {
+/** Prop under the cursor: the mesh the ray hits, else the ground footprint. */
+function propHit(pos, clientX, clientY) {
+  const list = propList();
+  const ray = clientX != null ? viewRay(clientX, clientY) : null;
+  if (ray) {
+    const along = backdropAlongRay(list, ray, rayGroundT(ray, pos));
+    if (along >= 0) return along;
+  }
+  if (!pos) return -1;
+  return nearestBackdrop(list, pos.x, pos.z);
+}
+
+function propGesture(pos, clientX, clientY) {
+  if (state.propArmed && pos) return true;
+  return propHit(pos, clientX, clientY) >= 0;
+}
+
+function placeOrGrabProp(pos, clientX, clientY) {
   if (!pos || !field) return;
   const list = propList();
-  const hit = nearestBackdrop(list, pos.x, pos.z);
+  const hit = propHit(pos, clientX, clientY);
   if (hit >= 0) {
     state.propIndex = hit;
     propDrag = { index: hit, dx: list[hit].x - pos.x, dz: list[hit].z - pos.z };
+    state.propArmed = false;
     syncPropUi();
     return;
   }
@@ -3402,28 +3460,54 @@ function gardenPayload() {
   return encodeGarden(field, gardenExtras());
 }
 
+function beatReels() {
+  return (state.story?.reels || []).filter((reel) => reel.when === 'beat');
+}
+
+function reelLabel(reel) {
+  return String(reel?.name || '').trim() || reel?.id || 'Beat';
+}
+
+function shellReel(id) {
+  if (id === 'ending') return { id: 'ending', when: 'win', clips: [], duration: 0 };
+  if (id === 'intro') return { id: 'intro', when: 'start', clips: [], duration: 0 };
+  return { id, when: 'beat', name: 'Beat', clips: [], duration: 0 };
+}
+
 function currentReel() {
-  const ending = state.storyReelId === 'ending';
-  const id = ending ? 'ending' : 'intro';
-  const found = state.story?.reels?.find((r) => r.id === id);
-  if (found) return activeReel(state.story, id);
-  if (ending) return { id: 'ending', when: 'win', clips: [], duration: 0 };
-  return activeReel(state.story, 'intro');
+  const id = state.storyReelId || 'intro';
+  const found = state.story?.reels?.find((reel) => reel.id === id);
+  return found || shellReel(id);
 }
 
 function setStoryReel(id) {
-  state.storyReelId = id === 'ending' ? 'ending' : 'intro';
+  state.storyReelId = id || 'intro';
+  if (!state.story?.reels?.some((reel) => reel.id === state.storyReelId)) {
+    state.story = replaceReel(state.story, shellReel(state.storyReelId));
+  }
   state.storyClipId = null;
   storyPlayer?.setReel(currentReel());
   storyPlayer?.toStart();
   syncStoryEditor();
 }
 
+function addStoryBeat() {
+  const used = new Set((state.story?.reels || []).map((reel) => reel.id));
+  let n = beatReels().length + 1;
+  let id = `beat-${n}`;
+  while (used.has(id)) {
+    n += 1;
+    id = `beat-${n}`;
+  }
+  state.story = replaceReel(state.story, { id, when: 'beat', name: `Beat ${n}`, clips: [], duration: 0 });
+  setStoryReel(id);
+}
+
 function applyStoryReveal(value) {
   const reel = currentReel();
   const next = { ...reel, clips: reel.clips.slice() };
   if (value === 'all') next.reveal = 'all';
-  else if (value === 'enemy') next.reveal = [4];
+  else if (value === 'enemy') next.reveal = 'enemy';
   else delete next.reveal;
   commitReel(next);
 }
@@ -3529,22 +3613,41 @@ function addStoryCamera() {
   if (!cam || !field) return;
   const pose = captureViewPose();
   const reel = currentReel();
+  const t = storyPlayer?.time() ?? 0;
   const clip = {
     id: newClipId(),
     kind: CLIP_CAMERA,
-    t: storyPlayer?.time() ?? 0,
+    t,
     dur: 2,
     tx: pose.tx,
     tz: pose.tz,
     radius: pose.radius,
     alpha: pose.alpha,
-    fromTx: pose.tx,
-    fromTz: pose.tz,
-    fromRadius: pose.radius,
-    fromAlpha: pose.alpha,
   };
+  const earlier = reel.clips.some((c) => c.kind === CLIP_CAMERA && c.t <= t);
+  if (!earlier) {
+    clip.fromTx = pose.tx;
+    clip.fromTz = pose.tz;
+    clip.fromRadius = pose.radius;
+    clip.fromAlpha = pose.alpha;
+  }
   state.storyClipId = clip.id;
   commitReel({ ...reel, clips: [...reel.clips, clip] });
+}
+
+function linkCameraToPrevious() {
+  const clip = selectedStoryClip();
+  if (clip?.kind !== CLIP_CAMERA) return;
+  const next = { ...clip };
+  delete next.fromTx;
+  delete next.fromTz;
+  delete next.fromRadius;
+  delete next.fromAlpha;
+  const reel = currentReel();
+  commitReel({
+    ...reel,
+    clips: reel.clips.map((c) => (c.id === clip.id ? next : c)),
+  });
 }
 
 function setCameraWaypoint(which) {
@@ -3620,7 +3723,7 @@ function storyClipLabel(clip) {
   }
   if (clip.kind === CLIP_HOLD) return `${stamp} Pause`;
   const end = `${clip.tx | 0}, ${clip.tz | 0}`;
-  return `${stamp} Camera - ${end}`;
+  return Number.isFinite(clip.fromTx) ? `${stamp} Camera - ${end}` : `${stamp} Camera - linked → ${end}`;
 }
 
 function renderStoryClipList() {
@@ -3689,12 +3792,19 @@ function syncStoryEditor() {
     set('story-cam-alpha', clip.alpha.toFixed(2));
     const hint = document.getElementById('story-cam-waypoints');
     if (hint) {
-      const who = clip.char ? ` ${clip.char}` : '';
+      const cameras = currentReel().clips.filter((c) => c.kind === CLIP_CAMERA);
+      const opening = cameras[0]?.id === clip.id;
+      const who = clip.char ? ` on ${clip.char}` : '';
       const end = `${clip.tx | 0},${clip.tz | 0} r${Math.round(clip.radius)}`;
-      if (Number.isFinite(clip.fromTx)) {
-        hint.textContent = `Start ${clip.fromTx | 0},${clip.fromTz | 0} r${Math.round(clip.fromRadius)} → End${who} ${end}`;
+      const start = `${clip.fromTx | 0},${clip.fromTz | 0} r${Math.round(clip.fromRadius)}`;
+      if (opening && !Number.isFinite(clip.fromTx)) {
+        hint.textContent = `Opening angle${who} ${end}. The match starts on this shot.`;
+      } else if (opening) {
+        hint.textContent = `Opening angle. The match starts at ${start}, then moves to${who} ${end}.`;
+      } else if (!Number.isFinite(clip.fromTx)) {
+        hint.textContent = `Linked to the previous shot, then moves to${who} ${end}.`;
       } else {
-        hint.textContent = `Start (previous shot) → End${who} ${end}`;
+        hint.textContent = `Cut from ${start} to${who} ${end}. Link to previous to chain them.`;
       }
     }
     const aim = document.getElementById('story-cam-char');
@@ -3720,14 +3830,32 @@ function syncStoryEditor() {
 }
 
 function syncStoryReelUi() {
-  const ending = state.storyReelId === 'ending';
-  document.getElementById('story-reel-intro')?.classList.toggle('active', !ending);
-  document.getElementById('story-reel-win')?.classList.toggle('active', ending);
+  const id = state.storyReelId || 'intro';
+  document.getElementById('story-reel-intro')?.classList.toggle('active', id === 'intro');
+  document.getElementById('story-reel-win')?.classList.toggle('active', id === 'ending');
+  const host = document.getElementById('story-beats');
+  if (host) {
+    host.replaceChildren();
+    for (const reel of beatReels()) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.dataset.storyBeat = reel.id;
+      btn.textContent = reelLabel(reel);
+      btn.classList.toggle('active', reel.id === id);
+      host.appendChild(btn);
+    }
+  }
+  const nameWrap = document.getElementById('story-beat-name-label');
+  const nameInput = document.getElementById('story-beat-name');
+  const beat = currentReel();
+  const naming = beat.when === 'beat';
+  if (nameWrap) nameWrap.hidden = !naming;
+  if (nameInput && naming && nameInput !== document.activeElement) nameInput.value = reelLabel(beat);
   const reveal = document.getElementById('story-reveal');
   const reel = currentReel();
   if (reveal && reveal !== document.activeElement) {
     if (reel.reveal === 'all') reveal.value = 'all';
-    else if (Array.isArray(reel.reveal) && reel.reveal.length) reveal.value = 'enemy';
+    else if (reel.reveal === 'enemy' || (Array.isArray(reel.reveal) && reel.reveal.length)) reveal.value = 'enemy';
     else reveal.value = '';
   }
 }
@@ -3740,9 +3868,13 @@ function fillCastControls() {
     if (!names.length) {
       const hint = document.createElement('p');
       hint.className = 'hint';
-      hint.textContent = 'Name a placed unit to jump, follow, or aim a camera at them.';
+      hint.textContent = 'Name a placed unit to aim a camera at them. Jump and Follow show up on that name. They move this view. They are not timeline clips.';
       row.appendChild(hint);
     } else {
+      const note = document.createElement('p');
+      note.className = 'hint';
+      note.textContent = 'Jump looks at that unit. Follow stays on them until you pan.';
+      row.appendChild(note);
       for (const u of names) {
         const line = document.createElement('div');
         line.className = 'row';
@@ -3821,11 +3953,23 @@ function bindStoryUi() {
   document.getElementById('story-delete')?.addEventListener('click', deleteStoryClip);
   document.getElementById('story-reel-intro')?.addEventListener('click', () => setStoryReel('intro'));
   document.getElementById('story-reel-win')?.addEventListener('click', () => setStoryReel('ending'));
+  document.getElementById('story-add-beat')?.addEventListener('click', () => addStoryBeat());
+  document.getElementById('story-beats')?.addEventListener('click', (e) => {
+    const id = e.target?.closest?.('[data-story-beat]')?.dataset?.storyBeat;
+    if (id) setStoryReel(id);
+  });
+  document.getElementById('story-beat-name')?.addEventListener('change', (e) => {
+    const reel = currentReel();
+    if (reel.when !== 'beat') return;
+    const name = String(e.target.value || '').trim() || reelLabel(reel);
+    commitReel({ ...reel, clips: reel.clips.slice(), name });
+  });
   document.getElementById('story-reveal')?.addEventListener('change', (e) => applyStoryReveal(e.target.value));
   document.getElementById('story-hold-t')?.addEventListener('change', () => patchSelectedClip({ t: num('story-hold-t') }));
   document.getElementById('story-hold-dur')?.addEventListener('change', () => patchSelectedClip({ dur: num('story-hold-dur') }));
   document.getElementById('story-cam-set-start')?.addEventListener('click', () => setCameraWaypoint('start'));
   document.getElementById('story-cam-set-end')?.addEventListener('click', () => setCameraWaypoint('end'));
+  document.getElementById('story-cam-link')?.addEventListener('click', () => linkCameraToPrevious());
   document.getElementById('story-cam-char')?.addEventListener('change', (e) => {
     aimClipAtCharacter(e.target.value);
   });
@@ -4347,6 +4491,8 @@ function blobToDataUrl(blob) {
 
 const PREVIEW_PX = 256;
 const FORGE_PITCH_BIAS = 0.36;
+/** Editing pullback. 1 is the match camera's farthest zoom. */
+const FORGE_RADIUS_SCALE = 1.5;
 const PREVIEW_RADIUS_SCALE = 2;
 let previewMode = false;
 
@@ -4442,6 +4588,7 @@ function enterPreviewMode() {
   previewMode = true;
   cam.setArcRotate(true);
   cam.setUpperRadiusScale(PREVIEW_RADIUS_SCALE);
+  cam.setBetaBias(0);
   document.body.classList.add('is-preview');
   const frame = document.getElementById('forge-preview-frame');
   if (frame) frame.hidden = false;
@@ -4453,7 +4600,7 @@ function exitPreviewMode() {
   if (!previewMode) return;
   previewMode = false;
   cam?.setArcRotate(false);
-  cam?.setUpperRadiusScale(1);
+  cam?.setUpperRadiusScale(FORGE_RADIUS_SCALE);
   cam?.setBetaBias(FORGE_PITCH_BIAS);
   document.body.classList.remove('is-preview');
   const frame = document.getElementById('forge-preview-frame');
@@ -5192,7 +5339,7 @@ function mountUi() {
       <input id="prop-y" type="range" min="-800" max="40" step="1" value="0" disabled>
       <label>Turn <span id="prop-yaw-label">0</span></label>
       <input id="prop-yaw" type="range" min="0" max="360" step="1" value="0" disabled>
-      <p class="hint">Props sit beside the table or in a hole. Disc or Castle arms one drop - click the ground once, then chunk clicks work again. Double-click a chunk to turn it on or off. Click a prop to drag it. They do not block movement.</p>
+      <p class="hint">Props sit beside the table or in a hole. Disc or Castle arms one drop. Click a prop to drag that one. Click empty ground to drop a new one, then chunk clicks work again. Double-click a chunk to turn it on or off. They do not block movement.</p>
     </div>
     <div id="panel-terrain" class="panel" style="display:none">
       <div class="palette">
@@ -5316,14 +5463,17 @@ function mountUi() {
       <div class="row stay">
         <button id="story-reel-intro" type="button" class="active">Intro</button>
         <button id="story-reel-win" type="button">Win</button>
+        <span id="story-beats"></span>
+        <button id="story-add-beat" type="button">Add beat</button>
         <label>Reveal
-          <select id="story-reveal">
+          <select id="story-reveal" title="Shares that faction's sight, so their units and buildings show through fog">
             <option value="">Hidden</option>
-            <option value="enemy">Enemy</option>
+            <option value="enemy">Enemies</option>
             <option value="all">Everyone</option>
           </select>
         </label>
       </div>
+      <p class="hint">Enemies or Everyone shares sight while that reel plays. When it ends, their units hide. Buildings you saw stay, under the visited fog.</p>
       <div class="row stay">
         <button id="story-to-start" type="button">|&lt;</button>
         <button id="story-rew" type="button">&lt;&lt;</button>
@@ -5339,13 +5489,15 @@ function mountUi() {
         <button id="story-add-hold" type="button">Add pause</button>
         <button id="story-delete" type="button">Delete clip</button>
       </div>
-      <p id="story-clip-empty" class="hint">Intro plays at the start. Win plays when the chapter is won. Reveal opens sight for that reel. Add a camera, a line, or a pause, then pick it in the list.</p>
+      <label id="story-beat-name-label" hidden>Name <input id="story-beat-name" type="text" maxlength="40"></label>
+      <p id="story-clip-empty" class="hint">Intro plays at the start. Its first camera is the match opening angle. Win plays when the chapter is won. A beat plays when a Chat goal walks into it. A later camera starts where the previous shot ended, unless you set its own start.</p>
       <div id="story-clip-list"></div>
       <div id="story-cast"></div>
       <div id="story-clip-camera" style="display:none">
         <div class="row">
           <button id="story-cam-set-start" type="button">Set start from view</button>
           <button id="story-cam-set-end" type="button">Set end from view</button>
+          <button id="story-cam-link" type="button">Link to previous</button>
         </div>
         <p id="story-cam-waypoints" class="hint"></p>
         <p class="block-title">Look</p>
@@ -6101,6 +6253,7 @@ function bindLightUi() {
 const canvas = document.getElementById('canvas');
 
 async function main() {
+  installNavGuard();
   mountUi();
   engine = await createEngine(canvas, { msaaSamples: 1 });
   scene = createSceneContext(engine);
@@ -6122,6 +6275,7 @@ async function main() {
   camera.farPlane = 40000;
   scene.camera = camera;
   cam = createCameraController(camera, canvas, { worldHalfF, worldHalfZF, betaBias: FORGE_PITCH_BIAS });
+  cam.setUpperRadiusScale(FORGE_RADIUS_SCALE);
 
   storyHud = createStoryHud(document.body);
   storySpeech = createStorySpeech({
@@ -6199,8 +6353,8 @@ async function main() {
         handlePlacePointerDown(pos, e);
       } else if (state.layer === 'zones') {
         handleZonePointerDown(pos, e);
-      } else if (state.layer === 'table' && state.tableTool === 'props' && propGesture(pos)) {
-        placeOrGrabProp(pos);
+      } else if (state.layer === 'table' && state.tableTool === 'props' && propGesture(pos, e.clientX, e.clientY)) {
+        placeOrGrabProp(pos, e.clientX, e.clientY);
       } else if (state.layer === 'table' || state.layer === 'terrain' || state.layer === 'scenery' || state.layer === 'story') {
         applyAt(pos, { add: e.shiftKey });
         beginSceneryStepHold(pos);
@@ -6214,7 +6368,7 @@ async function main() {
     if (state.tableTool === 'props' && state.propArmed) return;
     const pos = pickGround(e.clientX, e.clientY);
     if (!pos || !field?.tableShape) return;
-    if (state.tableTool === 'props' && nearestBackdrop(propList(), pos.x, pos.z) >= 0) return;
+    if (state.tableTool === 'props' && propHit(pos, e.clientX, e.clientY) >= 0) return;
     const { cx, cz } = worldToCell(field, pos.x, pos.z, field.tableShape.cellSize);
     if (!isSelected(cx, cz)) selectChunk(cx, cz);
     toggleSelectedChunks();

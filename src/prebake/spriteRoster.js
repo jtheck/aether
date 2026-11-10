@@ -38,7 +38,9 @@ const ZOOM_BY_STEM = {
   wagon: 1.3,
   siegewagon: 1.3,
   dirigible: 1.3,
+  warballoon: 1.3,
   apc: 1.3,
+  tank: 1.3,
 };
 
 /** Three-quarter portrait. Alpha is the orbit, beta is the height (π/2 is level). */

@@ -1541,6 +1541,8 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     return menuGateState({
       cost: slot.cost,
       requires: slot.requires,
+      tech: slot.tech,
+      researched: researchedUpgrades,
       bank: menuBank,
       ownedTypes,
     });
@@ -1697,6 +1699,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
         costText: item.auto ? '' : formatResourceCost(item.cost),
         cost: item.auto ? {} : item.cost,
         requires: item.requires,
+        tech: item.tech || null,
         gate: 'ok',
         iconKey,
         // Display-only slot (e.g. a village's auto-trickled villager): shows an

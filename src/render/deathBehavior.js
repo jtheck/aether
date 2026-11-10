@@ -8,12 +8,16 @@ export const DEATH_KIND = {
   SHRINK: 0,
   BALLOON: 1,
   FLEE: 2,
+  /** Same untied-balloon path as a dirigible, then a burst instead of a fade. */
+  BALLOON_POP: 3,
 };
 
 /** Generic corpse: shrink away. */
 export const DEATH_SHRINK_MS = 450;
 /** Untied-balloon flight, including the fade at the end. */
 export const BALLOON_MS = 3200;
+/** War balloon plays that same flight slower, then pops. */
+export const BALLOON_POP_MS = 5000;
 /**
  * Sprint away from the fight, then the fade. Long enough that the line off
  * the board can be read, still short of a walk.
@@ -22,6 +26,8 @@ export const FLEE_MS = 5200;
 
 /** Last slice of the balloon is the fade, after the shot into the sky. */
 const BALLOON_FADE_AT = 0.88;
+/** War balloon holds through that climb, then swells and vanishes. */
+const BALLOON_POP_AT = 0.97;
 /** Hull scale at the moment the mesh is dropped. Shrinks the whole flight. */
 const BALLOON_END_SCALE = 0.25;
 /** Last slice of the bolt is the fade. They are already gone. */
@@ -50,12 +56,14 @@ const BALLOON_SEGMENTS = [
 
 export function deathKindForType(typeId) {
   const id = typeId | 0;
+  if (id === UNIT.WAR_BALLOON) return DEATH_KIND.BALLOON_POP;
   if (id === UNIT.DIRIGIBLE) return DEATH_KIND.BALLOON;
   if (id === UNIT.VILLAGER || id === UNIT.BRIGAND) return DEATH_KIND.FLEE;
   return DEATH_KIND.SHRINK;
 }
 
 export function deathDurationMs(kind) {
+  if (kind === DEATH_KIND.BALLOON_POP) return BALLOON_POP_MS;
   if (kind === DEATH_KIND.BALLOON) return BALLOON_MS;
   if (kind === DEATH_KIND.FLEE) return FLEE_MS;
   return DEATH_SHRINK_MS;
@@ -109,10 +117,10 @@ function advanceSlice(pos, heading, seg, frac) {
 
 /**
  * Party balloon with the neck open: a fast erratic whip, then one shot upward,
- * then a quick fade.
+ * then a quick fade. `pop` keeps that path and swaps the fade for a burst.
  * @returns {{ x: number, y: number, z: number, yaw: number, pitch: number, roll: number, alpha: number, scale: number }}
  */
-export function sampleBalloon(u, seed) {
+export function sampleBalloon(u, seed, pop = false) {
   const t = clamp01(u);
   const s = seed | 0;
   let heading = hash01(s + 1) * Math.PI * 2;
@@ -133,7 +141,21 @@ export function sampleBalloon(u, seed) {
   }
   const sky = smoothstep(0.64, 0.88, t);
   const wobble = 1 - sky;
-  const alpha = tailAlpha(t, BALLOON_FADE_AT);
+  // Quarter size while the hull is still opaque. The last slice only fades.
+  let scale = 1 - (1 - BALLOON_END_SCALE) * smoothstep(0, BALLOON_FADE_AT, t);
+  let alpha = tailAlpha(t, BALLOON_FADE_AT);
+  if (pop) {
+    alpha = 1;
+    if (t > BALLOON_POP_AT) {
+      const puff = (t - BALLOON_POP_AT) / (1 - BALLOON_POP_AT);
+      if (puff < 0.4) {
+        scale = BALLOON_END_SCALE + (0.9 - BALLOON_END_SCALE) * (puff / 0.4);
+      } else {
+        scale = 0;
+        alpha = 0;
+      }
+    }
+  }
   return {
     x: pos.x,
     y: pos.y,
@@ -142,8 +164,7 @@ export function sampleBalloon(u, seed) {
     pitch: Math.sin(t * 16 + s * 0.017) * 0.22 * wobble - sky * 0.65,
     roll: Math.sin(t * 21 + s * 0.013) * 0.48 * wobble,
     alpha,
-    // Quarter size while the hull is still opaque. The last slice only fades.
-    scale: 1 - (1 - BALLOON_END_SCALE) * smoothstep(0, BALLOON_FADE_AT, t),
+    scale,
   };
 }
 

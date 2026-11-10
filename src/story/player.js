@@ -124,6 +124,10 @@ export function createStoryPlayer(opts = {}) {
       if (t >= reel.duration && reel.duration > 0) t = 0;
       emit('play');
     },
+    /** Freeze the playhead without leaving the reel. */
+    hold() {
+      rate = 0;
+    },
     stop() {
       rate = 0;
       emit('play');

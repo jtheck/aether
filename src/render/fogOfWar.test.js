@@ -681,6 +681,45 @@ describe('fogOfWar vision identity', () => {
     assert.equal(fog.isWorldVisible(0, 0), true);
   });
 
+  it('keeps a seen building when shared sight is settled instead of wiped', () => {
+    const field = fakeField(20, 20);
+    const half = (20 * 4) / 2;
+    const fog = createFogOfWar();
+    fog.reset(field);
+    const world = fakeWorld([
+      { owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 },
+      { owner: 1, type: UNIT.WARRIOR, x: half - 2, z: half - 2 },
+    ]);
+    const enemyCamp = { owner: 1, type: 'camp', x: half - 2, z: half - 2, tracks: [{ id: 'warrior', count: 1 }] };
+
+    fog.stamp({
+      world,
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [enemyCamp],
+      agoras: [],
+      shareVisionWith: [1],
+    });
+    assert.equal(fog.filterBuildings([enemyCamp]).length, 1);
+
+    fog.stamp({
+      world,
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [enemyCamp],
+      agoras: [],
+      shareVisionWith: [],
+      settleSeen: true,
+    });
+    assert.equal(fog.isWorldVisible(half - 2, half - 2), false);
+    assert.equal(fog.isWorldExplored(half - 2, half - 2), true);
+    assert.equal(fog.hidesHostile(1, half - 2, half - 2), true);
+    assert.equal(fog.filterBuildings([enemyCamp]).length, 1);
+    assert.equal(fog.isWorldVisible(0, 0), true);
+  });
+
   it('forgets last-known buildings when the local player id changes', () => {
     const field = fakeField(20, 20);
     const fog = createFogOfWar();

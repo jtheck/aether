@@ -38,7 +38,9 @@ export const UNIT_MODEL_URLS = {
   [UNIT.WAGON]: '/assets/models/wagon.glb',
   [UNIT.SIEGE_WAGON]: '/assets/models/siegewagon.glb',
   [UNIT.DIRIGIBLE]: '/assets/models/dirigible.glb',
+  [UNIT.WAR_BALLOON]: '/assets/models/warballoon.glb',
   [UNIT.APC]: '/assets/models/apc.glb',
+  [UNIT.TANK]: '/assets/models/tank.glb',
 };
 
 export function hasUnitModel(typeId) {

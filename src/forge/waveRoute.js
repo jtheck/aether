@@ -221,6 +221,10 @@ const ZONE_TRIGGERS = {
     hint: 'Walking in records this branch and finishes the other choice zones.',
     fields: [textField('branch', 'Branch', 'branch', '')],
   },
+  cue: {
+    hint: 'A party unit walks in and plays a beat from the Story tab. Lines and cameras come from that board.',
+    fields: [],
+  },
   race: {
     hint: 'Reach the zone before the clock runs out, or the chapter fails.',
     fields: [

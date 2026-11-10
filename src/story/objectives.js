@@ -20,12 +20,14 @@ export const OBJ_GATHER = 'gather';
 export const OBJ_BUILD = 'build';
 export const OBJ_CHOICE = 'choice';
 export const OBJ_RACE = 'race';
+/** Walk-in chat. Not a mission: no ring, no objective row, no chapter win. */
+export const OBJ_CUE = 'cue';
 
 export const OBJ_KINDS = Object.freeze([
   OBJ_REACH, OBJ_ESCAPE, OBJ_ADVANCE,
   OBJ_DESTROY, OBJ_CAPTURE, OBJ_HOLD, OBJ_INFILTRATE, OBJ_CONTROL,
   OBJ_ESCORT, OBJ_DEFEND, OBJ_SURVIVE, OBJ_GATHER, OBJ_BUILD,
-  OBJ_CHOICE, OBJ_RACE,
+  OBJ_CHOICE, OBJ_RACE, OBJ_CUE,
 ]);
 
 /** Kinds that inherently end the chapter (carry `next`). Others need `terminal: true`. */
@@ -152,8 +154,17 @@ function unitInZone(obj, units, field) {
   return (units || []).some((u) => zoneContains(obj, u.x, u.z, field));
 }
 
+export function isCueObjective(obj) {
+  return obj?.kind === OBJ_CUE;
+}
+
+/** Mission zones. Chat cues stay out of the win check, the HUD, and the map rings. */
+export function missionObjectives(objectives) {
+  return (objectives || []).filter((obj) => !isCueObjective(obj));
+}
+
 export function chapterObjectivesWin(objectives) {
-  const list = objectives || [];
+  const list = missionObjectives(objectives);
   if (!list.length) return false;
   const terminals = list.filter(isTerminalObjective);
   if (terminals.length) return terminals.some((o) => o.completed);
@@ -161,7 +172,7 @@ export function chapterObjectivesWin(objectives) {
 }
 
 export function winningNext(objectives) {
-  const list = objectives || [];
+  const list = missionObjectives(objectives);
   const hit = list.find((o) => isTerminalObjective(o) && o.completed && o.next);
   if (hit) return hit.next;
   if (chapterObjectivesWin(list)) {
@@ -226,7 +237,7 @@ export function createObjectiveHud(host = typeof document !== 'undefined' ? docu
   return {
     set(list, { hidden = false, describe } = {}) {
       if (!bar) return;
-      const open = (list || []).filter((o) => !o.completed);
+      const open = missionObjectives(list).filter((o) => !o.completed);
       if (hidden || !open.length) {
         bar.style.display = 'none';
         bar.replaceChildren();

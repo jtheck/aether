@@ -4,11 +4,34 @@
   "sockets": [],
   "materials": [
     {
-      "name": "Material",
+      "name": "Material.001",
       "baseColorFactor": [
-        0.800000011920929,
-        0.800000011920929,
-        0.800000011920929,
+        0.1333443820476532,
+        0.15356223285198212,
+        0.28423547744750977,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material.002",
+      "baseColorFactor": [
+        0.07607457041740417,
+        0.09220416843891144,
+        0.13198235630989075,
         1
       ],
       "metallicFactor": 0,
@@ -30,37 +53,72 @@
   "images": [],
   "parts": [
     {
-      "materialName": "Material",
+      "materialName": "Material.001",
       "materialIndex": 0,
       "reverseWinding": true,
       "boundMin": [
-        -4.521141529083252,
-        -1,
-        -4.530320644378662
+        -2.61279559135437,
+        -0.3759819269180298,
+        -2.909353494644165
       ],
       "boundMax": [
-        4.464679718017578,
-        4.368477821350098,
-        4.45550012588501
+        2.501321315765381,
+        2.6140410900115967,
+        2.8345329761505127
       ],
       "positions": {
         "offset": 0,
-        "length": 2952,
+        "length": 2655,
         "type": "f32"
       },
       "normals": {
-        "offset": 11808,
-        "length": 2952,
+        "offset": 10620,
+        "length": 2655,
         "type": "f32"
       },
       "indices": {
-        "offset": 23616,
-        "length": 996,
+        "offset": 21240,
+        "length": 885,
         "type": "u32"
       },
       "uvs": {
-        "offset": 27600,
-        "length": 1968,
+        "offset": 24780,
+        "length": 1770,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.002",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "boundMin": [
+        -1.5509042739868164,
+        0.6319807171821594,
+        -1.4557832479476929
+      ],
+      "boundMax": [
+        0.8650975823402405,
+        2.0632174015045166,
+        1.380962610244751
+      ],
+      "positions": {
+        "offset": 31860,
+        "length": 225,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 32760,
+        "length": 225,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 33660,
+        "length": 75,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 33960,
+        "length": 150,
         "type": "f32"
       }
     }

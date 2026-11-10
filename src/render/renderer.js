@@ -53,7 +53,7 @@ import { projectWorldToCanvas } from './screenProject.js';
 import { getUnitDef, UNIT } from '../sim/unitTypes.js';
 import { GATHER_ACT } from '../sim/gather.js';
 import { MAX_PROJECTILES, PROJECTILE_DESPAWN } from '../sim/projectiles.js';
-import { PROJECTILE, PROJECTILE_MESH } from '../sim/projectileTypes.js';
+import { getProjectileDef, PROJECTILE, PROJECTILE_MESH } from '../sim/projectileTypes.js';
 import { HEIGHT_AMPLITUDE, TILE_SIZE_F, WORLD_HALF_F, worldHalfFFromField, worldHalfZFFromField } from '../sim/field.js';
 import { cameraZoomNormalized, createCameraController, resolveCameraExtents, unitZoomScale, unitZoomScaleMaxForDef } from './cameraController.js';
 import { MODEL_BASE_SCALE } from './modelScale.js';
@@ -859,8 +859,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   const msaaSamples = opts.msaaSamples === 4 ? 4 : 1;
   const engine = await createEngine(canvas, { msaaSamples });
   bootLog('engine');
-  // Tree/rock bakes are ~170KB and used to start only after the terrain sheets
-  // and the billboard atlas. That gap is the opening frame of cards.
+  // Tree/rock bakes start before the terrain sheets. createTerrainFromField
+  // holds the first reveal until those meshes are instanced.
   if (opts.field) primeFieldAssets(engine);
   const scene = createSceneContext(engine);
   const buildingMenuFontPromise = loadFont(assetUrl('/assets/fonts/Roboto-Regular.ttf')).catch((err) => {
@@ -1920,7 +1920,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     const n = cur.highWater ?? 0;
     for (let i = 0; i < n; i++) {
       if (cur.alive[i]) continue;
-      if (cur.type[i] !== PROJECTILE.FIREBALL) continue;
+      const shot = getProjectileDef(cur.type[i]);
+      if (!shot.fireball) continue;
+      const splash = shot.fxScale ?? 1;
       const reason = cur.despawnReason?.[i] ?? PROJECTILE_DESPAWN.NONE;
       if (
         reason !== PROJECTILE_DESPAWN.HIT &&
@@ -1939,9 +1941,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const z = cur.z[i];
       const y = groundYAt(x, z) + 0.25;
       // Ground splash: wide burst of wisps + sparks.
-      for (let n = 0; n < 36; n++) {
-        const ang = (n / 36) * Math.PI * 2 + Math.random() * 0.35;
-        const speed = 6 + Math.random() * 8;
+      const puffCount = Math.max(6, Math.round(36 * splash));
+      for (let n = 0; n < puffCount; n++) {
+        const ang = (n / puffCount) * Math.PI * 2 + Math.random() * 0.35;
+        const speed = (6 + Math.random() * 8) * splash;
         const roll = Math.random();
         particles.emit({
           ...puffSprite(),
@@ -1949,7 +1952,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
           position: [x, y + Math.random() * 0.55, z],
           velocity: [
             Math.cos(ang) * speed,
-            4 + Math.random() * 8,
+            (4 + Math.random() * 8) * splash,
             Math.sin(ang) * speed,
           ],
           gravity: [0, -16, 0],
@@ -1959,29 +1962,30 @@ export async function createRenderer(canvas, capacity, opts = {}) {
               : [1, 0.4, 0.06, 0.55],
           lifetime: 0.5 + Math.random() * 0.45,
           startSize: [
-            1.3 + Math.random() * 1.6,
-            2.2 + Math.random() * 2.4,
+            (1.3 + Math.random() * 1.6) * splash,
+            (2.2 + Math.random() * 2.4) * splash,
           ],
-          endSize: [0.25, 0.55],
+          endSize: [0.25 * splash, 0.55 * splash],
           drag: 1.15,
         });
       }
-      for (let n = 0; n < 20; n++) {
+      const sparkCount = Math.max(4, Math.round(20 * splash));
+      for (let n = 0; n < sparkCount; n++) {
         const ang = Math.random() * Math.PI * 2;
-        const speed = 3.5 + Math.random() * 7;
+        const speed = (3.5 + Math.random() * 7) * splash;
         particles.emit({
           cullMin: FIREBALL_TRAIL_CULL,
           position: [x, y, z],
           velocity: [
             Math.cos(ang) * speed,
-            6 + Math.random() * 9,
+            (6 + Math.random() * 9) * splash,
             Math.sin(ang) * speed,
           ],
           gravity: [0, -10, 0],
           color: [1, 0.65, 0.15, 0.7],
           lifetime: 0.55 + Math.random() * 0.55,
-          startSize: 0.55,
-          endSize: 0.06,
+          startSize: 0.55 * splash,
+          endSize: 0.06 * splash,
           drag: 0.45,
         });
       }
@@ -1990,12 +1994,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         ...puffSprite(0.4),
         cullMin: FIREBALL_TRAIL_CULL,
         position: [x, y + 0.4, z],
-        velocity: [0, 3.5, 0],
+        velocity: [0, 3.5 * splash, 0],
         gravity: [0, 1.2, 0],
         color: [1, 0.55, 0.1, 0.4],
         lifetime: 0.45,
-        startSize: 7.5,
-        endSize: 2.2,
+        startSize: 7.5 * splash,
+        endSize: 2.2 * splash,
         drag: 1.0,
       });
     }
@@ -2637,7 +2641,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     scene,
     groundYAt,
     (slot, generation, x, y, z, vx, vz, def, vy = 0, age = 0) => {
-      const isFireball = def.id === PROJECTILE.FIREBALL;
+      const isFireball = !!def.fireball;
       const isArrow = def.mesh === PROJECTILE_MESH.ARROW;
       const isShadow = def.id === PROJECTILE.SHADOW_BOLT;
       const isLocust = def.id === PROJECTILE.LOCUST_SWARM;
@@ -2646,7 +2650,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         return;
       }
       if (isFireball) {
-        fireballFx.track(slot, generation, x, y, z, vx, vy, vz, age === 0);
+        fireballFx.track(slot, generation, x, y, z, vx, vy, vz, age === 0, def.fxScale ?? 1);
         return;
       }
       if (def.id === PROJECTILE.SPORE_STREAM) {
@@ -5170,8 +5174,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
      * Swap flat ground for atlas terrain (or rebuild after world reset).
      * Serialized + generation-gated so overlapping match starts can't leave
      * two forests in the scene. The outgoing board stays up until the next
-     * one is built, then both cut on the same turn - disposing first left an
-     * empty table with the old units still drawn, worst on a cold asset load.
+     * one is built (ground and 3D trees/rocks), then both cut on the same
+     * turn - disposing first left an empty table with the old units still
+     * drawn, worst on a cold asset load.
      * Fog CPU state resets with the board so a stress FFA veil cannot leak
      * onto 1v1 (and the overlay resizes with it).
      */
@@ -5253,8 +5258,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /**
-     * Resolves when the latest setField terrain is ready.
-     * Pass `{ models: true }` to also wait for 3D tree/rock GLBs (boot only).
+     * Resolves when the latest setField terrain is ready, including 3D
+     * trees and rocks. Pass `{ models: true }` to also wait for doodads
+     * and distant backdrops.
      */
     whenFieldReady(opts) {
       if (opts?.models) return setFieldChain.then(() => sceneryModelsReady);

@@ -1276,6 +1276,86 @@ describe('match lobby', () => {
     room.leaveRoom();
   });
 
+  it('adventure surrender hands the room back to the lobby', async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+    const p2p = fakeP2p('host');
+    let dataFn = null;
+    let surrendered = 0;
+    let left = 0;
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
+      onStartMatch: () => {},
+      onSurrender: () => { surrendered += 1; },
+      onLeaveMatch: () => { left += 1; },
+    });
+    room.createRoom('adventure');
+    const { roomId, mode } = room.getState();
+    dataFn({ v: 1, type: MSG.JOIN, userId: 'guest', name: 'Guest', color: '#0f0', roomId, mode });
+    dataFn({ v: 1, type: MSG.READY, userId: 'guest', ready: true, roomId, mode });
+    assert.equal(room.requestStart(), true);
+    await finishCountdown(t);
+    assert.equal(room.getState().phase, 'playing');
+    const beforeSent = p2p.sent.length;
+    assert.equal(room.surrender(), true);
+    assert.equal(surrendered, 1);
+    assert.equal(room.isActive(), true);
+    assert.equal(room.getState().phase, 'waiting');
+    assert.equal(room.hasForfeited(), false);
+    assert.equal(left, 0);
+    assert.equal(room.getState().seats.some((s) => s.userId === 'guest'), true);
+    const sent = p2p.sent.slice(beforeSent).filter((row) => row.msg.type === MSG.SURRENDER);
+    assert.equal(sent.length, 1);
+    assert.equal(p2p.sent.slice(beforeSent).some((row) => row.msg.type === MSG.CONCEDE), false);
+    assert.equal(room.surrender(), false);
+    room.leaveRoom();
+    assert.equal(left, 1);
+  });
+
+  it('a surrender from the other player returns adventure to the lobby', async () => {
+    const p2p = fakeP2p('guest-id');
+    let dataFn = null;
+    let surrendered = 0;
+    let left = 0;
+    const guest = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'guest-id',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      subscribeDataMessage: (fn) => { dataFn = withSim(fn); return () => {}; },
+      onStartMatch: () => {},
+      onSurrender: () => { surrendered += 1; },
+      onLeaveMatch: () => { left += 1; },
+    });
+    guest.joinRoom('adventure', 'lobby-1', 'host-id');
+    dataFn({
+      v: 1,
+      type: MSG.START,
+      countdownEndsAt: Date.now() - 1,
+      roomId: 'lobby-1',
+      mode: 'adventure',
+      seats: [
+        { index: 0, kind: 'human', userId: 'host-id', name: 'Host', ready: true },
+        { index: 1, kind: 'human', userId: 'guest-id', name: 'Guest', ready: true },
+      ],
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(guest.getState().phase, 'playing');
+    dataFn({
+      v: 1,
+      type: MSG.SURRENDER,
+      userId: 'host-id',
+      roomId: 'lobby-1',
+      mode: 'adventure',
+    });
+    assert.equal(surrendered, 1);
+    assert.equal(guest.isActive(), true);
+    assert.equal(guest.getState().phase, 'waiting');
+    assert.equal(left, 0);
+    guest.leaveRoom();
+  });
+
   it('concede forfeits the local player and the match keeps running', async (t) => {
     t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
     const p2p = fakeP2p('host');

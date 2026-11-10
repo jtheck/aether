@@ -16,6 +16,10 @@ export const BACKDROP_DEFS = {
     // Native mesh is ~9 units across. 80 wraps a small table.
     defaultScale: 80,
     originY: DISC_ORIGIN_Y,
+    // Baked xz reach. The wide rim is ~2.9, not the keep's half-unit.
+    radius: 2.92,
+    y0: -0.586,
+    y1: 3.107,
   },
   [BACKDROP.CASTLE]: {
     url: '/assets/models/props/castle.glb',
@@ -24,6 +28,9 @@ export const BACKDROP_DEFS = {
     // 64 makes a keep roughly thirty tiles across, for a hole or a rim.
     defaultScale: 64,
     originY: 0,
+    radius: 0.65,
+    y0: -0.297,
+    y1: 0.795,
   },
 };
 
@@ -63,9 +70,16 @@ export function freshBackdrop(type, x, z) {
   };
 }
 
+/** Model-space xz reach for a prop, scaled into world units. */
+export function backdropReach(pose) {
+  const radius = BACKDROP_DEFS[pose?.type]?.radius || 0.45;
+  const scale = Number(pose?.scale) > 0 ? Number(pose.scale) : 1;
+  return Math.max(6, scale * radius);
+}
+
 /**
  * Index of the prop under a ground point, or -1.
- * Reach grows with scale so a keep is selectable out at its walls.
+ * Reach follows each mesh's footprint, so a disc is grabbable out at its rim.
  */
 export function nearestBackdrop(list, x, z) {
   const poses = normalizeBackdrops(list);
@@ -73,12 +87,76 @@ export function nearestBackdrop(list, x, z) {
   let bestD = Infinity;
   for (let i = 0; i < poses.length; i++) {
     const pose = poses[i];
-    const reach = Math.max(6, pose.scale * 0.45);
+    const reach = backdropReach(pose);
     const d = Math.hypot(pose.x - x, pose.z - z);
     if (d <= reach && d < bestD) {
       best = i;
       bestD = d;
     }
+  }
+  return best;
+}
+
+/**
+ * Index of the prop a view ray hits before the ground, or -1.
+ * `ray` is `{ x, y, z, dx, dy, dz }` with t in world units of that direction.
+ * `groundT` is the ray parameter of the ground hit (clicks past it fall through).
+ */
+export function backdropAlongRay(list, ray, groundT) {
+  if (!ray) return -1;
+  const poses = normalizeBackdrops(list);
+  const limit = Number.isFinite(groundT) ? groundT + 1e-3 : Infinity;
+  let best = -1;
+  let bestT = limit;
+  for (let i = 0; i < poses.length; i++) {
+    const t = backdropRayT(poses[i], ray);
+    if (t == null || t < 0 || t > bestT) continue;
+    best = i;
+    bestT = t;
+  }
+  return best;
+}
+
+function backdropRayT(pose, ray) {
+  const def = BACKDROP_DEFS[pose.type];
+  if (!def) return null;
+  const scale = pose.scale;
+  const r = scale * (def.radius || 0.45);
+  const y0 = pose.y + scale * (def.y0 || 0);
+  const y1 = pose.y + scale * (def.y1 || 0);
+  const ox = ray.x - pose.x;
+  const oz = ray.z - pose.z;
+  const dx = ray.dx;
+  const dz = ray.dz;
+  const dy = ray.dy;
+  /** @type {number[]} */
+  const ts = [];
+  const a = dx * dx + dz * dz;
+  const b = 2 * (ox * dx + oz * dz);
+  const c = ox * ox + oz * oz - r * r;
+  if (a < 1e-12) {
+    if (c <= 0) ts.push(0);
+  } else {
+    const disc = b * b - 4 * a * c;
+    if (disc >= 0) {
+      const s = Math.sqrt(disc);
+      ts.push((-b - s) / (2 * a), (-b + s) / (2 * a));
+    }
+  }
+  if (Math.abs(dy) > 1e-8) {
+    for (const y of [y0, y1]) {
+      const t = (y - ray.y) / dy;
+      const x = ox + dx * t;
+      const z = oz + dz * t;
+      if (x * x + z * z <= r * r + 1e-4) ts.push(t);
+    }
+  }
+  let best = null;
+  for (const t of ts) {
+    if (t < -1e-4) continue;
+    const y = ray.y + dy * t;
+    if (y < y0 - 1e-2 || y > y1 + 1e-2) continue;
+    if (best == null || t < best) best = t;
   }
   return best;
 }

@@ -83,14 +83,16 @@ export function normalizeClip(raw) {
 }
 
 /**
- * Cinematic vision share: `'all'` (every faction) or a list of owner ids whose
- * sight is unioned into the local overlay while this reel plays. `undefined`
- * when nothing extra is revealed.
+ * Vision share for a reel: `'all'` (every faction), `'enemy'` (every faction
+ * but the local player), or a list of owner ids. `undefined` shares nothing.
+ * The old forge Enemy option stored purple as `[4]`.
  */
 export function normalizeReveal(v) {
   if (v === true || v === 'all') return 'all';
+  if (v === 'enemy') return 'enemy';
   if (Array.isArray(v)) {
     const ids = [...new Set(v.map((id) => id | 0).filter((id) => Number.isFinite(id) && id >= 0))];
+    if (ids.length === 1 && ids[0] === 4) return 'enemy';
     return ids.length ? ids : undefined;
   }
   return undefined;
@@ -108,7 +110,7 @@ export function normalizeReel(raw) {
   for (const clip of clips) derived = Math.max(derived, clip.t + clip.dur);
   const authored = Number(raw?.duration);
   const duration = Math.max(derived, Number.isFinite(authored) ? authored : 0);
-  const when = raw?.when === 'win' ? 'win' : 'start';
+  const when = raw?.when === 'win' ? 'win' : raw?.when === 'beat' ? 'beat' : 'start';
   const reveal = normalizeReveal(raw?.reveal);
   const reel = {
     id: String(raw?.id || 'intro'),
@@ -116,6 +118,8 @@ export function normalizeReel(raw) {
     clips,
     duration,
   };
+  const name = String(raw?.name || '').trim();
+  if (name) reel.name = name;
   if (reveal !== undefined) reel.reveal = reveal;
   return reel;
 }
@@ -132,10 +136,11 @@ export function encodeStory(story) {
   const normalized = normalizeStory(story);
   const reels = [];
   for (const reel of normalized.reels) {
-    if (!reel.clips.length) continue;
+    if (!reel.clips.length && reel.when !== 'beat') continue;
     reels.push({
       id: reel.id,
       when: reel.when,
+      name: reel.name || undefined,
       duration: reel.duration || undefined,
       reveal: reel.reveal,
       clips: reel.clips.map((clip) => {

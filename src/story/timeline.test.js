@@ -24,6 +24,21 @@ function reel() {
   };
 }
 
+describe('normalizeStory reveal', () => {
+  it('keeps everyone, and treats the old purple-only enemy as every enemy', () => {
+    const story = normalizeStory({
+      reels: [
+        { id: 'intro', when: 'start', reveal: 'all', clips: [] },
+        { id: 'old', when: 'beat', reveal: [4], clips: [] },
+        { id: 'camp', when: 'beat', reveal: 'enemy', clips: [] },
+      ],
+    });
+    assert.equal(story.reels[0].reveal, 'all');
+    assert.equal(story.reels[1].reveal, 'enemy');
+    assert.equal(story.reels[2].reveal, 'enemy');
+  });
+});
+
 describe('lineDuration', () => {
   it('clamps short and long copy', () => {
     assert.equal(lineDuration(''), 2.5);

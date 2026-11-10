@@ -255,6 +255,10 @@ describe('setupPointerHub right-click chrome', () => {
       const menuEvt = event('contextmenu', el('story-transport'), { button: 2 });
       h.dispatch('contextmenu', menuEvt);
       assert.equal(menuEvt.defaultPrevented, true);
+
+      const splashMenu = event('contextmenu', el('splash-img', el('boot-splash')), { button: 2 });
+      h.dispatch('contextmenu', splashMenu);
+      assert.equal(splashMenu.defaultPrevented, true);
     } finally {
       h.dispose();
     }

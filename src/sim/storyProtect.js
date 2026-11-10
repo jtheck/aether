@@ -12,7 +12,7 @@ export function gardenHasStartCinematic(garden) {
   if (!Array.isArray(reels)) return false;
   for (let i = 0; i < reels.length; i++) {
     const r = reels[i];
-    if (!r || r.when === 'win') continue;
+    if (!r || r.when === 'win' || r.when === 'beat') continue;
     if (r.clips?.length && Number(r.duration) > 0) return true;
   }
   return false;

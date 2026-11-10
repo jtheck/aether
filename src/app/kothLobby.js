@@ -249,6 +249,7 @@ export function syncLobbyList(listEl, emptyEl, lobbies, rowClass = 'koth-lobby-r
  * @param {() => void} [opts.onLeaveSolo]
  * @param {() => unknown} [opts.onRestoreBackdrop]
  * @param {() => void} [opts.onCloseMenu]
+ * @param {() => void} [opts.onLobbyVisible]
  */
 export function setupKothLobby({
   kothShard,
@@ -257,6 +258,7 @@ export function setupKothLobby({
   onLeaveSolo,
   onRestoreBackdrop,
   onCloseMenu,
+  onLobbyVisible,
 }) {
   const controls = document.getElementById('koth-controls');
   const lobbyEl = document.getElementById('koth-lobby');
@@ -411,6 +413,7 @@ export function setupKothLobby({
     if (!btn.dataset.matchId) return;
     onLeaveSolo?.();
     onCloseMenu?.();
+    onLobbyVisible?.();
     kothShard.joinLiveLobby?.(btn.dataset.matchId, btn.dataset.from);
     refresh();
   }
@@ -419,6 +422,7 @@ export function setupKothLobby({
     if (!btn || btn.disabled) return;
     onLeaveSolo?.();
     onCloseMenu?.();
+    onLobbyVisible?.();
     btn.disabled = true;
     if (start) start.disabled = true;
     if (menuStart) menuStart.disabled = true;

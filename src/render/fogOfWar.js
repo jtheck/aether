@@ -638,6 +638,34 @@ export function createFogOfWar() {
     lastStampAt = 0;
   }
 
+  /**
+   * Drop live shared sight without erasing what was seen.
+   * Tiles fall to the visited veil. Last-known buildings stay.
+   */
+  function settleSharedSight() {
+    const n = cover ? cover.length : 0;
+    if (explored && sight && cover && n) {
+      for (let i = 0; i < n; i++) {
+        if (!(sight[i] > 0 || (visible && visible[i] > 0))) continue;
+        explored[i] = 1;
+        cover[i] = VISITED_COVER;
+        markDirty(i);
+      }
+    }
+    if (visible) visible.fill(0);
+    if (sight) sight.fill(0);
+    if (lastSourceR && lastSrcN) {
+      for (let s = 0; s < lastSrcN; s++) lastSourceR[lastSrcTiles[s]] = 0;
+    }
+    lastSrcN = 0;
+    srcN = 0;
+    countedOccupancy = false;
+    if (inHot) inHot.fill(0);
+    hotN = 0;
+    if (tileStampGen) tileStampGen.fill(0);
+    lastStampAt = 0;
+  }
+
   function sameShareVision(list) {
     if (list == null) return true;
     const n = list.length;
@@ -1097,6 +1125,7 @@ export function createFogOfWar() {
    *   enabled?: boolean,
    *   shareVisionWith?: number[],
    *   now?: number,
+   *   settleSeen?: boolean,
    * }} input
    */
   function stamp(input) {
@@ -1104,13 +1133,18 @@ export function createFogOfWar() {
     // Spectator catch-up and loading-screen shared vision stamp every army.
     // Dropping that set (or swapping local player) must wipe explored tiles
     // and last-known buildings - otherwise the joiner keeps a second map.
+    // settleSeen is the story un-reveal: keep the visited veil and buildings.
     const shareChanged = input.shareVisionWith !== undefined && !sameShareVision(input.shareVisionWith);
     if (nextPlayer !== localPlayerId || shareChanged) {
       const savedAt = lastStampAt;
-      forgetOverlay();
-      if (input.restoreExplored) {
-        recallExplored();
-        lastStampAt = savedAt;
+      if (input.settleSeen && shareChanged && nextPlayer === localPlayerId) {
+        settleSharedSight();
+      } else {
+        forgetOverlay();
+        if (input.restoreExplored) {
+          recallExplored();
+          lastStampAt = savedAt;
+        }
       }
     }
     localPlayerId = nextPlayer;

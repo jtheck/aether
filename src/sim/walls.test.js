@@ -160,6 +160,44 @@ describe('wall occupancy', () => {
     assert.equal(passAt(field, 2, 2), 1);
   });
 
+  it('blocks one tile past each open end, for a one-tile wall and a two-tile wall', () => {
+    const one = openField();
+    applyWallOccupancy(one, {
+      style: DEFAULT_WALL_STYLE,
+      runs: [{ closed: false, points: [{ x: 0, z: 0 }, { x: 4, z: 0 }] }],
+    });
+    assert.equal(passAt(one, 8, 7), 0);
+    assert.equal(passAt(one, 8, 8), 0);
+    assert.equal(passAt(one, 7, 7), 0, 'tile before the start');
+    assert.equal(passAt(one, 7, 8), 0, 'tile before the start');
+    assert.equal(passAt(one, 9, 7), 0, 'tile past the end');
+    assert.equal(passAt(one, 9, 8), 0, 'tile past the end');
+    assert.equal(passAt(one, 6, 7), 1);
+    assert.equal(passAt(one, 10, 8), 1);
+
+    const two = openField();
+    applyWallOccupancy(two, {
+      style: DEFAULT_WALL_STYLE,
+      runs: [{ closed: false, points: [{ x: 0, z: 0 }, { x: 8, z: 0 }] }],
+    });
+    assert.equal(passAt(two, 7, 8), 0);
+    assert.equal(passAt(two, 10, 7), 0);
+    assert.equal(passAt(two, 6, 8), 1);
+    assert.equal(passAt(two, 11, 7), 1);
+
+    const diagonal = openField();
+    applyWallOccupancy(diagonal, {
+      style: DEFAULT_WALL_STYLE,
+      runs: [{ closed: false, points: [{ x: 0, z: 0 }, { x: 8, z: 8 }] }],
+    });
+    assert.equal(passAt(diagonal, 8, 8), 0);
+    assert.equal(passAt(diagonal, 9, 9), 0);
+    assert.equal(passAt(diagonal, 7, 7), 0, 'tile before the diagonal start');
+    assert.equal(passAt(diagonal, 10, 10), 0, 'tile past the diagonal end');
+    assert.equal(passAt(diagonal, 6, 6), 1);
+    assert.equal(passAt(diagonal, 11, 11), 1);
+  });
+
   it('leaves an open door passable and a shut door blocked', () => {
     const open = openField();
     applyWallOccupancy(open, {

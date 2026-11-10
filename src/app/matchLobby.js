@@ -100,6 +100,7 @@ export function createMatchLobby({
   onRankedForfeitBy,
   onRankedPregameEnd,
   onChapter,
+  onSurrender,
   onChat,
   loadGarden,
   ladderMaps,
@@ -591,6 +592,32 @@ export function createMatchLobby({
   function returnToWaiting() {
     if (phase !== 'playing') return false;
     return endMatchStay();
+  }
+
+  /**
+   * Adventure gives the chapter back. The room stays open on the lobby card
+   * so the host can pick another chapter or map. Versus matches use concede.
+   */
+  function applySurrender() {
+    if (mode !== 'adventure' || ranked) return false;
+    if (phase !== 'playing') return false;
+    onSurrender?.();
+    if (phase === 'playing') returnToWaiting();
+    return true;
+  }
+
+  function surrender() {
+    if (mode !== 'adventure' || ranked || watching) return false;
+    if (phase !== 'playing') return false;
+    const payload = { type: MSG.SURRENDER };
+    sendType(payload);
+    sendData(payload);
+    return applySurrender();
+  }
+
+  function acceptSurrender(msg) {
+    if (sameUserId(senderUserId(msg), localId())) return false;
+    return applySurrender();
   }
 
   /** Resign this seat. The match plays on to the score card. Ranked leave is the ladder forfeit. */
@@ -1512,6 +1539,10 @@ export function createMatchLobby({
       acceptConcede(data);
       return;
     }
+    if (data.type === MSG.SURRENDER) {
+      acceptSurrender(data);
+      return;
+    }
     if (data.type === MSG.PAUSE) {
       acceptPause(data);
       return;
@@ -1670,6 +1701,10 @@ export function createMatchLobby({
       acceptConcede(msg);
       return;
     }
+    if (msg.type === MSG.SURRENDER) {
+      acceptSurrender(msg);
+      return;
+    }
     if (msg.type === MSG.PAUSE) {
       acceptPause(msg);
       return;
@@ -1719,6 +1754,7 @@ export function createMatchLobby({
     attachSession,
     detachSession,
     returnToWaiting,
+    surrender,
     concede,
     toggleMatchPause,
     hasForfeited: localHasForfeited,

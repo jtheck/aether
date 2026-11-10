@@ -80,4 +80,20 @@ describe('objectives', () => {
     assert.equal(hit.chapterWin, true);
     assert.equal(hit.next, '/maps/chapter2.garden');
   });
+
+  it('chat zones speak on entry and do not win the chapter', () => {
+    const list = normalizeObjectives([
+      { id: 'hello', kind: 'cue', tx: 30, tz: 10, r: 4, params: { speaker: 'Mira', text: 'Hold.', camera: 1 } },
+      { kind: OBJ_REACH, tx: 1, tz: 1, r: 3 },
+    ]);
+    const hit = stepObjectives(list, [unitAt(30, 10)], field);
+    assert.equal(hit.just[0].kind, 'cue');
+    assert.equal(hit.chapterWin, false);
+    assert.equal(list[1].completed, false);
+    const packed = encodeObjectives(list);
+    const [again] = normalizeObjectives(packed);
+    assert.equal(again.params.speaker, 'Mira');
+    assert.equal(again.params.text, 'Hold.');
+    assert.equal(again.params.camera, 1);
+  });
 });

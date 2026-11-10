@@ -1128,6 +1128,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   }
   /** Filled just before return so the menu callback can reach the live ctx. */
   const ctxRef = { current: null };
+  let observerLobby = null;
   const sideMenu = setupMenu({
     renderer,
     onStartSoloAi: () => startSoloAiMatch(ctxRef.current),
@@ -1147,6 +1148,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     xrSupported,
     getXrActive: () => !!matchXr,
     onToggleXr: () => toggleMatchXr(renderer, () => inputApi, xrJumps),
+    onTogglePause: () => togglePlayPause(),
+    isPlayPaused,
+    canTogglePause,
   });
   const liteExplorer = createLiteExplorerToggle({
     engine: renderer.engine,
@@ -1249,8 +1253,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   // Scenario override - loading-screen / unit-tester share vision with the AI.
   // `fog: false` / ?fog=0 still disables the overlay entirely.
   let fogUserEnabled = bootCfg.fog !== false;
-  /** Cinematic 'all' reveal - covers every campaign owner slot (party + hostiles). */
-  const REVEAL_ALL_OWNERS = [0, 1, 2, 3, 4, 5, 6, 7];
+  /** Every forge faction. Enemy drops the local seat. */
+  const REVEAL_ALL_OWNERS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
   /** Owners shared by config (teammates / spectate). Cinematics layer on top. */
   let baseShareVisionWith = shareVisionOwnersFromCfg(bootCfg);
   /** Temporary cinematic reveal: null, 'all', or a list of owner ids. */
@@ -1271,7 +1275,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     stampFog();
     refreshFoggedProps();
   }
-  function applyEffectiveShareVision() {
+  function applyEffectiveShareVision(opts) {
     let eff = baseShareVisionWith;
     if (cinematicReveal === 'all') {
       eff = REVEAL_ALL_OWNERS;
@@ -1280,7 +1284,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     fogShareVisionWith = eff;
     if (session.resetting || liveConfigQuietFog) return;
-    stampFog();
+    stampFog({ settleSeen: opts?.settleSeen === true });
     refreshFoggedProps();
   }
   function setShareVisionWith(owners) {
@@ -1295,12 +1299,23 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     stampFog();
     refreshFoggedProps();
   }
-  /** Cinematic vision share driven by the active story reel. spec: null | 'all' | number[]. */
+  function ownersForReveal(spec) {
+    if (spec === 'all') return REVEAL_ALL_OWNERS;
+    if (spec === 'enemy' || (Array.isArray(spec) && spec.length === 1 && (spec[0] | 0) === 4)) {
+      const me = localPlayerId | 0;
+      return REVEAL_ALL_OWNERS.filter((id) => id !== me);
+    }
+    if (Array.isArray(spec)) return spec.map((id) => id | 0);
+    return null;
+  }
+  /** Story reveal: null, 'all', 'enemy', or a list of owner ids. */
   function setCinematicReveal(spec) {
-    cinematicReveal = spec === 'all'
-      ? 'all'
-      : (Array.isArray(spec) ? spec.map((id) => id | 0) : null);
-    applyEffectiveShareVision();
+    const owners = ownersForReveal(spec);
+    const next = owners && owners.length ? owners : null;
+    const dropping = !!(cinematicReveal && cinematicReveal.length) && !next;
+    if (dropping) refreshFoggedProps();
+    cinematicReveal = next;
+    applyEffectiveShareVision(dropping ? { settleSeen: true } : undefined);
   }
 
   const sceneryFogAt = (x, z) => fog.fogFactorAt(x, z);
@@ -1341,6 +1356,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         shareVisionWith: view.shareVisionWith,
         enabled: fogActive(),
         restoreExplored: Boolean(opts?.restoreExplored || leaving),
+        settleSeen: opts?.settleSeen === true,
       });
     } catch (err) {
       console.warn('[fog] stamp failed', err);
@@ -1469,7 +1485,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (!(fade > 0)) return 0;
     const u = 1 - fade;
     const kind = bufs.deathKind[i];
-    if (kind === DEATH_KIND.BALLOON) return sampleBalloon(u, bufs.deathSeed[i]).alpha;
+    if (kind === DEATH_KIND.BALLOON || kind === DEATH_KIND.BALLOON_POP) {
+      return sampleBalloon(u, bufs.deathSeed[i], kind === DEATH_KIND.BALLOON_POP).alpha;
+    }
     if (kind === DEATH_KIND.FLEE) return sampleFlee(u, bufs.deathDirX[i], bufs.deathDirZ[i], bufs.deathSeed[i]).alpha;
     return fade;
   }
@@ -1679,6 +1697,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (sideEl.textContent !== next) sideEl.textContent = next;
   }
 
+  let menuPauseShown = null;
   function paintPlayPaused() {
     const el = document.getElementById('sim-paused');
     if (!el) return;
@@ -1689,6 +1708,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       && !session.replayingCatchUp
       && !over;
     if (el.hidden !== !show) el.hidden = !show;
+    const paused = isPlayPaused();
+    if (paused !== menuPauseShown) {
+      menuPauseShown = paused;
+      sideMenu.paintPause?.();
+    }
   }
 
   function paintStatus() {
@@ -1721,7 +1745,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   observerData.mount().then(() => paintResources()).catch((err) => {
     console.warn('observer data failed', err);
   });
-  let observerLobby = null;
 
   /**
    * Lobby seats name the match they are playing. A waiting room shares owner
@@ -2796,6 +2819,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       session.submitCommand({ type: CMD.STORY_PROTECT, on: on ? 1 : 0 });
     },
   });
+  resumeStoryAfterSplash = () => matchStory.resume?.();
   if (garden?.story) matchStory.playIntro(garden.story);
   const objectiveHud = createObjectiveHud(document.body);
   const exitMarks = createExitMarks({
@@ -3126,9 +3150,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     objectiveHud.set(adventureObjectives, { describe: (o) => describeCampaignObjective(o, triggerCtx) });
     syncExitMarks(false);
     const just = justTriggers.length ? [...justTriggers, ...result.just] : result.just;
-    if (just.length && just[0].message) {
-      setStatusText(just[0].message);
+    for (const obj of just) {
+      if (obj.kind === 'cue' && !matchStory.playCue(obj, adventureStory) && matchStory.busy()) {
+        obj.completed = false;
+      }
     }
+    const note = just.find((obj) => obj.kind !== 'cue' && obj.message);
+    if (note) setStatusText(note.message);
     if (!result.chapterWin) {
       // Lose conditions: a chapter's critical objective fails, or - the default -
       // the whole party is dead. Latch partySeen so we never lose pre-spawn.
@@ -3216,6 +3244,23 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     chapterLost = true;
     endAdventureMatch('Defeat', reason);
     setStatusText(`Defeat - ${reason}`);
+  }
+
+  /** Give the chapter back and open the lobby card for another chapter or map. */
+  function surrenderAdventure() {
+    if (!adventureSessionLive() || chapterLost) return;
+    chapterWon = false;
+    chapterLost = true;
+    pendingChapterUrl = null;
+    chapterHandoffPending = false;
+    chapterProposeSent = false;
+    chapterVotes.clear();
+    chapterVoteUrl = '';
+    if (chapterFlushTimer) {
+      clearTimeout(chapterFlushTimer);
+      chapterFlushTimer = null;
+    }
+    endAdventureMatch('Surrender', 'Choose the next chapter');
   }
 
   if (garden?.story || gardenObjectivesOf(garden).length) beginAdventure(garden);
@@ -3682,6 +3727,47 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     },
   });
   const unitKeyHold = createQueueHoldTimer();
+  function isPlayPaused() {
+    if (replayCtl.isWatching?.()) {
+      const speed = replayCtl.getHead?.()?.speed;
+      return speed == null || speed === 0;
+    }
+    return Boolean(session.playPaused);
+  }
+
+  /** Spectators and a second human without a lobby pause must not freeze lockstep. */
+  function canTogglePause() {
+    if (replayCtl.isWatching?.()) return true;
+    const lobby = observerLobby?.getState?.();
+    if (lobby && (lobby.phase === 'playing' || lobby.phase === 'starting')) {
+      return !(lobby.watching || session.role === 'spectator');
+    }
+    const others = (session.humanPlayers || []).some((id) => (id | 0) !== (session.localPlayerId | 0));
+    if (others && session.role === 'player' && !session.watchingReplay) return false;
+    return true;
+  }
+
+  function togglePlayPause() {
+    if (replayCtl.togglePlay()) {
+      menuPauseShown = isPlayPaused();
+      sideMenu.paintPause?.();
+      return;
+    }
+    if (observerLobby?.toggleMatchPause?.()) {
+      paintPlayPaused();
+      return;
+    }
+    // One client freezing lockstep stops its tick confirms. The other side
+    // waits, then forfeits, and the eliminate tick never arrives.
+    if (!canTogglePause()) return;
+    session.pauseLockstep = !session.pauseLockstep;
+    session.playPaused = session.pauseLockstep;
+    if (session.pauseLockstep) session.simAcc = 0;
+    renderer.setFxPaused?.(session.pauseLockstep);
+    paintPlayPaused();
+    paintStatus();
+  }
+
   window.addEventListener('keydown', (e) => {
     if ((sideMenu.isHelpOpen?.() || sideMenu.isSkinsOpen?.()) && e.code !== 'Escape') {
       const inSkinControl = sideMenu.isSkinsOpen?.()
@@ -3806,21 +3892,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     if (e.code === 'KeyP') {
       e.preventDefault();
-      if (replayCtl.togglePlay()) return;
-      if (observerLobby?.toggleMatchPause?.()) {
-        paintPlayPaused();
-        return;
-      }
-      // One client freezing lockstep stops its tick confirms. The other side
-      // waits, then forfeits, and the eliminate tick never arrives.
-      const others = (session.humanPlayers || []).some((id) => (id | 0) !== (session.localPlayerId | 0));
-      if (others && session.role === 'player' && !session.watchingReplay) return;
-      session.pauseLockstep = !session.pauseLockstep;
-      session.playPaused = session.pauseLockstep;
-      if (session.pauseLockstep) session.simAcc = 0;
-      renderer.setFxPaused?.(session.pauseLockstep);
-      paintPlayPaused();
-      paintStatus();
+      togglePlayPause();
       return;
     }
     if (e.code === 'F9') {
@@ -3902,6 +3974,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     onLeaveSolo: () => leaveLoadingScreenSolo(ctxRef?.current),
     onRestoreBackdrop: () => restoreMenuSkirmishBackdrop(ctxRef?.current),
     onCloseMenu: () => sideMenu.close(),
+    onLobbyVisible: () => ladderUi.close(),
   };
 
   if (kothShard) {
@@ -3929,6 +4002,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         lobbyUi.refresh();
         kothLobbyUi.refresh();
         ladderUi.refresh();
+        sideMenu.paintPause?.();
       },
       onRankedLeave: (userId) => noteLadderDisconnect(userId, rememberLadderId()),
       onRankedDisconnect: (userId) => beginLadderDisconnect(userId, rememberLadderId(), session),
@@ -3941,6 +4015,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       onActiveChange: (active) => kothShard.setLobbyMatchHold?.(active),
       onStartMatch: (snap) => startLobbyMatch(ctxRef.current, snap, kothShard, matchLobby, sideMenu),
       onChapter: (msg) => ctxRef.current?.onChapterVote?.(msg),
+      onSurrender: () => ctxRef.current?.surrenderAdventure?.(),
       onLeaveMatch: () => {
         matchLobby.detachSession();
         kothShard.setLobbyMatchHold?.(false);
@@ -3960,6 +4035,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       matchLobby,
     });
     let ladderQueued = false;
+    refreshLobbyUnderSplash = () => lobbyUi.refresh?.();
+    closeMenuForSplash = () => sideMenu.close();
     lobbyUi = setupLobbyUi({
       gameLobby,
       matchLobby,
@@ -3968,6 +4045,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       getUserId: () => kothShard.getUserId(),
       onDismissSoloScore: () => restoreMenuSkirmishBackdrop(ctxRef.current),
       onCloseMenu: () => sideMenu.close(),
+      onLobbyVisible: () => ladderUi.close(),
       onFollowReplay: (userId) => viewFollow?.toggleUser?.(userId),
       getFollowUser: () => viewFollow?.userTarget?.() ?? null,
       getKing: () => shownKing(session.koth),
@@ -3977,6 +4055,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       getUserId: () => kothShard.getUserId(),
       onCloseMenu: () => sideMenu.close(),
       onKothPlace: placeLadderHill,
+      inKothLobby: () => kothShard.getLobbyPresence?.()?.browsing === false,
       onQueueChange(on) {
         ladderQueued = Boolean(on);
         lobbyUi.refresh();
@@ -4724,8 +4803,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (fade > 0 && !world.alive[i]) {
         const kind = deathKind[i];
         const u = 1 - fade;
-        if (kind === DEATH_KIND.BALLOON) {
-          const b = sampleBalloon(u, deathSeed[i]);
+        if (kind === DEATH_KIND.BALLOON || kind === DEATH_KIND.BALLOON_POP) {
+          const b = sampleBalloon(u, deathSeed[i], kind === DEATH_KIND.BALLOON_POP);
           x += b.x;
           z += b.z;
           loft = FLY_HEIGHT + b.y;
@@ -4827,7 +4906,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           }
         }
         let ringKind = 'default';
-        if (isTransport(world.type[i]) || def.category === 'vehicle' || def.category === 'air') {
+        if (
+          isTransport(world.type[i]) ||
+          def.mechanical ||
+          def.category === 'vehicle' ||
+          def.category === 'air'
+        ) {
           ringKind = 'vehicle';
         } else if (isManaCaster(world.type[i])) {
           ringKind = 'caster';
@@ -5192,12 +5276,16 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   // Engine already started after createRenderer for progressive first paint.
   await renderer.start();
 
-  // Splash stays up through the first heavy frames; fade starts after settle.
+  // Page opens on black under the logo. Fade the board in, then the logo.
+  const bootSplashGen = splashGen;
   const unlock = () => {
-    if (bootInteractive) return;
-    setInteractive(true);
-    dismissBootSplash();
-    aetherSteam.notifyPlayReady();
+    if (bootInteractive || splashGen !== bootSplashGen) return;
+    void fadeSplashVeil(0, bootSplashGen).then(() => {
+      if (bootInteractive || splashGen !== bootSplashGen) return;
+      setInteractive(true);
+      dismissBootSplash();
+      aetherSteam.notifyPlayReady();
+    });
   };
   void Promise.race([
     renderer.whenInteractive?.() ?? Promise.resolve(),
@@ -5219,6 +5307,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     },
     beginAdventure,
     endAdventure,
+    surrenderAdventure,
     captureAdventureParty,
     takeCarriedParty,
     onChapterVote(msg) {
@@ -5360,16 +5449,17 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
     ctx.session.watchingReplay = true;
   }
 
-  ctx.matchStory?.stop();
-  ctx.setStoryCast?.([]);
-  if (!liveConfigKeepsAdventure(cfg)) ctx.endAdventure?.();
-  applyOwnerPacksToRenderer(ctx.renderer, cfg, cfg.localPlayerId ?? ctx.localPlayerId);
-
   if (!cfg.skipSplash) {
     showMatchSplash();
     ctx.setInteractive?.(false);
     setStatusText(cfg.loadingLabel ?? (localSolo ? 'Starting 1v1…' : 'Loading match…'));
+    // Cover the board before the table and camera move. The logo stays up.
+    await fadeSplashVeil(1);
   }
+  ctx.matchStory?.stop();
+  ctx.setStoryCast?.([]);
+  if (!liveConfigKeepsAdventure(cfg)) ctx.endAdventure?.();
+  applyOwnerPacksToRenderer(ctx.renderer, cfg, cfg.localPlayerId ?? ctx.localPlayerId);
   syncLobbyChrome(cfg.mode);
 
   const simMode = workerSimMode(cfg.mode);
@@ -5428,8 +5518,9 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
     });
     // Same turn as reset return - solo (delay 0) can commit during whenFieldReady.
     ctx.pendingMatchStartCue = wantsMatchStartCue(cfg);
-    // Terrain is enough to unlock - 3D scenery/building GLBs finish in the
-    // background. Waiting on modelsReady here was a ~12s tab stall.
+    // Ground and 3D trees/rocks are part of setField. Doodads, backdrops, and
+    // building GLBs finish in the background. Waiting on full modelsReady
+    // here was a ~12s tab stall.
     await Promise.race([
       ctx.renderer.whenFieldReady?.() ?? Promise.resolve(),
       new Promise((r) => setTimeout(r, 12000)),
@@ -5467,7 +5558,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
     })) {
       kothShard.retrySpectatorAttach?.();
     }
-    return;
+    return false;
   }
   ctx.session._pendingWorldGen = null;
   applyGardenLighting(ctx.renderer, cfg.garden);
@@ -5512,8 +5603,10 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
   if (wantsMatchIntroSweep(cfg) && !ctx.matchStory?.driving?.()) {
     placeCameraAtArmy(ctx, cfg);
   }
-  if (!cfg.skipSplash) dismissBootSplash();
+  // Chapter loads place the story camera after this returns, still under black.
+  if (!cfg.skipSplash && !cfg.deferSplashReveal) await revealBootSplash();
   aetherSteam.notifyPlayReady();
+  return true;
 }
 
 /** Slide the look-at this fraction from the home agora toward map center. */
@@ -6071,11 +6164,21 @@ function isWebGpuFailure(err) {
   return /webgpu|requestadapter|requestdevice|gpuadapter|gpu device|no compatible/i.test(m);
 }
 
-// Splash: hold opaque through the ready hitch, then fade. Starting the dissolve
-// on the same tick as scene-ready starves it of frames.
+// Splash: hold the logo through the ready hitch, then fade it. The black veil
+// inside it covers the table swap. Starting the logo dissolve on the same tick
+// as scene-ready starves it of frames.
 const SPLASH_FADE_MS = 550;
 const SPLASH_SETTLE_FRAMES = 14;
 const SPLASH_SETTLE_MAX_MS = 900;
+const SPLASH_VEIL_MS = 160;
+/** Bumped when a match splash replaces the boot one, so a late boot fade bails. */
+let splashGen = 0;
+/** Lobby card refresh. Assigned once the menu exists; the splash hides that card. */
+let refreshLobbyUnderSplash = () => {};
+/** Close the side menu when a match splash covers the board. */
+let closeMenuForSplash = () => {};
+/** Start the intro clock once the splash is gone, so 00:00 is the visible map. */
+let resumeStoryAfterSplash = () => {};
 
 function workerSimMode(mode) {
   if (mode === 'koth') return 'koth';
@@ -6124,7 +6227,7 @@ async function loadAdventureGardenUrl(ctx, url, kothShard, extras = {}) {
   const localSolo = humans.length < 2;
   const matchLobby = extras.matchLobby ?? ctx.matchLobby;
   matchLobby?.detachSession?.();
-  await applyLiveConfig(ctx, {
+  const owned = await applyLiveConfig(ctx, {
     ...live,
     garden,
     gardenUrl: url,
@@ -6142,7 +6245,9 @@ async function loadAdventureGardenUrl(ctx, url, kothShard, extras = {}) {
     activeSlots: live.activeSlots?.length ? live.activeSlots : humans,
     inputDelayTicks: localSolo ? 0 : (live.inputDelayTicks ?? 1),
     loadingLabel: 'Loading next chapter…',
+    deferSplashReveal: true,
   }, kothShard);
+  if (owned === false) return;
   ctx.session.pauseLockstep = false;
   ctx.session.simAcc = 0;
   ctx.adventureLive = {
@@ -6155,6 +6260,7 @@ async function loadAdventureGardenUrl(ctx, url, kothShard, extras = {}) {
   };
   ctx.beginAdventure?.(garden);
   ctx.matchStory?.playIntro(garden?.story);
+  await revealBootSplash();
   if (!localSolo) {
     if (extras.epoch != null) matchLobby?.setLockstepEpoch?.(extras.epoch | 0);
     matchLobby?.attachSession?.(ctx.session);
@@ -6196,7 +6302,7 @@ async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
   ctx.localSoloHold = true;
   kothShard?.setLobbyMatchHold?.(true);
   try {
-    await applyLiveConfig(ctx, {
+    const owned = await applyLiveConfig(ctx, {
       ...cfg,
       garden,
       spawnSeed: (cfg.seed ?? 0) >>> 0,
@@ -6208,7 +6314,13 @@ async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
       reset: true,
       inputEnabled: true,
       armyPerSide: 0,
+      deferSplashReveal: true,
     }, kothShard);
+    if (owned === false) {
+      ctx.localSoloHold = heldSolo;
+      kothShard?.setLobbyMatchHold?.(false);
+      return;
+    }
     ctx.setMatchMeta?.({ mode: snapshot.mode, matchId: snapshot.roomId });
     if (snapshot.mode === 'adventure') {
       ctx.adventureLive = { ...cfg };
@@ -6222,6 +6334,7 @@ async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
     matchRosterNames = namesFromLobbySeats(lobbyResultSeats);
     sideMenu?.close?.();
     ctx.matchStory?.playIntro(garden?.story);
+    await revealBootSplash();
     const label = snapshot.mode === 'teams'
       ? 'Teams'
       : snapshot.mode === 'adventure'
@@ -6286,13 +6399,17 @@ function updateCatchupProgress(session) {
 }
 
 function showMatchSplash() {
+  splashGen += 1;
   let el = document.getElementById('boot-splash');
+  let created = false;
   if (!el) {
+    created = true;
     el = document.createElement('div');
     el.id = 'boot-splash';
     el.setAttribute('aria-hidden', 'true');
     el.innerHTML =
-      `<img src="${assetUrl('/assets/images/skinnyheader.png')}" alt="Æther.Garden" width="506" height="56" decoding="async" />`;
+      `<div id="boot-veil"></div>`
+      + `<img src="${assetUrl('/assets/images/skinnyheader.png')}" alt="Æther.Garden" width="506" height="56" decoding="async" />`;
     document.body.appendChild(el);
   }
   delete el.dataset.leaving;
@@ -6303,6 +6420,74 @@ function showMatchSplash() {
     img.getAnimations?.().forEach((a) => a.cancel());
     img.style.opacity = '1';
   }
+  const veil = splashVeil(el);
+  veil?.getAnimations?.().forEach((a) => a.cancel());
+  // A fresh splash starts clear so the logo can fade the board to black.
+  // The page-load splash is already black in CSS.
+  if (created && veil) veil.style.opacity = '0';
+  closeMenuForSplash();
+  refreshLobbyUnderSplash();
+}
+
+function splashVeil(el = document.getElementById('boot-splash')) {
+  if (!el) return null;
+  let veil = el.querySelector('#boot-veil');
+  if (!veil) {
+    veil = document.createElement('div');
+    veil.id = 'boot-veil';
+    el.prepend(veil);
+  }
+  return veil;
+}
+
+function veilOpacity(veil) {
+  const inline = veil.style.opacity;
+  if (inline !== '') {
+    const n = Number(inline);
+    if (Number.isFinite(n)) return n;
+  }
+  const computed = Number(getComputedStyle(veil).opacity);
+  return Number.isFinite(computed) ? computed : 1;
+}
+
+/**
+ * Fade the black cover under the logo. `gen` bails if a newer splash took over.
+ * @param {number} opacity
+ * @param {number} [gen]
+ */
+function fadeSplashVeil(opacity, gen = splashGen) {
+  const el = document.getElementById('boot-splash');
+  const veil = splashVeil(el);
+  if (!el || !veil || gen !== splashGen) return Promise.resolve();
+  const from = veilOpacity(veil);
+  veil.getAnimations?.().forEach((a) => a.cancel());
+  if (Math.abs(from - opacity) < 0.02) {
+    veil.style.opacity = String(opacity);
+    return Promise.resolve();
+  }
+  veil.style.opacity = String(from);
+  if (typeof veil.animate !== 'function') {
+    veil.style.opacity = String(opacity);
+    return Promise.resolve();
+  }
+  const anim = veil.animate(
+    [{ opacity: from }, { opacity }],
+    { duration: SPLASH_VEIL_MS, easing: 'ease-out', fill: 'forwards' },
+  );
+  const done = anim.finished.then(() => {
+    if (gen !== splashGen) return;
+    veil.style.opacity = String(opacity);
+  }, () => {});
+  return done;
+}
+
+/** Board is in place. Fade the black off, then let the logo leave as usual. */
+function revealBootSplash() {
+  const gen = splashGen;
+  return fadeSplashVeil(0, gen).then(() => {
+    if (gen !== splashGen) return;
+    dismissBootSplash();
+  });
 }
 
 /** @param {{ immediate?: boolean }} [opts] */
@@ -6313,6 +6498,8 @@ function dismissBootSplash(opts = {}) {
   if (opts.immediate) {
     el.dataset.leaving = '1';
     el.remove();
+    refreshLobbyUnderSplash();
+    resumeStoryAfterSplash();
     return;
   }
   if (el.dataset.leaving === '1' || el.dataset.settle === '1') return;
@@ -6336,6 +6523,8 @@ function dismissBootSplash(opts = {}) {
       if (done) return;
       done = true;
       el.remove();
+      refreshLobbyUnderSplash();
+      resumeStoryAfterSplash();
     };
     if (typeof img.animate === 'function') {
       img.animate(

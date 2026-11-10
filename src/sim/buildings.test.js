@@ -195,6 +195,20 @@ describe('buildings place', () => {
     assert.equal(footprintTiles('mine', hitX, hitZ).length, 4);
   });
 
+  it('even footprints use the depth half on a rectangular board', () => {
+    const width = 80;
+    const height = 144;
+    buildField(3, { width, height });
+    const snapped = snapFloat('mine', 12, -40);
+    const b = buildingFootprintBounds('mine', snapped.xFixed, snapped.zFixed);
+    const halfX = (width * TILE_SIZE_F) / 2;
+    const halfZ = (height * TILE_SIZE_F) / 2;
+    const lineX = Math.round((snapped.x + halfX) / TILE_SIZE_F);
+    const lineZ = Math.round((snapped.z + halfZ) / TILE_SIZE_F);
+    assert.equal(b.coreX0, lineX - 1);
+    assert.equal(b.coreZ0, lineZ - 1);
+  });
+
   it('rejects advanced buildings until the required building exists', () => {
     const w = createWorld(4);
     w.buildings = [];
@@ -940,8 +954,76 @@ describe('village and workshop menus', () => {
   it('trains engineers and monks at the village, wagons at the workshop', () => {
     assert.deepEqual(BUILDING_MENUS.village.units, ['engineer', 'monk']);
     assert.deepEqual(BUILDING_MENUS.workshop.units, ['wagon', 'siege_wagon']);
+    assert.deepEqual(BUILDING_MENUS.factory.units, ['apc', 'tank']);
+    assert.deepEqual(BUILDING_MENUS.perch.units, ['dirigible', 'war_balloon']);
     assert.ok(!BUILDING_MENUS.village.units.includes('villager'));
     assert.ok(!BUILDING_MENUS.workshop.units.includes('engineer'));
+  });
+
+  it('refuses the tank and war balloon until artillery is researched', () => {
+    const factory = getBuildingMenu('factory');
+    const perch = getBuildingMenu('perch');
+    assert.equal(factory.units.find((u) => u.id === 'tank').tech, 'artillery');
+    assert.equal(perch.units.find((u) => u.id === 'war_balloon').tech, 'artillery');
+    assert.equal(factory.units.find((u) => u.id === 'apc').tech, null);
+    assert.equal(
+      menuGateState({
+        cost: { wood: 50 },
+        tech: 'artillery',
+        bank: { wood: 200 },
+        researched: new Set(),
+      }),
+      'locked',
+    );
+    assert.equal(
+      menuGateState({
+        cost: { wood: 50 },
+        tech: 'artillery',
+        bank: { wood: 200 },
+        researched: new Set(['artillery']),
+      }),
+      'ok',
+    );
+
+    const w = createWorld(4);
+    w.buildings = [];
+    const field = buildField(4, { width: 64, height: 64 });
+    clearClaim(field, 'factory', 20, 20);
+    clearClaim(field, 'perch', 40, 20);
+    applyCommands(w, field, [
+      {
+        type: CMD.PLACE_BUILDING,
+        playerId: 0,
+        buildingType: 'factory',
+        tx: fx.fromFloat(20),
+        ty: fx.fromFloat(20),
+      },
+      {
+        type: CMD.PLACE_BUILDING,
+        playerId: 0,
+        buildingType: 'perch',
+        tx: fx.fromFloat(40),
+        ty: fx.fromFloat(20),
+      },
+    ]);
+    finishAllBuildings(w);
+    const wood = getResource(w, 0, 'wood');
+    applyCommands(w, field, [
+      { type: CMD.QUEUE_TRAIN, playerId: 0, buildingIndex: 0, unitKey: 'tank' },
+      { type: CMD.QUEUE_TRAIN, playerId: 0, buildingIndex: 1, unitKey: 'war_balloon' },
+    ]);
+    assert.equal(w.buildings[0].tracks?.length ?? 0, 0);
+    assert.equal(w.buildings[1].tracks?.length ?? 0, 0);
+    assert.equal(getResource(w, 0, 'wood'), wood);
+    grantTech(w, 0, 'artillery');
+    applyCommands(w, field, [
+      { type: CMD.QUEUE_TRAIN, playerId: 0, buildingIndex: 0, unitKey: 'tank' },
+      { type: CMD.QUEUE_TRAIN, playerId: 0, buildingIndex: 1, unitKey: 'war_balloon' },
+    ]);
+    assert.equal(w.buildings[0].tracks[0].id, 'tank');
+    assert.equal(w.buildings[0].tracks[0].unitType, UNIT.TANK);
+    assert.equal(w.buildings[1].tracks[0].id, 'war_balloon');
+    assert.equal(w.buildings[1].tracks[0].unitType, UNIT.WAR_BALLOON);
   });
 
   it('trickles a villager from a completed village and charges the train cost', () => {

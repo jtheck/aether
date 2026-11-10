@@ -13,11 +13,12 @@ import { isBuildingAlive } from './buildings.js';
 import { lineClear, TILE_SIZE_F, worldToTile, worldToTileZ } from './field.js';
 import { applyDamageDoor, damageDoorsInRadius, isDoorAlive } from './doorCombat.js';
 import { getProjectileDef, PROJECTILE } from './projectileTypes.js';
+import { unitImmuneToFire } from './unitTypes.js';
 import { isHostile } from './teams.js';
 import { applyTreeSplash, tileIsWater } from './trees.js';
 import { spawnFireZone } from './fireZones.js';
 import { fireballBlastLob } from './monkKick.js';
-import { rngFrac } from './rng.js';
+import { rngFrac, rngRange } from './rng.js';
 import {
   queryCellBounds,
   rebuildSpatialGrid,
@@ -157,6 +158,71 @@ export function spawnProjectile(w, {
   store.activeCount++;
   w.metrics.projectileSpawned++;
   return slot;
+}
+
+/** Side offsets and reach, authored once. Index 0 is unused. */
+const FAN_BY_COUNT = (() => {
+  /** @type {({ side: Int32Array, reach: Int32Array } | null)[]} */
+  const table = [null];
+  for (let n = 1; n <= 12; n++) {
+    const side = new Int32Array(n);
+    const reach = new Int32Array(n);
+    const last = Math.max(1, n - 1);
+    for (let k = 0; k < n; k++) {
+      const t = (k / last) * 2 - 1;
+      side[k] = fx.fromFloat(t);
+      reach[k] = fx.fromFloat(1 + (1 - Math.abs(t)) * 0.24);
+    }
+    table.push({ side, reach });
+  }
+  return table;
+})();
+
+/** Extra ticks between balls when the shot is sporadic. Clumps, then a hole. */
+const SPORADIC_GAP = [1, 3, 1, 4, 2, 5, 1];
+
+/**
+ * One attack shot. `volley` > 1 spits a fan: edges land short and wide,
+ * the middle ball reaches a little farther. Sporadic shots also wobble and
+ * leave uneven gaps.
+ */
+export function spawnAttackShot(w, shot) {
+  const n = shot.volley | 0;
+  if (!(n > 1)) return spawnProjectile(w, shot);
+  const fan = FAN_BY_COUNT[Math.min(n, FAN_BY_COUNT.length - 1)];
+  const count = fan.side.length;
+  const spread = shot.volleySpread | 0;
+  const sporadic = !!getProjectileDef(shot.type).sporadic;
+  const x = shot.x | 0;
+  const y = shot.y | 0;
+  const dx = (shot.aimX | 0) - x;
+  const dy = (shot.aimY | 0) - y;
+  let dist = fx.len(dx, dy);
+  if (dist <= 0) dist = fx.ONE;
+  const nx = fx.div(dx, dist);
+  const ny = fx.div(dy, dist);
+  const px = -ny;
+  const py = nx;
+  let first = -1;
+  let wait = 1;
+  for (let k = 0; k < count; k++) {
+    const along = fx.mul(dist, fan.reach[k]);
+    let side = fx.mul(spread, fan.side[k]);
+    if (sporadic && w?.rng) {
+      const wobble = (rngFrac(w.rng) - fx.HALF) * 2;
+      side += fx.mul(fx.fromFloat(12), wobble);
+    }
+    const slot = spawnProjectile(w, {
+      ...shot,
+      aimX: x + fx.mul(nx, along) + fx.mul(px, side),
+      aimY: y + fx.mul(ny, along) + fx.mul(py, side),
+      aimScatter: 0,
+      launchWait: wait,
+    });
+    if (first < 0) first = slot;
+    wait += sporadic ? SPORADIC_GAP[k % SPORADIC_GAP.length] : 1;
+  }
+  return first;
 }
 
 /** Deterministic aim wander; max offset grows with throw distance. */
@@ -318,6 +384,7 @@ function applySplash(w, slot, impactX, impactY, def, field) {
 
   for (let i = 0; i < w.count; i++) {
     if (!w.alive[i]) continue;
+    if ((def.fireball || def.leavesGroundFire) && unitImmuneToFire(w.type[i])) continue;
     if (fx.dist2(impactX, impactY, w.px[i], w.py[i]) > radius2) continue;
     let dmg = baseDamage;
     if (!isHostile(owner, w.owner[i])) {

@@ -11,12 +11,21 @@ export const MENU_LOCKED = 'locked';
  * @param {{
  *   cost?: Record<string, number> | null,
  *   requires?: readonly string[] | null,
+ *   tech?: string | null,
+ *   researched?: Set<string> | Iterable<string> | null,
  *   bank?: Record<string, number> | null,
  *   ownedTypes?: Set<string> | Iterable<string> | null,
  * }} opts
  * @returns {'ok' | 'unafford' | 'locked'}
  */
 export function menuGateState(opts) {
+  const tech = opts?.tech;
+  if (tech) {
+    const researched = opts.researched instanceof Set
+      ? opts.researched
+      : new Set(opts.researched ?? []);
+    if (!researched.has(tech)) return MENU_LOCKED;
+  }
   const requires = opts?.requires;
   if (requires?.length) {
     const owned = opts.ownedTypes instanceof Set

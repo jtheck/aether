@@ -228,6 +228,12 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
       e.preventDefault();
       return;
     }
+    /** @type {{ closest?: (sel: string) => unknown }} */
+    const target = /** @type {EventTarget} */ (e.target);
+    if (typeof target?.closest === 'function' && target.closest('#boot-splash')) {
+      e.preventDefault();
+      return;
+    }
     if (!isActive()) return;
     if (onCanvas(e)) e.preventDefault();
   }

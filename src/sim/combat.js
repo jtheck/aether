@@ -7,7 +7,7 @@ import { revertBrigand } from './brigand.js';
 import { isHostile } from './teams.js';
 import { attackInRange, clearPath, queuePath, attackStandPoint } from './path.js';
 import { applyDamage, kill } from './damage.js';
-import { spawnProjectile } from './projectiles.js';
+import { spawnAttackShot } from './projectiles.js';
 import {
   claimEngagement,
   clearEngagement,
@@ -24,6 +24,7 @@ import { tryPriestHeal } from './priestHeal.js';
 import { tickMana } from './mana.js';
 import {
   applyDamageBuilding,
+  attackBuildingInRange,
   attackBuildingStandPointOnField,
   buildingFootprintHalf,
   isEconomyCombatBuilding,
@@ -33,6 +34,7 @@ import { applyDamageDoor, attackDoorInRange, attackDoorStandPointOnField, DOOR_B
 import { lineClear } from './field.js';
 import { clearAttackFocus, lockAttackFocus } from './world.js';
 import { armChaseLeash, chaseLeashExceeded, refreshLeashDrops } from './leash.js';
+import { rngRange } from './rng.js';
 import { frostAttackAdvances } from './combatStatus.js';
 
 export const ACQUIRE_PHASES = 5;
@@ -118,7 +120,10 @@ export function acquireTargets(w, field) {
     if (i % ACQUIRE_PHASES !== w.tick % ACQUIRE_PHASES) continue;
 
     const def = getUnitDef(w.type[i]);
-    if (def.category !== 'military' || def.aggroRange === 0) continue;
+    // Attack-move still fires on the way. Acquiring here would turn that shot into a chase.
+    if (def.firesOnMove && w.order[i] === w.ORDER.ATTACK_MOVE) continue;
+    if (!(def.aggroRange > 0)) continue;
+    if (def.category !== 'military' && !def.firesOnMove) continue;
 
     const aggro2 = fx.mul(def.aggroRange, def.aggroRange);
     let best = -1;
@@ -274,6 +279,119 @@ function endAttack(w, i) {
   revertBrigand(w, i);
 }
 
+function forEachNearby(w, x, y, radius, visit) {
+  const grid = w.spatial;
+  const bounds = queryCellBounds(x, y, radius, grid);
+  for (let z = bounds.minZ; z <= bounds.maxZ; z++) {
+    for (let cx = bounds.minX; cx <= bounds.maxX; cx++) {
+      const cell = spatialCellId(cx, z, grid);
+      if (grid.overflowOwners) {
+        let j = grid.head[cell];
+        while (j >= 0) {
+          visit(j);
+          j = grid.next[j];
+        }
+        continue;
+      }
+      for (let owner = 0; owner < SPATIAL_OWNER_SLOTS; owner++) {
+        if (!grid.activeOwners[owner]) continue;
+        let j = grid.ownerHead[cell * SPATIAL_OWNER_SLOTS + owner];
+        while (j >= 0) {
+          visit(j);
+          j = grid.ownerNext[j];
+        }
+      }
+    }
+  }
+}
+
+/** Nearest hostile inside `radius` and outside `minRange` (0 skips the inner check). */
+function nearestHostileWithin(w, i, radius, minRange) {
+  const range2 = fx.mul(radius, radius);
+  const min2 = minRange > 0 ? fx.mul(minRange, minRange) : 0;
+  let best = -1;
+  let bestD2 = 0x7fffffff;
+  forEachNearby(w, w.px[i], w.py[i], radius, (j) => {
+    if (j === i || !w.alive[j] || !isHostile(w.owner[i], w.owner[j])) return;
+    if (w.carriedBy?.[j] >= 0) return;
+    const d2 = fx.dist2(w.px[i], w.py[i], w.px[j], w.py[j]);
+    if (d2 > range2 || d2 < min2) return;
+    if (d2 < bestD2 || (d2 === bestD2 && j < best)) {
+      bestD2 = d2;
+      best = j;
+    }
+  });
+  return best;
+}
+
+/** Nearest hostile whose center sits inside weapon range and outside min range. */
+function nearestHostileInWeaponRange(w, i, def) {
+  return nearestHostileWithin(w, i, def.attackRange, def.minRange);
+}
+
+function nearestHostileBuildingInWeaponRange(w, i) {
+  const buildings = w.buildings;
+  if (!buildings?.length) return -1;
+  let best = -1;
+  let bestD2 = 0x7fffffff;
+  for (let bi = 0; bi < buildings.length; bi++) {
+    const b = buildings[bi];
+    if (!isBuildingAlive(b) || !isHostile(w.owner[i], b.owner)) continue;
+    if (isEconomyCombatBuilding(b.type)) continue;
+    if (!attackBuildingInRange(w, i, b)) continue;
+    const d2 = fx.dist2(w.px[i], w.py[i], b.x, b.z);
+    if (d2 < bestD2 || (d2 === bestD2 && bi < best)) {
+      bestD2 = d2;
+      best = bi;
+    }
+  }
+  return best;
+}
+
+function setAttackCooldown(w, i, def) {
+  let cd = def.attackCooldown | 0;
+  const jitter = def.attackCooldownJitter | 0;
+  if (jitter > 1 && w.rng) cd += rngRange(w.rng, 0, jitter);
+  w.attackCd[i] = cd;
+}
+function fireWhileMoving(w, i) {
+  if (w.attackCd[i] > 0 || w.distractCd[i] > 0) return;
+  const def = getUnitDef(w.type[i]);
+  const unit = nearestHostileInWeaponRange(w, i, def);
+  let target = -1;
+  let targetBuilding = -1;
+  let aimX = 0;
+  let aimY = 0;
+  if (unit >= 0) {
+    target = unit;
+    aimX = w.px[unit];
+    aimY = w.py[unit];
+  } else if (unitAttacksBuildings(w.type[i])) {
+    const bi = nearestHostileBuildingInWeaponRange(w, i);
+    if (bi < 0) return;
+    targetBuilding = bi;
+    aimX = w.buildings[bi].x;
+    aimY = w.buildings[bi].z;
+  } else {
+    return;
+  }
+  spawnAttackShot(w, {
+    type: def.projectileType,
+    owner: w.owner[i],
+    source: i,
+    target,
+    targetBuilding,
+    x: w.px[i],
+    y: w.py[i],
+    aimX,
+    aimY,
+    damage: unitAttackDamage(w, i, def.attackDamage),
+    volley: def.volley,
+    volleySpread: def.volleySpread,
+  });
+  setAttackCooldown(w, i, def);
+}
+
 function resolveAttacks(w, field) {
   for (let i = 0; i < w.count; i++) {
     if (!w.alive[i]) continue;
@@ -282,6 +400,10 @@ function resolveAttacks(w, field) {
     // are about to fire, and only when most of that heal would land.
     if (w.order[i] === w.ORDER.IDLE) {
       if (w.type[i] === UNIT.PRIEST) tryPriestHeal(w, i, true);
+      continue;
+    }
+    if (w.order[i] === w.ORDER.ATTACK_MOVE && getUnitDef(w.type[i]).firesOnMove) {
+      fireWhileMoving(w, i);
       continue;
     }
     if (w.order[i] !== w.ORDER.ATTACK) continue;
@@ -315,7 +437,7 @@ function resolveAttacks(w, field) {
         clearPath(w, i);
         if (w.attackCd[i] <= 0) {
           if (def.attackDelivery === ATTACK_DELIVERY.PROJECTILE) {
-            spawnProjectile(w, {
+            spawnAttackShot(w, {
               type: def.projectileType,
               owner: w.owner[i],
               source: i,
@@ -326,11 +448,13 @@ function resolveAttacks(w, field) {
               aimX: door.x,
               aimY: door.z,
               damage: unitAttackDamage(w, i, def.attackDamage),
+              volley: def.volley,
+              volleySpread: def.volleySpread,
             });
           } else {
             applyDamageDoor(w, field, di, unitAttackDamage(w, i, def.attackDamage));
           }
-          w.attackCd[i] = def.attackCooldown;
+          setAttackCooldown(w, i, def);
           if (!isDoorAlive(w.doors?.[di])) endAttack(w, i);
         }
       }
@@ -347,7 +471,7 @@ function resolveAttacks(w, field) {
           // Shared attack cooldown spent on the heal. Smite waits.
         } else if (unitOk) {
           if (def.attackDelivery === ATTACK_DELIVERY.PROJECTILE) {
-            spawnProjectile(w, {
+            spawnAttackShot(w, {
               type: def.projectileType,
               owner: w.owner[i],
               source: i,
@@ -357,15 +481,17 @@ function resolveAttacks(w, field) {
               aimX: w.px[target],
               aimY: w.py[target],
               damage: unitAttackDamage(w, i, def.attackDamage),
+              volley: def.volley,
+              volleySpread: def.volleySpread,
             });
           } else {
             applyDamage(w, target, unitAttackDamage(w, i, def.attackDamage), i);
           }
-          w.attackCd[i] = def.attackCooldown;
+          setAttackCooldown(w, i, def);
           if (!w.alive[target]) endAttack(w, i);
         } else {
           if (def.attackDelivery === ATTACK_DELIVERY.PROJECTILE) {
-            spawnProjectile(w, {
+            spawnAttackShot(w, {
               type: def.projectileType,
               owner: w.owner[i],
               source: i,
@@ -376,11 +502,13 @@ function resolveAttacks(w, field) {
               aimX: b.x,
               aimY: b.z,
               damage: unitAttackDamage(w, i, def.attackDamage),
+              volley: def.volley,
+              volleySpread: def.volleySpread,
             });
           } else {
             applyDamageBuilding(w, field, bi, unitAttackDamage(w, i, def.attackDamage), w.owner[i] | 0);
           }
-          w.attackCd[i] = def.attackCooldown;
+          setAttackCooldown(w, i, def);
           if (!isBuildingAlive(w.buildings?.[bi])) endAttack(w, i);
         }
       }

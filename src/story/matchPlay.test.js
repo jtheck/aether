@@ -4,6 +4,49 @@ import { CLIP_CAMERA, CLIP_LINE } from './timeline.js';
 import { createMatchStory } from './matchPlay.js';
 
 describe('createMatchStory', () => {
+  it('puts the camera on the playhead with the line, including a move', () => {
+    const how = [];
+    const radii = [];
+    const cam = {
+      easePose(pose) { how.push('ease'); radii.push(pose.radius); },
+      setPose(pose) { how.push('set'); radii.push(pose.radius); },
+      stopFollow() {},
+    };
+    const story = createMatchStory({
+      getCamera: () => cam,
+      getField: () => ({ worldHalfF: 160, width: 80 }),
+    });
+    story.playIntro({
+      reels: [{
+        id: 'intro',
+        when: 'start',
+        clips: [
+          {
+            id: 'a',
+            kind: CLIP_CAMERA,
+            t: 0,
+            dur: 1,
+            fromTx: 0,
+            fromTz: 0,
+            fromRadius: 80,
+            fromAlpha: 0,
+            tx: 10,
+            tz: 0,
+            radius: 40,
+            alpha: 0,
+          },
+          { id: 'line', kind: CLIP_LINE, t: 0, dur: 2, speaker: 'Doc', text: 'Go.' },
+        ],
+      }],
+    });
+    assert.deepEqual(how, ['set']);
+    assert.equal(radii[0], 80);
+    for (let i = 0; i < 10; i++) story.tick(50);
+    assert.ok(how.every((kind) => kind === 'set'));
+    assert.ok(radii.at(-1) < 80 && radii.at(-1) > 40);
+    story.skip();
+  });
+
   it('drives the camera along the start reel and releases on skip', () => {
     const poses = [];
     const cam = {
@@ -97,6 +140,28 @@ describe('createMatchStory', () => {
     const story = createMatchStory({ getCamera: () => null, getField: () => null });
     assert.equal(story.playIntro({ reels: [] }), false);
     assert.equal(story.driving(), false);
+  });
+
+  it('drops live sight when a reel ends and keeps buildings as seen', () => {
+    const revealed = [];
+    const story = createMatchStory({
+      getCamera: () => null,
+      getField: () => ({ worldHalfF: 160, width: 80 }),
+      onReveal: (spec) => revealed.push(spec ?? null),
+    });
+    story.playIntro({
+      reels: [{
+        id: 'intro',
+        when: 'start',
+        reveal: 'enemy',
+        clips: [
+          { id: 'c', kind: CLIP_CAMERA, t: 0, dur: 2, tx: 1, tz: 2, radius: 40, alpha: 0 },
+        ],
+      }],
+    });
+    assert.equal(revealed.at(-1), 'enemy');
+    story.skip();
+    assert.equal(revealed.at(-1), null);
   });
 
   it('notifies when a cinematic arms and when it is skipped', () => {

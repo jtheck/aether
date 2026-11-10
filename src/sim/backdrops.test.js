@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   BACKDROP,
   BACKDROP_DEFS,
+  backdropAlongRay,
   cloneBackdrops,
   defaultBackdropY,
   encodeBackdrops,
@@ -38,6 +39,23 @@ describe('backdrops', () => {
     const poses = [castle, disc];
     assert.equal(nearestBackdrop(poses, 12, -4), 0);
     assert.equal(nearestBackdrop(poses, 400, 400), -1);
+    // Disc footprint is the mesh radius (~2.9 * scale), not the keep's half-unit.
+    assert.equal(nearestBackdrop(poses, 120, 0), 1);
+    assert.equal(nearestBackdrop([disc], 400, 0), -1);
+  });
+
+  it('grabs a prop the view ray hits before the ground, including a castle roof', () => {
+    const disc = freshBackdrop(BACKDROP.DISC, 0, 0);
+    const onRim = { x: 180, y: 90, z: -240, dx: 0, dy: -90, dz: 240 };
+    assert.equal(backdropAlongRay([disc], onRim, 1), 0);
+    const outside = { x: 400, y: 80, z: 0, dx: 0, dy: -80, dz: 0 };
+    assert.equal(backdropAlongRay([disc], outside, 1), -1);
+
+    const castle = freshBackdrop(BACKDROP.CASTLE, 0, 0);
+    // Aimed at the keep top; the ground under that ray sits outside the walls.
+    const roof = { x: 0, y: 200, z: -200, dx: 0, dy: -150, dz: 200 };
+    assert.equal(nearestBackdrop([castle], 0, 67), -1);
+    assert.equal(backdropAlongRay([castle], roof, 1.34), 0);
   });
 
   it('roundtrips garden tuples with an explicit huge pose', () => {

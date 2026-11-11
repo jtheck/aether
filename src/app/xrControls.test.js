@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createXrControls } from './xrControls.js';
 import { QUEUE_HOLD_DELAY_MS, QUEUE_HOLD_INTERVAL_MS } from './input/queueHold.js';
+import { handleButtonPoint } from '../render/xrLasso.js';
 
 const EYE_Y = 100;
 
@@ -151,6 +152,23 @@ describe('xr controls: play', () => {
     assert.equal(casts.length, 2);
     assert.ok(casts[0].args[0].dx < 0);
     assert.ok(casts[1].args[0].dx > 0);
+  });
+
+  it('the other trigger presses the handle pad at that laser', () => {
+    const h = harness();
+    const aim = { ox: 0, oy: 1.5, oz: 0, dx: 0, dy: 0, dz: 1, ux: 0, uy: 1, uz: 0 };
+    h.left.src.targetRayMatrix = rayMatrix(aim.ox, aim.oy, aim.oz, aim.dx, aim.dy, aim.dz);
+    const pad = handleButtonPoint(aim, 0);
+    h.right.src.targetRayMatrix = rayMatrix(pad.x, pad.y, pad.z, 0, -1, 0);
+    h.left.touch(true);
+    h.step();
+    h.calls.length = 0;
+    tap(h, h.right.trigger);
+    assert.equal(h.of('forceMove').length, 1);
+    assert.equal(h.of('attackMove').length, 0);
+    assert.equal(h.of('select').length, 0);
+    const ray = h.of('forceMove')[0].args[0];
+    assert.ok(Math.abs(ray.dz - 1) < 1e-5);
   });
 
   it('X and A clear the selection', () => {
@@ -328,6 +346,29 @@ describe('xr controls: ghost-place', () => {
     h.step();
     assert.equal(h.of('preview').length, 2);
     assert.equal(h.of('select').length, 0);
+  });
+
+  it('a grip tap does not select while the ghost is out', () => {
+    const h = harness();
+    h.state.placing = true;
+    tap(h, h.right.grip);
+    assert.equal(h.of('select').length, 0);
+    assert.equal(h.of('loop').length, 0);
+  });
+
+  it('a grip sweep while placing lassoes the field', () => {
+    const h = harness();
+    h.state.placing = true;
+    h.right.grip(true);
+    for (const [x, z] of [[0, 0], [20, 0], [20, 20], [0, 20]]) {
+      h.right.aim(x, z);
+      h.step();
+    }
+    h.right.grip(false);
+    h.step();
+    assert.equal(h.of('select').length, 0);
+    assert.equal(h.of('loop').length, 1);
+    assert.ok(h.of('preview').length > 0);
   });
 
   it('X / A cancels the ghost', () => {

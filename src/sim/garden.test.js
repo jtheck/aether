@@ -49,7 +49,8 @@ import {
 import { STRESS_ARMY_COUNT, STRESS_MENU_PER_SIDE } from './worldSetup.js';
 import { UNIT_DEFS } from './unitTypes.js';
 import * as fx from './fixed.js';
-import { PLACEABLE_BUILDINGS } from './buildings.js';
+import { PLACEABLE_BUILDINGS, getBuildingHp } from './buildings.js';
+import { NAMED_UNIT_SCALE, namedUnitHp } from './namedUnit.js';
 import { getResource, STARTING_RESOURCES } from './resources.js';
 
 function makeLMask(width, height, cellSize = 16) {
@@ -675,6 +676,42 @@ describe('garden codec', () => {
     assert.equal(decodeGarden(json).units[0].hp, 44);
   });
 
+  it('roundtrips an authored body scale and leaves a named hero at the default', () => {
+    const field = buildField(3, { width: 32, height: 32 });
+    applyTableSilhouette(field, {
+      cellSize: 16,
+      cellMask: createFullCellMask(32, 32, 16),
+      cellRadius: createFullCellRadius(32, 32, 16, 0),
+    });
+    const json = encodeGarden(field, {
+      units: [
+        { owner: 0, type: 5, tx: 4, tz: 6, name: 'Stumpey' },
+        { owner: 0, type: 5, tx: 6, tz: 6, name: 'Wide', scale: 2 },
+        { owner: 0, type: 1, tx: 8, tz: 6, scale: 1.5 },
+      ],
+      buildings: [{ owner: 0, type: 'camp', x: 4, z: -4, yaw: 0, scale: 2 }],
+    });
+    assert.deepEqual(json.us, [0, 2, 1.5]);
+    assert.equal(json.b[0][5], 2);
+    const g = decodeGarden(json);
+    assert.equal(g.units[0].scale, undefined);
+    assert.equal(g.units[1].scale, 2);
+    assert.equal(g.units[2].scale, 1.5);
+    assert.equal(g.buildings[0].scale, 2);
+    const world = createWorld(3);
+    applyGardenPlacements(world, field, g);
+    assert.equal(world.hp[0], namedUnitHp(UNIT_DEFS[5].hp));
+    assert.equal(world.hp[1], Math.round(UNIT_DEFS[5].hp * 2));
+    assert.equal(world.hp[2], Math.round(UNIT_DEFS[1].hp * 1.5));
+    assert.equal(world.buildings[0].scale, 2);
+    assert.equal(world.buildings[0].maxHp, Math.round(getBuildingHp('camp') * 2));
+    assert.equal(world.buildings[0].hp, world.buildings[0].maxHp);
+    const again = encodeGarden(field, { units: g.units, buildings: g.buildings });
+    assert.deepEqual(again.us, json.us);
+    assert.equal(again.b[0][5], 2);
+    assert.equal(NAMED_UNIT_SCALE, 1.29);
+  });
+
   it('omits sr and uses the default opening bank', () => {
     const field = buildField(3, { width: 32, height: 32 });
     applyTableSilhouette(field, {
@@ -807,6 +844,17 @@ describe('garden codec', () => {
     const g = decodeGarden(json);
     assert.deepEqual(g.neutralTeams, [[0, 5], [0, 4]]);
     assert.equal(encodeGarden(field).nr, undefined);
+  });
+
+  it('roundtrips an army intent and drops an unknown one', () => {
+    const field = buildField(3, { width: 32, height: 32 });
+    const json = encodeGarden(field, {
+      ownerIntents: [[2, 'reckless'], [0, 'nope'], [2, 'passive'], [4, 'steady']],
+    });
+    assert.deepEqual(json.ap, [[2, 'reckless'], [4, 'steady']]);
+    assert.deepEqual(decodeGarden(json).ownerIntents, [[2, 'reckless'], [4, 'steady']]);
+    assert.equal(encodeGarden(field).ap, undefined);
+    assert.equal(decodeGarden(encodeGarden(field)).ownerIntents, null);
   });
 
   it('roundtrips an authored alliance table and omits a missing one', () => {

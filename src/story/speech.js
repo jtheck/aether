@@ -38,6 +38,7 @@ export function createStorySpeech(opts = {}) {
   let layer = null;
   /** @type {{ id: string, speaker: string, text: string, style: string }[]} */
   let lines = [];
+  let suppressed = false;
 
   if (canDom && host) {
     layer = host.querySelector('#story-speech-layer');
@@ -50,7 +51,7 @@ export function createStorySpeech(opts = {}) {
   }
 
   function tick() {
-    if (!layer) return;
+    if (suppressed || !layer) return;
     layer.replaceChildren();
     if (!lines.length) {
       layer.style.display = 'none';
@@ -85,6 +86,17 @@ export function createStorySpeech(opts = {}) {
     show(input) {
       lines = spokenLines(input);
       tick();
+    },
+    current() {
+      return lines;
+    },
+    /** Headset draws the lines in the world, so the DOM copy stays down. */
+    suppress(on) {
+      suppressed = !!on;
+      if (suppressed && layer) {
+        layer.replaceChildren();
+        layer.style.display = 'none';
+      } else tick();
     },
     tick,
     hide() {

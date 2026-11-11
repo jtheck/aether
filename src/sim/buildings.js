@@ -6,7 +6,7 @@ import {
   TILE,
   HALF_TILE,
   TILE_SIZE_F,
-  TERRAIN,
+  isBlockedLiquid,
   worldToTile,
   worldToTileZ,
   activeWorldHalfZ,
@@ -23,6 +23,7 @@ import { SCENERY, rockFootprintRadiusForStock } from './scenery.js';
 import { UNIT, getUnitDef, isFlyer, getUnitCost } from './unitTypes.js';
 import { unitPopCost } from './pop.js';
 import { ORDER } from './world.js';
+import { bodyScaleChecksum, bodyScaleMul, scaledHitPoints } from './namedUnit.js';
 import { MAX_WAYPOINTS, PATH_STYLE, queuePath } from './path.js';
 import { spendResources, addResource, canAffordBank } from './resources.js';
 import { noteResourceRefund, noteSpent } from './ownerStats.js';
@@ -1121,10 +1122,6 @@ export function applyStructureOccupancyAt(field, typeId, xFixed, zFixed, built =
   }
 }
 
-function isSolidWater(field, i) {
-  return field.terrainTypes?.[i] === TERRAIN.WATER && field.tileType?.[i] === 12;
-}
-
 function otherLiveBuildingCovers(field, buildings, i, exceptIndex, coordsAreFloat) {
   if (!buildings) return false;
   for (let bi = 0; bi < buildings.length; bi++) {
@@ -1172,7 +1169,7 @@ function tileKeepsSlow(field, i) {
 }
 
 /**
- * Open a ruined building's tiles. Never unblocks water / table / walls / rocks /
+ * Open a ruined building's tiles. Never unblocks liquid / table / walls / rocks /
  * other live buildings. Incremental - does not restamp the whole map.
  */
 export function clearStructureOccupancyAt(field, typeId, xFixed, zFixed, opts = {}) {
@@ -1184,9 +1181,10 @@ export function clearStructureOccupancyAt(field, typeId, xFixed, zFixed, opts = 
     if (mode === 'block') {
       if (
         !(field.activeMask && field.activeMask[i] === 0)
-        && !isSolidWater(field, i)
+        && !isBlockedLiquid(field, i)
         && !field.tableEdge?.[i]
         && !field.wallBlock?.[i]
+        && !field.standardBlock?.[i]
         && !rockCovers(field, tx, tz)
         && !otherLiveBuildingCovers(field, buildings, i, exceptIndex, coordsAreFloat)
       ) {
@@ -1265,6 +1263,7 @@ export function createBuilding(opts) {
   // Defaults to complete - staging showcase, checkpoints, and tests want live
   // buildings. Placement (applyPlaceBuilding) opts into an under-construction site.
   const built = opts.built != null ? opts.built | 0 : 1;
+  const draw = bodyScaleMul(opts.scale);
   return {
     owner: opts.owner | 0,
     type,
@@ -1310,9 +1309,10 @@ export function createBuilding(opts) {
     engBonusUntil: 0,
     /** Ticks until a watchtower may fire again. */
     attackCd: 0,
-    maxHp: getBuildingHp(type),
+    ...(draw === 1 ? null : { scale: draw }),
+    maxHp: scaledHitPoints(getBuildingHp(type), draw),
     // Unfinished sites are paper until a builder is on-site (see buildingCombat.js).
-    hp: opts.hp != null ? opts.hp | 0 : (built ? getBuildingHp(type) : 1),
+    hp: opts.hp != null ? opts.hp | 0 : (built ? scaledHitPoints(getBuildingHp(type), draw) : 1),
     locustTicks: 0,
     locustStacks: 0,
     /** Ticks left on a lightning burn. 0 = not on fire. */
@@ -1839,7 +1839,7 @@ function beginStructureSite(b, type, cost) {
   b.morphTicks = 0;
   b.gatherRallyAt = 0;
   b.villageSpawnAcc = 0;
-  b.maxHp = getBuildingHp(type);
+  b.maxHp = scaledHitPoints(getBuildingHp(type), bodyScaleMul(b.scale));
   b.hp = 1;
   b.refundCost = cloneRefundCost(cost);
   b.hasRally = 0;
@@ -2052,6 +2052,7 @@ export function serializeBuildings(buildings) {
     locustStacks: b.locustStacks | 0,
     fireTicks: b.fireTicks | 0,
     morphTicks: b.morphTicks | 0,
+    ...(bodyScaleMul(b.scale) === 1 ? null : { scale: bodyScaleMul(b.scale) }),
     refundCost: cloneRefundCost(b.refundCost),
   }));
 }
@@ -2101,6 +2102,8 @@ export function mixBuildingChecksum(h, mix, buildings) {
     mix(b.locustHops | 0);
     mix(b.locustSource | 0);
     mix(b.morphTicks | 0);
+    const scaleMilli = bodyScaleChecksum(b.scale);
+    if (scaleMilli) mix(scaleMilli);
     const refund = b.refundCost;
     mix(refund ? 1 : 0);
     if (refund) {

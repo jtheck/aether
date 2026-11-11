@@ -5,10 +5,16 @@ import { createWorld, spawn } from './world.js';
 import { UNIT } from './unitTypes.js';
 import { CMD } from './commands.js';
 import {
+  AI_CONTROL_GROUP_COUNT,
   AI_DIFFICULTY,
   AI_PATH,
+  AI_ROAM_GROUP_SLOTS,
   AI_STANCE,
+  aiControlGroup,
+  aiPlayersFromOwnerIntents,
+  excludeHumanAiPlayers,
   generateAiCommands,
+  mergeAiPlayers,
   parseAiDifficulty,
   replyCount,
   resolveAiStrategy,
@@ -192,12 +198,100 @@ describe('agora capture gradient', () => {
 
   it('steady will not march on a quiet enemy agora', () => {
     const w = seedCapture({ foeX: 80 });
-    assert.equal(firstAttackMove(w, { owner: 1, temperament: 'steady' }), null);
+    for (let t = 0; t < 800; t++) {
+      w.tick = t;
+      const move = generateAiCommands(w, { owner: 1, temperament: 'steady' })
+        .find((c) => c.type === CMD.ATTACK_MOVE);
+      assert.equal(move, undefined);
+    }
   });
 
-  it('reckless does not invent a march on a quiet enemy agora', () => {
+  it('aggressive and reckless sometimes seek a quiet enemy agora', () => {
+    const marches = (temperament) => {
+      const w = seedCapture({ foeX: 80 });
+      let n = 0;
+      let held = 0;
+      for (let t = 0; t < 800; t++) {
+        w.tick = t;
+        const move = generateAiCommands(w, { owner: 1, temperament })
+          .find((c) => c.type === CMD.ATTACK_MOVE);
+        if (move && fx.toFloat(move.tx[0]) > 40) n++;
+        else held++;
+      }
+      return { n, held };
+    };
+    const aggressive = marches('aggressive');
+    const reckless = marches('reckless');
+    assert.ok(aggressive.n > 0 && aggressive.held > 0);
+    assert.ok(reckless.n > 0 && reckless.held > 0);
+
+    const a = seedCapture({ foeX: 80 });
+    const b = seedCapture({ foeX: 80 });
+    for (let t = 0; t < 800; t++) {
+      a.tick = t;
+      b.tick = t;
+      const ma = generateAiCommands(a, { owner: 1, temperament: 'reckless' });
+      const mb = generateAiCommands(b, { owner: 1, temperament: 'reckless' });
+      assert.equal(ma.length, mb.length);
+      if (ma[0]) assert.equal(ma[0].tx[0], mb[0].tx[0]);
+    }
+  });
+
+  it('keeps one veteran control group roaming and leaves the later bands home', () => {
+    assert.equal(AI_CONTROL_GROUP_COUNT, 6);
+    assert.equal(AI_ROAM_GROUP_SLOTS, 1);
     const w = seedCapture({ foeX: 80 });
-    assert.equal(firstAttackMove(w, { owner: 1, temperament: 'reckless' }), null);
+    for (let i = 0; i < 5; i++) {
+      spawn(w, { x: fx.fromFloat(-80), y: 0, type: UNIT.WARRIOR, owner: 1 });
+    }
+    const patrol = aiControlGroup(w, 1, 0, 4);
+    const reserve = aiControlGroup(w, 1, 1, 4);
+    assert.deepEqual(patrol, [0, 2, 3, 4]);
+    assert.deepEqual(reserve, [5, 6]);
+    assert.equal(aiControlGroup(w, 1, 5, 4).length, 0);
+    assert.equal(aiControlGroup(w, 1, 6, 4).length, 0);
+
+    w.alive[0] = 0;
+    assert.deepEqual(aiControlGroup(w, 1, 0, 4), [2, 3, 4, 5]);
+    w.alive[0] = 1;
+
+    const patrolSet = new Set(patrol);
+    let orders = 0;
+    for (let t = 0; t < 800; t++) {
+      w.tick = t;
+      const move = generateAiCommands(w, { owner: 1, temperament: 'aggressive' })
+        .find((c) => c.type === CMD.ATTACK_MOVE);
+      if (!move) continue;
+      orders++;
+      assert.deepEqual(move.entities, patrol);
+      for (let k = 0; k < move.entities.length; k++) {
+        assert.equal(patrolSet.has(move.entities[k]), true);
+        assert.equal(reserve.includes(move.entities[k]), false);
+      }
+    }
+    assert.ok(orders > 0);
+  });
+});
+
+describe('garden intent', () => {
+  it('turns a painted personality into a fair player and skips a seated human', () => {
+    const painted = aiPlayersFromOwnerIntents([
+      [2, 'reckless'],
+      [0, 'aggressive'],
+      [2, 'passive'],
+      [9, 'nope'],
+    ]);
+    assert.equal(painted.length, 2);
+    assert.equal(painted[0].owner, 2);
+    assert.equal(painted[0].temperament, 'reckless');
+    assert.equal(painted[0].vision, 'fair');
+    assert.equal(painted[0].script, undefined);
+    const merged = excludeHumanAiPlayers(
+      mergeAiPlayers([{ owner: 1, temperament: 'steady' }], painted),
+      [0],
+    );
+    assert.deepEqual(merged.map((entry) => entry.owner), [1, 2]);
+    assert.equal(merged[0].temperament, 'steady');
   });
 });
 

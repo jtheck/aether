@@ -93,6 +93,68 @@ describe('lobby start config', () => {
     assert.deepEqual(selectableAdventureChapters().map((c) => c.id), ['pack:opening.garden']);
   });
 
+  it('starts 1v1 and teams with Auto owners outside the lockstep set', () => {
+    const duel = liveConfigFromLobby({
+      mode: 'onevsone',
+      roomId: 'lobby-1',
+      settings: { fieldSize: 'tiny', seed: 99 },
+      seats: [
+        seats[0],
+        { index: 1, kind: 'ai', ai: 'aggressive', team: 0 },
+      ],
+    }, 'host-id');
+    assert.deepEqual(duel.humanPlayers, [0]);
+    assert.deepEqual(duel.activeSlots, [0, 1]);
+    assert.deepEqual(duel.aiPlayers, [{ owner: 1, temperament: 'aggressive', vision: 'fair' }]);
+    assert.equal(duel.aiPlayers[0].script, undefined);
+    assert.equal(duel.teamByOwner, null);
+    assert.equal(duel.localSolo, false);
+    assert.equal(duel.inputDelayTicks, 1);
+
+    const uneven = [
+      { ...seats[0], team: 0 },
+      { index: 1, kind: 'ai', ai: 'reckless', team: 1 },
+      { index: 2, kind: 'ai', ai: 'steady', team: 1 },
+      { index: 3, kind: 'ai', ai: 'nope', team: 1 },
+    ];
+    const teams = liveConfigFromLobby({
+      mode: 'teams',
+      roomId: 'r',
+      settings: { fieldSize: 'small', seed: 1 },
+      seats: uneven,
+    }, 'host-id');
+    assert.deepEqual(teams.humanPlayers, [0]);
+    assert.deepEqual(teams.activeSlots, [0, 1, 2, 3]);
+    assert.deepEqual(teams.teamByOwner, [0, 1, 1, 1]);
+    assert.deepEqual(teams.shareVisionWith, []);
+    assert.deepEqual(teams.aiPlayers.map((ai) => [ai.owner, ai.temperament]), [
+      [1, 'reckless'],
+      [2, 'steady'],
+      [3, 'steady'],
+    ]);
+
+    const story = liveConfigFromLobby({
+      mode: 'adventure',
+      roomId: 'adv',
+      ranked: false,
+      settings: { fieldSize: 'small', seed: 2, chapter: 'ch1' },
+      seats: [seats[0], { index: 1, kind: 'ai', ai: 'steady', team: 0 }],
+    }, 'host-id');
+    assert.deepEqual(story.humanPlayers, [0]);
+    assert.deepEqual(story.activeSlots, [0]);
+    assert.deepEqual(story.aiPlayers, []);
+
+    const ranked = liveConfigFromLobby({
+      mode: 'onevsone',
+      ranked: true,
+      roomId: 'ladder',
+      settings: { fieldSize: 'tiny', seed: 3 },
+      seats: [seats[0], { index: 1, kind: 'ai', ai: 'steady', team: 0 }],
+    }, 'host-id');
+    assert.deepEqual(ranked.aiPlayers, []);
+    assert.deepEqual(ranked.activeSlots, [0]);
+  });
+
   it('plays a custom map ref in 1v1', () => {
     const cfg = liveConfigFromLobby({
       mode: 'onevsone',

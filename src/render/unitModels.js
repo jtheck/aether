@@ -41,6 +41,19 @@ export const UNIT_MODEL_URLS = {
   [UNIT.WAR_BALLOON]: '/assets/models/warballoon.glb',
   [UNIT.APC]: '/assets/models/apc.glb',
   [UNIT.TANK]: '/assets/models/tank.glb',
+  [UNIT.ROCK_GOLEM]: '/assets/models/mobs/rock_golem.glb',
+  [UNIT.RETCH]: '/assets/models/mobs/retch.glb',
+  [UNIT.WARG]: '/assets/models/mobs/warg.glb',
+};
+
+/**
+ * Model-space raise so the lowest exported vertex sits on the ground.
+ * These meshes are rigid (no walk clip yet); the body still follows move orders.
+ */
+export const UNIT_MESH_LIFT = {
+  [UNIT.ROCK_GOLEM]: 1.37,
+  [UNIT.RETCH]: 0.67,
+  [UNIT.WARG]: 0.09,
 };
 
 export function hasUnitModel(typeId) {

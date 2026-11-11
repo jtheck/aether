@@ -75,6 +75,8 @@ export function createMatchStory(opts = {}) {
   let locking = false;
   let lastShot = null;
   let lastPose = null;
+  /** Reel teardown emits one last sample. That must not move the camera. */
+  let suppressCamera = false;
   /** Intro is armed at 00:00 and waiting for the splash to clear. */
   let heldForSplash = false;
   /** Clip ids already copied into chat for this reel. */
@@ -102,7 +104,7 @@ export function createMatchStory(opts = {}) {
   function applySample(s) {
     const cam = opts.getCamera?.();
     const field = opts.getField?.();
-    if (s?.camera && cam && field) {
+    if (!suppressCamera && s?.camera && cam && field) {
       const shot = s.camera.id || `${s.camera.tx}|${s.camera.tz}|${s.camera.radius}`;
       const live = s.camera.char ? opts.getSpeakerPos?.(s.camera.char) : null;
       const tile = worldFromTile(field, s.camera.tx, s.camera.tz);
@@ -114,12 +116,19 @@ export function createMatchStory(opts = {}) {
       };
       // The sample is the camera, on the same tick as the line. An ease
       // lands about a second after the text that shares its time.
-      if (shot !== lastShot || !samePose(lastPose, pose)) {
+      // A finished clip only repeats its end pose. If the player has
+      // already moved the view, leave it there.
+      const steered = s.camera.held && steeredAway(cam);
+      if (!steered && (shot !== lastShot || !samePose(lastPose, pose))) {
         if (shot !== lastShot) cam.stopFollow?.();
         lastShot = shot;
         lastPose = pose;
         cam.setPose?.(pose, { unclamped: true });
       }
+    }
+    if (opts.xrActive?.()) {
+      hud.suppress?.(true);
+      speech.suppress?.(true);
     }
     const lines = s?.lines ?? (s?.line ? [s.line] : []);
     const narrated = narratorLines(lines);
@@ -127,6 +136,39 @@ export function createMatchStory(opts = {}) {
     else hud.hide();
     speech.show(lines);
     publishSpoken(lines);
+    presentSpeech();
+  }
+
+  function presentSpeech() {
+    const xr = !!opts.xrActive?.();
+    hud.suppress?.(xr);
+    speech.suppress?.(xr);
+    if (!xr) {
+      opts.onXrSpeech?.(null);
+      return;
+    }
+    const spoken = [];
+    for (const line of speech.current?.() || []) {
+      let pos = null;
+      try {
+        pos = opts.getSpeakerPos?.(line.speaker) ?? null;
+      } catch {
+        pos = null;
+      }
+      spoken.push({
+        speaker: line.speaker,
+        text: line.text,
+        style: line.style,
+        pos,
+      });
+    }
+    opts.onXrSpeech?.({ spoken, narrator: hud.current?.() || [] });
+  }
+
+  /** True when the live view has left the pose this reel last applied. */
+  function steeredAway(cam) {
+    const live = cam.getPose?.();
+    return !!(live && lastPose && !samePose(live, lastPose));
   }
 
   function unbindSkip() {
@@ -148,10 +190,13 @@ export function createMatchStory(opts = {}) {
     lastPose = null;
     heldForSplash = false;
     unbindSkip();
+    suppressCamera = true;
     player?.stop();
+    suppressCamera = false;
     transport.detach();
     hud.hide();
     speech.hide();
+    presentSpeech();
     // Live sight ends with the reel. Buildings already seen stay as last-known.
     opts.onReveal?.(null);
     if (locked) opts.onCinematic?.(false);
@@ -235,7 +280,8 @@ export function createMatchStory(opts = {}) {
 
   function tick(deltaMs) {
     if (playing) player?.tick(deltaMs);
-    speech.tick();
+    if (!opts.xrActive?.()) speech.tick();
+    presentSpeech();
   }
 
   return {

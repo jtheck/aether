@@ -17,10 +17,13 @@ const reach = { h: 1, v: 1 };
 export const XR_HUD_DRIFT_FOLLOW = 4;
 export const XR_HUD_DRIFT_MAX = 0.09;
 export const XR_HUD_DRIFT_CARRY = 0.02;
-/** Angular spring: loose near home, stronger only after the HUD floats away. */
-export const XR_HUD_TURN_FOLLOW = 4;
-export const XR_HUD_TURN_SNAP = 16;
-export const XR_HUD_TURN_SNAP_ARC = Math.PI / 10;
+/**
+ * Angular spring. A glance up or sideways should meet the panel where it
+ * sits; the stronger rate waits until the head has really turned away.
+ */
+export const XR_HUD_TURN_FOLLOW = 1.15;
+export const XR_HUD_TURN_SNAP = 5;
+export const XR_HUD_TURN_SNAP_ARC = Math.PI / 3;
 
 /** @type {{ x: number, y: number, z: number, worldMatrix: Float32Array } | null} */
 let eye = null;
@@ -203,6 +206,11 @@ export function clearXrEye() {
 
 export function xrEye() {
   return eye;
+}
+
+/** Live stereo half-angle tangents. Fade plates size from this. */
+export function xrEyeFrustum() {
+  return { h: reach.h, v: reach.v };
 }
 
 export function xrHudEye() {

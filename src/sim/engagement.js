@@ -1,7 +1,7 @@
 // Deterministic individual engagement claims and stand-off geometry.
 
 import * as fx from './fixed.js';
-import { NAMED_UNIT_SCALE } from './namedUnit.js';
+import { namedScaleOf } from './namedUnit.js';
 import { ATTACK_DELIVERY, getUnitDef } from './unitTypes.js';
 
 export const ENGAGEMENT_SLOTS = 16;
@@ -71,8 +71,8 @@ export function effectiveAttackRange(w, attacker, target) {
   const def = getUnitDef(w.type[attacker]);
   if (def.attackDelivery !== ATTACK_DELIVERY.MELEE) return def.attackRange;
   const targetDef = getUnitDef(w.type[target]);
-  const attackerSize = def.size * (w.named?.[attacker] ? NAMED_UNIT_SCALE : 1);
-  const targetSize = targetDef.size * (w.named?.[target] ? NAMED_UNIT_SCALE : 1);
+  const attackerSize = def.size * namedScaleOf(w, attacker);
+  const targetSize = targetDef.size * namedScaleOf(w, target);
   const bodyClearance = fx.fromFloat((attackerSize + targetSize) * 0.35);
   return def.attackRange + bodyClearance;
 }

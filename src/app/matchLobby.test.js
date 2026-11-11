@@ -83,6 +83,38 @@ describe('match lobby', () => {
     room.leaveRoom();
   });
 
+  it('lets the host cycle Auto into an open skirmish seat', () => {
+    const p2p = fakeP2p('host');
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+    });
+    room.createRoom('onevsone');
+    assert.equal(room.cycleAuto(1), true);
+    assert.equal(room.getState().seats[1].kind, 'ai');
+    assert.equal(room.getState().seats[1].ai, 'passive');
+    assert.equal(room.getState().playerCount, 2);
+    assert.equal(room.canStart(), true);
+    assert.equal(room.cycleAuto(0), false);
+    room.leaveRoom();
+
+    room.createRoom('teams');
+    assert.equal(room.cycleAuto(1), true);
+    assert.equal(room.startBlockReason(), 'Need both teams');
+    assert.equal(room.cycleAuto(2), true);
+    assert.equal(room.canStart(), true);
+    assert.equal(room.moveSeat(1, 1), true);
+    assert.deepEqual(room.getState().seats.map((s) => s.team), [0, 1, 1, 1]);
+    assert.equal(room.getState().seats[1].kind, 'ai');
+    room.leaveRoom();
+
+    room.createRoom('adventure');
+    assert.equal(room.cycleAuto(1), false);
+    assert.equal(room.getState().seats[1].kind, 'empty');
+    room.leaveRoom();
+  });
+
   it('rejects a peer that omits the live simulation generation', () => {
     const p2p = fakeP2p('host');
     let receive = null;

@@ -39,12 +39,12 @@ export function helpPips(value, max) {
 
 const UNIT_NOTE = {
   [UNIT.VILLAGER]: 'Gathers and builds. Comes from the Village.',
-  [UNIT.BRIGAND]: 'Temporary torch fighter. Ability or pointed attack; reverts when idle or sent to work.',
+  [UNIT.BRIGAND]: 'Temporary fighter. Ability or pointed attack; reverts when idle or sent to work.',
   [UNIT.WARRIOR]: 'Melee. Trained at the Barracks. Becomes a Champion after felling five enemies.',
-  [UNIT.CHAMPION]: 'Melee. A warrior who has seen battle.',
+  [UNIT.CHAMPION]: 'Melee. A warrior who has seen tremendous battle.',
   [UNIT.ARCHER]: 'Ranged. Trained at the Barracks.',
   [UNIT.WARLOCK]: 'Ranged. Fireball. Trained at the Tavern.',
-  [UNIT.PRIEST]: 'Ranged. Holy armor. Does not attack buildings. Trained at the Church.',
+  [UNIT.PRIEST]: 'Ranged. Heal costs a mana charge. Holy armor. Does not attack buildings. Trained at the Church.',
   [UNIT.MYCO]: 'Ranged. Spore bloom. Trained at the Camp.',
   [UNIT.SHAMAN]: 'Ranged. Plague of frogs, locusts. Trained at the Grove.',
   [UNIT.WIZARD]: 'Ranged. Lightning. Trained at the Tower.',
@@ -53,9 +53,9 @@ const UNIT_NOTE = {
   [UNIT.WAGON]: 'Carries 4. Trained at the Workshop.',
   [UNIT.SIEGE_WAGON]: 'Slow. Fireballs at long range. Trained at the Workshop.',
   [UNIT.DIRIGIBLE]: 'Flies. Carries 6. Trained at the Perch.',
-  [UNIT.WAR_BALLOON]: 'Flies. Shoots while holding still or while moving. Sporadic spray of fireballs. Trained at the Perch. Needs Artillery.',
+  [UNIT.WAR_BALLOON]: 'Flies. Shoots. Trained at the Perch. Needs Artillery.',
   [UNIT.APC]: 'Melee. Carries 6. Trained at the Factory.',
-  [UNIT.TANK]: 'Very slow. Immune to fire. One giant fireball, slow reload. Trained at the Factory. Needs Artillery.',
+  [UNIT.TANK]: 'Slow. Immune to fire. Trained at the Factory. Needs Artillery.',
 };
 
 const BUILDING_NOTE = {
@@ -150,7 +150,7 @@ export function helpUnitLayout() {
 }
 
 export function helpUnitCards() {
-  const units = UNIT_DEFS;
+  const units = UNIT_DEFS.filter((d) => d.category !== 'mob');
   const maxHp = Math.max(...units.map((d) => d.hp));
   const maxSpeed = Math.max(...units.map((d) => fx.toFloat(d.speed)));
   const maxDamage = Math.max(...units.map((d) => d.attackDamage));

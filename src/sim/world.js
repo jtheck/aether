@@ -8,7 +8,7 @@
 
 import { makeRng } from './rng.js';
 import { getUnitDef } from './unitTypes.js';
-import { namedUnitHp } from './namedUnit.js';
+import { NAMED_UNIT_SCALE, packBodyScale, quantizeBodyScale, scaledHitPoints } from './namedUnit.js';
 import { isManaCaster, MANA_MAX } from './mana.js';
 import { MAX_WAYPOINTS } from './path.js';
 import { createSpatialGrid } from './spatialGrid.js';
@@ -175,8 +175,10 @@ export function createWorld(seed) {
     manualHold: new Uint8Array(MAX_ENTITIES),
     /** 0 none / 1 chop at node / 2 haul load back (see gather.js GATHER_ACT). */
     gatherAct: new Uint8Array(MAX_ENTITIES),
-    /** 1 = garden unit with a name. Bigger mesh, more hp, harder hits. */
+    /** 1 = garden unit with a name. */
     named: new Uint8Array(MAX_ENTITIES),
+    /** Packed body scale (1000 = normal). 0 means derive from `named`. */
+    bodyScale: new Uint16Array(MAX_ENTITIES),
     /** Building index this villager is constructing (ORDER.BUILD), or -1. */
     buildTarget,
 
@@ -272,7 +274,7 @@ export function createWorld(seed) {
   };
 }
 
-export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed, faceX, faceY, named = false } = {}) {
+export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed, faceX, faceY, named = false, scale } = {}) {
   if (w.count >= MAX_ENTITIES) {
     throw new RangeError(`entity capacity exceeded (${MAX_ENTITIES})`);
   }
@@ -361,7 +363,13 @@ export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed, faceX, 
   w.transportTarget[i] = -1;
   if (w.transportWait) w.transportWait[i] = 0;
   if (w.named) w.named[i] = named ? 1 : 0;
-  w.hp[i] = hp ?? (named ? namedUnitHp(def.hp) : def.hp);
+  const explicit = quantizeBodyScale(scale);
+  const heroDefault = Math.abs((explicit ?? 0) - NAMED_UNIT_SCALE) < 0.005;
+  const body = explicit == null
+    ? (named ? NAMED_UNIT_SCALE : 1)
+    : (heroDefault ? NAMED_UNIT_SCALE : explicit);
+  if (w.bodyScale) w.bodyScale[i] = packBodyScale(body);
+  w.hp[i] = hp ?? scaledHitPoints(def.hp, body);
   w.type[i] = type;
   w.owner[i] = owner;
   w.alive[i] = 1;

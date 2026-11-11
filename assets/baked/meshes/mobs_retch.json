@@ -1,0 +1,68 @@
+{
+  "sourceUrl": "/assets/models/mobs/retch.glb",
+  "version": 3,
+  "sockets": [],
+  "materials": [
+    {
+      "name": "Material.001",
+      "baseColorFactor": [
+        0.002258947817608714,
+        0.0021556548308581114,
+        0.09564574062824249,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "Material.001",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "boundMin": [
+        -4.964675426483154,
+        -0.7999782562255859,
+        -5.049260139465332
+      ],
+      "boundMax": [
+        4.87062406539917,
+        5.827729225158691,
+        2.7841594219207764
+      ],
+      "positions": {
+        "offset": 0,
+        "length": 3126,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 12504,
+        "length": 3126,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 25008,
+        "length": 1572,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 31296,
+        "length": 2084,
+        "type": "f32"
+      }
+    }
+  ]
+}

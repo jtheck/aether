@@ -1,13 +1,40 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { bentBeamPoint, densifyLoop } from './xrLasso.js';
+import { arcBeamPoint, densifyLoop, handleButtonPoint, pickHandleButton } from './xrLasso.js';
 
-describe('bentBeamPoint', () => {
-  it('arcs above the chord without moving either targeting endpoint', () => {
-    const ray = { ox: 2, oy: 8, oz: 3, dx: 0, dy: 0, dz: 1 };
-    assert.deepEqual(bentBeamPoint(ray, 10, 2, 0), { x: 2, y: 8, z: 3 });
-    assert.deepEqual(bentBeamPoint(ray, 10, 2, 1), { x: 2, y: 8, z: 13 });
-    assert.deepEqual(bentBeamPoint(ray, 10, 2, 0.5), { x: 2, y: 10, z: 8 });
+describe('arcBeamPoint', () => {
+  const ray = { ox: 2, oy: 8, oz: 3, dx: 0, dy: 0, dz: 1, ux: 1, uy: 0, uz: 0 };
+
+  it('keeps both ends on the ray and bows the middle up', () => {
+    const start = arcBeamPoint(ray, 10, 0);
+    const end = arcBeamPoint(ray, 10, 1);
+    const mid = arcBeamPoint(ray, 10, 0.5);
+    assert.ok(Math.abs(start.x - 2) < 1e-5 && Math.abs(start.y - 8) < 1e-5 && Math.abs(start.z - 3) < 1e-5);
+    assert.ok(Math.abs(end.x - 2) < 1e-5 && Math.abs(end.y - 8) < 1e-5 && Math.abs(end.z - 13) < 1e-5);
+    assert.ok(Math.abs(mid.x - 2) < 1e-5);
+    assert.ok(Math.abs(mid.z - 8) < 1e-4);
+    assert.ok(mid.y > 8.2 && mid.y < 8.5);
+  });
+
+  it('ignores wrist roll', () => {
+    const rolled = { ...ray, ux: 0, uy: 1, uz: 0 };
+    const a = arcBeamPoint(ray, 10, 0.5);
+    const b = arcBeamPoint(rolled, 10, 0.5);
+    assert.ok(Math.abs(a.y - b.y) < 1e-6);
+    assert.ok(Math.abs(a.x - b.x) < 1e-6);
+  });
+});
+
+describe('handle buttons', () => {
+  const aim = { ox: 0, oy: 1.5, oz: 0, dx: 0, dy: 0, dz: 1, ux: 0, uy: 1, uz: 0 };
+
+  it('a ray from above the order pad hits it, and a far ray does not', () => {
+    const p = handleButtonPoint(aim, 0);
+    const press = { ox: p.x, oy: p.y, oz: p.z, dx: 0, dy: -1, dz: 0 };
+    assert.equal(pickHandleButton(aim, press), 0);
+    const select = handleButtonPoint(aim, 1);
+    assert.equal(pickHandleButton(aim, { ox: select.x, oy: select.y, oz: select.z, dx: 0, dy: -1, dz: 0 }), 1);
+    assert.equal(pickHandleButton(aim, { ox: 3, oy: 3, oz: 3, dx: 0, dy: -1, dz: 0 }), null);
   });
 });
 

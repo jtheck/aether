@@ -12,9 +12,45 @@ import { getMode } from './modes.js';
  *   skins?: Record<number, string>,
  *   ready: boolean,
  *   replay?: boolean,
- *   kind: 'empty' | 'human',
+ *   ai?: string,
+ *   kind: 'empty' | 'human' | 'ai',
  * }} LobbySeat
  */
+
+/** Lobby Auto cycle. Same ids as the sim temperaments, in play order. */
+export const LOBBY_AI_PRESETS = ['passive', 'cautious', 'steady', 'aggressive', 'reckless'];
+
+const LOBBY_AI_LABEL = {
+  passive: 'Passive',
+  cautious: 'Cautious',
+  steady: 'Steady',
+  aggressive: 'Aggressive',
+  reckless: 'Reckless',
+};
+
+/** Cool to hot. Passive barely fights; Reckless is the alarm color. */
+const LOBBY_AI_COLOR = {
+  passive: '#8ea4b8',
+  cautious: '#c6b15a',
+  steady: '#d4893a',
+  aggressive: '#e15a32',
+  reckless: '#ff4d4d',
+};
+
+/** @param {string | null | undefined} id */
+export function lobbyAiLabel(id) {
+  return LOBBY_AI_LABEL[id] || 'Auto';
+}
+
+/** @param {string | null | undefined} id */
+export function lobbyAiColor(id) {
+  return LOBBY_AI_COLOR[id] || '';
+}
+
+/** @param {string | null | undefined} id */
+export function lobbyAiPreset(id) {
+  return LOBBY_AI_PRESETS.includes(id) ? id : '';
+}
 
 function copyDlc(list) {
   return Array.isArray(list) ? list.filter((id) => typeof id === 'string' && id) : [];
@@ -44,6 +80,7 @@ export function createRoster(modeId) {
     dlc: [],
     skins: {},
     ready: false,
+    ai: '',
     kind: 'empty',
   }));
 }
@@ -57,6 +94,13 @@ export function cloneRoster(seats) {
 export function countHumans(seats) {
   let n = 0;
   for (const s of seats) if (s.kind === 'human') n += 1;
+  return n;
+}
+
+/** Humans plus Auto seats. Browse count, so a filled computer slot is not an open seat. */
+export function countPlaying(seats) {
+  let n = 0;
+  for (const s of seats) if (s.kind === 'human' || s.kind === 'ai') n += 1;
   return n;
 }
 
@@ -97,6 +141,7 @@ export function claimSeat(seats, player, at = null) {
   empty.skins = copySkins(player.skins);
   empty.ready = Boolean(player.ready);
   empty.replay = Boolean(player.replay);
+  empty.ai = '';
   empty.kind = 'human';
   return { seats: next, index: empty.index, ok: true };
 }
@@ -106,14 +151,7 @@ export function releaseSeat(seats, userId) {
   const next = cloneRoster(seats);
   const s = seatOf(next, userId);
   if (!s) return next;
-  s.userId = null;
-  s.name = '';
-  s.color = '';
-  s.dlc = [];
-  s.skins = {};
-  s.ready = false;
-  s.replay = false;
-  s.kind = 'empty';
+  blankSeat(s);
   return next;
 }
 
@@ -139,12 +177,21 @@ export function allHumansReady(seats) {
   return humans.length > 0 && humans.every((s) => s.ready);
 }
 
-/** Teams needs a person on each side. Empty seats do not count. */
-function bothTeamsOccupied(seats) {
+/** Seats that will actually play. Adventure and King of the Hill ignore Auto. */
+function playingSeats(mode, seats) {
+  const allowAi = Boolean(mode?.allowAi);
+  const out = [];
+  for (const s of seats) {
+    if (s.kind === 'human' || (allowAi && s.kind === 'ai')) out.push(s);
+  }
+  return out;
+}
+
+/** Teams needs a player or Auto on each side. Empty seats do not count. */
+function bothTeamsOccupied(playing) {
   let team0 = false;
   let team1 = false;
-  for (const s of seats) {
-    if (s.kind !== 'human') continue;
+  for (const s of playing) {
     if (s.team === 0) team0 = true;
     else if (s.team === 1) team1 = true;
     if (team0 && team1) return true;
@@ -156,9 +203,11 @@ function bothTeamsOccupied(seats) {
 export function canStart(modeId, seats) {
   const mode = getMode(modeId);
   if (!mode) return false;
-  if (countHumans(seats) < mode.minHumans) return false;
-  if (mode.teams && !bothTeamsOccupied(seats)) return false;
-  return allHumansReady(seats);
+  const playing = playingSeats(mode, seats);
+  const humans = playing.filter((s) => s.kind === 'human');
+  if (humans.length < 1 || playing.length < mode.minHumans) return false;
+  if (mode.teams && !bothTeamsOccupied(playing)) return false;
+  return humans.every((s) => s.ready);
 }
 
 /**
@@ -196,6 +245,7 @@ function blankSeat(seat) {
   seat.skins = {};
   seat.ready = false;
   seat.replay = false;
+  seat.ai = '';
   seat.kind = 'empty';
 }
 
@@ -208,6 +258,7 @@ function writeSeat(seat, player, hostId) {
   seat.kind = 'human';
   seat.ready = sameUserId(player.userId, hostId);
   seat.replay = Boolean(player.replay);
+  seat.ai = '';
 }
 
 function swapSeatPlayers(a, b) {
@@ -219,6 +270,7 @@ function swapSeatPlayers(a, b) {
     skins: copySkins(a.skins),
     ready: a.ready,
     replay: Boolean(a.replay),
+    ai: a.ai || '',
     kind: a.kind,
   };
   a.userId = b.userId;
@@ -228,6 +280,7 @@ function swapSeatPlayers(a, b) {
   a.skins = copySkins(b.skins);
   a.ready = b.ready;
   a.replay = Boolean(b.replay);
+  a.ai = b.ai || '';
   a.kind = b.kind;
   b.userId = hold.userId;
   b.name = hold.name;
@@ -236,7 +289,39 @@ function swapSeatPlayers(a, b) {
   b.skins = hold.skins;
   b.ready = hold.ready;
   b.replay = hold.replay;
+  b.ai = hold.ai;
   b.kind = hold.kind;
+}
+
+/**
+ * Host cycles one open seat: empty, then each Auto preset, then empty again.
+ * A taken seat is refused. Team stays on the seat index.
+ * @param {LobbySeat[]} seats
+ * @param {number} index
+ */
+export function cycleSeatAuto(seats, index) {
+  const next = cloneRoster(seats);
+  const seat = next.find((s) => s.index === index);
+  if (!seat || seat.kind === 'human') return { seats: next, ok: false };
+  if (seat.kind !== 'ai') {
+    seat.kind = 'ai';
+    seat.ai = LOBBY_AI_PRESETS[0];
+    seat.userId = null;
+    seat.name = '';
+    seat.color = '';
+    seat.dlc = [];
+    seat.skins = {};
+    seat.ready = false;
+    seat.replay = false;
+    return { seats: next, ok: true };
+  }
+  const at = LOBBY_AI_PRESETS.indexOf(seat.ai);
+  if (at < 0 || at + 1 >= LOBBY_AI_PRESETS.length) {
+    blankSeat(seat);
+    return { seats: next, ok: true };
+  }
+  seat.ai = LOBBY_AI_PRESETS[at + 1];
+  return { seats: next, ok: true };
 }
 
 /**
@@ -247,7 +332,7 @@ function swapSeatPlayers(a, b) {
  * @param {LobbySpectator[]} spectators
  * @param {string} userId
  * @param {number} dir -1 up, +1 down
- * @param {{ hostId?: string, allowSpectators?: boolean }} [opts]
+ * @param {{ hostId?: string, allowSpectators?: boolean, teams?: boolean, seatIndex?: number }} [opts]
  */
 export function moveRosterPerson(seats, spectators, userId, dir, opts = {}) {
   const nextSeats = cloneRoster(seats);
@@ -260,8 +345,11 @@ export function moveRosterPerson(seats, spectators, userId, dir, opts = {}) {
   );
   const allowSpectators = opts.allowSpectators !== false;
   const hostId = opts.hostId;
-  const seat = seatOf(nextSeats, userId);
-  const specIndex = nextSpecs.findIndex((s) => sameUserId(s.userId, userId));
+  let seat = userId ? seatOf(nextSeats, userId) : null;
+  if (!seat && Number.isInteger(opts.seatIndex)) {
+    seat = nextSeats.find((s) => s.index === opts.seatIndex && s.kind === 'ai') ?? null;
+  }
+  const specIndex = userId ? nextSpecs.findIndex((s) => sameUserId(s.userId, userId)) : -1;
   if (!seat && specIndex < 0) return { seats: nextSeats, spectators: nextSpecs, ok: false };
 
   if (seat && opts.teams) {
@@ -277,7 +365,7 @@ export function moveRosterPerson(seats, spectators, userId, dir, opts = {}) {
       seat.team = neighbor.team;
     } else if (neighbor) {
       swapSeatPlayers(seat, neighbor);
-    } else if (dir > 0 && allowSpectators) {
+    } else if (dir > 0 && allowSpectators && seat.kind === 'human') {
       nextSpecs.unshift({
         userId: seat.userId, name: seat.name, color: seat.color, replay: Boolean(seat.replay),
       });
@@ -291,7 +379,7 @@ export function moveRosterPerson(seats, spectators, userId, dir, opts = {}) {
       swapSeatPlayers(nextSeats[seat.index], nextSeats[seat.index - 1]);
     } else if (seat.index < nextSeats.length - 1) {
       swapSeatPlayers(nextSeats[seat.index], nextSeats[seat.index + 1]);
-    } else if (allowSpectators) {
+    } else if (allowSpectators && seat.kind === 'human') {
       nextSpecs.unshift({
         userId: seat.userId, name: seat.name, color: seat.color, replay: Boolean(seat.replay),
       });
@@ -345,11 +433,12 @@ export function spectatorOf(list, userId) {
 export function startBlockReason(modeId, seats) {
   const mode = getMode(modeId);
   if (!mode) return 'Unknown mode';
-  const n = countHumans(seats);
-  if (n < mode.minHumans) {
+  const playing = playingSeats(mode, seats);
+  const humans = playing.filter((s) => s.kind === 'human');
+  if (humans.length < 1 || playing.length < mode.minHumans) {
     return mode.minHumans <= 1 ? 'Need a player' : `Need ${mode.minHumans} players`;
   }
-  if (mode.teams && !bothTeamsOccupied(seats)) return 'Need both teams';
-  if (!allHumansReady(seats)) return 'Waiting for ready';
+  if (mode.teams && !bothTeamsOccupied(playing)) return 'Need both teams';
+  if (!humans.every((s) => s.ready)) return 'Waiting for ready';
   return '';
 }

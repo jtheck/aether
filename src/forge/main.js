@@ -27,6 +27,7 @@ import {
   SKIRMISH_MAP_CHUNKS,
   forgeTilesForChunks,
   consumeWaterDirty,
+  isLiquidTerrain,
   HEIGHT_AMPLITUDE,
   paintRegionLevel,
   paintRegionLift,
@@ -87,7 +88,7 @@ import {
 } from '../app/workshop.js';
 import { RESOURCE_KINDS, STARTING_RESOURCES } from '../sim/resources.js';
 import { applyAuthoredScenery, clearAllScenery, clearOffTableScenery, clearSceneryCoveringTiles, clearSceneryOnWater, populateScenery, paintSceneryBrush, stepSceneryBrush, SCENERY } from '../sim/scenery.js';
-import { DOODAD, paintDoodadBrush } from '../sim/doodads.js';
+import { DOODAD, applyStandardOccupancy, paintDoodadBrush } from '../sim/doodads.js';
 import { UNIT_DEFS } from '../sim/unitTypes.js';
 import { BUILDING_FOOTPRINTS, BUILDING_YAW_SNAP, PLACEABLE_BUILDINGS, forEachFootprintTile, snapBuildingWorld, snapBuildingYaw } from '../sim/buildings.js';
 import {
@@ -122,6 +123,7 @@ import { createStoryPlayer } from '../story/player.js';
 import { createStoryHud } from '../story/hud.js';
 import { createStorySpeech, narratorLines } from '../story/speech.js';
 import { findNamedUnit, mergeStoryParty, namedUnits, normalizeSpeaker, storyPartyPlacements } from '../story/cast.js';
+import { NAMED_UNIT_SCALE, authoredUnitScale, bodyScaleMul, isNamedUnit, quantizeBodyScale } from '../sim/namedUnit.js';
 import { OBJ_KINDS, TERMINAL_KINDS, isTerminalObjective, normalizeObjectives } from '../story/objectives.js';
 import { createStorySheet } from './storySheet.js';
 import { installNavGuard } from '../app/navGuard.js';
@@ -198,6 +200,8 @@ const state = {
   sceneryOp: 'place',
   stamp: 'scenery',
   doodad: DOODAD.WAGON,
+  /** Army swatch index stamped onto standards. */
+  standardColor: 0,
   placeKind: '',
   placeType: 0,
   owner: 0,
@@ -219,6 +223,8 @@ const state = {
   teamByOwner: null,
   /** Garden `nr`. Pairs of team ids that do not fight. */
   neutralTeams: null,
+  /** Garden `ap`. [owner, temperament] for sides that play themselves. */
+  ownerIntents: null,
   painting: false,
   selected: [],
   units: [],
@@ -1101,11 +1107,16 @@ function tileOpen(tx, tz) {
 }
 
 function grabReach(kind, item) {
-  if (kind === 'unit') return TILE_SIZE_F;
+  const mul = kind === 'unit'
+    ? authoredUnitScale(item)
+    : kind === 'building'
+      ? bodyScaleMul(item?.scale)
+      : 1;
+  if (kind === 'unit') return TILE_SIZE_F * mul;
   if (kind === 'objective') return Math.max(2, (item.r || 1) * 1.6);
   const fp = BUILDING_FOOTPRINTS[item?.type] || (kind === 'agora' ? BUILDING_FOOTPRINTS.agora : null);
   const half = ((fp?.w ?? 2) * TILE_SIZE_F) * 0.5;
-  return Math.max(2.2, half * 0.72);
+  return Math.max(2.2, half * 0.72) * mul;
 }
 
 function hitPlacement(pos, kinds = ['unit', 'building', 'agora', 'objective']) {
@@ -1166,6 +1177,25 @@ function syncPlacePickUi() {
     nameEl.disabled = picks.length > 0 && !named;
     if (named && document.activeElement !== nameEl) nameEl.value = named.name || '';
     else if (picks.length > 0 && document.activeElement !== nameEl) nameEl.value = '';
+  }
+  const scaleEl = document.getElementById('place-scale');
+  const scaleLabel = document.getElementById('place-scale-label');
+  const sized = [];
+  for (const p of picks) {
+    if (p.kind !== 'unit' && p.kind !== 'building') continue;
+    const item = placeList(p.kind)?.[p.index];
+    if (!item) continue;
+    sized.push(p.kind === 'unit' ? authoredUnitScale(item) : bodyScaleMul(item.scale));
+  }
+  if (scaleEl) scaleEl.disabled = sized.length === 0;
+  if (scaleLabel) {
+    if (!sized.length) scaleLabel.textContent = '-';
+    else if (sized.every((s) => Math.abs(s - sized[0]) < 0.005)) {
+      scaleLabel.textContent = `${Math.round(sized[0] * 100)}%`;
+    } else scaleLabel.textContent = 'Mixed';
+  }
+  if (scaleEl && sized.length && document.activeElement !== scaleEl) {
+    scaleEl.value = String(Math.round(sized[0] * 100));
   }
   syncFactionUi(picks);
   syncBench();
@@ -1313,7 +1343,7 @@ function pruneNeutralTeams() {
   state.neutralTeams = next.length ? next : null;
 }
 
-function assignFightSide(id, key) {
+function assignFightSide(id, key, inherit = true) {
   if (id === 0) return;
   materializeTeams();
   const table = state.teamByOwner;
@@ -1321,8 +1351,9 @@ function assignFightSide(id, key) {
   if (key === 'players') {
     table[id] = table[0];
   } else if (key === 'peace') {
-    assignFightSide(id, 'own');
+    assignFightSide(id, 'own', false);
     setFriendlyToPlayers(id, true);
+    if (inherit) inheritRowIntent(id);
     return;
   } else if (key === 'own') {
     const used = new Set();
@@ -1344,6 +1375,7 @@ function assignFightSide(id, key) {
   }
   if (key === 'own') setFriendlyToPlayers(id, false);
   pruneNeutralTeams();
+  if (inherit) inheritRowIntent(id);
 }
 
 function setFriendlyToPlayers(id, friendly) {
@@ -1420,11 +1452,122 @@ function flipStance(id) {
   assignFightSide(id, key === 'friendly' ? 'own' : 'peace');
 }
 
+const ARMY_INTENTS = [
+  ['', 'Stand'],
+  ['passive', 'Passive'],
+  ['cautious', 'Cautious'],
+  ['steady', 'Steady'],
+  ['aggressive', 'Aggressive'],
+  ['reckless', 'Reckless'],
+];
+const INTENT_COLOR = {
+  passive: '#8ea4b8',
+  cautious: '#c6b15a',
+  steady: '#d4893a',
+  aggressive: '#e15a32',
+  reckless: '#ff4d4d',
+};
+
+function intentFor(id) {
+  const rows = state.ownerIntents;
+  if (!rows) return '';
+  for (let i = 0; i < rows.length; i++) {
+    if ((rows[i][0] | 0) === id) return rows[i][1];
+  }
+  return '';
+}
+
+function sharedIntent(ids) {
+  if (!ids.length) return '';
+  const first = intentFor(ids[0]);
+  for (let i = 1; i < ids.length; i++) {
+    if (intentFor(ids[i]) !== first) return 'mixed';
+  }
+  return first;
+}
+
+function writeIntent(ids, value) {
+  const drop = new Set(ids);
+  const next = [];
+  for (const row of state.ownerIntents || []) {
+    if (!drop.has(row[0] | 0)) next.push(row);
+  }
+  if (value && value !== 'mixed') {
+    for (const id of ids) next.push([id | 0, value]);
+  }
+  next.sort((a, b) => a[0] - b[0]);
+  state.ownerIntents = next.length ? next : null;
+}
+
+function idsForFightKey(key) {
+  const ids = [];
+  for (const faction of FACTIONS) if (fightKey(faction.id) === key) ids.push(faction.id);
+  return ids;
+}
+
+function inheritRowIntent(id) {
+  const others = idsForFightKey(fightKey(id)).filter((other) => other !== id);
+  if (!others.length) return;
+  const shared = sharedIntent(others);
+  if (shared === 'mixed') return;
+  writeIntent([id], shared);
+}
+
+function intentGroup(id) {
+  const side = displaySide(id);
+  if (side === 'own') return [id];
+  const ids = [];
+  for (const faction of FACTIONS) if (displaySide(faction.id) === side) ids.push(faction.id);
+  return ids.length ? ids : [id];
+}
+
+function intentSelect(ids, title) {
+  const current = sharedIntent(ids);
+  const sel = document.createElement('select');
+  sel.className = 'intent';
+  sel.title = title;
+  if (current === 'mixed') {
+    const mixed = document.createElement('option');
+    mixed.value = 'mixed';
+    mixed.textContent = 'Mixed';
+    mixed.disabled = true;
+    mixed.selected = true;
+    sel.appendChild(mixed);
+  }
+  for (const [value, label] of ARMY_INTENTS) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    if (value === current) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  if (INTENT_COLOR[current]) sel.style.color = INTENT_COLOR[current];
+  sel.addEventListener('change', () => {
+    if (sel.value === 'mixed') return;
+    writeIntent(ids, sel.value);
+    renderAllianceEditor();
+  });
+  return sel;
+}
+
+function intentTitle(key) {
+  if (key === 'own') return 'Same intent for each color in this row. They still fight each other. Stand only reacts.';
+  if (key === 'friendly') return 'Same intent for each color at peace. Stand only reacts.';
+  return 'How this team plays when no person is sitting it. Stand only reacts.';
+}
+
 function moveSideButton(key, label) {
   const b = document.createElement('button');
   b.type = 'button';
   b.className = 'side';
   b.textContent = label;
+  b.title = key === 'own'
+    ? 'Put the selected color here. Each color in this row fights everyone.'
+    : key === 'friendly'
+      ? 'Put the selected color at peace with the players.'
+      : key === 'players'
+        ? 'Put the selected color on the players\u2019 team.'
+        : 'Put the selected color on this team. Colors on one row fight together.';
   b.classList.toggle('active', fightKey(state.owner) === key);
   b.addEventListener('click', () => {
     const move = key === 'friendly' ? 'peace' : key;
@@ -1438,6 +1581,10 @@ function paintArmyGroups(host) {
   if (!host) return;
   host.className = '';
   host.replaceChildren();
+  const note = document.createElement('p');
+  note.id = 'army-note';
+  note.textContent = 'Select a color, then a side name, to move it. Players and a named side fight together. Enemy is each color alone. Intent plays that row when no person is sitting it.';
+  host.appendChild(note);
   const buckets = new Map();
   for (const f of FACTIONS) {
     const key = fightKey(f.id);
@@ -1484,6 +1631,7 @@ function sideRow(key, ids, camps) {
   dots.className = 'ink dots';
   for (const id of ids) dots.appendChild(ownerButton(id, true));
   row.appendChild(dots);
+  row.appendChild(intentSelect(ids, intentTitle(key)));
   return row;
 }
 
@@ -1502,8 +1650,18 @@ function renderArmySides() {
   if (grouped) paintArmyGroups(document.getElementById('army-sides'));
   else {
     const host = document.getElementById('army-sides');
-    if (host) host.className = 'ink';
-    paintOwnerRow(host, ids, false);
+    if (host) {
+      host.className = '';
+      host.replaceChildren();
+      const note = document.createElement('p');
+      note.id = 'army-note';
+      note.textContent = 'Sides and intent are on the File tab. Own fights alone. A shared letter is one team.';
+      host.appendChild(note);
+      const row = document.createElement('div');
+      row.className = 'ink';
+      host.appendChild(row);
+      paintOwnerRow(row, ids, false);
+    }
   }
   const held = document.getElementById('army-held-ink');
   if (grouped) {
@@ -1612,7 +1770,18 @@ function syncBench() {
 }
 
 function allianceHint() {
-  return '';
+  return 'Own fights alone. A shared letter is one team. Intent plays that side when no person is sitting it. Stand only reacts.';
+}
+
+function intentOptionsHtml(ids) {
+  const current = sharedIntent(ids);
+  const mixed = current === 'mixed' ? '<option value="mixed" disabled selected>Mixed</option>' : '';
+  const rest = ARMY_INTENTS.map(([value, label]) => {
+    const selected = value === current ? ' selected' : '';
+    return `<option value="${value}"${selected}>${label}</option>`;
+  }).join('');
+  const color = INTENT_COLOR[current] ? ` style="color:${INTENT_COLOR[current]}"` : '';
+  return { html: mixed + rest, color };
 }
 
 function renderAllianceEditor() {
@@ -1630,10 +1799,12 @@ function renderAllianceEditor() {
       const label = key === 'own' ? 'Own' : `Side ${key}`;
       return `<option value="${key}"${key === side ? ' selected' : ''}>${label}</option>`;
     }).join('');
+    const intent = intentOptionsHtml(intentGroup(f.id));
     return `<div class="row faction-row alliance-row">
       <span class="faction-swatch" style="background:${factionCss(f.id)}"></span>
       <span class="alliance-name">${f.name}</span>
       <select data-alliance="${f.id}">${opts}</select>
+      <select class="intent" data-intent="${f.id}" title="How this side plays when no person is sitting it. Stand only reacts."${intent.color}>${intent.html}</select>
     </div>`;
   }).join('');
   renderArmySides();
@@ -2225,6 +2396,7 @@ function updatePlaceMarkers() {
       z: unitWorldXZ(u).z,
       yaw: u.yaw || 0,
       name: u.name || '',
+      scale: u.scale,
     })),
     buildings: state.buildings.map((b) => ({
       owner: b.owner | 0,
@@ -2234,6 +2406,7 @@ function updatePlaceMarkers() {
       yaw: b.yaw ?? 0,
       built: 1,
       hp: 1,
+      scale: b.scale,
     })),
     agoras: state.agoras.map((g) => ({
       owner: g.owner | 0,
@@ -2482,6 +2655,20 @@ function refreshDrapeOverlays() {
   if (state.showTiles) scheduleTileWire();
 }
 
+/** Army stamps. Well is a finished building here; it is not on the build radial. */
+function armyBuildings() {
+  const out = [];
+  for (const b of PLACEABLE_BUILDINGS) {
+    out.push(b);
+    if (b.id === 'mine') out.push({ id: 'well', name: 'Well', category: 'basic' });
+  }
+  return out;
+}
+
+function armyBuildingName(id) {
+  return armyBuildings().find((b) => b.id === id)?.name || 'Building';
+}
+
 function brushColor() {
   if (state.layer === 'terrain') {
     if (state.lift === 'level') return [0.82, 0.86, 0.78];
@@ -2491,11 +2678,23 @@ function brushColor() {
     if (state.terrain === TERRAIN.WATER) return [0.28, 0.62, 0.98];
     if (state.terrain === TERRAIN.GRAVEL) return [0.28, 0.28, 0.30];
     if (state.terrain === TERRAIN.TILE) return [0.72, 0.72, 0.74];
+    if (state.terrain === TERRAIN.DECORATIVE) return [0.54, 0.56, 0.60];
+    if (state.terrain === TERRAIN.SCORCHED) return [0.54, 0.45, 0.22];
+    if (state.terrain === TERRAIN.CHARRED) return [0.23, 0.24, 0.29];
+    if (state.terrain === TERRAIN.LAVA) return [0.88, 0.32, 0.06];
     return [0.35, 0.88, 0.42];
   }
   if (state.stamp === 'doodad') {
     if (state.doodad === DOODAD.NONE) return [0.95, 0.32, 0.28];
     if (state.doodad === DOODAD.WAGON) return [0.72, 0.52, 0.28];
+    if (state.doodad === DOODAD.TORCH) return [0.95, 0.48, 0.16];
+    if (state.doodad === DOODAD.DERRICK) return [0.55, 0.50, 0.46];
+    if (state.doodad === DOODAD.WINDVANE) return [0.70, 0.76, 0.84];
+    if (state.doodad === DOODAD.STANDARD) {
+      const n = OWNER_TINTS.length;
+      const i = ((state.standardColor | 0) % n + n) % n;
+      return OWNER_TINTS[i];
+    }
     return [0.78, 0.58, 0.22];
   }
   if (state.sceneryOp === 'age') return [0.95, 0.82, 0.28];
@@ -2692,6 +2891,7 @@ function swapWallMesh(current, name, geometry, material, shadows) {
 function restampWallPass() {
   if (!field) return;
   applyWallOccupancy(field, wallsForGarden());
+  applyStandardOccupancy(field);
   grid?.refreshOccupancy(field);
 }
 
@@ -3242,7 +3442,7 @@ function applyAt(pos, { add = false } = {}) {
           state.brush,
         )
         : paintTerrainBrush(field, tx, tz, state.terrain, state.brush);
-    if (!leveling && !state.lift && state.terrain === TERRAIN.WATER) {
+    if (!leveling && !state.lift && isLiquidTerrain(state.terrain)) {
       const cleared = clearSceneryOnWater(field, tx, tz, state.brush);
       if (cleared.length) {
         field.sceneryAuthored = true;
@@ -3262,9 +3462,12 @@ function applyAt(pos, { add = false } = {}) {
     const tz = Math.floor((pos.z + halfZ) / TILE_SIZE_F);
     const stepping = state.stamp !== 'doodad' && (state.sceneryOp === 'age' || state.sceneryOp === 'deage');
     const stamp = state.stamp === 'doodad' ? state.doodad : state.scenery;
+    const colorKey = state.stamp === 'doodad' && state.doodad === DOODAD.STANDARD
+      ? `:${state.standardColor}`
+      : '';
     const key = stepping
       ? `step:${tx}:${tz}:${state.brush}:${state.sceneryOp}:${sceneryStepGen}`
-      : `scenery:${tx}:${tz}:${state.brush}:${state.stamp}:${stamp}:${state.sceneryDensity}`;
+      : `scenery:${tx}:${tz}:${state.brush}:${state.stamp}:${stamp}:${state.sceneryDensity}${colorKey}`;
     if (key === lastPaintKey) return;
     lastPaintKey = key;
     if (state.stamp !== 'doodad') stampStructureClaim();
@@ -3284,6 +3487,7 @@ function applyAt(pos, { add = false } = {}) {
       ? paintDoodadBrush(field, tx, tz, state.doodad, state.brush, {
         density: state.sceneryDensity / 10,
         salt: scenerySalt,
+        color: state.standardColor,
       })
       : paintSceneryBrush(field, tx, tz, state.scenery, state.brush, {
         refresh: false,
@@ -3452,6 +3656,7 @@ function gardenExtras({ committedWalls = false } = {}) {
     mapType: state.mapType,
     teamByOwner: state.teamByOwner,
     neutralTeams: state.neutralTeams,
+    ownerIntents: state.ownerIntents,
     preview: workshopPreviewJpeg,
   };
 }
@@ -4362,6 +4567,7 @@ function applyGardenJson(json) {
   state.mapType = g.mapType || DEFAULT_MAP_TYPE;
   state.teamByOwner = g.teamByOwner || null;
   state.neutralTeams = g.neutralTeams || null;
+  state.ownerIntents = g.ownerIntents || null;
   state.units = g.units;
   state.placePicks = [];
   placeDrag = null;
@@ -4871,6 +5077,10 @@ function handLabel() {
     if (state.terrain === TERRAIN.WATER) return 'Water';
     if (state.terrain === TERRAIN.GRAVEL) return 'Gravel';
     if (state.terrain === TERRAIN.TILE) return 'Tile';
+    if (state.terrain === TERRAIN.DECORATIVE) return 'Decor';
+    if (state.terrain === TERRAIN.SCORCHED) return 'Scorch';
+    if (state.terrain === TERRAIN.CHARRED) return 'Char';
+    if (state.terrain === TERRAIN.LAVA) return 'Lava';
     return 'Grass';
   }
   if (state.layer === 'table') return state.tableTool === 'props' ? 'Prop' : 'Table';
@@ -4890,13 +5100,13 @@ function handLabel() {
         return item?.name || UNIT_DEFS.find((u) => u.id === (item?.type | 0))?.name || 'Unit';
       }
       if (picks[0].kind === 'agora') return 'Agora';
-      return PLACEABLE_BUILDINGS.find((b) => b.id === item?.type)?.name || 'Building';
+      return armyBuildingName(item?.type);
     }
     if (state.placeKind === 'party') return 'Party';
     if (state.placeKind === 'agora') return 'Agora';
     if (state.placeKind === 'unit') return UNIT_DEFS.find((u) => u.id === (state.placeType | 0))?.name || 'Unit';
     if (state.placeKind === 'building') {
-      return PLACEABLE_BUILDINGS.find((b) => b.id === state.placeType)?.name || 'Building';
+      return armyBuildingName(state.placeType);
     }
     return factionLabel(state.owner);
   }
@@ -5222,6 +5432,13 @@ function bindHistory() {
   syncHistoryUi();
 }
 
+function unitPlaceButton(u) {
+  const r = Math.round(u.color[0] * 255);
+  const g = Math.round(u.color[1] * 255);
+  const b = Math.round(u.color[2] * 255);
+  return `<button data-place="unit" data-type="${u.id}"><i class="swatch" style="background:rgb(${r}, ${g}, ${b})"></i>${u.name}</button>`;
+}
+
 function mountUi() {
   const ui = document.createElement('div');
   ui.id = 'forge-ui';
@@ -5348,6 +5565,10 @@ function mountUi() {
         <button data-terrain="${TERRAIN.WATER}"><i class="swatch" style="background:#3a7ea8"></i>Water</button>
         <button data-terrain="${TERRAIN.GRAVEL}"><i class="swatch" style="background:#8d887c"></i>Gravel</button>
         <button data-terrain="${TERRAIN.TILE}"><i class="swatch" style="background:#c4b49a"></i>Tile</button>
+        <button data-terrain="${TERRAIN.DECORATIVE}"><i class="swatch" style="background:#8a8e96"></i>Decor</button>
+        <button data-terrain="${TERRAIN.SCORCHED}"><i class="swatch" style="background:#8a7340"></i>Scorch</button>
+        <button data-terrain="${TERRAIN.CHARRED}"><i class="swatch" style="background:#3a3d4a"></i>Char</button>
+        <button data-terrain="${TERRAIN.LAVA}"><i class="swatch" style="background:#e05110"></i>Lava</button>
         <button data-lift="1">Raise</button>
         <button data-lift="-1">Lower</button>
         <button data-lift="level">Level</button>
@@ -5368,6 +5589,11 @@ function mountUi() {
         <button data-scenery-op="deage" type="button" title="Shrink trees and rocks one stage. Hold to keep shrinking.">De-age</button>
         <button data-doodad="${DOODAD.MUSHROOM}"><i class="swatch" style="background:#c4563a"></i>Mushroom</button>
         <button data-doodad="${DOODAD.WAGON}"><i class="swatch" style="background:#6a5340"></i>Wagon</button>
+        <button data-doodad="${DOODAD.TORCH}"><i class="swatch" style="background:#e07a2f"></i>Torch</button>
+        <button data-doodad="${DOODAD.DERRICK}"><i class="swatch" style="background:#8a8278"></i>Derrick</button>
+        <button data-doodad="${DOODAD.WINDVANE}"><i class="swatch" style="background:#b7c4d4"></i>Windvane</button>
+        <button data-doodad="${DOODAD.STANDARD}"><i class="swatch" id="standard-brush-swatch" style="background:${factionCss(0)}"></i>Standard</button>
+        ${OWNER_TINTS.map((_, i) => `<button type="button" data-standard-color="${i}" title="Standard color ${i + 1}"><i class="swatch" style="background:${factionCss(i)}"></i></button>`).join('')}
         <button data-doodad="${DOODAD.NONE}">Erase doodads</button>
       </div>
       <label>Brush <span id="scenery-brush-label">1</span></label>
@@ -5413,12 +5639,17 @@ function mountUi() {
         <p class="block-title">Units</p>
         <div class="palette">
           <button data-place="party" type="button"><i class="swatch" style="background:#e6c35c"></i>Party</button>
-          ${UNIT_DEFS.map((u) => `<button data-place="unit" data-type="${u.id}"><i class="swatch" style="background:rgb(${Math.round(u.color[0] * 255)}, ${Math.round(u.color[1] * 255)}, ${Math.round(u.color[2] * 255)})"></i>${u.name}</button>`).join('')}
+          ${UNIT_DEFS.filter((u) => u.category !== 'mob').map(unitPlaceButton).join('')}
+        </div>
+        <p class="block-title">Mobs</p>
+        <p class="hint">Move orders only, until a behavior is set.</p>
+        <div class="palette">
+          ${UNIT_DEFS.filter((u) => u.category === 'mob').map(unitPlaceButton).join('')}
         </div>
         <p class="block-title">Buildings</p>
         <div class="palette">
           <button data-place="agora" data-type="agora"><i class="swatch" style="background:#e6c35c"></i>Agora</button>
-          ${PLACEABLE_BUILDINGS.map((b) => {
+          ${armyBuildings().map((b) => {
             const ink = b.category === 'elemental' ? '#7d6aa8' : b.category === 'advanced' ? '#8aa0b8' : '#c4a574';
             return `<button data-place="building" data-type="${b.id}"><i class="swatch" style="background:${ink}"></i>${b.name}</button>`;
           }).join('')}
@@ -5428,6 +5659,9 @@ function mountUi() {
         <label>Name</label>
         <input id="place-name" type="text" placeholder="Name">
         <div id="army-held-ink" class="ink"></div>
+        <label>Size <span id="place-scale-label">-</span></label>
+        <input id="place-scale" type="range" min="50" max="400" step="1" value="100" disabled>
+        <p class="hint">Scales the mesh for every selected unit and building. Units gain the same health and damage. A named unit with no size set stays at 129%. A building keeps its plot.</p>
         <select id="place-owner" hidden>
           ${FACTIONS.map((f) => `<option value="${f.id}"${f.id === 0 ? ' selected' : ''}>${f.name}</option>`).join('')}
         </select>
@@ -5678,6 +5912,14 @@ function mountUi() {
   ui.querySelectorAll('[data-lift]').forEach((b) => {
     b.addEventListener('click', () => setLift(liftToken(b.dataset.lift)));
   });
+  function syncStandardColorUi() {
+    const armed = state.stamp === 'doodad' && state.doodad === DOODAD.STANDARD;
+    ui.querySelectorAll('[data-standard-color]').forEach((x) => {
+      x.classList.toggle('active', armed && Number(x.dataset.standardColor) === state.standardColor);
+    });
+    const swatch = document.getElementById('standard-brush-swatch');
+    if (swatch) swatch.style.background = factionCss(state.standardColor);
+  }
   ui.querySelectorAll('[data-scenery]').forEach((b) => {
     b.addEventListener('click', () => {
       state.stamp = 'scenery';
@@ -5688,6 +5930,7 @@ function mountUi() {
       });
       ui.querySelectorAll('[data-scenery-op]').forEach((x) => x.classList.remove('active'));
       ui.querySelectorAll('[data-doodad]').forEach((x) => x.classList.remove('active'));
+      syncStandardColorUi();
       refreshBrushCursor();
       syncHand();
     });
@@ -5701,6 +5944,7 @@ function mountUi() {
       ui.querySelectorAll('[data-scenery-op]').forEach((x) => {
         x.classList.toggle('active', x.dataset.sceneryOp === state.sceneryOp);
       });
+      syncStandardColorUi();
       refreshBrushCursor();
       syncHand();
     });
@@ -5715,6 +5959,23 @@ function mountUi() {
       });
       ui.querySelectorAll('[data-scenery]').forEach((x) => x.classList.remove('active'));
       ui.querySelectorAll('[data-scenery-op]').forEach((x) => x.classList.remove('active'));
+      syncStandardColorUi();
+      refreshBrushCursor();
+      syncHand();
+    });
+  });
+  ui.querySelectorAll('[data-standard-color]').forEach((b) => {
+    b.addEventListener('click', () => {
+      state.standardColor = Number(b.dataset.standardColor) || 0;
+      state.stamp = 'doodad';
+      state.doodad = DOODAD.STANDARD;
+      state.sceneryOp = 'place';
+      ui.querySelectorAll('[data-doodad]').forEach((x) => {
+        x.classList.toggle('active', Number(x.dataset.doodad) === DOODAD.STANDARD);
+      });
+      ui.querySelectorAll('[data-scenery]').forEach((x) => x.classList.remove('active'));
+      ui.querySelectorAll('[data-scenery-op]').forEach((x) => x.classList.remove('active'));
+      syncStandardColorUi();
       refreshBrushCursor();
       syncHand();
     });
@@ -5745,6 +6006,15 @@ function mountUi() {
   });
   renderAllianceEditor();
   document.getElementById('alliance-list').addEventListener('change', (e) => {
+    const intent = e.target.closest('select[data-intent]');
+    if (intent) {
+      const id = Number(intent.dataset.intent);
+      if (!Number.isInteger(id) || id < 0 || id >= FACTIONS.length) return;
+      if (intent.value === 'mixed') return;
+      writeIntent(intentGroup(id), intent.value);
+      renderAllianceEditor();
+      return;
+    }
     const sel = e.target.closest('select[data-alliance]');
     if (!sel) return;
     const id = Number(sel.dataset.alliance);
@@ -5754,6 +6024,7 @@ function mountUi() {
     if (!Number.isInteger(team) || team < 0) return;
     materializeTeams();
     state.teamByOwner[id] = team;
+    inheritRowIntent(id);
     renderAllianceEditor();
   });
   document.getElementById('place-owner').addEventListener('change', (e) => {
@@ -5777,7 +6048,33 @@ function mountUi() {
     const picks = livePicks();
     if (picks.length !== 1 || picks[0].kind !== 'unit') return;
     const u = state.units[picks[0].index];
-    if (u) u.name = String(e.target.value || '');
+    if (!u) return;
+    u.name = String(e.target.value || '');
+    syncPlacePickUi();
+    updatePlaceMarkers();
+  });
+  document.getElementById('place-scale')?.addEventListener('input', (e) => {
+    const scale = quantizeBodyScale(Number(e.target.value) / 100);
+    if (scale == null) return;
+    let changed = false;
+    for (const pick of livePicks()) {
+      if (pick.kind !== 'unit' && pick.kind !== 'building') continue;
+      const item = placeList(pick.kind)?.[pick.index];
+      if (!item) continue;
+      const implicit = pick.kind === 'unit' && isNamedUnit(item.name) ? NAMED_UNIT_SCALE : 1;
+      if (Math.abs(scale - implicit) < 0.005) {
+        if (item.scale != null) {
+          delete item.scale;
+          changed = true;
+        }
+      } else if (item.scale !== scale) {
+        item.scale = scale;
+        changed = true;
+      }
+    }
+    const label = document.getElementById('place-scale-label');
+    if (label) label.textContent = `${Math.round(scale * 100)}%`;
+    if (changed) updatePlaceMarkers();
   });
   document.getElementById('place-rot-l')?.addEventListener('click', () => rotatePlacePick(-1));
   document.getElementById('place-rot-r')?.addEventListener('click', () => rotatePlacePick(1));
@@ -5880,6 +6177,9 @@ function mountUi() {
   });
   document.getElementById('btn-clear-doodads').addEventListener('click', () => {
     if (field.doodadType) field.doodadType.fill(0);
+    if (field.doodadColor) field.doodadColor.fill(0);
+    applyStandardOccupancy(field);
+    grid?.refreshOccupancy(field);
     if (terrain?.applyAuthoredSceneryTiles) {
       terrain.applyAuthoredSceneryTiles(field, []);
       if (sceneRegistered) invalidateRenderBundles(engine);
@@ -6051,6 +6351,7 @@ function mountUi() {
     state.units = [];
     state.teamByOwner = null;
     state.neutralTeams = null;
+    state.ownerIntents = null;
     state.placePicks = [];
     placeDrag = null;
     placeBox = null;

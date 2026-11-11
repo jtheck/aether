@@ -9,8 +9,8 @@ import {
 } from '../vendor/lite/liteVendor.js';
 import { createBuildingProps } from '../render/buildings.js';
 import { MODEL_BASE_SCALE } from '../render/modelScale.js';
-import { NAMED_UNIT_SCALE, isNamedUnit } from '../sim/namedUnit.js';
-import { UNIT_MODEL_URLS, loadBakedUnitMeshParts } from '../render/unitModels.js';
+import { authoredUnitScale } from '../sim/namedUnit.js';
+import { UNIT_MESH_LIFT, UNIT_MODEL_URLS, loadBakedUnitMeshParts } from '../render/unitModels.js';
 import { VAT_UNIT_DEFS } from '../render/vatUnits.js';
 import { ownerTint } from '../render/ownerTints.js';
 import { isTeamColorMaterial, prepareTeamColorMaterial, sceneTeamRgb } from '../render/teamColor.js';
@@ -240,8 +240,8 @@ export function createPlacePreview(engine, scene, groundYAt, onReady) {
       }
       for (let i = 0; i < needed; i++) {
         const u = list[i];
-        const y = groundYAt(u.x, u.z) + FOOT_CLEARANCE;
-        const scale = MODEL_BASE_SCALE * (isNamedUnit(u.name) ? NAMED_UNIT_SCALE : 1);
+        const scale = MODEL_BASE_SCALE * authoredUnitScale(u);
+        const y = groundYAt(u.x, u.z) + FOOT_CLEARANCE + (UNIT_MESH_LIFT[type] ?? 0) * scale;
         writePose(layer.matrices, i, u.x, y, u.z, u.yaw || 0, scale);
         const tint = layer.team ? sceneTeamRgb(ownerTint(u.owner)) : [1, 1, 1];
         const o = i * 4;

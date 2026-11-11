@@ -1,6 +1,7 @@
 // Side-menu type drawers + center match room + reduced sidebar copy.
 
 import { sameUserId } from '../lobby/ids.js';
+import { lobbyAiColor, lobbyAiLabel } from '../lobby/roster.js';
 import { rosterStatusLabel } from './viewFollow.js';
 import { observerSheetIndexFromCode } from './observerData.js';
 import { cleanMapName, FIELD_SIZES, MODE_IDS, getMode, mapTypeFitsLobby, selectableAdventureChapters } from '../lobby/modes.js';
@@ -178,7 +179,7 @@ function setHidden(el, hidden) {
   el.hidden = hidden;
 }
 
-function paintMoves(row, userId, hostMoves) {
+function paintMoves(row, userId, hostMoves, seatIndex = null) {
   let moves = row.querySelector('.lobby-seat-moves');
   if (!hostMoves) {
     moves?.remove();
@@ -200,14 +201,38 @@ function paintMoves(row, userId, hostMoves) {
     moves.append(up, down);
     row.append(moves);
   }
+  const keyed = Boolean(userId) || Number.isInteger(seatIndex);
   for (const btn of moves.querySelectorAll('button')) {
     btn.dataset.userId = userId || '';
-    btn.hidden = !userId;
+    if (Number.isInteger(seatIndex)) btn.dataset.seat = String(seatIndex);
+    else delete btn.dataset.seat;
+    btn.hidden = !keyed;
   }
 }
 
+function paintAuto(row, seat, hostAuto) {
+  let btn = row.querySelector('.lobby-seat-auto');
+  const open = hostAuto && Number.isInteger(seat.index) && (seat.kind === 'empty' || seat.kind === 'ai');
+  if (!open) {
+    btn?.remove();
+    return;
+  }
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'lobby-seat-auto lobby-seat-move';
+    const moves = row.querySelector('.lobby-seat-moves');
+    if (moves) row.insertBefore(btn, moves);
+    else row.append(btn);
+  }
+  const filled = seat.kind === 'ai';
+  btn.dataset.autoSeat = String(seat.index);
+  btn.textContent = 'Auto';
+  btn.title = filled ? `${lobbyAiLabel(seat.ai)}. Click for the next one` : 'Fill this seat with Auto';
+}
+
 function paintSeats(container, seats, {
-  teams, localId, compact, spectators, hostMoves, followUserId, kingOwner = -1, laggingIds = null, ratings = false,
+  teams, localId, compact, spectators, hostMoves, hostAuto = false, followUserId, kingOwner = -1, laggingIds = null, ratings = false,
   hostId = null,
 }) {
   if (!container) return;
@@ -287,6 +312,19 @@ function paintSeats(container, seats, {
           statusEl.title = canFollow ? (following ? 'Following' : 'Follow replay') : '';
         }
         paintMoves(row, seat.userId, hostMoves);
+        paintAuto(row, seat, false);
+      } else if (seat.kind === 'ai') {
+        setText(nameEl, `Auto · ${lobbyAiLabel(seat.ai)}`);
+        if (nameEl) nameEl.style.color = lobbyAiColor(seat.ai);
+        setText(statusEl, '');
+        delete row.dataset.replayUser;
+        if (statusEl) {
+          statusEl.style.cursor = '';
+          statusEl.style.textDecoration = '';
+          statusEl.title = '';
+        }
+        paintMoves(row, '', hostMoves && teams, seat.index);
+        paintAuto(row, seat, hostAuto);
       } else {
         setText(nameEl, 'Waiting…');
         if (nameEl) nameEl.style.color = '';
@@ -298,6 +336,7 @@ function paintSeats(container, seats, {
           statusEl.title = '';
         }
         paintMoves(row, '', hostMoves);
+        paintAuto(row, seat, hostAuto);
       }
     });
   });
@@ -796,14 +835,15 @@ export function setupLobbyUi({
       ? stallTitle
       : `${mode?.name ?? 'Lobby'} - ${state.hosting ? 'host' : status.title}`);
     const hostMoves = state.hosting && (state.phase === 'waiting' || state.phase === 'countdown');
+    const hostAuto = hostMoves && !ranked && Boolean(mode?.allowAi);
     const followUserId = getFollowUser?.() ?? null;
     const kingOwner = state.mode === 'koth' ? (getKing?.() ?? -1) : -1;
     const hostId = state.hostId || (state.hosting ? localId : null);
     paintSeats(sideSeats, state.seats, {
-      teams: Boolean(mode?.teams), localId, compact: true, spectators: state.spectators, hostMoves, followUserId, kingOwner, laggingIds, ratings: ranked, hostId,
+      teams: Boolean(mode?.teams), localId, compact: true, spectators: state.spectators, hostMoves, hostAuto, followUserId, kingOwner, laggingIds, ratings: ranked, hostId,
     });
     paintSeats(panelSeats, state.seats, {
-      teams: Boolean(mode?.teams), localId, compact: false, spectators: state.spectators, hostMoves, followUserId, kingOwner, laggingIds, ratings: ranked, hostId,
+      teams: Boolean(mode?.teams), localId, compact: false, spectators: state.spectators, hostMoves, hostAuto, followUserId, kingOwner, laggingIds, ratings: ranked, hostId,
     });
 
     setHidden(sideReady, ranked || state.hosting || state.watching);
@@ -964,15 +1004,26 @@ export function setupLobbyUi({
     onFollowReplay?.(id);
   }
   function onMoveClick(e) {
-    const btn = e.target instanceof Element ? e.target.closest('[data-dir][data-user-id]') : null;
+    const btn = e.target instanceof Element ? e.target.closest('[data-dir]') : null;
+    if (!btn || btn.hidden) return;
+    const dir = Number(btn.dataset.dir);
+    if (btn.dataset.seat) matchLobby.moveSeat?.(Number(btn.dataset.seat), dir);
+    else if (btn.dataset.userId) matchLobby.movePerson(btn.dataset.userId, dir);
+    else return;
+    refresh();
+  }
+  function onAutoClick(e) {
+    const btn = e.target instanceof Element ? e.target.closest('[data-auto-seat]') : null;
     if (!btn) return;
-    matchLobby.movePerson(btn.dataset.userId, Number(btn.dataset.dir));
+    matchLobby.cycleAuto?.(Number(btn.dataset.autoSeat));
     refresh();
   }
   sideSeats?.addEventListener('click', onReplayClick);
   panelSeats?.addEventListener('click', onReplayClick);
   sideSeats?.addEventListener('click', onMoveClick);
   panelSeats?.addEventListener('click', onMoveClick);
+  sideSeats?.addEventListener('click', onAutoClick);
+  panelSeats?.addEventListener('click', onAutoClick);
   sideReady?.addEventListener('click', toggleReady);
   panelReady?.addEventListener('click', toggleReady);
   sideStart?.addEventListener('click', () => { matchLobby.requestStart(); refresh(); });

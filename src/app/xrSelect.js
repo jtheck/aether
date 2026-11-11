@@ -20,11 +20,14 @@ const LINE_FRAC = 0.006;
 const LINE_MIN = 0.08;
 /** Beam length when the ray misses the field, in head heights. */
 const MISS_REACH = 3;
+/** How far past the board rim the laser may still reach, as a fraction of the half-extent. */
+export const LASER_PAST_BOARD = 0.5;
 export const STROKE_MAX_PTS = 160;
 
 /**
  * Controller target ray in Lite's scene space: origin is the translation,
- * forward is the third basis column.
+ * forward is the third basis column, and `u*` is the wrist's up (column 1)
+ * so a roll slants the pointer.
  * @param {Float32Array | number[]} m
  */
 export function controllerRay(m) {
@@ -33,12 +36,31 @@ export function controllerRay(m) {
   const dz = m[10];
   const len = Math.hypot(dx, dy, dz);
   if (!(len > 1e-8)) return null;
-  return { ox: m[12], oy: m[13], oz: m[14], dx: dx / len, dy: dy / len, dz: dz / len };
+  let ux = m[4] || 0;
+  let uy = m[5] || 0;
+  let uz = m[6] || 0;
+  const ul = Math.hypot(ux, uy, uz);
+  if (ul > 1e-8) {
+    ux /= ul;
+    uy /= ul;
+    uz /= ul;
+  } else {
+    ux = 0;
+    uy = 1;
+    uz = 0;
+  }
+  return {
+    ox: m[12], oy: m[13], oz: m[14],
+    dx: dx / len, dy: dy / len, dz: dz / len,
+    ux, uy, uz,
+  };
 }
 
 /** Tracked target ray of an XR input source, or null. */
 export function sourceRay(src) {
-  return src?.targetRayTracked ? controllerRay(src.targetRayMatrix) : null;
+  const ray = src?.targetRayTracked ? controllerRay(src.targetRayMatrix) : null;
+  if (ray) ray.hand = src.handedness || '';
+  return ray;
 }
 
 /**
@@ -96,18 +118,66 @@ export function rayHeadHeight(renderer, ray) {
 }
 
 /**
- * Beam overlay for a ray: reaches the field hit, or a few head heights into the sky.
+ * Longest the laser may travel from the hand: every point a bit past the
+ * board, including the drop from the hand down to the ground. A shallow
+ * aim ends there instead of following the ground plane out to the horizon.
+ * @param {{ ox: number, oy: number, oz: number }} ray
+ * @param {number} halfX
+ * @param {number} halfZ
+ * @param {number} [groundY]
+ */
+export function laserReach(ray, halfX, halfZ, groundY = 0) {
+  const limX = Math.abs(halfX) * (1 + LASER_PAST_BOARD);
+  const limZ = Math.abs(halfZ) * (1 + LASER_PAST_BOARD);
+  const dx = Math.max(Math.abs(limX - ray.ox), Math.abs(-limX - ray.ox));
+  const dz = Math.max(Math.abs(limZ - ray.oz), Math.abs(-limZ - ray.oz));
+  const drop = Math.max(0, ray.oy - groundY);
+  return Math.hypot(dx, dz, drop);
+}
+
+/**
+ * Keep a ground hit inside the laser's reach. Past that, the ray ends in
+ * the air at the cap so the beam and the aim stop together.
+ * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number }} ray
+ * @param {{ x: number, y?: number, z: number, t?: number } | null} hit
+ * @param {number} reach
+ */
+export function clipLaserHit(ray, hit, reach) {
+  if (!hit || !(reach > 0)) return hit;
+  const dist = Number.isFinite(hit.t)
+    ? hit.t
+    : Math.hypot(hit.x - ray.ox, (hit.y ?? ray.oy) - ray.oy, hit.z - ray.oz);
+  if (dist <= reach) return hit;
+  return {
+    x: ray.ox + ray.dx * reach,
+    y: ray.oy + ray.dy * reach,
+    z: ray.oz + ray.dz * reach,
+    t: reach,
+  };
+}
+
+function hitOnGround(renderer, hit) {
+  if (!hit || typeof renderer.groundHeight !== 'function') return !!hit;
+  const ground = renderer.groundHeight(hit.x, hit.z);
+  if (!Number.isFinite(ground)) return true;
+  return hit.y <= ground + 1.5;
+}
+
+/**
+ * Beam overlay for a ray: reaches the field hit inside the laser's reach,
+ * or a few head heights into the sky. A hit past the cap has no ground ring.
  * @param {{ rayToGround: Function, groundHeight: Function }} renderer
  * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number }} ray
  * @param {{ x: number, y: number, z: number } | null} [hit]
  */
 export function beamState(renderer, ray, hit = renderer.rayToGround(ray), loop = null) {
   const head = rayHeadHeight(renderer, ray);
+  const onGround = hitOnGround(renderer, hit);
   return {
     ray,
     length: hit ? Math.hypot(hit.x - ray.ox, hit.y - ray.oy, hit.z - ray.oz) : head * MISS_REACH,
     loop,
-    tip: hit ? { x: hit.x, z: hit.z } : null,
+    tip: onGround ? { x: hit.x, z: hit.z } : null,
     width: Math.max(LINE_MIN, head * LINE_FRAC),
   };
 }
@@ -140,6 +210,8 @@ export function createXrSelect({ renderer, getInput }) {
   const gestures = new Map();
   /** A release that overlapped another live gesture: the next release adds. */
   let chainAdd = false;
+  /** This frame a grip tap must not select (a lasso still does). */
+  let suppressTap = false;
 
   function end(key, g) {
     gestures.delete(key);
@@ -166,6 +238,7 @@ export function createXrSelect({ renderer, getInput }) {
       input.groundLoopSelect?.(loop, add);
       return;
     }
+    if (suppressTap) return;
     input.selectAtRay?.(g.pressRay, add, g.pressHit
       ? { x: g.pressHit.x, z: g.pressHit.z, slop: g.pressHead * TAP_SLOP_FRAC }
       : null);
@@ -218,12 +291,14 @@ export function createXrSelect({ renderer, getInput }) {
   /**
    * Call once per XR frame after the rig has moved the reference space.
    * `blocked` drops live gestures without selecting (the grip belongs to
-   * something else, e.g. ghost-place yaw). `canBegin` vetoes one press.
+   * something else). `suppressTap` keeps a sweep and ignores a grip tap.
+   * `canBegin` vetoes one press.
    * @param {{ input?: { inputSources?: object[] } }} ctx
-   * @param {{ blocked?: boolean, canBegin?: (src: object) => boolean }} [opts]
+   * @param {{ blocked?: boolean, suppressTap?: boolean, canBegin?: (src: object) => boolean }} [opts]
    */
   function step(ctx, opts = {}) {
     const sources = ctx.input?.inputSources ?? [];
+    suppressTap = !!opts.suppressTap;
     if (opts.blocked && gestures.size > 0) endAll();
     for (const src of sources) {
       const held = gripHeld(src);

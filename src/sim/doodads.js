@@ -1,8 +1,10 @@
-// Visual-only world dressing. No pass, stock, gather, or entities.
-// Grove mushrooms are derived from tree stock. Forge stamps persist on
-// field.doodadType and round-trip in .garden (`dd`).
+// World dressing. Grove mushrooms are derived from tree stock. Forge stamps
+// persist on field.doodadType and round-trip in .garden (`dd`).
+// A standard also stores a banner index on field.doodadColor (`dc`) and
+// blocks a five-tile plus. A torch is a planted stick. Fog stamps its fire
+// as a shared sight hole.
 
-import { TERRAIN, TILE_SIZE_F, worldHalfFFromField, worldHalfZFFromField } from './field.js';
+import { TERRAIN, isBlockedLiquid, TILE_SIZE_F, worldHalfFFromField, worldHalfZFFromField } from './field.js';
 import { SCENERY, rockFootprintRadius, sceneryDensityAllows, sceneryTileHash } from './scenery.js';
 import { TREE_STOCK_NATURAL_MAX, treeScaleForStage, treeStageFromStock } from './trees.js';
 
@@ -10,7 +12,39 @@ export const DOODAD = {
   NONE: 0,
   MUSHROOM: 1,
   WAGON: 2,
+  TORCH: 3,
+  DERRICK: 4,
+  WINDVANE: 5,
+  STANDARD: 6,
 };
+
+/** Center plus the four orthogonal tiles. Arms are blocked, not extra stamps. */
+export const STANDARD_PLUS = Object.freeze([
+  [0, 0],
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+]);
+
+/**
+ * Hard sight around a planted torch, in tiles. A villager sees 8.
+ * The veil still feathers EDGE_FADE_TILES past this.
+ */
+export const TORCH_VISION_TILES = 3;
+
+/**
+ * Local fire_anchor on the planted stick. Y is up from the ground contact.
+ * Scale is the empty size the socket flame multiplies (camp anchors are 1
+ * on a building; this stays a small flame).
+ */
+export const TORCH_FIRE_ANCHOR = Object.freeze({
+  name: 'fire_anchor',
+  x: 0,
+  y: 1.14,
+  z: 0,
+  scale: 0.2,
+});
 
 /** First wood past a natural canopy - grove overgrowth, not populate/paint. */
 export const MUSHROOM_HOST_STOCK = TREE_STOCK_NATURAL_MAX;
@@ -49,7 +83,21 @@ export function ensureDoodadArrays(field) {
   if (!(field.doodadType instanceof Uint8Array) || field.doodadType.length !== n) {
     field.doodadType = new Uint8Array(n);
   }
+  if (!(field.doodadColor instanceof Uint8Array) || field.doodadColor.length !== n) {
+    field.doodadColor = new Uint8Array(n);
+  }
   return field;
+}
+
+/** Color RLE when a standard uses a swatch other than the first. Index 0 is the default. */
+export function authoredStandardColors(field) {
+  const types = field?.doodadType;
+  const colors = field?.doodadColor;
+  if (!types || !colors || colors.length !== types.length) return null;
+  for (let i = 0; i < types.length; i++) {
+    if (types[i] === DOODAD.STANDARD && colors[i]) return colors;
+  }
+  return null;
 }
 
 export function hasAuthoredDoodads(field) {
@@ -161,11 +209,6 @@ export function mushroomHostStatesNear(field, tiles) {
   return out;
 }
 
-function tileHasTree(field, tx, tz) {
-  const i = tz * field.width + tx;
-  return field.sceneryType?.[i] === SCENERY.TREE || (field.treeStock?.[i] | 0) > 0;
-}
-
 function tileHasRock(field, tx, tz) {
   const { width, height } = field;
   for (let dz = -2; dz <= 2; dz++) {
@@ -196,37 +239,62 @@ export function canPaintDoodadAt(field, tx, tz, kind) {
   const width = field.width | 0;
   const height = field.height | 0;
   if (tx < 0 || tz < 0 || tx >= width || tz >= height) return false;
-  if (kind !== DOODAD.MUSHROOM && kind !== DOODAD.WAGON) return false;
+  if (
+    kind !== DOODAD.MUSHROOM
+    && kind !== DOODAD.WAGON
+    && kind !== DOODAD.TORCH
+    && kind !== DOODAD.DERRICK
+    && kind !== DOODAD.WINDVANE
+    && kind !== DOODAD.STANDARD
+  ) return false;
   const i = tz * width + tx;
   if (field.activeMask?.[i] === 0) return false;
+  if (kind !== DOODAD.MUSHROOM) return true;
   if (field.tableEdge?.[i]) return false;
   if (!isPaintLand(field, i)) return false;
   if (tileHasRock(field, tx, tz)) return false;
-  if (kind === DOODAD.WAGON && tileHasTree(field, tx, tz)) return false;
   return true;
 }
 
-function stampDoodad(field, tx, tz, kind) {
+function clampColor(color) {
+  const n = color | 0;
+  if (n < 0) return 0;
+  if (n > 255) return 255;
+  return n;
+}
+
+function writeDoodadColor(field, i, kind, color) {
+  const next = kind === DOODAD.STANDARD ? clampColor(color) : 0;
+  if (field.doodadColor[i] === next) return false;
+  field.doodadColor[i] = next;
+  return true;
+}
+
+function stampDoodad(field, tx, tz, kind, color) {
   ensureDoodadArrays(field);
   const i = tz * field.width + tx;
   if (kind === DOODAD.NONE) {
-    if (!field.doodadType[i]) return false;
+    if (!field.doodadType[i] && !field.doodadColor[i]) return false;
     field.doodadType[i] = DOODAD.NONE;
+    field.doodadColor[i] = 0;
     return true;
   }
   if (!canPaintDoodadAt(field, tx, tz, kind)) return false;
-  if (field.doodadType[i] === kind) return false;
+  const recolor = writeDoodadColor(field, i, kind, color);
+  if (field.doodadType[i] === kind && !recolor) return false;
   field.doodadType[i] = kind;
   return true;
 }
 
 /**
- * Stamp or erase authored doodads. Does not touch pass / trees / rocks.
+ * Stamp or erase authored doodads. Trees and rocks stay. A standard blocks
+ * its plus; every other kind leaves pass alone.
  * @param {object} field
  * @param {number} tx
  * @param {number} tz
  * @param {number} kind
  * @param {number} [radius]
+ * @param {{ density?: number, salt?: number, color?: number }} [opts]
  * @returns {{ x: number, z: number }[]}
  */
 export function paintDoodadBrush(field, tx, tz, kind, radius = 0, opts = {}) {
@@ -240,10 +308,62 @@ export function paintDoodadBrush(field, tx, tz, kind, radius = 0, opts = {}) {
       const x = tx + dx;
       const z = tz + dz;
       if (!sceneryDensityAllows(x, z, field.seed, opts.density, opts.salt)) continue;
-      if (stampDoodad(field, x, z, kind)) dirty.push({ x, z });
+      if (stampDoodad(field, x, z, kind, opts.color)) dirty.push({ x, z });
     }
   }
+  if (dirty.length) applyStandardOccupancy(field);
   return dirty;
+}
+
+function canReleaseStandard(field, i) {
+  if (field.activeMask?.[i] === 0) return false;
+  if (isBlockedLiquid(field, i)) return false;
+  if (field.tableEdge?.[i]) return false;
+  if (field.wallBlock?.[i]) return false;
+  const width = field.width | 0;
+  const tz = (i / width) | 0;
+  const tx = i - tz * width;
+  if (tileHasRock(field, tx, tz)) return false;
+  return true;
+}
+
+/**
+ * Rebuild the standard plus into field.pass. Tiles that leave the plus open
+ * again unless liquid, the table rim, a wall, or a rock still owns them.
+ * A pass rebuild (water, table silhouette) clears the block until this runs.
+ * @param {object} field
+ */
+export function applyStandardOccupancy(field) {
+  if (!field?.pass || !field.doodadType) return field;
+  const width = field.width | 0;
+  const height = field.height | 0;
+  const n = width * height;
+  const next = new Uint8Array(n);
+  const types = field.doodadType;
+  for (let i = 0; i < types.length; i++) {
+    if (types[i] !== DOODAD.STANDARD) continue;
+    const tz = (i / width) | 0;
+    const tx = i - tz * width;
+    for (let a = 0; a < STANDARD_PLUS.length; a++) {
+      const x = tx + STANDARD_PLUS[a][0];
+      const z = tz + STANDARD_PLUS[a][1];
+      if (x < 0 || z < 0 || x >= width || z >= height) continue;
+      const ti = z * width + x;
+      if (field.activeMask?.[ti] === 0) continue;
+      next[ti] = 1;
+    }
+  }
+  const prev = field.standardBlock;
+  if (prev && prev.length === n) {
+    for (let i = 0; i < n; i++) {
+      if (prev[i] && !next[i] && canReleaseStandard(field, i)) field.pass[i] = 1;
+    }
+  }
+  for (let i = 0; i < n; i++) {
+    if (next[i]) field.pass[i] = 0;
+  }
+  field.standardBlock = next;
+  return field;
 }
 
 function tileWorldCenter(field, tx, tz) {
@@ -431,6 +551,90 @@ export function wagonPlacementForTile(field, tileIndex) {
   };
 }
 
+/**
+ * Upright stick in the ground. Yaw and a small shift only - roll stays 0
+ * so the fire_anchor sits on the tip.
+ * @param {object} field
+ * @param {number} tileIndex
+ */
+export function torchPlacementForTile(field, tileIndex) {
+  const width = field.width | 0;
+  const ti = tileIndex | 0;
+  const tz = (ti / width) | 0;
+  const tx = ti - tz * width;
+  const seed = field.seed | 0;
+  const { x, z } = tileWorldCenter(field, tx, tz);
+  const hYaw = sceneryTileHash(tx, tz, seed + 7100);
+  const hOff = sceneryTileHash(tx, tz, seed + 7200);
+  const hScale = sceneryTileHash(tx, tz, seed + 7300);
+  return {
+    type: DOODAD.TORCH,
+    host: ti,
+    x: x + (hOff - 0.5) * 0.4,
+    z: z + (sceneryTileHash(tx + 1, tz, seed + 7400) - 0.5) * 0.4,
+    yaw: hYaw * Math.PI * 2,
+    roll: 0,
+    yOff: 0,
+    scale: 0.92 + hScale * 0.16,
+  };
+}
+
+/**
+ * Upright model prop. The mesh keeps its authored size; render centers it
+ * on the stamp. Roll stays 0 so a derrick does not lie down like a wagon.
+ * @param {object} field
+ * @param {number} tileIndex
+ * @param {number} type
+ * @param {number} salt
+ */
+function plantedPropPlacement(field, tileIndex, type, salt) {
+  const width = field.width | 0;
+  const ti = tileIndex | 0;
+  const tz = (ti / width) | 0;
+  const tx = ti - tz * width;
+  const seed = field.seed | 0;
+  const { x, z } = tileWorldCenter(field, tx, tz);
+  const hYaw = sceneryTileHash(tx, tz, seed + salt);
+  const hOff = sceneryTileHash(tx, tz, seed + salt + 100);
+  return {
+    type,
+    host: ti,
+    x: x + (hOff - 0.5) * 0.4,
+    z: z + (sceneryTileHash(tx + 1, tz, seed + salt + 200) - 0.5) * 0.4,
+    yaw: hYaw * Math.PI * 2,
+    roll: 0,
+    yOff: 0,
+    scale: 1,
+  };
+}
+
+/** Static derrick mesh. Not a building, so it never collapses into a well. */
+export function derrickPlacementForTile(field, tileIndex) {
+  return plantedPropPlacement(field, tileIndex, DOODAD.DERRICK, 6100);
+}
+
+/** Windvane from the props folder. Visual only. */
+export function windvanePlacementForTile(field, tileIndex) {
+  return plantedPropPlacement(field, tileIndex, DOODAD.WINDVANE, 5100);
+}
+
+/** Upright flag. Color lives on the tile, not in this pose. */
+export function standardPlacementForTile(field, tileIndex) {
+  return plantedPropPlacement(field, tileIndex, DOODAD.STANDARD, 7100);
+}
+
+/** World XZ of every authored torch. Fog stamps these for every player. */
+export function forEachTorch(field, fn) {
+  const types = field?.doodadType;
+  if (!types || !fn) return;
+  const width = field.width | 0;
+  for (let i = 0; i < types.length; i++) {
+    if (types[i] !== DOODAD.TORCH) continue;
+    const p = torchPlacementForTile(field, i);
+    fn(p.x, p.z);
+  }
+}
+
 function appendAuthoredDoodads(field, out) {
   const types = field?.doodadType;
   if (!types) return;
@@ -440,6 +644,22 @@ function appendAuthoredDoodads(field, out) {
     const kind = types[i];
     if (kind === DOODAD.WAGON) {
       out.push(wagonPlacementForTile(field, i));
+      continue;
+    }
+    if (kind === DOODAD.TORCH) {
+      out.push(torchPlacementForTile(field, i));
+      continue;
+    }
+    if (kind === DOODAD.DERRICK) {
+      out.push(derrickPlacementForTile(field, i));
+      continue;
+    }
+    if (kind === DOODAD.WINDVANE) {
+      out.push(windvanePlacementForTile(field, i));
+      continue;
+    }
+    if (kind === DOODAD.STANDARD) {
+      out.push(standardPlacementForTile(field, i));
       continue;
     }
     if (kind !== DOODAD.MUSHROOM) continue;
@@ -482,6 +702,20 @@ export function collectDoodadSlots(field) {
     const kind = types[i];
     if (kind === DOODAD.WAGON) {
       slots.push({ key: `w:${i}`, kind, tile: i, grove: false });
+    } else if (kind === DOODAD.TORCH) {
+      slots.push({ key: `t:${i}`, kind, tile: i, grove: false });
+    } else if (kind === DOODAD.DERRICK) {
+      slots.push({ key: `d:${i}`, kind, tile: i, grove: false });
+    } else if (kind === DOODAD.WINDVANE) {
+      slots.push({ key: `v:${i}`, kind, tile: i, grove: false });
+    } else if (kind === DOODAD.STANDARD) {
+      slots.push({
+        key: `s:${i}`,
+        kind,
+        tile: i,
+        grove: false,
+        color: field.doodadColor?.[i] ?? 0,
+      });
     } else if (kind === DOODAD.MUSHROOM && !grove.has(i)) {
       slots.push({ key: `a:${i}`, kind, tile: i, grove: false });
     }

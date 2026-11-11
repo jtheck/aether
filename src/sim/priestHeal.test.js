@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import * as fx from './fixed.js';
 import { combatSystem } from './combat.js';
 import { createField } from './field.js';
-import { MANA_MAX } from './mana.js';
-import { PRIEST_HEAL_AMOUNT, priestHealLandsMost, takePriestHealUpdates } from './priestHeal.js';
+import { MANA_CHARGE, MANA_MAX } from './mana.js';
+import { PRIEST_HEAL_AMOUNT, PRIEST_HEAL_MANA, priestHealLandsMost, takePriestHealUpdates } from './priestHeal.js';
 import { isAlly, setTeamAssignments } from './teams.js';
 import { getUnitDef, UNIT } from './unitTypes.js';
 import { createWorld, lockAttackFocus, ORDER, spawn } from './world.js';
@@ -23,6 +23,7 @@ function tick(w, field) {
 describe('priest heal', () => {
   it('uses a flat half of a 50 HP unit, and only when most of it lands', () => {
     assert.equal(PRIEST_HEAL_AMOUNT, 25);
+    assert.equal(PRIEST_HEAL_MANA, MANA_CHARGE);
     assert.equal(priestHealLandsMost(18), false);
     assert.equal(priestHealLandsMost(19), true);
     assert.equal(priestHealLandsMost(25), true);
@@ -39,14 +40,12 @@ describe('priest heal', () => {
       owner: 0,
       hp: getUnitDef(UNIT.WARRIOR).hp - 4,
     });
-    const mana = w.mana[priest];
     tick(w, field);
     assert.equal(w.hp[ally], getUnitDef(UNIT.WARRIOR).hp);
     assert.equal(w.order[priest], ORDER.IDLE);
     assert.equal(w.attackCd[priest], getUnitDef(UNIT.PRIEST).attackCooldown - 1);
     assert.equal(w.abilityCd[priest], 0);
-    assert.equal(w.mana[priest], mana);
-    assert.equal(mana, MANA_MAX);
+    assert.equal(w.mana[priest], MANA_MAX - PRIEST_HEAL_MANA);
     assert.equal(w.projectiles.activeCount, 0);
     const fxPatch = takePriestHealUpdates(w);
     assert.equal(fxPatch.count, 1);
@@ -259,6 +258,50 @@ describe('priest heal', () => {
     assert.equal(w.hp[better], getUnitDef(UNIT.MONK).hp - 40 + PRIEST_HEAL_AMOUNT);
     assert.equal(w.hp[worse], worseHp);
     assert.equal(w.hp[priest], priestHp);
+  });
+
+  it('will not heal without a mana charge, and smites instead', () => {
+    const w = createWorld(50);
+    const field = openField();
+    const priest = spawn(w, { x: 0, y: 0, type: UNIT.PRIEST, owner: 0 });
+    const ally = spawn(w, {
+      x: fx.fromInt(6),
+      y: 0,
+      type: UNIT.WARRIOR,
+      owner: 0,
+      hp: 40,
+    });
+    w.mana[priest] = PRIEST_HEAL_MANA - 1;
+    tick(w, field);
+    assert.equal(w.hp[ally], 40);
+    assert.equal(w.attackCd[priest], 0);
+    assert.equal(w.mana[priest], PRIEST_HEAL_MANA - 1);
+
+    const fight = createWorld(51);
+    const priest2 = spawn(fight, { x: 0, y: 0, type: UNIT.PRIEST, owner: 0 });
+    const ally2 = spawn(fight, {
+      x: fx.fromInt(6),
+      y: 0,
+      type: UNIT.WARRIOR,
+      owner: 0,
+      hp: 40,
+    });
+    const foe = spawn(fight, {
+      x: fx.fromInt(12),
+      y: 0,
+      type: UNIT.WARRIOR,
+      owner: 1,
+      hp: 80,
+    });
+    fight.mana[priest2] = PRIEST_HEAL_MANA - 1;
+    fight.order[priest2] = ORDER.ATTACK;
+    fight.targetEntity[priest2] = foe;
+    lockAttackFocus(fight, priest2);
+    tick(fight, field);
+    assert.equal(fight.hp[ally2], 40);
+    assert.equal(fight.hp[foe], 80);
+    assert.equal(fight.projectiles.activeCount, 1);
+    assert.equal(fight.mana[priest2], PRIEST_HEAL_MANA - 1);
   });
 
   it('heals a teammate on another seat', () => {

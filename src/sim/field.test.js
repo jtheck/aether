@@ -26,6 +26,7 @@ import {
   rebuildWaterSurface,
   refreshTerrainDerived,
   terrainCornerCell,
+  isTerrainSlowTile,
   tileHeightWorld,
   TILE_SIZE_F,
 } from './field.js';
@@ -179,6 +180,43 @@ describe('chunk-scale relief', () => {
     }
     assert.ok(found);
     assert.ok(worst < 4, `shore drop ${worst}`);
+  });
+
+  it('seats lava like water and keeps the charred bank walkable', () => {
+    const field = createField(1, { width: 16, height: 12 });
+    field.terrainTypes.fill(TERRAIN.CHARRED);
+    field.detailHeight.fill(0.55);
+    field.regionLift.fill(0.4);
+    field.activeMask.fill(1);
+    for (let z = 3; z <= 8; z++) {
+      for (let x = 3; x <= 8; x++) {
+        field.terrainTypes[z * 16 + x] = TERRAIN.LAVA;
+        field.detailHeight[z * 16 + x] = 0.15;
+      }
+    }
+    const lake = 5 * 16 + 14;
+    field.terrainTypes[lake] = TERRAIN.WATER;
+    field.detailHeight[lake] = 0.9;
+    composeHeightMap(field);
+    refreshTerrainDerived(field);
+    const lava = 5 * 16 + 5;
+    const bank = 5 * 16 + 2;
+    assert.equal(field.pass[lava], 0);
+    assert.equal(field.pass[bank], 1);
+    assert.equal(isTerrainSlowTile(field, lava), false);
+    assert.equal(isTerrainSlowTile(field, bank), false);
+    const bankY = tileHeightWorld(field, 2, 5);
+    const lavaY = tileHeightWorld(field, 5, 5);
+    assert.ok(bankY - lavaY > 0.3, `lava sat on the bank (${bankY - lavaY})`);
+    assert.ok(
+      Math.abs(field.waterLevel[lake] - field.waterLevel[lava]) > 0.2,
+      `lava shared the lake (${field.waterLevel[lake]} vs ${field.waterLevel[lava]})`,
+    );
+    paintTerrainBrush(field, 5, 5, TERRAIN.CHARRED, 0);
+    const filled = tileHeightWorld(field, 5, 5);
+    assert.ok(Math.abs(filled - lavaY) < 0.2, `fill dropped into the basin (${lavaY} -> ${filled})`);
+    refreshTerrainDerived(field);
+    assert.equal(field.pass[lava], 1);
   });
 
   it('keeps water seated on the felt where it meets a plinth or table edge', () => {
@@ -706,8 +744,8 @@ describe('terrain atlases', () => {
     const tile = at(field, 1, 3);
     const gravelEdge = at(field, 1, 2);
     const water = at(field, 0, 0);
-    assert.equal(field.atlasId[tile], ATLAS.TILE_GRAVEL);
-    assert.equal(field.tileType[tile], 6);
+    assert.equal(field.atlasId[tile], ATLAS.DECORATIVE_TILE);
+    assert.equal(field.tileType[tile], 12);
     assert.equal(field.atlasId[gravelEdge], ATLAS.TILE_GRAVEL);
     assert.equal(
       field.tileType[gravelEdge],

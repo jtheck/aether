@@ -9,6 +9,7 @@ import {
   NAMED_UNIT_SCALE,
   namedUnitDamage,
   namedUnitHp,
+  namedScaleOf,
   unitAttackDamage,
   unitMaxHp,
 } from './namedUnit.js';
@@ -32,6 +33,19 @@ describe('named heroes', () => {
     assert.equal(w.hp[fresh], namedUnitHp(base.hp));
     assert.equal(unitAttackDamage(w, fresh, base.attackDamage), namedUnitDamage(base.attackDamage, true));
     assert.equal(unitAttackDamage(w, plain, base.attackDamage), base.attackDamage);
+  });
+
+  it('an authored scale replaces the named hero bump', () => {
+    const base = getUnitDef(UNIT.MYCO);
+    const w = createWorld(1);
+    const big = spawn(w, { type: UNIT.MYCO, owner: 0, named: true, scale: 2 });
+    const ordinary = spawn(w, { type: UNIT.MYCO, owner: 0, named: true, scale: 1 });
+    assert.equal(namedScaleOf(w, big), 2);
+    assert.equal(w.hp[big], Math.round(base.hp * 2));
+    assert.equal(unitAttackDamage(w, big, base.attackDamage), Math.round(base.attackDamage * 2));
+    assert.equal(namedScaleOf(w, ordinary), 1);
+    assert.equal(w.hp[ordinary], base.hp);
+    assert.equal(unitMaxHp(w, ordinary, base.hp), base.hp);
   });
 
   it('marks a named garden unit and leaves a blank one ordinary', () => {

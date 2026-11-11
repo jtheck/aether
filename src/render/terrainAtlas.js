@@ -10,13 +10,17 @@ import {
   setStandardEmissiveTexture,
   setStandardSpecularTexture,
 } from '../vendor/lite/liteVendor.js';
-import { ATLAS, isBlendAtlas } from '../sim/field.js';
+import { ATLAS, isBlendAtlas, layerCell, layerSheet } from '../sim/field.js';
 import { assetFetch, assetUrl } from './assetRev.js';
 import {
   ATLAS_GRID,
   PAVE_DIFFUSE,
+  SHEET_BURN_JUNCTION,
+  SHEET_DIRT_JUNCTION,
   TERRAIN_DIFFUSE_LEVEL,
   blobMask,
+  compositeBurnJunction,
+  compositeDirtJunction,
   compositeJunction,
   junctionLookBlock,
   paveLookBytes,
@@ -33,13 +37,21 @@ const NATURAL_ATLAS_URLS = {
 /** Side sets. A third pave member adds its pair sheets here. */
 const BLEND_ATLAS_URLS = {
   [ATLAS.TILE_GRAVEL]: '/assets/textures/atlas-tile-gravel.png',
+  [ATLAS.DECORATIVE_TILE]: '/assets/textures/atlas-decorative-tile.png',
+  [ATLAS.CHARRED_SCORCHED]: '/assets/textures/atlas-charred-scorched.png',
+  [ATLAS.LAVA_CHARRED]: '/assets/textures/atlas-lava-charred.png',
 };
-const ATLAS_URLS = { ...NATURAL_ATLAS_URLS, ...BLEND_ATLAS_URLS };
+/** Overlay blobs on dirt. Decoded with the natural sheets for shared-corner composites. */
+const DIRT_OVERLAY_URLS = {
+  [ATLAS.GRAVEL_DIRT]: '/assets/textures/atlas-gravel-dirt.png',
+  [ATLAS.SCORCHED_DIRT]: '/assets/textures/atlas-scorched-dirt.png',
+};
+const ATLAS_URLS = { ...NATURAL_ATLAS_URLS, ...BLEND_ATLAS_URLS, ...DIRT_OVERLAY_URLS };
 /** Emissive maps are smooth; a quarter of the atlas resolution is plenty. */
 const LOOK_SCALE = 4;
 const PAGE_SLOTS = ATLAS_GRID * ATLAS_GRID;
-/** Mesh bucket id of composite page N. Sheets use their ATLAS id. */
-export const PAGE_BUCKET_BASE = 16;
+/** Mesh bucket id of composite page N. Sheet ids stay below this. */
+export const PAGE_BUCKET_BASE = 32;
 /** Full-res pixels stay this long after the last user, for back-to-back builds. */
 const SOURCE_IDLE_MS = 15000;
 const TERRAIN_SPECULAR_POWER = 10;
@@ -65,7 +77,7 @@ async function createTerrainAtlas(engine) {
   const sheets = new Map();
   /** @type {Map<number, object>} */
   const looks = new Map();
-  /** @type {{ sheets: { gd: Uint8ClampedArray, gw: Uint8ClampedArray, dw: Uint8ClampedArray }, mask: Float32Array, size: number } | null} */
+  /** @type {{ sheets: { gd: Uint8ClampedArray, gw: Uint8ClampedArray, dw: Uint8ClampedArray, gv: Uint8ClampedArray, sd: Uint8ClampedArray }, mask: Float32Array, size: number } | null} */
   let source = null;
   let sourcePromise = null;
   let sourceUsers = 0;
@@ -81,10 +93,14 @@ async function createTerrainAtlas(engine) {
         decodeSheet(NATURAL_ATLAS_URLS[ATLAS.GRASS_DIRT]),
         decodeSheet(NATURAL_ATLAS_URLS[ATLAS.GRASS_WATER]),
         decodeSheet(NATURAL_ATLAS_URLS[ATLAS.DIRT_WATER]),
-      ]).then(([gd, gw, dw]) => {
+        decodeSheet(DIRT_OVERLAY_URLS[ATLAS.GRAVEL_DIRT]),
+        decodeSheet(DIRT_OVERLAY_URLS[ATLAS.SCORCHED_DIRT]),
+      ]).then(([gd, gw, dw, gv, sd]) => {
         const size = gw.size;
-        if (gd.size !== size || dw.size !== size) throw new Error('terrain atlas sheets differ in size');
-        const px = { gd: gd.rgba, gw: gw.rgba, dw: dw.rgba };
+        if (gd.size !== size || dw.size !== size || gv.size !== size || sd.size !== size) {
+          throw new Error('terrain atlas sheets differ in size');
+        }
+        const px = { gd: gd.rgba, gw: gw.rgba, dw: dw.rgba, gv: gv.rgba, sd: sd.rgba };
         source = { sheets: px, mask: blobMask(px, size), size };
         return source;
       }).finally(() => {
@@ -212,7 +228,12 @@ async function createTerrainAtlas(engine) {
     const row = (cell / ATLAS_GRID) | 0;
     const rgba = new Uint8Array(cellPx * cellPx * 4);
     const weights = new Float32Array(cellPx * cellPx * 3);
-    compositeJunction(source.sheets, source.mask, source.size, key, rgba, weights);
+    const cellKey = layerCell(key);
+    const kind = layerSheet(key);
+    const paveLook = kind === SHEET_DIRT_JUNCTION || kind === SHEET_BURN_JUNCTION;
+    if (kind === SHEET_BURN_JUNCTION) compositeBurnJunction(source.sheets, source.mask, source.size, cellKey, rgba, weights);
+    else if (kind === SHEET_DIRT_JUNCTION) compositeDirtJunction(source.sheets, source.mask, source.size, cellKey, rgba, weights);
+    else compositeJunction(source.sheets, source.mask, source.size, cellKey, rgba, weights);
     const levels = srgbMipChain(rgba, cellPx);
     for (let level = 0; level < levels.length; level++) {
       const s = cellPx >> level;
@@ -228,7 +249,7 @@ async function createTerrainAtlas(engine) {
     const lookPx = cellPx / LOOK_SCALE;
     device.queue.writeTexture(
       { texture: page.look.texture, origin: { x: col * lookPx, y: row * lookPx } },
-      junctionLookBlock(weights, cellPx, LOOK_SCALE, LOOK.emissive),
+      junctionLookBlock(weights, cellPx, LOOK_SCALE, LOOK.emissive, paveLook),
       { bytesPerRow: lookPx * 4, rowsPerImage: lookPx },
       { width: lookPx, height: lookPx, depthOrArrayLayers: 1 },
     );
@@ -292,8 +313,10 @@ export function createTerrainMaterials(atlas, specTexture) {
   const materials = new Map();
   let spec = specTexture;
 
+  const bare = new Set();
+
   function bindSpec(mat) {
-    if (!spec) return;
+    if (!spec || bare.has(mat)) return;
     mat.specularCoordIndex = 1;
     setStandardSpecularTexture(mat, spec);
     markMaterialUboDirty?.(mat);
@@ -320,7 +343,9 @@ export function createTerrainMaterials(atlas, specTexture) {
     mat.backFaceCulling = true;
     const look = atlas.lookFor(bucket);
     if (look) setStandardEmissiveTexture(mat, look);
-    bindSpec(mat);
+    // The glint mask paints a red mark on lava. This sheet would phong it.
+    if (bucket === ATLAS.LAVA_CHARRED) bare.add(mat);
+    else bindSpec(mat);
     materials.set(bucket, mat);
     return mat;
   }

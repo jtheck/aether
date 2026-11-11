@@ -59,6 +59,7 @@ import { cameraZoomNormalized, createCameraController, resolveCameraExtents, uni
 import { MODEL_BASE_SCALE } from './modelScale.js';
 import { capacityFor } from '../sim/capacity.js';
 import {
+  UNIT_MESH_LIFT,
   UNIT_MODEL_URLS,
   collectFxSockets,
   hasUnitModel,
@@ -99,6 +100,7 @@ import { createHolyShieldMaterial, createHolyShieldMesh } from './holyShields.js
 import { createWorkRadiusRings } from './workRadiusRings.js';
 import { createAgoraCaptureRings } from './agoraCaptureRing.js';
 import { createXrLassoOverlay } from './xrLasso.js';
+import { clipLaserHit, laserReach } from '../app/xrSelect.js';
 import { assetUrl } from './assetRev.js';
 import { createFrogRenderer } from './frogs.js';
 import { createArrowTrails } from './arrowTrails.js';
@@ -130,6 +132,8 @@ import { nextSelectionRingDrawCount } from './selectionRingDraw.js';
 import { createControlGroupHud } from './controlGroupHud.js';
 import { createResourcePileHud } from './resourcePileHud.js';
 import { createScreenDomHud } from './screenDomHud.js';
+import { createStorySpeechWorld } from './storySpeechWorld.js';
+import { createXrFade } from './xrFade.js';
 import { createSceneConfirm } from './sceneConfirm.js';
 import { createGamepadCursor } from './gamepadCursor.js';
 import { createSelectionBoxOverlay } from './selectionBox.js';
@@ -791,6 +795,7 @@ async function createTypeBatch(engine, typeId, activeCount, gpuCap, packId = nul
     entityIds: [],
     gpuCapacity: cap,
     mappedSize: 0,
+    meshLift: UNIT_MESH_LIFT[typeId] ?? 0,
     fxSockets: mesh.fxSockets ?? [],
   };
 }
@@ -2456,6 +2461,22 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     console.warn('[resourcePileHud] init failed', err);
   }
 
+  /** @type {any} Unit lines and narrator card drawn in the world while XR is up. */
+  let storySpeechWorld = { set() {}, update() {}, clear() {} };
+  try {
+    storySpeechWorld = createStorySpeechWorld(engine, scene, (x, z) => groundYAt(x, z));
+  } catch (err) {
+    console.warn('[storySpeech] init failed', err);
+  }
+
+  /** @type {any} Visor blackout for table swaps. HTML splash never reaches XR. */
+  let xrFade = { set() {}, setLines() {}, opacity: () => 0, update() {}, clear() {} };
+  try {
+    xrFade = createXrFade(engine, scene);
+  } catch (err) {
+    console.warn('[xrFade] init failed', err);
+  }
+
   /** @type {any} Clock, pop, and spectator sheet carried with the headset. */
   let screenDomHud = { update() {}, clear() {} };
   try {
@@ -3037,6 +3058,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         socketFireElapsed = 0;
         emitUnitSocketFire('fire');
         emitBuildingSocketFx('fire');
+        emitDoodadSocketFx('fire');
         emitBuildingDamageFire();
       }
       if (socketSmokeElapsed >= SOCKET_FX_CADENCE.smoke * cadenceScale) {
@@ -3376,6 +3398,35 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         }
       }
     }
+  }
+
+  /** Planted-torch fire_anchor. Same socket recipe as a building empty. */
+  function emitDoodadSocketFx(group) {
+    if (!socketFireEnabled) return;
+    const eye = cameraEyePos();
+    const distSq = fxDistanceSq;
+    terrain?.forEachDoodadFx?.((m, slot, sockets) => {
+      const o = slot * 16;
+      if (eye && distSq > 0) {
+        if (particleEyeDistSq(eye, m[o + 12], m[o + 13], m[o + 14]) > distSq) return;
+      }
+      if (!allowContinuousFx()) return;
+      const instScale = instanceUniformScale(m, o);
+      for (let s = 0; s < sockets.length; s++) {
+        const sock = sockets[s];
+        const kind = socketFxKind(sock.name);
+        if (!kind || !socketMatchesGroup(kind.style, group)) continue;
+        const lx = sock.x;
+        const ly = sock.y;
+        const lz = sock.z;
+        const wx = m[o + 12] + m[o] * lx + m[o + 8] * lz;
+        const wy = m[o + 13] + m[o + 5] * ly;
+        const wz = m[o + 14] + m[o + 2] * lx + m[o + 10] * lz;
+        const sockScale = Number.isFinite(sock.scale) && sock.scale > 1e-6 ? sock.scale : 1;
+        const scale = SOCKET_FX_INHERENT * kind.base * sockScale * instScale;
+        emitSocketFlame(wx, wy, wz, scale, kind.style);
+      }
+    });
   }
 
   /** Building empties for one cadence group (spawn_* ignored). */
@@ -4027,6 +4078,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       controlGroupHud.clear();
       resourcePileHud.clear?.();
       screenDomHud.clear?.();
+      storySpeechWorld.clear?.();
+      xrFade.update?.();
       sceneConfirm.clear?.();
     } else {
       if (buildingRadial.isOpen()) {
@@ -4036,10 +4089,18 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         actionRadial.update?.(viewCamera());
       }
       const hudCamera = hudViewCamera();
+      const fadeCovering = (xrFade.opacity?.() ?? 0) > 0.2;
       selectionHud.update?.(hudCamera);
       controlGroupHud.update?.(hudCamera);
-      resourcePileHud.update?.(hudCamera, !!xrEye());
-      screenDomHud.update?.(hudCamera, !!xrEye());
+      if (fadeCovering) {
+        resourcePileHud.clear?.();
+        screenDomHud.clear?.();
+      } else {
+        resourcePileHud.update?.(hudCamera, !!xrEye());
+        screenDomHud.update?.(hudCamera, !!xrEye());
+      }
+      storySpeechWorld.update?.();
+      xrFade.update?.();
       sceneConfirm.update?.(viewCamera());
     }
     syncGamepadCursor();
@@ -4409,7 +4470,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       writeUnitMatrix(batch.matrices, slot, x, z, 0, yaw, false, gy, pitch, roll);
     } else {
       const scale = (batch.vatScale ?? 1) * zoomS * (meshScale > 0 ? meshScale : 0);
-      const lift = batch.vatFootLift ?? 0;
+      const lift = (batch.vatFootLift ?? 0) + (batch.meshLift ?? 0) * scale;
       writeUnitMatrix(batch.matrices, slot, x, z, scale, yaw, false, gy + lift, pitch, roll);
     }
 
@@ -4628,10 +4689,15 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       return groundYAt(x, z);
     },
 
-    /** World ray (unit direction) onto the field, or null when it points at the sky. */
+    /** World ray (unit direction) onto the field, or null when it points at the sky.
+     *  Hits past the board are cut off a bit beyond the rim. */
     rayToGround(ray) {
       if (!ray) return null;
-      return fieldSnap ? rayHitTerrain(ray, (x, z) => groundYAt(x, z)) : rayHitGround(ray);
+      const hit = fieldSnap ? rayHitTerrain(ray, (x, z) => groundYAt(x, z)) : rayHitGround(ray);
+      const halfX = fieldSnap ? worldHalfFFromField(fieldSnap) : tableHalfF;
+      const halfZ = fieldSnap ? worldHalfZFFromField(fieldSnap) : tableHalfZF;
+      const reach = laserReach(ray, halfX, halfZ, groundYAt(ray.ox, ray.oz));
+      return clipLaserHit(ray, hit, reach);
     },
 
     /**
@@ -4656,6 +4722,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       for (const overlay of xrLassos.values()) overlay.hide();
       resourcePileHud.clear?.();
       screenDomHud.clear?.();
+      xrFade.clear?.();
       xrFit._cover = 0;
       if (scene.camera !== camera) scene.camera = camera;
       syncShadowCoverage();
@@ -6300,6 +6367,20 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     onFrame(cb) {
       frameCb = cb;
+    },
+
+    setStorySpeech(payload) {
+      storySpeechWorld.set?.(payload);
+      xrFade.setLines?.(payload);
+    },
+
+    /** Headset veil. `ms` matches the desktop splash ease. */
+    setXrFade(opacity, ms = 0) {
+      xrFade.set?.(opacity, ms);
+    },
+
+    xrFadeOpacity() {
+      return xrFade.opacity?.() ?? 0;
     },
 
     setFrameCpuTimingEnabled(on) {

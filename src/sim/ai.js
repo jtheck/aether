@@ -12,6 +12,7 @@ import { rngU32 } from './rng.js';
 import { ABILITY } from './abilities.js';
 import { canCastAbility } from './mana.js';
 import { agoraForOwner } from './agora.js';
+import { matchAiPlayer } from './aiScript.js';
 
 import {
   AI_STANCE,
@@ -20,7 +21,7 @@ import {
   replyCount,
   resolveAiStrategy,
 } from './aiStrategy.js';
-import { aiUsesFairVision, entitySeenByOwner } from './matchVision.js';
+import { aiUsesFairVision, entitySeenByOwner, worldPointSeenByOwner } from './matchVision.js';
 
 export {
   AI_DIFFICULTY,
@@ -37,6 +38,21 @@ export {
 
 /** 1vAI pool - strategy labels, not a-move cadences. */
 export const MATCH_AI_TEMPERAMENTS = ['passive', 'cautious', 'steady', 'aggressive', 'reckless'];
+
+/**
+ * Same count as the player's pads. Membership is not saved: slot 0 is the
+ * oldest `size` military units, slot 1 the next band, and so on. A death
+ * promotes the next veteran, so a group stays filled without a second list.
+ * Only the first AI_ROAM_GROUP_SLOTS bands are ordered. The rest are the garrison.
+ */
+export const AI_CONTROL_GROUP_COUNT = 6;
+/** One roaming band for now. Raise this, up to AI_CONTROL_GROUP_COUNT, for more. */
+export const AI_ROAM_GROUP_SLOTS = 1;
+
+const ROAM_HEADINGS = [
+  [1, 0], [1, 1], [0, 1], [-1, 1],
+  [-1, 0], [-1, -1], [0, -1], [1, -1],
+];
 
 /** Stress FFA still pushes (no eco). Match AI does not inherit this. */
 export const STRESS_AI_PROFILES = [
@@ -83,6 +99,42 @@ export function excludeHumanAiPlayers(aiPlayers, humanPlayers) {
     const owner = aiOwnerOf(entry);
     if (owner < 0 || humans.has(owner)) continue;
     out.push(entry);
+  }
+  return out;
+}
+
+/** Lobby seats win when the same owner is also painted in the garden. */
+export function mergeAiPlayers(primary, extra) {
+  const out = [];
+  const seen = new Set();
+  const add = (entry) => {
+    const owner = aiOwnerOf(entry);
+    if (owner < 0 || seen.has(owner)) return;
+    seen.add(owner);
+    out.push(entry);
+  };
+  for (const entry of primary ?? []) add(entry);
+  for (const entry of extra ?? []) add(entry);
+  return out;
+}
+
+/**
+ * Garden `ap` rows: [owner, temperament]. Stand (no row) stays semi-reactive.
+ * No freeplay script, so the personality is the one the map asked for.
+ * @param {unknown} rows
+ */
+export function aiPlayersFromOwnerIntents(rows) {
+  const out = [];
+  const seen = new Set();
+  if (!Array.isArray(rows)) return out;
+  for (const row of rows) {
+    if (!Array.isArray(row)) continue;
+    const owner = row[0] | 0;
+    const temperament = String(row[1] ?? '');
+    if (owner < 0 || owner > 15 || seen.has(owner)) continue;
+    if (!MATCH_AI_TEMPERAMENTS.includes(temperament)) continue;
+    seen.add(owner);
+    out.push(matchAiPlayer(owner, { temperament, script: null }));
   }
   return out;
 }
@@ -136,24 +188,23 @@ export function generateAiCommands(world, aiConfig, field = null, opts = {}) {
   const threat = pickArmyAim(world, aiOwner, strategy, army, capture, field);
   if (!threat) return [];
 
-  const want = strategy.stance === AI_STANCE.ATTACK
-    ? 0x7fffffff
-    : replyCount(Math.max(capture.shown, 1), 0x7fffffff, strategy.heat);
-  const ids = pickReplyIds(world, aiOwner, threat, want, capture.reissue);
-  const aim = militaryCentroidOf(world, ids) ?? army;
-
   /** @type {import('./commands.js').Command[]} */
   const cmds = [];
-  if (ids.length > 0) {
-    const n = ids.length;
-    const tx = new Array(n);
-    const ty = new Array(n);
-    for (let k = 0; k < n; k++) {
-      const i = ids[k];
-      tx[k] = threat.x + (world.px[i] - aim.x);
-      ty[k] = threat.y + (world.py[i] - aim.y);
+  if (threat.ambition) {
+    const size = roamGroupSize(strategy.heat);
+    const slots = AI_ROAM_GROUP_SLOTS;
+    for (let slot = 0; slot < slots; slot++) {
+      const ids = aiControlGroup(world, aiOwner, slot, size);
+      if (!ids.length || groupEngaged(world, ids)) continue;
+      const dest = threat.wander ? wanderDest(world, ids, threat.roll, slot) : threat;
+      if (dest) pushAttackMove(cmds, world, ids, dest);
     }
-    cmds.push({ type: CMD.ATTACK_MOVE, entities: ids, tx, ty });
+  } else {
+    const want = strategy.stance === AI_STANCE.ATTACK
+      ? 0x7fffffff
+      : replyCount(Math.max(capture.shown, 1), 0x7fffffff, strategy.heat);
+    const ids = pickReplyIds(world, aiOwner, threat, want, capture.reissue);
+    if (ids.length) pushAttackMove(cmds, world, ids, threat);
   }
 
   const casts = collectCasts(world, aiOwner, strategy);
@@ -179,7 +230,7 @@ function pickArmyAim(world, aiOwner, strategy, army, capture, field) {
     return hostileCentroid(world, aiOwner, null, 0, field, strategy);
   }
   if (strategy.stance === AI_STANCE.HOLD) return null;
-  return hostileCentroid(
+  const near = hostileCentroid(
     world,
     aiOwner,
     homePoint(world, aiOwner) ?? army,
@@ -187,6 +238,151 @@ function pickArmyAim(world, aiOwner, strategy, army, capture, field) {
     field,
     strategy,
   );
+  if (near) return near;
+  return ambitionSeek(world, aiOwner, strategy, field);
+}
+
+/**
+ * Oldest living military units in band `slot`. Slot 0 is control group 1.
+ * @param {object} world
+ * @param {number} owner
+ * @param {number} slot
+ * @param {number} size
+ * @returns {number[]}
+ */
+export function aiControlGroup(world, owner, slot, size) {
+  const band = slot | 0;
+  const n = size | 0;
+  if (band < 0 || band >= AI_CONTROL_GROUP_COUNT || n <= 0) return [];
+  const ids = [];
+  for (let i = 0; i < world.count; i++) {
+    if (!world.alive[i] || world.owner[i] !== (owner | 0)) continue;
+    if (getUnitDef(world.type[i]).category !== 'military') continue;
+    ids.push(i);
+  }
+  const start = band * n;
+  if (start >= ids.length) return [];
+  return ids.slice(start, start + n);
+}
+
+function roamGroupSize(heat) {
+  return (heat | 0) >= 4 ? 6 : 4;
+}
+
+function groupEngaged(world, ids) {
+  const attack = world.ORDER.ATTACK;
+  for (let k = 0; k < ids.length; k++) {
+    if (world.order[ids[k]] === attack) return true;
+  }
+  return false;
+}
+
+function pushAttackMove(cmds, world, ids, dest) {
+  const aim = militaryCentroidOf(world, ids);
+  if (!aim) return;
+  const n = ids.length;
+  const tx = new Array(n);
+  const ty = new Array(n);
+  for (let k = 0; k < n; k++) {
+    const i = ids[k];
+    tx[k] = dest.x + (world.px[i] - aim.x);
+    ty[k] = dest.y + (world.py[i] - aim.y);
+  }
+  cmds.push({ type: CMD.ATTACK_MOVE, entities: ids, tx, ty });
+}
+
+/** A short step from where the band already is. Slot salts the heading. */
+function wanderDest(world, ids, roll, slot) {
+  const c = militaryCentroidOf(world, ids);
+  if (!c) return null;
+  const mixed = (roll ^ Math.imul((slot | 0) + 1, 0x9e3779b1)) >>> 0;
+  const dir = ROAM_HEADINGS[(mixed >>> 8) & 7];
+  const len = Math.hypot(dir[0], dir[1]) || 1;
+  const dist = 36 + ((mixed >>> 12) & 31);
+  return {
+    x: c.x + fx.fromFloat((dir[0] / len) * dist),
+    y: c.y + fx.fromFloat((dir[1] / len) * dist),
+  };
+}
+
+/**
+ * Heat 3 and 4 only. One draw from the shared sim rng on a quiet decide tick.
+ * Reckless seeks on 4/8 and wanders on 2/8. Aggressive seeks on 2/8 and wanders
+ * on 1/8. The order goes to the roaming control group, not the garrison.
+ * Home guard and a live pad still win, and they use the whole army.
+ * Armies and buildings have to be seen. Agoras are public, same as the map.
+ * @returns {{ x?: number, y?: number, ambition: true, wander?: boolean, roll: number } | null}
+ */
+function ambitionSeek(world, aiOwner, strategy, field) {
+  const heat = strategy.heat | 0;
+  if (heat < 3) return null;
+  const roll = rngU32(world.rng);
+  const bucket = roll % 8;
+  let seek = false;
+  let wander = false;
+  if (heat >= 4) {
+    seek = bucket < 4;
+    wander = bucket >= 4 && bucket < 6;
+  } else {
+    seek = bucket < 2;
+    wander = bucket === 2;
+  }
+  if (!seek && !wander) return null;
+  if (seek) {
+    const found = militaryObjective(world, aiOwner, strategy, field);
+    if (found) return { x: found.x, y: found.y, ambition: true, roll };
+  }
+  return { ambition: true, wander: true, roll };
+}
+
+function militaryObjective(world, aiOwner, strategy, field) {
+  const fair = aiUsesFairVision(strategy) && field;
+  const home = homePoint(world, aiOwner);
+  const ox = home ? home.x : 0;
+  const oy = home ? home.y : 0;
+  let bestX = 0;
+  let bestY = 0;
+  let bestD = 0;
+  let found = false;
+  const take = (x, y) => {
+    const dx = x - ox;
+    const dy = y - oy;
+    const d = fx.mul(dx, dx) + fx.mul(dy, dy);
+    if (!found || d < bestD) {
+      found = true;
+      bestD = d;
+      bestX = x;
+      bestY = y;
+    }
+  };
+  for (let j = 0; j < world.count; j++) {
+    if (!world.alive[j] || !isHostile(aiOwner, world.owner[j])) continue;
+    if (getUnitDef(world.type[j]).category !== 'military') continue;
+    if (fair && !entitySeenByOwner(world, field, aiOwner, j)) continue;
+    take(world.px[j], world.py[j]);
+  }
+  if (found) return { x: bestX, y: bestY, ambition: true };
+  const buildings = world.buildings;
+  if (buildings) {
+    for (let i = 0; i < buildings.length; i++) {
+      const b = buildings[i];
+      if (!b || (b.hp ?? 1) <= 0) continue;
+      if (!isHostile(aiOwner, b.owner | 0)) continue;
+      if (fair && !worldPointSeenByOwner(world, field, aiOwner, b.x, b.z)) continue;
+      take(b.x, b.z);
+    }
+  }
+  if (found) return { x: bestX, y: bestY, ambition: true };
+  const agoras = world.agoras;
+  if (agoras) {
+    for (let i = 0; i < agoras.length; i++) {
+      const g = agoras[i];
+      if (!g || !isHostile(aiOwner, g.owner | 0)) continue;
+      take(g.x, g.z);
+    }
+  }
+  if (!found) return null;
+  return { x: bestX, y: bestY, ambition: true };
 }
 
 function pickReplyIds(world, owner, aim, want, reissue) {
@@ -221,6 +417,16 @@ function militaryCentroidOf(world, ids) {
     sy += world.py[i];
   }
   return { x: fx.div(sx, fx.fromInt(ids.length)), y: fx.div(sy, fx.fromInt(ids.length)) };
+}
+
+function militaryCount(world, owner) {
+  let n = 0;
+  for (let i = 0; i < world.count; i++) {
+    if (!world.alive[i] || world.owner[i] !== owner) continue;
+    if (getUnitDef(world.type[i]).category !== 'military') continue;
+    n++;
+  }
+  return n;
 }
 
 function militaryCentroid(world, owner) {

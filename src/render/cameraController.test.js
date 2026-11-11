@@ -18,6 +18,7 @@ import {
   FOV_MAX_SPEED,
   FOLLOW_ZIP_RATE,
   RMB_PAN_DRAG_THRESHOLD_PX,
+  RMB_PAN_MIN_HOLD_MS,
   ZOOM_TEND_HOME,
   ZOOM_TEND_NEAR,
   cameraPlayRadius,
@@ -333,15 +334,28 @@ function rmb(partial = {}) {
 }
 
 describe('RMB click vs pan', () => {
-  it('treats a short RMB hold as a click, not a pan', () => {
+  it('treats travel inside the lasso break as a click, not a pan', () => {
     const cam = fakeCamera();
     const ctrl = createCameraController(cam, fakeCanvas(), { worldHalfF: 200 });
+    const slip = RMB_PAN_DRAG_THRESHOLD_PX - 7;
     ctrl.handlePointerDown(rmb());
-    ctrl.handlePointerMove(rmb({ clientX: 406, clientY: 302 }));
+    ctrl.handlePointerMove(rmb({ clientX: 400 + slip, clientY: 300 }));
     ctrl.tick(16);
     assert.equal(cam.target.x, 0);
     assert.equal(cam.target.z, 0);
-    assert.equal(ctrl.handlePointerUp(rmb({ clientX: 406, clientY: 302 })), false);
+    assert.equal(ctrl.handlePointerUp(rmb({ clientX: 400 + slip, clientY: 300 })), false);
+  });
+
+  it('keeps a quick pointer-up inside the lasso break a click', () => {
+    const cam = fakeCamera();
+    const ctrl = createCameraController(cam, fakeCanvas(), { worldHalfF: 200 });
+    ctrl.handlePointerDown(rmb());
+    assert.equal(
+      ctrl.handlePointerUp(rmb({ clientX: 400 + RMB_PAN_DRAG_THRESHOLD_PX, clientY: 300 })),
+      false,
+    );
+    assert.equal(cam.target.x, 0);
+    assert.equal(cam.target.z, 0);
   });
 
   it('latches a drag so pointer-up does not count as a click', () => {
@@ -363,15 +377,55 @@ describe('RMB click vs pan', () => {
       ctrl.handlePointerUp(rmb({ clientX: 400 + RMB_PAN_DRAG_THRESHOLD_PX + 8, clientY: 300 })),
       true,
     );
+    ctrl.tick(16);
+    assert.equal(cam.target.x, 0);
+    assert.equal(cam.target.z, 0);
   });
 
-  it('pans from the latch, not the pointer-down backlog', () => {
+  it('starts pan after a short hold without catching up', () => {
+    const cam = fakeCamera();
+    const ctrl = createCameraController(cam, fakeCanvas(), { worldHalfF: 200 });
+    const slip = 12;
+    const held = 1000 + RMB_PAN_MIN_HOLD_MS;
+    ctrl.handlePointerDown(rmb({ timeStamp: 1000 }));
+    ctrl.handlePointerMove(rmb({ clientX: 400 + slip, clientY: 300, timeStamp: held }));
+    for (let i = 0; i < 8; i++) ctrl.tick(16);
+    assert.equal(cam.target.x, 0);
+    assert.equal(cam.target.z, 0);
+    ctrl.handlePointerMove(rmb({ clientX: 400 + slip + 16, clientY: 300, timeStamp: held + 20 }));
+    for (let i = 0; i < 8; i++) ctrl.tick(16);
+    assert.ok(Math.hypot(cam.target.x, cam.target.z) > 0);
+    assert.equal(
+      ctrl.handlePointerUp(rmb({ clientX: 400 + slip + 16, clientY: 300, timeStamp: held + 40 })),
+      true,
+    );
+  });
+
+  it('a still hold starts pan in place, then follows the next movement', () => {
+    const cam = fakeCamera();
+    const ctrl = createCameraController(cam, fakeCanvas(), { worldHalfF: 200 });
+    ctrl.handlePointerDown(rmb());
+    ctrl.tick(RMB_PAN_MIN_HOLD_MS - 16);
+    ctrl.handlePointerMove(rmb({ clientX: 408, clientY: 300 }));
+    ctrl.tick(16);
+    assert.equal(cam.target.x, 0);
+    assert.equal(cam.target.z, 0);
+    ctrl.tick(16);
+    assert.equal(cam.target.x, 0);
+    assert.equal(cam.target.z, 0);
+    ctrl.handlePointerMove(rmb({ clientX: 424, clientY: 300 }));
+    ctrl.tick(16);
+    assert.ok(Math.hypot(cam.target.x, cam.target.z) > 0);
+  });
+
+  it('pans only movement after the drag latches', () => {
     const smallCam = fakeCamera();
     const small = createCameraController(smallCam, fakeCanvas(), { worldHalfF: 200 });
     small.handlePointerDown(rmb());
     small.handlePointerMove(rmb({ clientX: 400 + RMB_PAN_DRAG_THRESHOLD_PX + 2, clientY: 300 }));
     for (let i = 0; i < 24; i++) small.tick(16);
-    const first = Math.hypot(smallCam.target.x, smallCam.target.z);
+    assert.equal(smallCam.target.x, 0);
+    assert.equal(smallCam.target.z, 0);
 
     const followCam = fakeCamera();
     const follow = createCameraController(followCam, fakeCanvas(), { worldHalfF: 200 });
@@ -379,9 +433,7 @@ describe('RMB click vs pan', () => {
     follow.handlePointerMove(rmb({ clientX: 400 + RMB_PAN_DRAG_THRESHOLD_PX + 2, clientY: 300 }));
     follow.handlePointerMove(rmb({ clientX: 400 + RMB_PAN_DRAG_THRESHOLD_PX + 22, clientY: 300 }));
     for (let i = 0; i < 24; i++) follow.tick(16);
-    const after = Math.hypot(followCam.target.x, followCam.target.z);
-    assert.ok(first > 0);
-    assert.ok(after > first * 3);
+    assert.ok(Math.hypot(followCam.target.x, followCam.target.z) > 0);
   });
 });
 

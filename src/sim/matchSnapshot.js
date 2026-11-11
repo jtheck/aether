@@ -63,7 +63,7 @@ function tally(w) {
       continue;
     }
     const category = UNIT_DEFS[type]?.category;
-    if (category === 'civilian') continue;
+    if (category === 'civilian' || category === 'mob') continue;
     army[owner] += unitValue(type);
   }
   return { villagers, army };

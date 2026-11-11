@@ -136,6 +136,99 @@ describe('createMatchStory', () => {
     assert.equal(story.driving(), false);
   });
 
+  it('keeps the player camera when a clip ends after they move it', () => {
+    let pose = null;
+    let pulled = false;
+    const sets = [];
+    const cam = {
+      setPose(p) {
+        pose = { ...p };
+        sets.push(pose.radius);
+      },
+      getPose() {
+        if (!pose) return null;
+        return pulled ? { ...pose, x: pose.x + 40 } : pose;
+      },
+      stopFollow() {},
+    };
+    const story = createMatchStory({
+      getCamera: () => cam,
+      getField: () => ({ worldHalfF: 160, width: 80 }),
+    });
+    story.playIntro({
+      reels: [{
+        id: 'intro',
+        when: 'start',
+        clips: [{
+          id: 'a',
+          kind: CLIP_CAMERA,
+          t: 0,
+          dur: 1,
+          fromTx: 0,
+          fromTz: 0,
+          fromRadius: 80,
+          fromAlpha: 0,
+          tx: 10,
+          tz: 0,
+          radius: 40,
+          alpha: 0,
+        }],
+      }],
+    });
+    for (let i = 0; i < 19; i++) story.tick(50);
+    const n = sets.length;
+    assert.ok(n > 1);
+    assert.ok(sets.at(-1) > 40);
+    pulled = true;
+    story.tick(50);
+    assert.equal(sets.length, n);
+    assert.equal(story.driving(), false);
+  });
+
+  it('still lands a clip the player did not steer', () => {
+    let pose = null;
+    const sets = [];
+    const cam = {
+      setPose(p) {
+        pose = { ...p };
+        sets.push(pose.radius);
+      },
+      getPose() { return pose; },
+      stopFollow() {},
+    };
+    const story = createMatchStory({
+      getCamera: () => cam,
+      getField: () => ({ worldHalfF: 160, width: 80 }),
+    });
+    story.playIntro({
+      reels: [{
+        id: 'intro',
+        when: 'start',
+        clips: [{
+          id: 'a',
+          kind: CLIP_CAMERA,
+          t: 0,
+          dur: 1,
+          fromTx: 0,
+          fromTz: 0,
+          fromRadius: 80,
+          fromAlpha: 0,
+          tx: 10,
+          tz: 0,
+          radius: 40,
+          alpha: 0,
+        }],
+      }],
+    });
+    for (let i = 0; i < 19; i++) story.tick(50);
+    const n = sets.length;
+    story.tick(50);
+    assert.ok(sets.length > n);
+    assert.equal(sets.at(-1), 40);
+    story.tick(50);
+    assert.equal(sets.at(-1), 40);
+  });
+
   it('ignores a story with no start clips', () => {
     const story = createMatchStory({ getCamera: () => null, getField: () => null });
     assert.equal(story.playIntro({ reels: [] }), false);

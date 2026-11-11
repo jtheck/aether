@@ -82,6 +82,7 @@ export function checksum(w, field = null) {
     mix(w.type[i]);
     mix(w.owner[i]);
     if (w.named) mix(w.named[i]);
+    if (w.bodyScale) mix(w.bodyScale[i]);
     if (w.carriedBy) mix(w.carriedBy[i]);
     if (w.transportTarget) mix(w.transportTarget[i]);
     if (w.transportWait) mix(w.transportWait[i]);

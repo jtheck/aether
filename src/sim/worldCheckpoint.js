@@ -23,6 +23,7 @@ import { capacityFor } from './capacity.js';
 import { SPORE_PENDING_INITIAL } from './sporeBloom.js';
 import { isManaCaster, MANA_MAX } from './mana.js';
 import { ensureDamageCreditPool, resetDamageCredit } from './champion.js';
+import { bodyScaleMul } from './namedUnit.js';
 
 export const CHECKPOINT_FORMAT = 1;
 
@@ -39,7 +40,7 @@ const ENTITY_I16 = [
   'frostTicks', 'lobTicks', 'lobDur', 'lobPeak',
   'gatherCd', 'brigandIdle',
 ];
-const ENTITY_U16 = ['engagementMask', 'targetLoad'];
+const ENTITY_U16 = ['engagementMask', 'targetLoad', 'bodyScale'];
 const ENTITY_U8 = [
   'hasTarget', 'order', 'navWpCount', 'navWpIndex', 'pathRequest', 'pathSlowAware',
   'rallyHopCount', 'rallyHop1Order', 'rallyHop2Order',
@@ -179,6 +180,7 @@ export function importWorldCheckpoint(w, field, checkpoint) {
     w.damagedByFree = ent.damagedBy.free ?? -1;
   }
   if (!ent.arrays.named && w.named) w.named.fill(0);
+  if (!ent.arrays.bodyScale && w.bodyScale) w.bodyScale.fill(0);
   if (!ent.arrays.targetBuilding && w.targetBuilding) w.targetBuilding.fill(-1);
   if (!ent.arrays.locustTicks && w.locustTicks) w.locustTicks.fill(0);
   if (!ent.arrays.locustStacks && w.locustStacks) w.locustStacks.fill(0);
@@ -609,6 +611,7 @@ function exportBuildings(buildings) {
     locustSource: b.locustSource ?? -1,
     fireTicks: b.fireTicks | 0,
     morphTicks: b.morphTicks | 0,
+    ...(bodyScaleMul(b.scale) === 1 ? null : { scale: bodyScaleMul(b.scale) }),
     refundCost: b.refundCost
       ? {
         wood: b.refundCost.wood | 0,
@@ -675,6 +678,7 @@ function importBuildings(w, data) {
       locustSource: b.locustSource != null ? b.locustSource | 0 : -1,
       fireTicks: b.fireTicks | 0,
       morphTicks: b.morphTicks | 0,
+      ...(bodyScaleMul(b.scale) === 1 ? null : { scale: bodyScaleMul(b.scale) }),
       refundCost: b.refundCost
         ? {
           wood: b.refundCost.wood | 0,

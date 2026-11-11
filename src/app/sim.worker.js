@@ -22,7 +22,7 @@ import {
   stressSpawnDryPads,
 } from '../sim/worldSetup.js';
 import { step } from '../sim/step.js';
-import { excludeHumanAiPlayers, generateAiCommands } from '../sim/ai.js';
+import { aiPlayersFromOwnerIntents, excludeHumanAiPlayers, generateAiCommands, mergeAiPlayers } from '../sim/ai.js';
 import { effectiveAiEntry } from '../sim/aiScript.js';
 import { generateEconomyCommands } from '../sim/aiEconomy.js';
 import { generatePadDefenseCommands } from '../sim/aiPadDefense.js';
@@ -145,12 +145,15 @@ self.onmessage = (e) => {
     if (msg.type === 'init') {
       views = mapSharedState(msg.sab);
       humanPlayers = msg.config.humanPlayers ?? [];
+      const garden = msg.config.garden ? decodeGarden(msg.config.garden) : null;
       aiPlayers = excludeHumanAiPlayers(
-        msg.config.aiPlayers ?? [],
+        mergeAiPlayers(
+          msg.config.aiPlayers ?? [],
+          aiPlayersFromOwnerIntents(garden?.ownerIntents),
+        ),
         humanPlayers,
       );
       resetAiScriptRuntime();
-      const garden = msg.config.garden ? decodeGarden(msg.config.garden) : null;
       const keepOwners = garden
         ? placementOwnersToKeep(garden, {
           humanPlayers: msg.config.humanPlayers,

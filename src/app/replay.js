@@ -77,6 +77,7 @@ function copyAiPlayers(ai) {
     if (!raw || typeof raw !== 'object') return 0;
     const row = { owner: raw.owner | 0 };
     if (raw.temperament) row.temperament = String(raw.temperament);
+    if (raw.vision === 'fair' || raw.vision === 'omniscient') row.vision = raw.vision;
     if (raw.difficulty != null) {
       row.difficulty = typeof raw.difficulty === 'number'
         ? raw.difficulty | 0

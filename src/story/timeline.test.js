@@ -60,6 +60,7 @@ describe('sample', () => {
   it('lerps camera mid-clip and shows the covering line', () => {
     const duringLine = sample(reel(), 2);
     assert.equal(duringLine.camera.tx, 0);
+    assert.equal(duringLine.camera.held, false);
     assert.equal(duringLine.line.speaker, 'Stumpey');
     assert.equal(duringLine.line.text, 'Big problems.');
     const midMove = sample(reel(), 6);
@@ -93,6 +94,7 @@ describe('sample', () => {
     assert.equal(s.camera.tx, 10);
     assert.equal(s.camera.tz, 20);
     assert.equal(s.camera.radius, 45);
+    assert.equal(s.camera.held, true);
     assert.equal(s.line, null);
     assert.deepEqual(s.lines, []);
   });

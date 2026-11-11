@@ -1,7 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fx from './fixed.js';
-import { createField, TERRAIN, TILE_SIZE_F, tileCenterX, tileCenterY, worldHalfFFromField } from './field.js';
+import { createField, refreshTerrainDerived, TERRAIN, TILE_SIZE_F, tileCenterX, tileCenterY, worldHalfFFromField } from './field.js';
+import { encodeGarden, fieldFromGarden } from './garden.js';
 import { createWorld } from './world.js';
 import { createBuilding } from './buildings.js';
 import { SCENERY } from './scenery.js';
@@ -21,10 +22,18 @@ import {
   isMatureOvergrowthHost,
   mushroomHostStatesNear,
   mushroomHostSkirtRadius,
+  TORCH_FIRE_ANCHOR,
+  TORCH_VISION_TILES,
+  forEachTorch,
   mushroomPlacementsForHost,
   overgrowthCountNear,
   paintDoodadBrush,
+  applyStandardOccupancy,
+  derrickPlacementForTile,
+  standardPlacementForTile,
+  torchPlacementForTile,
   wagonPlacementForTile,
+  windvanePlacementForTile,
 } from './doodads.js';
 
 function plant(field, tx, tz, stock, burn = 0) {
@@ -191,12 +200,142 @@ describe('grove mushroom doodads', () => {
     assert.equal(collectDoodadSlots(field).length, 0);
   });
 
-  it('refuses a wagon on a tree but allows mushrooms', () => {
+  it('plants a torch upright on any live tile', () => {
+    const field = blank();
+    field.terrainTypes.fill(TERRAIN.GRASS);
+    const tx = 18;
+    const tz = 22;
+    const i = tz * field.width + tx;
+    assert.equal(canPaintDoodadAt(field, tx, tz, DOODAD.TORCH), true);
+    assert.ok(paintDoodadBrush(field, tx, tz, DOODAD.TORCH).length);
+    const torch = torchPlacementForTile(field, i);
+    assert.equal(torch.type, DOODAD.TORCH);
+    assert.equal(torch.roll, 0);
+    assert.equal(torch.yOff, 0);
+    assert.equal(TORCH_FIRE_ANCHOR.name, 'fire_anchor');
+    assert.ok(TORCH_FIRE_ANCHOR.y > 1);
+    assert.ok(TORCH_VISION_TILES < 8);
+    const slots = collectDoodadSlots(field);
+    assert.ok(slots.some((s) => s.kind === DOODAD.TORCH && s.tile === i && s.key === `t:${i}`));
+    let seen = 0;
+    forEachTorch(field, (x, z) => {
+      seen++;
+      assert.equal(x, torch.x);
+      assert.equal(z, torch.z);
+    });
+    assert.equal(seen, 1);
+    plant(field, tx, tz, 20);
+    field.tableEdge = new Uint8Array(field.width * field.height);
+    field.terrainTypes[i] = TERRAIN.WATER;
+    field.tableEdge[i] = 1;
+    assert.equal(canPaintDoodadAt(field, tx, tz, DOODAD.TORCH), true);
+    assert.equal(paintDoodadBrush(field, tx, tz, DOODAD.TORCH).length, 0);
+    const wet = tz * field.width + (tx + 1);
+    field.terrainTypes[wet] = TERRAIN.WATER;
+    field.sceneryType[wet] = SCENERY.ROCK_PLAIN;
+    field.tableEdge[wet] = 1;
+    assert.equal(canPaintDoodadAt(field, tx + 1, tz, DOODAD.TORCH), true);
+    assert.ok(paintDoodadBrush(field, tx + 1, tz, DOODAD.TORCH).length);
+    assert.equal(field.doodadType[wet], DOODAD.TORCH);
+  });
+
+  it('plants a static derrick and a windvane', () => {
+    const field = blank();
+    field.terrainTypes.fill(TERRAIN.GRASS);
+    const derrickTile = 9 * field.width + 11;
+    const vaneTile = 14 * field.width + 16;
+    assert.ok(paintDoodadBrush(field, 11, 9, DOODAD.DERRICK).length);
+    assert.ok(paintDoodadBrush(field, 16, 14, DOODAD.WINDVANE).length);
+    const derrick = derrickPlacementForTile(field, derrickTile);
+    const vane = windvanePlacementForTile(field, vaneTile);
+    assert.equal(derrick.roll, 0);
+    assert.equal(vane.roll, 0);
+    assert.equal(derrick.scale, 1);
+    assert.equal(vane.scale, 1);
+    const slots = collectDoodadSlots(field);
+    assert.ok(slots.some((s) => s.kind === DOODAD.DERRICK && s.key === `d:${derrickTile}`));
+    assert.ok(slots.some((s) => s.kind === DOODAD.WINDVANE && s.key === `v:${vaneTile}`));
+  });
+
+  it('blocks a plus around a standard and keeps its banner', () => {
+    const field = blank();
+    field.terrainTypes.fill(TERRAIN.GRASS);
+    field.pass.fill(1);
+    const tx = 20;
+    const tz = 20;
+    const w = field.width;
+    const at = (x, z) => field.pass[z * w + x];
+    const i = tz * w + tx;
+    assert.ok(paintDoodadBrush(field, tx, tz, DOODAD.STANDARD, 0, { color: 4 }).length);
+    assert.equal(field.doodadType[i], DOODAD.STANDARD);
+    assert.equal(field.doodadColor[i], 4);
+    assert.equal(at(tx, tz), 0);
+    assert.equal(at(tx + 1, tz), 0);
+    assert.equal(at(tx - 1, tz), 0);
+    assert.equal(at(tx, tz + 1), 0);
+    assert.equal(at(tx, tz - 1), 0);
+    assert.equal(at(tx + 1, tz + 1), 1);
+    const slot = collectDoodadSlots(field).find((s) => s.kind === DOODAD.STANDARD);
+    assert.equal(slot.color, 4);
+    assert.equal(slot.key, `s:${i}`);
+    assert.equal(standardPlacementForTile(field, i).roll, 0);
+    assert.equal(paintDoodadBrush(field, tx, tz, DOODAD.STANDARD, 0, { color: 4 }).length, 0);
+    assert.ok(paintDoodadBrush(field, tx, tz, DOODAD.STANDARD, 0, { color: 2 }).length);
+    assert.equal(field.doodadColor[i], 2);
+    assert.equal(at(tx + 1, tz), 0);
+
+    paintDoodadBrush(field, tx + 2, tz, DOODAD.STANDARD, 0, { color: 1 });
+    paintDoodadBrush(field, tx, tz, DOODAD.NONE);
+    assert.equal(at(tx, tz), 1);
+    assert.equal(at(tx - 1, tz), 1);
+    assert.equal(at(tx + 1, tz), 0);
+    assert.equal(at(tx + 2, tz), 0);
+    paintDoodadBrush(field, tx + 2, tz, DOODAD.NONE);
+    assert.equal(at(tx + 1, tz), 1);
+    assert.equal(at(tx + 2, tz), 1);
+
+    paintDoodadBrush(field, tx, tz, DOODAD.STANDARD, 0, { color: 7 });
+    field.terrainTypes[tz * w + (tx + 1)] = TERRAIN.WATER;
+    field.tileType[tz * w + (tx + 1)] = 12;
+    field.pass[tz * w + (tx + 1)] = 0;
+    paintDoodadBrush(field, tx, tz, DOODAD.NONE);
+    assert.equal(at(tx, tz), 1);
+    assert.equal(at(tx + 1, tz), 0);
+
+    paintDoodadBrush(field, tx, tz, DOODAD.STANDARD, 0, { color: 4 });
+    refreshTerrainDerived(field);
+    assert.equal(at(tx, tz), 1);
+    applyStandardOccupancy(field);
+    assert.equal(at(tx, tz), 0);
+    assert.equal(at(tx, tz + 1), 0);
+    const json = encodeGarden(field, { name: 'standard' });
+    assert.ok(json.dc);
+    const again = fieldFromGarden(json);
+    assert.equal(again.doodadType[i], DOODAD.STANDARD);
+    assert.equal(again.doodadColor[i], 4);
+    assert.equal(again.pass[i], 0);
+    assert.equal(again.pass[tz * w + (tx + 1)], 0);
+    assert.equal(again.standardBlock[i], 1);
+  });
+
+  it('plants props on any live tile and keeps mushrooms on open ground', () => {
     const field = blank();
     field.terrainTypes.fill(TERRAIN.GRASS);
     plant(field, 16, 16, 20);
-    assert.equal(canPaintDoodadAt(field, 16, 16, DOODAD.WAGON), false);
+    assert.equal(canPaintDoodadAt(field, 16, 16, DOODAD.WAGON), true);
+    assert.equal(canPaintDoodadAt(field, 16, 16, DOODAD.DERRICK), true);
+    assert.equal(canPaintDoodadAt(field, 16, 16, DOODAD.WINDVANE), true);
+    assert.equal(canPaintDoodadAt(field, 16, 16, DOODAD.STANDARD), true);
     assert.equal(canPaintDoodadAt(field, 16, 16, DOODAD.MUSHROOM), true);
+    const wet = 16 * field.width + 18;
+    field.terrainTypes[wet] = TERRAIN.WATER;
+    field.tableEdge = new Uint8Array(field.width * field.height);
+    field.tableEdge[wet] = 1;
+    field.sceneryType[wet] = SCENERY.ROCK_PLAIN;
+    assert.equal(canPaintDoodadAt(field, 18, 16, DOODAD.MUSHROOM), false);
+    assert.equal(canPaintDoodadAt(field, 18, 16, DOODAD.WAGON), true);
+    assert.ok(paintDoodadBrush(field, 18, 16, DOODAD.WAGON).length);
+    assert.equal(field.doodadType[wet], DOODAD.WAGON);
     assert.ok(paintDoodadBrush(field, 16, 16, DOODAD.MUSHROOM).length);
     assert.ok(collectDoodads(field).some((d) => d.type === DOODAD.MUSHROOM));
   });

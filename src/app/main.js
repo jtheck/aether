@@ -113,7 +113,7 @@ import {
   exitXr,
   isXrSessionSupported,
 } from '../vendor/lite/liteVendor.js';
-import { createXrRig, jumpXrRig, stepXrRig } from './xrRig.js';
+import { createXrRig, jumpXrRig, stepXrRig, xrFitHead } from './xrRig.js';
 import { createXrControls } from './xrControls.js';
 import { clearXrEye } from '../render/xrEye.js';
 import { rimKeyForBuildingType, sharedRimKey } from '../render/workRadiusRings.js';
@@ -226,7 +226,7 @@ import { defaultCelestialState } from '../render/celestial.js';
 import { liveConfigFromLobby } from '../lobby/startConfig.js';
 import { createMatchStory } from '../story/matchPlay.js';
 import { castIndexFromUnits, normalizeSpeaker } from '../story/cast.js';
-import { NAMED_UNIT_SCALE, namedUnitHp } from '../sim/namedUnit.js';
+import { bodyScaleMul, namedScaleOf, unitMaxHp } from '../sim/namedUnit.js';
 import { adventureDealSeed, prepareAdventureGarden, snapshotParty } from '../story/party.js';
 import {
   createObjectiveHud,
@@ -642,6 +642,8 @@ function shouldBootLoadingScreenMatch(bootCfg) {
 }
 
 let matchXr = null;
+/** Drive the visor veil from the HTML splash. No-op until the renderer boots. */
+let pushXrFade = () => {};
 
 function paintXrButton(on) {
   const button = document.getElementById('xr_button');
@@ -662,6 +664,7 @@ async function toggleMatchXr(renderer, getInput, jumps) {
     const ctx = matchXr;
     matchXr = null;
     ctx.xrControls?.dispose();
+    ctx.releaseCameraFit?.();
     clearXrEye();
     renderer.releaseHeadsetCamera?.();
     paintXrButton(false);
@@ -669,12 +672,17 @@ async function toggleMatchXr(renderer, getInput, jumps) {
     await exitXr(ctx);
     return;
   }
+  const shot = renderer.cameraController?.cameraEye?.();
   const cam = renderer.camera.worldMatrix;
-  const eye = [cam[12], cam[13], cam[14]];
-  const target = renderer.camera.target;
-  const facing = target
-    ? [target.x - eye[0], target.z - eye[2]]
-    : [-cam[8], -cam[10]];
+  const rawEye = shot?.eye ?? [cam[12], cam[13], cam[14]];
+  const rawTarget = shot?.target ?? renderer.camera.target;
+  const fitted = xrFitHead(rawEye, rawTarget || { x: rawEye[0], y: 0, z: rawEye[2] }, (x, z) => renderer.groundHeight(x, z));
+  const eye = fitted.eye;
+  const facing = fitted.facing ?? (rawTarget
+    ? [rawTarget.x - rawEye[0], rawTarget.z - rawEye[2]]
+    : [-cam[8], -cam[10]]);
+  let fitMark = fitted;
+  let xrCamLive = true;
   const controls = createXrControls({
     renderer,
     getInput,
@@ -684,18 +692,51 @@ async function toggleMatchXr(renderer, getInput, jumps) {
   const rig = createXrRig(eye, {
     floor: (x, z) => renderer.groundHeight(x, z),
     clearance: 6,
-    maxY: Math.max(eye[1], renderer.camera.upperRadiusLimit ?? eye[1]),
-    maxRange: renderer.camera.upperRadiusLimit ?? Math.hypot(eye[0], eye[2]),
+    maxY: Math.max(rawEye[1], eye[1], renderer.camera.upperRadiusLimit ?? eye[1]),
+    maxRange: renderer.camera.upperRadiusLimit ?? Math.hypot(rawEye[0], rawEye[2]),
   }, { facing });
+  function applyXrFit(next) {
+    fitMark = next;
+    // Only teleport under the visor veil. Story samples in the open were a rollercoaster.
+    if ((renderer.xrFadeOpacity?.() ?? 0) >= 0.95) {
+      rig.pendingFit = null;
+      jumpXrRig(rig, next.eye[0], next.eye[2], { y: next.eye[1], facing: next.facing });
+      return;
+    }
+    rig.pendingFit = next;
+  }
+  renderer.cameraController?.setPoseListener?.(() => {
+    if (!xrCamLive) return;
+    const nextShot = renderer.cameraController?.cameraEye?.();
+    if (!nextShot) return;
+    const next = xrFitHead(nextShot.eye, nextShot.target, (x, z) => renderer.groundHeight(x, z));
+    const prev = fitMark;
+    const dx = next.eye[0] - prev.eye[0];
+    const dy = next.eye[1] - prev.eye[1];
+    const dz = next.eye[2] - prev.eye[2];
+    let face = 0;
+    if (prev.facing && next.facing) {
+      face = prev.facing[0] * next.facing[0] + prev.facing[1] * next.facing[1];
+    } else if (!prev.facing && !next.facing) face = 1;
+    if (dx * dx + dy * dy + dz * dz < 1 && face > 0.999) return;
+    applyXrFit(next);
+  });
   matchXr = await enterXr(renderer.scene, {
     depthNear: 0.08,
     // Sky dome radius is 24000. A short far plane clips it to flat clear color.
     depthFar: renderer.camera.farPlane || 40000,
     onFrame: (ctx, frame, time) => {
       stepXrRig(rig, ctx, frame, time);
+      const pending = rig.pendingFit;
+      if (pending && (renderer.xrFadeOpacity?.() ?? 0) >= 0.95) {
+        rig.pendingFit = null;
+        jumpXrRig(rig, pending.eye[0], pending.eye[2], { y: pending.eye[1], facing: pending.facing });
+      }
       controls.step(ctx);
     },
     onEnd: () => {
+      xrCamLive = false;
+      renderer.cameraController?.setPoseListener?.(null);
       matchXr = null;
       controls.dispose();
       clearXrEye();
@@ -704,6 +745,13 @@ async function toggleMatchXr(renderer, getInput, jumps) {
     },
   });
   matchXr.xrControls = controls;
+  matchXr.rig = rig;
+  matchXr.releaseCameraFit = () => {
+    xrCamLive = false;
+    renderer.cameraController?.setPoseListener?.(null);
+  };
+  const veil = document.getElementById('boot-veil');
+  if (veil) pushXrFade(veilOpacity(veil), 0);
   paintXrButton(true);
   noteHelpControlsDevice('xr');
 }
@@ -1049,7 +1097,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         x: renderX[i],
         y: renderY[i],
         z: renderZ[i],
-        r: (def.pickRadius ?? 1.8) * (world.named?.[i] ? NAMED_UNIT_SCALE : 1) * (renderer.unitZoomScale?.(def) ?? 1),
+        r: (def.pickRadius ?? 1.8) * namedScaleOf(world, i) * (renderer.unitZoomScale?.(def) ?? 1),
       });
       const p = renderer.worldToScreen(renderX[i], renderY[i], renderZ[i]);
       if (!p || p.x < 0 || p.y < 0 || p.x > rect.width || p.y > rect.height) continue;
@@ -1126,6 +1174,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   if (bootShadowMode === 0) {
     renderer.setShadowsEnabled?.(false);
   }
+  pushXrFade = (opacity, ms) => renderer.setXrFade?.(opacity, ms);
   /** Filled just before return so the menu callback can reach the live ctx. */
   const ctxRef = { current: null };
   let observerLobby = null;
@@ -1842,7 +1891,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (!b) return null;
     const fp = BUILDING_FOOTPRINTS[b.type];
     const size = fp && fp.w <= 2 ? 's' : 'm';
-    return { x: b.x, z: b.z, size };
+    return { x: b.x, z: b.z, size, mul: bodyScaleMul(b.scale) };
   }
 
   function ringSlotKey(x, z) {
@@ -2813,6 +2862,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     getSpeakerPos: getStorySpeakerPos,
     worldToScreen: (x, y, z) => renderer.worldToScreen?.(x, y, z) ?? null,
     onSpeak: (lines) => chatHud.noteStory?.(lines),
+    xrActive: () => !!matchXr,
+    onXrSpeech: (payload) => renderer.setStorySpeech?.(payload),
     onReveal: (spec) => setCinematicReveal(spec),
     onCinematic: (on) => {
       if (session.role !== 'player') return;
@@ -4591,7 +4642,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (fogHidden[i]) continue;
       const isSel = !!selected[i];
       const def = getUnitDef(world.type[i]);
-      const maxHp = world.named?.[i] ? namedUnitHp(def.hp) : def.hp;
+      const maxHp = unitMaxHp(world, i, def.hp);
       const hurt = maxHp > 0 && world.hp[i] < maxHp;
       if (!isSel && !hurt) continue;
       const x = prev.x[i] + (cur.x[i] - prev.x[i]) * alpha;
@@ -4727,10 +4778,14 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         }
         const loft = posed.loft;
         const yaw = posed.yaw;
-        const hero = world.named?.[i] ? NAMED_UNIT_SCALE : 1;
+        const hero = namedScaleOf(world, i);
         let size = def.size * 0.85 * hero;
+        let meshScale = hero;
         const fade = deathFade[i];
-        if (fade > 0) size *= fade;
+        if (fade > 0) {
+          size *= fade;
+          meshScale *= fade;
+        }
         const gy = groundYCached(t, tx, tz);
         renderX[i] = x;
         renderY[i] = gy + loft + (def.pickHeight ?? 1.1) * hero * zoomFor(def);
@@ -4741,7 +4796,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         }
         const forcePose = followSmooth || fade > 0 || posed.pitch !== 0 || posed.roll !== 0;
         if (forcePose || poseDirty(i, x, z, yaw, size, loft, 0)) {
-          if (renderer.writeInstance(i, world.type[i], world.owner[i], x, z, size, yaw, false, loft, posed.pitch, posed.roll, gy)) {
+          if (renderer.writeInstance(i, world.type[i], world.owner[i], x, z, size, yaw, false, loft, posed.pitch, posed.roll, gy, false, false, 1, false, meshScale)) {
             if (world.owner[i] === 0) drawStats.p0++;
             else if (world.owner[i] === 1) drawStats.p1++;
           } else drawStats.unmapped++;
@@ -4794,9 +4849,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       let yaw = facingYaw[i];
       if (loft > 0.01 && dx * dx + dz * dz > 0.0004) yaw = Math.atan2(dx, dz);
       yaw += yawTwist;
-      const hero = world.named?.[i] ? NAMED_UNIT_SCALE : 1;
+      const hero = namedScaleOf(world, i);
       let size = def.size * hero;
-      let meshScale = 1;
+      let meshScale = hero;
       const fade = deathFade[i];
       let deathAlpha = fade;
       let deathExit = false;
@@ -4812,7 +4867,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           pitch = b.pitch;
           roll = b.roll;
           size *= b.scale;
-          meshScale = b.scale;
+          meshScale = hero * b.scale;
           deathAlpha = b.alpha;
           deathExit = true;
         } else if (kind === DEATH_KIND.FLEE) {
@@ -4822,13 +4877,16 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           yaw = f.yaw;
           facingYaw[i] = f.yaw;
           size *= f.scale;
+          meshScale = hero * f.scale;
           deathAlpha = f.alpha;
           deathExit = true;
         } else {
           size *= fade;
+          meshScale = hero * fade;
         }
       } else if (fade > 0) {
         size *= fade;
+        meshScale = hero * fade;
       }
       // Pick sphere center at chest height over terrain (not sim `size`, which is spacing).
       const gy = groundYCached(i, x, z);
@@ -4940,7 +4998,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
       wasSelected[i] = isSel ? 1 : 0;
 
-      const maxHp = world.named?.[i] ? namedUnitHp(def.hp) : def.hp;
+      const maxHp = unitMaxHp(world, i, def.hp);
       const hp = world.hp[i];
       if (maxHp > 0 && (isSel || hp < maxHp) && overlayBarAllow[i]) {
         const slot = isSel ? hbSelCount++ : hbHurtCount++;
@@ -5033,7 +5091,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       x = b.x;
       z = b.z;
       owner = b.owner;
-      lift = renderer.buildingChipHeight?.(b.type) ?? roofChipLift(0, DEFAULT_BUILDING_ROOF);
+      lift = (renderer.buildingChipHeight?.(b.type) ?? roofChipLift(0, DEFAULT_BUILDING_ROOF)) * bodyScaleMul(b.scale);
       const maxHp = b.maxHp != null ? b.maxHp | 0 : 0;
       const hp = b.hp != null ? b.hp | 0 : maxHp;
       hpLeft = hp;
@@ -5070,7 +5128,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         const hp = b.hp != null ? b.hp | 0 : maxHp;
         if (maxHp <= 0 || hp <= 0 || hp >= maxHp) continue;
         if (fog.hidesHostile(b.owner, b.x, b.z)) continue;
-        const lift = renderer.buildingChipHeight?.(b.type) ?? roofChipLift(0, DEFAULT_BUILDING_ROOF);
+        const lift = (renderer.buildingChipHeight?.(b.type) ?? roofChipLift(0, DEFAULT_BUILDING_ROOF)) * bodyScaleMul(b.scale);
         renderer.writeHealthBar?.(b.x, b.z, lift, hp / maxHp, {
           armor: false,
           holy: false,
@@ -5110,7 +5168,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
               if ((entry.index | 0) === i && entry.name) return String(entry.name);
             }
             return '';
-          }),
+          }, (i) => passengerTotalOf[i] | 0),
         );
       }
     }
@@ -5174,7 +5232,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       for (let s = 0; s < take; s++) {
         const i = ids[s];
         const def = getUnitDef(world.type[i]);
-        const hero = world.named?.[i] ? NAMED_UNIT_SCALE : 1;
+        const hero = namedScaleOf(world, i);
         const pick = (def.pickRadius ?? 1.8) * hero;
         // Pick spheres sit inside the VAT mesh; the shield has to wrap the body.
         const zs = zoomFor(def);
@@ -5222,7 +5280,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           x: renderX[i],
           y: renderY[i],
           z: renderZ[i],
-          r: (def.pickRadius ?? 1.8) * (world.named?.[i] ? NAMED_UNIT_SCALE : 1) * zoomFor(def),
+          r: (def.pickRadius ?? 1.8) * namedScaleOf(world, i) * zoomFor(def),
         });
       }
       // Buildings pick against their mesh, so H only draws unit spheres.
@@ -6424,7 +6482,10 @@ function showMatchSplash() {
   veil?.getAnimations?.().forEach((a) => a.cancel());
   // A fresh splash starts clear so the logo can fade the board to black.
   // The page-load splash is already black in CSS.
-  if (created && veil) veil.style.opacity = '0';
+  if (created && veil) {
+    veil.style.opacity = '0';
+    pushXrFade(0, 0);
+  }
   closeMenuForSplash();
   refreshLobbyUnderSplash();
 }
@@ -6461,7 +6522,10 @@ function fadeSplashVeil(opacity, gen = splashGen) {
   if (!el || !veil || gen !== splashGen) return Promise.resolve();
   const from = veilOpacity(veil);
   veil.getAnimations?.().forEach((a) => a.cancel());
-  if (Math.abs(from - opacity) < 0.02) {
+  const ms = Math.abs(from - opacity) < 0.02 ? 0 : SPLASH_VEIL_MS;
+  // Headset stays black through splash dismiss so the jump lands before fade-up.
+  if (!(opacity < 0.02 && matchXr)) pushXrFade(opacity, ms);
+  if (ms === 0) {
     veil.style.opacity = String(opacity);
     return Promise.resolve();
   }
@@ -6481,9 +6545,28 @@ function fadeSplashVeil(opacity, gen = splashGen) {
   return done;
 }
 
+/** Headset jump is applied on the next XR frame. Hold black until then. */
+function waitXrCaughtUp() {
+  if (!matchXr?.rig) return Promise.resolve();
+  return new Promise((resolve) => {
+    const t0 = performance.now();
+    const tick = () => {
+      const rig = matchXr?.rig;
+      if (!rig || (!rig.jump && !rig.pendingFit) || performance.now() - t0 > 500) {
+        resolve();
+        return;
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
 /** Board is in place. Fade the black off, then let the logo leave as usual. */
-function revealBootSplash() {
+async function revealBootSplash() {
   const gen = splashGen;
+  await waitXrCaughtUp();
+  if (gen !== splashGen) return;
   return fadeSplashVeil(0, gen).then(() => {
     if (gen !== splashGen) return;
     dismissBootSplash();
@@ -6496,6 +6579,7 @@ function dismissBootSplash(opts = {}) {
   const el = document.getElementById('boot-splash');
   if (!el) return;
   if (opts.immediate) {
+    pushXrFade(0, 0);
     el.dataset.leaving = '1';
     el.remove();
     refreshLobbyUnderSplash();
@@ -6522,6 +6606,7 @@ function dismissBootSplash(opts = {}) {
     const finish = () => {
       if (done) return;
       done = true;
+      pushXrFade(0, SPLASH_FADE_MS);
       el.remove();
       refreshLobbyUnderSplash();
       resumeStoryAfterSplash();

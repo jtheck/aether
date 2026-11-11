@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fx from '../sim/fixed.js';
 import { PLACEABLE_BUILDINGS } from '../sim/buildings.js';
+import { DOODAD, TORCH_VISION_TILES, torchPlacementForTile, wagonPlacementForTile } from '../sim/doodads.js';
 import { TILE_SIZE_F, worldHalfFFromMap } from '../sim/field.js';
 import { UNIT } from '../sim/unitTypes.js';
 import {
@@ -109,6 +110,51 @@ describe('fogOfWar vision radii', () => {
     assert.equal(visionTilesForBuilding('tower'), caster);
     assert.equal(visionTilesForBuilding('perch'), caster);
     assert.equal(visionTilesForBuilding('agora'), dirigible);
+  });
+});
+
+describe('fogOfWar torches', () => {
+  it('opens a small hole at a torch for every player', () => {
+    const field = fakeField(48, 48);
+    field.seed = 3;
+    field.doodadType = new Uint8Array(48 * 48);
+    const torchTile = 24 * 48 + 24;
+    const wagonTile = 8 * 48 + 8;
+    field.doodadType[torchTile] = DOODAD.TORCH;
+    field.doodadType[wagonTile] = DOODAD.WAGON;
+    const torch = torchPlacementForTile(field, torchTile);
+    const wagon = wagonPlacementForTile(field, wagonTile);
+    const fog = createFogOfWar();
+    fog.reset(field);
+    const world = fakeWorld([]);
+    for (const player of [0, 1]) {
+      fog.stamp({
+        world,
+        field,
+        localPlayerId: player,
+        enabled: true,
+        buildings: [],
+        agoras: [],
+        now: 1000,
+      });
+      assert.equal(fog.isWorldSight(torch.x, torch.z), true);
+      const enemy = player === 0 ? 1 : 0;
+      assert.equal(fog.hidesHostile(enemy, torch.x, torch.z), false);
+      assert.equal(fog.isWorldSight(wagon.x, wagon.z), false);
+      assert.equal(fog.hidesHostile(enemy, wagon.x, wagon.z), true);
+    }
+    // Past the hard circle and the feather, so this is not still the lamp.
+    const far = torch.x + (TORCH_VISION_TILES + 6) * TILE_SIZE_F;
+    fog.stamp({
+      world,
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [],
+      agoras: [],
+      now: 1000,
+    });
+    assert.equal(fog.isWorldSight(far, torch.z), false);
   });
 });
 

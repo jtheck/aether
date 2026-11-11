@@ -283,7 +283,8 @@ export function sample(reel, time) {
       const from = cameraStartPose(clip) || prev;
       const to = cameraEndPose(clip);
       const end = clip.t + clip.dur;
-      if (t < end) {
+      const inside = t < end;
+      if (inside) {
         const u = clip.dur > 0 ? ease((t - clip.t) / clip.dur) : 1;
         camera = mixPose(from, to, u);
         if (clip.char) camera.char = clip.char;
@@ -291,6 +292,9 @@ export function sample(reel, time) {
         camera = { ...to };
       }
       camera.id = clip.id;
+      // Past the clip the pose is only the held end. Playback must not
+      // pull a player who has already moved the camera back onto it.
+      camera.held = !inside;
       prev = to;
     }
   }

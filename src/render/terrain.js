@@ -20,6 +20,8 @@ import {
   TERRAIN,
   TILE_SIZE_F,
   tileHeightWorld,
+  layerCell,
+  layerSheet,
   worldHalfFFromField,
   worldHalfZFFromField,
 } from '../sim/field.js';
@@ -43,8 +45,9 @@ import { EXPOSURE, SKY_HORIZON, SKY_HORIZON_SUN, SKY_ZENITH } from './celestial.
 import { resumeMeshes, softDetachMesh, suspendMeshes } from './meshLifecycle.js';
 import { classifyGridTile, placementFillKind, placementGridWindow } from './placementGrid.js';
 import { tickTeamColorGlimmer } from './teamColor.js';
+import { tickTreeSnow } from './treeSnow.js';
 import { tickWind } from './windSway.js';
-import { ATLAS_GRID, SHEET_JUNCTION, TERRAIN_LOOK, tileLayer } from './terrainLayers.js';
+import { ATLAS_GRID, CELL_EMPTY, SHEET_BURN_JUNCTION, SHEET_DIRT_JUNCTION, SHEET_JUNCTION, TERRAIN_LOOK, tileLayer } from './terrainLayers.js';
 import { PAGE_BUCKET_BASE, createTerrainMaterials, loadTerrainAtlas } from './terrainAtlas.js';
 import * as fx from '../sim/fixed.js';
 
@@ -69,6 +72,13 @@ const SPEC_RGB_WATER = specRgb8(TERRAIN.WATER);
 const SPEC_RGB_GRASS = specRgb8(TERRAIN.GRASS);
 const SPEC_RGB_DIRT = specRgb8(TERRAIN.DIRT);
 const SPEC_RGB_NONE = [0, 0, 0];
+/**
+ * Red byte on a lava texel. Grass spec tops out near 7, so this still reads
+ * as a mask. The lava sheet does not bind the spec map, so the pool stays matte.
+ */
+const LAVA_MARK = 16;
+const LAVA_MARK_LO = 9 / 255;
+const LAVA_MARK_HI = 14 / 255;
 const FRAME_THICKNESS = 5.5;
 const FRAME_INNER_OVERLAP = 2.4;
 const FRAME_BOTTOM_Y = -9;
@@ -595,6 +605,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       const t0 = profile ? performance.now() : 0;
       specGlint.update(activeCamera, deltaMs);
       tickWind();
+      tickTreeSnow();
       tickTeamColorGlimmer();
       const tGlint = profile ? performance.now() : 0;
       backdrop.update();
@@ -618,6 +629,9 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
           doodadsMs: tEnd - tLod,
         };
       }
+    },
+    forEachDoodadFx(fn) {
+      if (!disposed) doodads.forEachFxInstance?.(fn);
     },
     forEachBurningTree(fn) {
       if (!disposed) scenery.forEachBurningTree?.(fn);
@@ -839,6 +853,40 @@ export function wetnessAt(types, width, height, tx, tz) {
   return types[tz * width + tx] === TERRAIN.WATER ? 255 : 0;
 }
 
+/** Lava cover 0–255. The pool only; the charred bank stays dark. */
+export function heatAt(types, width, height, tx, tz) {
+  if (tx < 0 || tz < 0 || tx >= width || tz >= height) return 0;
+  return types[tz * width + tx] === TERRAIN.LAVA ? 255 : 0;
+}
+
+function smoothstep01(e0, e1, x) {
+  const t = x <= e0 ? 0 : x >= e1 ? 1 : (x - e0) / (e1 - e0);
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * Spec RGB, water in alpha, lava as a small red mark plus alpha.
+ * Matches the glint shader's split. A partial sample under 32 stays unmarked
+ * so a faint shore texel does not paint a red fringe onto the next tile.
+ */
+export function packGroundSpecTexel(rgb, wet, heat) {
+  const w = wet | 0;
+  const h = heat | 0;
+  const mark = h >= 32 ? LAVA_MARK : 0;
+  return [
+    Math.min(255, (rgb[0] | 0) + mark),
+    rgb[1] | 0,
+    rgb[2] | 0,
+    mark ? Math.max(w, h) : w,
+  ];
+}
+
+/** Overlay weights for a sampled texel. `r` and `a` are 0–1. */
+export function liquidCover(r, a) {
+  const mark = smoothstep01(LAVA_MARK_LO, LAVA_MARK_HI, r);
+  return { wet: a * (1 - mark), heat: a * mark };
+}
+
 export function sampleWetness(types, width, height, fx, fz) {
   const x0 = Math.floor(fx);
   const z0 = Math.floor(fz);
@@ -851,15 +899,27 @@ export function sampleWetness(types, width, height, fx, fz) {
   return (c00 * (1 - tx) + c10 * tx) * (1 - tz) + (c01 * (1 - tx) + c11 * tx) * tz;
 }
 
+export function sampleHeat(types, width, height, fx, fz) {
+  const x0 = Math.floor(fx);
+  const z0 = Math.floor(fz);
+  const tx = fx - x0;
+  const tz = fz - z0;
+  const c00 = heatAt(types, width, height, x0, z0);
+  const c10 = heatAt(types, width, height, x0 + 1, z0);
+  const c01 = heatAt(types, width, height, x0, z0 + 1);
+  const c11 = heatAt(types, width, height, x0 + 1, z0 + 1);
+  return (c00 * (1 - tx) + c10 * tx) * (1 - tz) + (c01 * (1 - tx) + c11 * tx) * tz;
+}
+
 function tileNeedsWaterGlint(active, types, width, height, tx, tz) {
-  if (wetnessAt(types, width, height, tx, tz) > 0) return true;
+  if (wetnessAt(types, width, height, tx, tz) > 0 || heatAt(types, width, height, tx, tz) > 0) return true;
   for (let dz = -1; dz <= 1; dz++) {
     for (let dx = -1; dx <= 1; dx++) {
       if (dx === 0 && dz === 0) continue;
       const x = tx + dx;
       const z = tz + dz;
       if (!active(x, z)) continue;
-      if (wetnessAt(types, width, height, x, z) > 0) return true;
+      if (wetnessAt(types, width, height, x, z) > 0 || heatAt(types, width, height, x, z) > 0) return true;
     }
   }
   return false;
@@ -930,11 +990,16 @@ function createGroundSpecMap(engine) {
       for (let sx = 0; sx < srcW; sx++) {
         const fx = (sx + 0.5) / SPEC_TEX_SCALE - 0.5;
         const rgb = sampleSpecLook(terrainTypes, width, height, fx, fz);
+        const packed = packGroundSpecTexel(
+          rgb,
+          sampleWetness(terrainTypes, width, height, fx, fz),
+          sampleHeat(terrainTypes, width, height, fx, fz),
+        );
         const o = (dstRow + sx) * 4;
-        pixels[o] = rgb[0];
-        pixels[o + 1] = rgb[1];
-        pixels[o + 2] = rgb[2];
-        pixels[o + 3] = sampleWetness(terrainTypes, width, height, fx, fz);
+        pixels[o] = packed[0];
+        pixels[o + 1] = packed[1];
+        pixels[o + 2] = packed[2];
+        pixels[o + 3] = packed[3];
       }
     }
   }
@@ -1004,8 +1069,8 @@ function readSunDir(scene) {
 }
 
 /**
- * Additive water glint on a welded sheet. Atlas stays on the tile mesh;
- * this pass only adds Phong so pond squares and milky film both stay off.
+ * Additive sheet over water and lava. Atlas stays on the tile mesh.
+ * Water gets the slow glint. Lava gets drifting cracks. The mask is the spec map.
  */
 function createGroundSpecGlint(engine, scene) {
   /** @type {object[]} */
@@ -1068,42 +1133,66 @@ function createGroundSpecGlint(engine, scene) {
   @location(0) worldPos: vec3<f32>,
   @location(1) uv: vec2<f32>,
 };
+fn lavaGlow(p: vec2<f32>, t: f32) -> vec3<f32> {
+  // Broad plates, not a second crack drawing. The atlas already has the crust.
+  let drift = vec2<f32>(t * 0.22, t * 0.08);
+  let w1 = sin(p.x * 0.11 + p.y * 0.07 + t * 0.15);
+  let w2 = sin(p.y * 0.09 - p.x * 0.06 - t * 0.11);
+  let q = p * 0.18 + drift + vec2<f32>(w1, w2) * 2.4;
+  let n = sin(q.x) * sin(q.y * 0.85 + 1.3);
+  let m = sin(q.x * 0.62 + q.y * 0.4 - t * 0.2);
+  let plate = pow(saturate(0.55 + 0.45 * n), 3.0);
+  let core = pow(saturate(0.5 + 0.5 * m), 4.0);
+  let hot = saturate(plate * 0.65 + core);
+  let pulse = 0.82 + 0.18 * sin(t * 1.6 + w1 * 2.0);
+  var col = mix(vec3<f32>(0.45, 0.03, 0.0), vec3<f32>(1.05, 0.36, 0.02), hot);
+  col = mix(col, vec3<f32>(1.0, 0.75, 0.2), core * core);
+  return col * (0.28 + 0.72 * hot) * pulse;
+}
 @fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
-  let w = textureSample(wetness, wetnessSampler, input.uv).a;
-  if (w < 0.004) { discard; }
-  let t = shaderUniforms.time;
-  let p = input.worldPos.xz;
-  // Slow large-scale phase warps (tens of tiles) so the small ripples never tile.
-  let w1 = sin(p.x * 0.11 + p.y * 0.07 + t * 0.05) * 3.0 + sin(p.x * 0.037 - p.y * 0.05) * 4.0;
-  let w2 = sin(p.y * 0.13 - p.x * 0.05 - t * 0.04) * 3.0 + sin(p.y * 0.041 + p.x * 0.029) * 4.0;
-  // Sun-glint slope: few, wide, gentle swells. High frequency here is what made
-  // a million tiny tall hills in the reflection.
-  let rx = sin(p.x * 0.16 + t * 0.7 + w1) + sin(p.y * 0.22 - t * 0.5 + p.x * 0.08 + w2);
-  let rz = sin(p.y * 0.18 + t * 0.6 + w2) + sin(p.x * 0.2 + t * 0.8 - p.y * 0.1 + w1);
-  // Same gust band as trees, wheat and banners (windSway.js): keep direction, speed, and clock in step.
-  let g = 0.5 + 0.5 * sin(dot(p, vec2<f32>(0.014, 0.011)) - t * 0.5);
-  let gust = 0.6 + 1.2 * g * g;
-  let N = normalize(vec3<f32>(rx * 0.03 * gust, 1.0, rz * 0.03 * gust));
-  let L = normalize(-shaderUniforms.sunDir);
-  let V = normalize(shaderSystem.cameraPosition - input.worldPos);
-  let H = normalize(V + L);
-  let spec = pow(max(dot(N, H), 0.0), max(shaderUniforms.specPower, 1.0)) * shaderUniforms.specGain;
-  // Angle-independent ripple lines so the surface moves even off the sun glint.
-  // Two broad layers at different scales and headings, warped by w1/w2, then a
-  // patchy mask so ripples gather in areas instead of covering everything evenly.
-  let q = p * 0.28;
-  let ra = sin(q.x + t * 0.5 + sin(q.y * 1.3 + t * 0.3) * 1.7 + w1);
-  let rb = sin(q.y - t * 0.4 + sin(q.x * 1.7 - t * 0.25) * 1.7 + w2);
-  let q2 = vec2<f32>(p.x * 0.14 + p.y * 0.08, p.y * 0.16 - p.x * 0.06);
-  let rc = sin(q2.x - t * 0.35 + sin(q2.y * 1.4 + t * 0.2) * 1.9 - w2);
-  let rd = sin(q2.y + t * 0.3 + sin(q2.x * 1.2 - t * 0.15) * 1.9 - w1);
-  let rip1 = pow(max(1.0 - abs(ra + rb) * 0.5, 0.0), 6.0);
-  let rip2 = pow(max(1.0 - abs(rc + rd) * 0.5, 0.0), 6.0);
-  let clump = smoothstep(-0.2, 0.6, sin(p.x * 0.083 + t * 0.06 + w2 * 0.3) * sin(p.y * 0.067 - t * 0.05 + w1 * 0.3));
-  let ripple = (rip1 * 0.7 + rip2 * 0.6) * (0.7 + 0.3 * clump);
-  // Gust only nudges the universal ripple brightness; the glint slope takes the full swing.
-  let rippleGust = 0.85 + 0.3 * g * g;
-  return vec4<f32>(shaderUniforms.specColor * spec + vec3<f32>(0.5, 0.65, 0.8) * ripple * 0.22 * rippleGust, w);
+  let s = textureSample(wetness, wetnessSampler, input.uv);
+  let mark = smoothstep(${LAVA_MARK_LO.toFixed(6)}, ${LAVA_MARK_HI.toFixed(6)}, s.r);
+  let heat = s.a * mark;
+  let wet = s.a * (1.0 - mark);
+  if (wet < 0.004 && heat < 0.004) { discard; }
+  var col = vec3<f32>(0.0);
+  if (wet >= 0.004) {
+    let t = shaderUniforms.time;
+    let p = input.worldPos.xz;
+    // Slow large-scale phase warps (tens of tiles) so the small ripples never tile.
+    let w1 = sin(p.x * 0.11 + p.y * 0.07 + t * 0.05) * 3.0 + sin(p.x * 0.037 - p.y * 0.05) * 4.0;
+    let w2 = sin(p.y * 0.13 - p.x * 0.05 - t * 0.04) * 3.0 + sin(p.y * 0.041 + p.x * 0.029) * 4.0;
+    // Sun-glint slope: few, wide, gentle swells. High frequency here is what made
+    // a million tiny tall hills in the reflection.
+    let rx = sin(p.x * 0.16 + t * 0.7 + w1) + sin(p.y * 0.22 - t * 0.5 + p.x * 0.08 + w2);
+    let rz = sin(p.y * 0.18 + t * 0.6 + w2) + sin(p.x * 0.2 + t * 0.8 - p.y * 0.1 + w1);
+    // Same gust band as trees, wheat and banners (windSway.js): keep direction, speed, and clock in step.
+    let g = 0.5 + 0.5 * sin(dot(p, vec2<f32>(0.014, 0.011)) - t * 0.5);
+    let gust = 0.6 + 1.2 * g * g;
+    let N = normalize(vec3<f32>(rx * 0.03 * gust, 1.0, rz * 0.03 * gust));
+    let L = normalize(-shaderUniforms.sunDir);
+    let V = normalize(shaderSystem.cameraPosition - input.worldPos);
+    let H = normalize(V + L);
+    let spec = pow(max(dot(N, H), 0.0), max(shaderUniforms.specPower, 1.0)) * shaderUniforms.specGain;
+    // Angle-independent ripple lines so the surface moves even off the sun glint.
+    let q = p * 0.28;
+    let ra = sin(q.x + t * 0.5 + sin(q.y * 1.3 + t * 0.3) * 1.7 + w1);
+    let rb = sin(q.y - t * 0.4 + sin(q.x * 1.7 - t * 0.25) * 1.7 + w2);
+    let q2 = vec2<f32>(p.x * 0.14 + p.y * 0.08, p.y * 0.16 - p.x * 0.06);
+    let rc = sin(q2.x - t * 0.35 + sin(q2.y * 1.4 + t * 0.2) * 1.9 - w2);
+    let rd = sin(q2.y + t * 0.3 + sin(q2.x * 1.2 - t * 0.15) * 1.9 - w1);
+    let rip1 = pow(max(1.0 - abs(ra + rb) * 0.5, 0.0), 6.0);
+    let rip2 = pow(max(1.0 - abs(rc + rd) * 0.5, 0.0), 6.0);
+    let clump = smoothstep(-0.2, 0.6, sin(p.x * 0.083 + t * 0.06 + w2 * 0.3) * sin(p.y * 0.067 - t * 0.05 + w1 * 0.3));
+    let ripple = (rip1 * 0.7 + rip2 * 0.6) * (0.7 + 0.3 * clump);
+    let rippleGust = 0.85 + 0.3 * g * g;
+    col += (shaderUniforms.specColor * spec + vec3<f32>(0.5, 0.65, 0.8) * ripple * 0.22 * rippleGust) * wet;
+  }
+  if (heat >= 0.004) {
+    col += lavaGlow(input.worldPos.xz, shaderUniforms.time) * heat;
+  }
+  let cover = max(wet, heat);
+  return vec4<f32>(col / cover, cover);
 }`,
     });
     setShaderTexture(material, 'wetness', texture);
@@ -1251,6 +1340,10 @@ function createGroundSpecGlint(engine, scene) {
   };
 }
 
+function isCompositeSheet(sheet) {
+  return sheet === SHEET_JUNCTION || sheet === SHEET_DIRT_JUNCTION || sheet === SHEET_BURN_JUNCTION;
+}
+
 /** Junction composites a field needs, so they can be built before meshing. */
 function junctionKeysOf(field, active) {
   const { width, height, terrainTypes } = field;
@@ -1259,7 +1352,7 @@ function junctionKeysOf(field, active) {
     for (let tx = 0; tx < width; tx++) {
       if (!active(tx, tz)) continue;
       const layer = tileLayer(terrainTypes, width, height, tx, tz);
-      if (layer >> 8 === SHEET_JUNCTION) keys.add(layer & 255);
+      if (isCompositeSheet(layerSheet(layer))) keys.add(layer);
     }
   }
   return keys;
@@ -1317,16 +1410,24 @@ function buildAtlasMeshesInRect(engine, field, look, active, tx0, tz0, tx1, tz1,
     for (let tx = tx0; tx < tx1; tx++) {
       if (!active(tx, tz)) continue;
       const layer = tileLayer(terrainTypes, width, height, tx, tz);
-      let bucketId = layer >> 8;
-      let cell = layer & 255;
-      if (bucketId === SHEET_JUNCTION) {
-        const slot = atlas.junctionSlot(cell);
+      let bucketId = layerSheet(layer);
+      let cell = layerCell(layer);
+      if (isCompositeSheet(bucketId)) {
+        const slot = atlas.junctionSlot(layer);
         if (slot) {
           bucketId = PAGE_BUCKET_BASE + slot.page;
           cell = slot.cell;
-        } else {
+        } else if (bucketId === SHEET_JUNCTION) {
           // No composite yet: grass shore only, dirt blob missing.
           bucketId = ATLAS.GRASS_WATER;
+          cell &= 15;
+        } else if (bucketId === SHEET_BURN_JUNCTION && (cell & 15) === CELL_EMPTY) {
+          // No composite yet: scorched blob only, grass absent.
+          bucketId = ATLAS.SCORCHED_DIRT;
+          cell = (cell >> 4) & 15;
+        } else {
+          // No composite yet: grass blob only, the other blobs missing.
+          bucketId = ATLAS.GRASS_DIRT;
           cell &= 15;
         }
       }

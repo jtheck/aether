@@ -1,6 +1,7 @@
 // v1-style RTS camera: velocity + momentum for pan/zoom/yaw.
 // Touch / gamepad call nudgePan / nudgeLookPan / nudgeZoom / nudgeRotate.
 
+import { DRAG_THRESHOLD_PX } from '../app/input/dragThreshold.js';
 import { WORLD_HALF_F, TILE_SIZE_F } from '../sim/field.js';
 
 const ZOOM_WHEEL = 0.025;
@@ -27,11 +28,12 @@ const CAMERA_KEYS = new Set([
   'arrowup', 'arrowdown', 'arrowleft', 'arrowright',
 ]);
 const RMB_PAN_BASE = 5;
-// Click-vs-pan: same latch for camera motion and the force-move. Pan used
-// to start on the first pixel while the click still fired until 25px, so a
-// short drag both panned and issued an order. 5px cumulative ate ordinary
-// clicks; this sits between jitter and an intentional drag.
-export const RMB_PAN_DRAG_THRESHOLD_PX = 10;
+// Same break as left-click vs lasso: travel inside DRAG_THRESHOLD_PX stays
+// a command. Past it, pan latches and the click does not fire.
+export const RMB_PAN_DRAG_THRESHOLD_PX = DRAG_THRESHOLD_PX;
+// A settled hold also starts pan, a bit longer than the old 200ms gate, so a
+// slow command click still lands. The latch sample does not move the camera.
+export const RMB_PAN_MIN_HOLD_MS = 300;
 
 // Beta: 0 = straight down, π/2 = horizon. Horizon at both ends; play sits in
 // a look-down trough. Smoothstep both legs so zoom never slams pitch.
@@ -266,6 +268,7 @@ export function resolveCameraExtents(tableHalfX, tableHalfZ, authoredHalfF) {
  * `betaBias` subtracts radians from the zoom pitch (positive looks more straight down).
  */
 export function createCameraController(camera, canvas, opts = {}) {
+  let poseListener = null;
   let worldHalfF = opts.worldHalfF ?? WORLD_HALF_F;
   let worldHalfZF = opts.worldHalfZF ?? worldHalfF;
   // Zoom follows the longer axis so a rectangle still fits. Pan clamps per axis.
@@ -321,6 +324,8 @@ export function createCameraController(camera, canvas, opts = {}) {
   let rmbDidPan = false;
   let rmbLastScreen = { x: 0, y: 0 };
   let rmbDownScreen = { x: 0, y: 0 };
+  let rmbDownAt = 0;
+  let rmbHoldMs = 0;
   let rmbPointerId = null;
 
   camera.lowerRadiusLimit = LOWER_RADIUS;
@@ -555,6 +560,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     snapFov();
     snapBeta();
     markNudged();
+    poseListener?.();
   }
 
   /** Soft pull toward a story beat. Player pan/zoom still applies on top. */
@@ -946,10 +952,20 @@ export function createCameraController(camera, canvas, opts = {}) {
   }
 
   function endRmbPan() {
+    rmbHoldMs = 0;
     if (!rmbPanActive) return false;
     rmbPanActive = false;
     rmbPointerId = null;
     return rmbDidPan;
+  }
+
+  function eventNow(e) {
+    const t = e?.timeStamp;
+    return typeof t === 'number' && Number.isFinite(t) ? t : performance.now();
+  }
+
+  function rmbHeldMs(e) {
+    return Math.max(rmbHoldMs, Math.max(0, eventNow(e) - rmbDownAt));
   }
 
   function handlePointerDown(e) {
@@ -969,6 +985,8 @@ export function createCameraController(camera, canvas, opts = {}) {
     rmbPointerId = e.pointerId;
     rmbLastScreen = { x: e.clientX, y: e.clientY };
     rmbDownScreen = { x: e.clientX, y: e.clientY };
+    rmbDownAt = eventNow(e);
+    rmbHoldMs = 0;
     e.preventDefault();
     return true;
   }
@@ -1012,18 +1030,17 @@ export function createCameraController(camera, canvas, opts = {}) {
     return Math.hypot(clientX - rmbDownScreen.x, clientY - rmbDownScreen.y);
   }
 
-  /** Apply pan only after the click-vs-drag latch, from the latch - not pointer-down. */
-  function applyRmbPanTo(clientX, clientY) {
-    const travel = rmbTravelPx(clientX, clientY);
+  /**
+   * Pan starts where the camera already is. Distance past the lasso break, or
+   * a settled hold, only decides that this press is a drag.
+   */
+  function applyRmbPanTo(clientX, clientY, heldMs) {
     if (!rmbDidPan) {
-      if (travel <= RMB_PAN_DRAG_THRESHOLD_PX) return;
-      if (travel > 1e-6) {
-        const dx0 = clientX - rmbDownScreen.x;
-        const dy0 = clientY - rmbDownScreen.y;
-        const s = RMB_PAN_DRAG_THRESHOLD_PX / travel;
-        rmbLastScreen = { x: rmbDownScreen.x + dx0 * s, y: rmbDownScreen.y + dy0 * s };
-      }
+      rmbLastScreen = { x: clientX, y: clientY };
+      const travel = rmbTravelPx(clientX, clientY);
+      if (travel <= RMB_PAN_DRAG_THRESHOLD_PX && heldMs < RMB_PAN_MIN_HOLD_MS) return;
       rmbDidPan = true;
+      return;
     }
     const screenDx = clientX - rmbLastScreen.x;
     const screenDy = clientY - rmbLastScreen.y;
@@ -1046,7 +1063,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     }
     if (!rmbPanActive) return false;
     if (rmbPointerId != null && e.pointerId !== rmbPointerId) return false;
-    applyRmbPanTo(e.clientX, e.clientY);
+    applyRmbPanTo(e.clientX, e.clientY, rmbHeldMs(e));
     return true;
   }
 
@@ -1072,9 +1089,9 @@ export function createCameraController(camera, canvas, opts = {}) {
     if (rmbPointerId != null && e.pointerId !== rmbPointerId && e.type !== 'pointercancel') {
       return false;
     }
-    // Last sample - a flick can skip moves and land past the latch only on up.
+    // Last sample - a drag can skip moves and land past the latch only on up.
     if (e.type !== 'pointercancel' && e.clientX != null && e.clientY != null) {
-      applyRmbPanTo(e.clientX, e.clientY);
+      applyRmbPanTo(e.clientX, e.clientY, rmbHeldMs(e));
     }
     return endRmbPan();
   }
@@ -1178,6 +1195,11 @@ export function createCameraController(camera, canvas, opts = {}) {
   function tick(dtMs) {
     // Reuse layout geometry across high-rate events, never across rendered frames.
     canvasRectCache = null;
+    // Idle frames still count a held right button. Latch in place: no catch-up.
+    if (rmbPanActive && !rmbDidPan) {
+      rmbHoldMs += Number(dtMs) || 16;
+      if (rmbHoldMs >= RMB_PAN_MIN_HOLD_MS) rmbDidPan = true;
+    }
     if (!nudged && !followActive && !anyKeyHeld() && !ease && !fovCatching()) {
       pinZoomFloor();
       return;
@@ -1415,6 +1437,16 @@ export function createCameraController(camera, canvas, opts = {}) {
     takeUserAim,
     setInputObserver(observer) {
       inputObserver = typeof observer === 'function' ? observer : null;
+    },
+    /** Orbit eye and look target after the latest pose write. */
+    cameraEye() {
+      const p = cameraPosition();
+      const t = getTarget();
+      return { eye: [p.x, p.y, p.z], target: { x: t.x, y: t.y, z: t.z } };
+    },
+    /** Fires after an authored pose lands (level load, campaign shot, replay). */
+    setPoseListener(fn) {
+      poseListener = typeof fn === 'function' ? fn : null;
     },
   };
 }

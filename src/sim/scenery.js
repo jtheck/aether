@@ -2,7 +2,7 @@
 // Sim owns the layout because rocks affect passability and trees affect speed.
 
 import * as fx from './fixed.js';
-import { TERRAIN, TILE_SIZE_F, worldToTile, worldToTileZ, applyTerrainSlow, isTerrainSlowTile, tableRimDistAt } from './field.js';
+import { TERRAIN, TILE_SIZE_F, worldToTile, worldToTileZ, applyTerrainSlow, isBlockedLiquid, isLiquidTerrain, isTerrainSlowTile, tableRimDistAt } from './field.js';
 import { DEFAULT_SLOW_MUL } from './unitTypes.js';
 import { applyTableEdgeOccupancy, refreshTableTerrain } from './tableShape.js';
 import {
@@ -257,10 +257,6 @@ function tileCenterOf(field, tile) {
   return { tx: tile - tz * width, tz };
 }
 
-function isSolidWaterTile(field, i) {
-  return field.terrainTypes?.[i] === TERRAIN.WATER && field.tileType?.[i] === 12;
-}
-
 function otherRockCovers(field, tx, tz, exceptTile) {
   const { width, height, sceneryType, rockStock } = field;
   for (let dz = -2; dz <= 2; dz++) {
@@ -295,14 +291,14 @@ function forEachDiscTile(field, cx, cz, radius, visit) {
 
 function canUnblockRockTile(field, i, tx, tz, exceptTile) {
   if (field.activeMask && field.activeMask[i] === 0) return false;
-  if (isSolidWaterTile(field, i)) return false;
+  if (isBlockedLiquid(field, i)) return false;
   if (field.tableEdge?.[i]) return false;
   if (field.wallBlock?.[i]) return false;
   if (otherRockCovers(field, tx, tz, exceptTile)) return false;
   return true;
 }
 
-/** Open tiles that left this rock's disc. Never unblocks water / table / walls / other rocks. */
+/** Open tiles that left this rock's disc. Never unblocks liquid / table / walls / other rocks. */
 function shrinkRockFootprint(field, tile, prevRadius, nextRadius) {
   if (nextRadius >= prevRadius) return;
   const { tx, tz } = tileCenterOf(field, tile);
@@ -949,8 +945,8 @@ export function placeRockAt(field, tx, tz, kind = SCENERY.ROCK_PLAIN) {
 }
 
 /**
- * Drop trees, rocks, and doodads sitting on water in a brush.
- * A rock goes when its collision disc covers a water tile, even if the
+ * Drop trees, rocks, and doodads sitting on water or lava in a brush.
+ * A rock goes when its collision disc covers a liquid tile, even if the
  * center is still on land. Returns tiles whose scenery meshes changed.
  */
 export function clearSceneryOnWater(field, tx, tz, radius = 0) {
@@ -969,7 +965,7 @@ export function clearSceneryOnWater(field, tx, tz, radius = 0) {
       if (x < 0 || z < 0 || x >= field.width || z >= field.height) continue;
       const i = z * field.width + x;
       if (field.activeMask?.[i] === 0) continue;
-      if (types[i] !== TERRAIN.WATER) continue;
+      if (!isLiquidTerrain(types[i])) continue;
       if (hasScenery) {
         if (stampClear(field, x, z)) dirty.push({ x, z });
         const under = rockUnderTile(field, x, z);
@@ -979,6 +975,7 @@ export function clearSceneryOnWater(field, tx, tz, radius = 0) {
       }
       if (field.doodadType?.[i]) {
         field.doodadType[i] = 0;
+        if (field.doodadColor) field.doodadColor[i] = 0;
         dirty.push({ x, z });
       }
     }
@@ -1017,6 +1014,7 @@ export function clearOffTableScenery(field) {
     for (let i = 0; i < doodads.length; i++) {
       if (mask[i] !== 0 || !doodads[i]) continue;
       doodads[i] = 0;
+      if (field.doodadColor) field.doodadColor[i] = 0;
       changed = true;
     }
   }

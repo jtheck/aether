@@ -39,7 +39,7 @@ import {
 } from './controlGroups.js';
 import { MAX_ENTITIES, ORDER } from '../../sim/world.js';
 import { isMechanical, isTransport, UNIT, getUnitDef, isVillagerLine, unitAttacksBuildings } from '../../sim/unitTypes.js';
-import { NAMED_UNIT_SCALE } from '../../sim/namedUnit.js';
+import { namedScaleOf } from '../../sim/namedUnit.js';
 import { isHostile } from '../../sim/teams.js';
 import { canRideTransport, passengerCount, assignNearestRidersToTransport, assignTransportsToRiders, listPassengers, listPickupCandidates, transportCapacityOf } from '../../sim/transport.js';
 import { playVillagerMove } from '../audio.js';
@@ -75,6 +75,7 @@ import {
 } from './gamepadLasso.js';
 import { projectWorldToCanvas } from '../../render/screenProject.js';
 import { pickGatherNodeOnRay, rayHitYawBox, rayTToPoint } from './gatherPick.js';
+import { DRAG_THRESHOLD_PX } from './dragThreshold.js';
 import { createQueueHoldTimer, unitQueueKey } from './queueHold.js';
 
 /** Footprint box height - tall enough for a tower, not a circumcircle. */
@@ -87,8 +88,7 @@ const RALLY_FLAG_PICK_H = 5.2;
 /** Reused empty hit list - never mutate. */
 const EMPTY_HITS = Object.freeze([]);
 
-/** v1 lasso drag threshold. */
-export const DRAG_THRESHOLD_PX = 25;
+export { DRAG_THRESHOLD_PX };
 /** Sentinel so a trigger drag does not collide with a live mouse pointerId. */
 const PAD_SELECT_PTR = -2;
 /** Squeeze past this and a still aim paints the disk instead of a point click. */
@@ -305,6 +305,10 @@ export function createGameInput(opts) {
   });
   /** Pointer-down started on a bottom selection-strip chip - select that type on up. */
   let selHudGesture = false;
+  /** Second press landed on the same chip, or where that chip was before the row recentered. */
+  let selHudRepeat = false;
+  /** @type {{ t: number, x: number, y: number, slot: object } | null} */
+  let lastHudTap = null;
   /** Pad id (0..5) when pointer-down started on a control-group button. */
   let ctrlGroupGesture = null;
   /** @type {ReturnType<typeof setTimeout> | null} */
@@ -837,7 +841,7 @@ export function createGameInput(opts) {
       sp.x = posScratch.x;
       sp.y = posScratch.y;
       sp.z = posScratch.z;
-      sp.r = (def?.pickRadius ?? 1.8) * (world.named?.[i] ? NAMED_UNIT_SCALE : 1) * (renderer.unitZoomScale?.(def) ?? 1);
+      sp.r = (def?.pickRadius ?? 1.8) * namedScaleOf(world, i) * (renderer.unitZoomScale?.(def) ?? 1);
       n++;
     }
     return n;
@@ -1455,22 +1459,73 @@ export function createGameInput(opts) {
   }
 
   /**
-   * Selection-strip chip - units and buildings use the same click-to-select-all.
-   * @param {{ kind?: string, typeId?: number, typeKey?: string, entityId?: number } | number | null} slot
-   * @param {boolean} add
+   * Same portrait: a named chip is its own unit, otherwise the type.
+   * @param {{ kind?: string, typeId?: number, typeKey?: string, entityId?: number } | null | undefined} a
+   * @param {{ kind?: string, typeId?: number, typeKey?: string, entityId?: number } | null | undefined} b
    */
-  function selectHudSlot(slot, add) {
+  function hudSlotSame(a, b) {
+    if (!a || !b || a.kind !== b.kind) return false;
+    if (a.kind === 'building') return a.typeKey === b.typeKey;
+    if (a.entityId != null || b.entityId != null) return a.entityId === b.entityId;
+    return a.typeId === b.typeId;
+  }
+
+  /**
+   * Selection-strip chip. One click keeps the units or buildings already in
+   * that portrait. A double click, or ctrl, selects every match on the map.
+   * @param {{ kind?: string, typeId?: number, typeKey?: string, entityId?: number, ids?: number[], members?: { kind: string, index: number }[] } | number | null} slot
+   * @param {boolean} add
+   * @param {boolean} [allOnMap]
+   */
+  function selectHudSlot(slot, add, allOnMap) {
     if (slot == null) return;
     if (typeof slot === 'object' && slot.kind === 'building' && slot.typeKey) {
-      selectAllBuildingsOfType(slot.typeKey, add);
+      if (allOnMap || !slot.members?.length) selectAllBuildingsOfType(slot.typeKey, add);
+      else {
+        clearUnitSelection();
+        setBuildingSelection(slot.members.slice(), add, slot.members[0]);
+      }
+      return;
+    }
+    const typeId = typeof slot === 'number' ? slot : slot.typeId;
+    if (allOnMap) {
+      if (typeId != null) selectAllOfType(typeId, add);
+      return;
+    }
+    if (typeof slot === 'object' && slot.ids?.length) {
+      selectTheseUnits(slot.ids, add);
       return;
     }
     if (typeof slot === 'object' && slot.entityId != null) {
       selectHudEntity(slot.entityId | 0, add);
       return;
     }
-    const typeId = typeof slot === 'number' ? slot : slot.typeId;
     if (typeId != null) selectAllOfType(typeId, add);
+  }
+
+  /** Keep exactly these selected units (shift adds them). */
+  function selectTheseUnits(ids, add) {
+    const world = getWorld();
+    let owner = -1;
+    for (let k = 0; k < ids.length; k++) {
+      const id = ids[k] | 0;
+      if (id >= 0 && id < world.count && world.alive[id]) {
+        owner = world.owner[id] | 0;
+        break;
+      }
+    }
+    if (owner < 0) return;
+    if (!add) clearUnitSelectionBits();
+    else dropUnitsNotOwnedBy(owner);
+    for (let k = 0; k < ids.length; k++) {
+      const id = ids[k] | 0;
+      if (id < 0 || id >= world.count || !world.alive[id]) continue;
+      if ((world.owner[id] | 0) !== owner) continue;
+      selectEntity(id);
+    }
+    clearBuildingSelection();
+    syncSelectionSquad();
+    onSelectionChanged?.();
   }
 
   function selectHudEntity(id, add) {
@@ -1691,6 +1746,14 @@ export function createGameInput(opts) {
 
   function finishMarqueeSelect(unitHits, buildings, add, flags) {
     const winner = boxSelectWinner(unitHits, buildings.length, flags?.length ?? 0);
+    // Nothing inside, and a ghost is out: same as Esc / X / A. Selecting
+    // something still just leaves placement.
+    if (winner === 'none' && isPlacing()) {
+      cancelPlacement();
+      syncSelectionSquad();
+      onSelectionChanged?.();
+      return;
+    }
     if (winner === 'units') {
       clearBuildingSelection();
       syncSelectionSquad();
@@ -1698,11 +1761,13 @@ export function createGameInput(opts) {
       return;
     }
     if (winner === 'flags') {
+      abandonPlacement();
       clearUnitSelection();
       setBuildingSelection(flags, add, flags[0]);
       return;
     }
     if (winner === 'buildings') {
+      abandonPlacement();
       clearUnitSelection();
       setBuildingSelection(buildings, add, buildings[0]);
       return;
@@ -1714,8 +1779,6 @@ export function createGameInput(opts) {
 
   function boxSelect(x0, y0, x1, y1, add) {
     if (!canUseInput()) return;
-    // Selecting units / buildings leaves build/place UI.
-    abandonPlacement();
     const rect = canvas.getBoundingClientRect();
     const minX = Math.min(x0, x1) - rect.left;
     const maxX = Math.max(x0, x1) - rect.left;
@@ -1761,7 +1824,6 @@ export function createGameInput(opts) {
 
   function polySelect(clientPts, add) {
     if (!canUseInput() || !clientPts || clientPts.length < 3) return;
-    abandonPlacement();
     const rect = canvas.getBoundingClientRect();
     const pts = [];
     let minX = Infinity;
@@ -1831,7 +1893,6 @@ export function createGameInput(opts) {
    */
   function groundLoopSelect(loop, add = false) {
     if (!canUseInput() || !loop || loop.length < 3) return false;
-    abandonPlacement();
     const pts = [];
     let minX = Infinity;
     let minZ = Infinity;
@@ -2306,9 +2367,18 @@ export function createGameInput(opts) {
     hideSelectionBox();
 
     // Top selection strip acts as on-screen buttons: a press on a chip owns
-    // the gesture (no box-select / ability-hold); the type is selected on up.
-    selHudGesture = renderer.pickSelectionHud?.(e.clientX, e.clientY) != null;
+    // the gesture (no box-select / ability-hold). One click keeps that
+    // portrait's units; the second press selects the whole type.
+    selHudRepeat = false;
+    const hudSlot = renderer.pickSelectionHud?.(e.clientX, e.clientY) ?? null;
+    const hudNow = performance.now();
+    selHudRepeat = !!lastHudTap
+      && hudNow - lastHudTap.t <= DOUBLE_MS
+      && Math.hypot(e.clientX - lastHudTap.x, e.clientY - lastHudTap.y) <= DOUBLE_PX
+      && (hudSlot == null || hudSlotSame(lastHudTap.slot, hudSlot));
+    selHudGesture = hudSlot != null || selHudRepeat;
     if (selHudGesture) return true;
+    lastHudTap = null;
 
     const ctrlId = renderer.pickControlGroupHud?.(e.clientX, e.clientY);
     if (ctrlId != null) {
@@ -2656,10 +2726,23 @@ export function createGameInput(opts) {
         if (!ctrlHoldAssigned) tapControlGroup(wasCtrlGroup);
         lastTap = null;
       } else if (wasSelHud) {
-        // Release on the same chip → select every unit/building of that type
-        // for the current owner (shift adds), like v1's selection panel.
-        const slot = renderer.pickSelectionHud?.(e.clientX, e.clientY);
-        if (slot != null) selectHudSlot(slot, e.shiftKey);
+        // One click keeps the units already in the portrait. Double-click
+        // (or ctrl) selects every match on the map. The row recenters after
+        // a narrow, so a second press on the first spot still counts.
+        const slot = renderer.pickSelectionHud?.(e.clientX, e.clientY)
+          ?? (selHudRepeat ? lastHudTap?.slot : null);
+        if (slot != null) {
+          const allOnMap = !!(
+            e.ctrlKey
+            || e.metaKey
+            || (selHudRepeat && lastHudTap && hudSlotSame(lastHudTap.slot, slot))
+          );
+          selectHudSlot(slot, e.shiftKey, allOnMap);
+          lastHudTap = { t: tapAt, x: e.clientX, y: e.clientY, slot };
+        } else {
+          lastHudTap = null;
+        }
+        selHudRepeat = false;
         lastTap = null;
       } else if (isPlacing()) {
         let radialHandled = false;

@@ -20,7 +20,7 @@ import { desireCastBonus } from './aiDesire.js';
 export const AI_STANCE = {
   /** No army orders - unit sim aggro is the only fight. */
   HOLD: 'hold',
-  /** Intercept hostiles in the agora yard. Never F2 the map. */
+  /** Intercept hostiles in the yard. Heat 3+ sometimes seeks a seen objective. */
   DEFEND: 'defend',
   /** Push the army at the enemy centroid (opt-in; stress FFA). */
   ATTACK: 'attack',
@@ -128,7 +128,8 @@ export const AI_STRATEGIES = {
     castChance: 20,
     castCap: 5,
   },
-  // Guards immediately; piles onto an enemy pad that's already being taken.
+  // Guards immediately and piles onto a pad already being taken.
+  // A veteran control group sometimes seeks, and sometimes just wanders.
   aggressive: {
     economy: true,
     path: AI_PATH.ARMY,
@@ -141,7 +142,8 @@ export const AI_STRATEGIES = {
     castChance: 28,
     castCap: 6,
   },
-  // Angryboi - same facts, louder reply. Still only answers what was shown.
+  // Louder than aggressive, and a larger roaming group that looks more often.
+  // Still comes home first. Armies and buildings only if seen; agoras are public.
   reckless: {
     economy: true,
     path: AI_PATH.ARMY,

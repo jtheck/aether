@@ -4,7 +4,7 @@
 import { MAX_ENTITIES } from './world.js';
 import { MAX_PROJECTILES } from './projectiles.js';
 
-export const SHARED_LAYOUT_VERSION = 13;
+export const SHARED_LAYOUT_VERSION = 14;
 const HEADER_I32 = 6; // version, unitCount, tick, projectileActive, publishSeq, projectileHighWater
 
 export function simSharedByteSize() {
@@ -29,6 +29,7 @@ export function simSharedByteSize() {
     MAX_ENTITIES + // carriedKind (0 = empty, else resource index + 1)
     MAX_ENTITIES + // gatherAct (0 none / 1 chop / 2 haul)
     MAX_ENTITIES + // named (hero)
+    MAX_ENTITIES * 2 + // bodyScale (uint16 millis, 1000 = normal)
     MAX_PROJECTILES * 4 * 4 + // projectile px, py, vx, vy
     MAX_PROJECTILES * 4 + // projectile generation
     MAX_PROJECTILES * 2 * 2 + // projectile age, lifetime
@@ -78,6 +79,9 @@ export function mapSharedState(sab) {
   o += MAX_ENTITIES;
   const named = new Uint8Array(sab, o, MAX_ENTITIES);
   o += MAX_ENTITIES;
+  // MAX_ENTITIES is even, so this uint8 run stays 2-aligned for the scale.
+  const bodyScale = new Uint16Array(sab, o, MAX_ENTITIES);
+  o += MAX_ENTITIES * 2;
 
   const projectilePx = new Int32Array(sab, o, MAX_PROJECTILES);
   o += MAX_PROJECTILES * 4;
@@ -126,6 +130,7 @@ export function mapSharedState(sab) {
     carriedKind,
     gatherAct,
     named,
+    bodyScale,
     projectiles: {
       px: projectilePx,
       py: projectilePy,
@@ -179,6 +184,9 @@ export function publishWorld(w, s) {
   }
   if (w.named && s.named) {
     s.named.set(w.named.subarray(0, n));
+  }
+  if (w.bodyScale && s.bodyScale) {
+    s.bodyScale.set(w.bodyScale.subarray(0, n));
   }
 }
 
@@ -235,6 +243,8 @@ export function simViewFacade(s) {
     carriedAmt: s.carriedAmt,
     carriedKind: s.carriedKind,
     gatherAct: s.gatherAct,
+    named: s.named,
+    bodyScale: s.bodyScale,
     projectiles: {
       get activeCount() {
         return s.header[3];

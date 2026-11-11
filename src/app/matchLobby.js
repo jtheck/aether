@@ -18,6 +18,8 @@ import {
   claimSeat,
   cloneRoster,
   countHumans,
+  countPlaying,
+  cycleSeatAuto,
   createRoster,
   moveRosterPerson,
   releaseSeat,
@@ -201,7 +203,7 @@ export function createMatchLobby({
       hostId,
       hostName,
       hostColor,
-      playerCount: countHumans(seats),
+      playerCount: countPlaying(seats),
       maxPlayers: getMode(mode)?.maxPlayers ?? seats.length,
       countdownEndsAt,
       userId,
@@ -1192,6 +1194,36 @@ export function createMatchLobby({
     if (restoreWorld) onLeaveMatch?.();
   }
 
+  function cycleAuto(index) {
+    if (!hosting || ranked || phase === 'idle' || phase === 'starting' || phase === 'playing') return false;
+    if (!getMode(mode)?.allowAi) return false;
+    const seat = Number.isInteger(index) ? index : Number(index);
+    if (!Number.isInteger(seat)) return false;
+    const cycled = cycleSeatAuto(seats, seat);
+    if (!cycled.ok) return false;
+    seats = cycled.seats;
+    if (phase === 'countdown') abortCountdown(true);
+    publishRoom();
+    return true;
+  }
+
+  function moveSeat(index, dir) {
+    if (!hosting || phase === 'idle' || phase === 'starting' || phase === 'playing') return false;
+    if (!getMode(mode)?.teams) return false;
+    const moved = moveRosterPerson(seats, spectators, '', dir, {
+      hostId,
+      allowSpectators: false,
+      teams: true,
+      seatIndex: index | 0,
+    });
+    if (!moved.ok) return false;
+    seats = moved.seats;
+    spectators = moved.spectators;
+    if (phase === 'countdown') abortCountdown(true);
+    publishRoom();
+    return true;
+  }
+
   function movePerson(userId, dir) {
     if (!hosting || phase === 'idle' || phase === 'starting' || phase === 'playing') return false;
     if (!userId) return false;
@@ -1747,6 +1779,8 @@ export function createMatchLobby({
     setReplayWatch,
     sendView,
     movePerson,
+    moveSeat,
+    cycleAuto,
     setSetting,
     setMap,
     requestStart,

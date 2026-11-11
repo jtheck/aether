@@ -2,7 +2,7 @@
 // Optional `mt` is the map type (skirmish, koth, adventure). Older 1v1 and teams
 // labels read as skirmish. Missing means the old generator, which dries every start.
 // v3 files still decode (no scenery / doodads / backdrops / placements).
-// Optional `dd` is a doodadType RLE (visual-only stamps).
+// Optional `dd` is a doodadType RLE. Optional `dc` is the standard banner index.
 // Optional `bd` is a list of off-board backdrop poses.
 // Optional `wl` is procedural curtain walls (style + corner runs). The forge draws
 // them while editing; a match stamps them onto the field and renders that copy.
@@ -10,7 +10,7 @@
 import { applyTableSilhouette, createFullCellMask, createFullCellRadius, normalizeTableShape } from './tableShape.js';
 import { applySeededHeight, buildField, composeHeightMap, computeSeedRegionLift, createField, generateHeightMap, PAINTED_LIFT_MAX, PAINTED_LIFT_MIN, refreshTerrainDerived, STRESS_SPAWN_CLEAR_TILES, TILE_SIZE_F, tileCenterX, tileCenterY, worldToTile, worldToTileZ } from './field.js';
 import { applyAuthoredScenery, applySavedRockStock, clearOffTableScenery, rockYield, SCENERY } from './scenery.js';
-import { ensureDoodadArrays, hasAuthoredDoodads } from './doodads.js';
+import { applyStandardOccupancy, authoredStandardColors, ensureDoodadArrays, hasAuthoredDoodads } from './doodads.js';
 import { cloneBackdrops, encodeBackdrops, normalizeBackdrops } from './backdrops.js';
 import { spawn } from './world.js';
 import { createBuilding, snapBuildingWorld, applyWorldStructureOccupancy } from './buildings.js';
@@ -22,7 +22,7 @@ import * as fx from './fixed.js';
 import { normalizeNeutralTeams, normalizeTeamByOwner } from './teams.js';
 import { applyWallOccupancy, decodeWalls, encodeWalls } from './walls.js';
 import { normalizeMapType } from './mapType.js';
-import { isNamedUnit } from './namedUnit.js';
+import { NAMED_UNIT_SCALE, isNamedUnit, quantizeBodyScale } from './namedUnit.js';
 import { spawnOpeningVillagers, spawnPadsForMapType } from './worldSetup.js';
 
 export const GARDEN_VERSION = 4;
@@ -197,6 +197,7 @@ function normalizeUnits(list) {
       ...(world || {}),
       ...(Number.isFinite(Number(u.hp)) ? { hp: u.hp | 0 } : {}),
       ...(Number.isFinite(yaw) && Math.abs(yaw) > 1e-4 ? { yaw } : {}),
+      ...(quantizeBodyScale(u.scale) != null ? { scale: quantizeBodyScale(u.scale) } : {}),
     };
   });
 }
@@ -219,6 +220,38 @@ function applyUnitYaws(units, raw) {
     if (Number.isFinite(y) && Math.abs(y) > 1e-4) units[i].yaw = y;
   }
   return units;
+}
+
+function encodeUnitScales(units) {
+  let any = false;
+  const out = [];
+  for (let i = 0; i < units.length; i++) {
+    const u = units[i];
+    const q = quantizeBodyScale(u.scale);
+    const implicit = isNamedUnit(u.name) ? NAMED_UNIT_SCALE : 1;
+    if (q != null && Math.abs(q - implicit) > 0.005) {
+      any = true;
+      out.push(q);
+    } else {
+      out.push(0);
+    }
+  }
+  return any ? out : null;
+}
+
+function applyUnitScales(units, raw) {
+  if (!Array.isArray(raw)) return units;
+  for (let i = 0; i < units.length && i < raw.length; i++) {
+    const q = quantizeBodyScale(raw[i]);
+    if (q != null) units[i].scale = q;
+  }
+  return units;
+}
+
+function storedBuildingScale(scale) {
+  const q = quantizeBodyScale(scale);
+  if (q == null || Math.abs(q - 1) <= 0.005) return null;
+  return q;
 }
 
 function fixedFaceFromYaw(yaw) {
@@ -245,18 +278,35 @@ function encodeUnitTuple(u) {
   return [u.owner, u.type, u.tx, u.tz];
 }
 
+function encodeBuildingTuple(b) {
+  const row = [b.owner, b.type, b.x, b.z, b.yaw];
+  const scale = storedBuildingScale(b.scale);
+  if (scale != null) row.push(scale);
+  return row;
+}
+
 function normalizeBuildings(list) {
   if (!Array.isArray(list)) return [];
   return list.map((b) => {
     if (Array.isArray(b)) {
-      return { owner: b[0] | 0, type: String(b[1]), x: Number(b[2]) || 0, z: Number(b[3]) || 0, yaw: Number(b[4]) || 0 };
+      const scale = storedBuildingScale(b[5]);
+      return {
+        owner: b[0] | 0,
+        type: String(b[1]),
+        x: Number(b[2]) || 0,
+        z: Number(b[3]) || 0,
+        yaw: Number(b[4]) || 0,
+        ...(scale != null ? { scale } : {}),
+      };
     }
+    const scale = storedBuildingScale(b.scale);
     return {
       owner: b.owner | 0,
       type: String(b.type),
       x: Number(b.x) || 0,
       z: Number(b.z) || 0,
       yaw: Number(b.yaw) || 0,
+      ...(scale != null ? { scale } : {}),
     };
   });
 }
@@ -404,6 +454,24 @@ function regionLiftMatchesSeed(field) {
   return true;
 }
 
+/** Keep in step with MATCH_AI_TEMPERAMENTS. Empty means Stand. */
+const OWNER_INTENT = new Set(['passive', 'cautious', 'steady', 'aggressive', 'reckless']);
+
+function normalizeOwnerIntents(raw) {
+  if (!Array.isArray(raw)) return null;
+  const out = [];
+  const seen = new Set();
+  for (const row of raw) {
+    const owner = Array.isArray(row) ? (row[0] | 0) : -1;
+    const intent = Array.isArray(row) ? String(row[1] ?? '') : '';
+    if (owner < 0 || owner > 15 || seen.has(owner) || !OWNER_INTENT.has(intent)) continue;
+    seen.add(owner);
+    out.push([owner, intent]);
+  }
+  out.sort((a, b) => a[0] - b[0]);
+  return out.length ? out : null;
+}
+
 export function encodeGarden(field, extras = {}) {
   const shape = normalizeTableShape(field, field.tableShape ?? {});
   const units = normalizeUnits(extras.units);
@@ -446,6 +514,8 @@ export function encodeGarden(field, extras = {}) {
   }
   if (hasAuthoredDoodads(field)) {
     out.dd = encodeRle(field.doodadType);
+    const colors = authoredStandardColors(field);
+    if (colors) out.dc = encodeRle(colors);
   }
   if (rockStockNeedsSave(field)) out.rk = encodeRle(field.rockStock);
   const backdrops = normalizeBackdrops(
@@ -456,8 +526,10 @@ export function encodeGarden(field, extras = {}) {
     out.u = units.map(encodeUnitTuple);
     const yaws = encodeUnitYaws(units);
     if (yaws) out.uy = yaws;
+    const scales = encodeUnitScales(units);
+    if (scales) out.us = scales;
   }
-  if (buildings.length) out.b = buildings.map((b) => [b.owner, b.type, b.x, b.z, b.yaw]);
+  if (buildings.length) out.b = buildings.map(encodeBuildingTuple);
   if (agoras.length) out.g = agoras.map((g) => [g.owner, g.x, g.z]);
   const sr = encodeStartingResources(extras.startingResources);
   if (sr) out.sr = sr;
@@ -479,6 +551,8 @@ export function encodeGarden(field, extras = {}) {
   if (neutrals) out.nr = neutrals;
   const teams = normalizeTeamByOwner(extras.teamByOwner);
   if (teams) out.tm = teams;
+  const intents = normalizeOwnerIntents(extras.ownerIntents);
+  if (intents) out.ap = intents;
   if (extras.mapType != null && String(extras.mapType).trim() !== '') {
     out.mt = normalizeMapType(extras.mapType);
   }
@@ -497,8 +571,19 @@ export function patchGarden(data, extras = {}) {
   const next = { ...data };
   if (extras.units) {
     const units = normalizeUnits(extras.units);
-    if (units.length) next.u = units.map(encodeUnitTuple);
-    else delete next.u;
+    if (units.length) {
+      next.u = units.map(encodeUnitTuple);
+      const yaws = encodeUnitYaws(units);
+      if (yaws) next.uy = yaws;
+      else delete next.uy;
+      const scales = encodeUnitScales(units);
+      if (scales) next.us = scales;
+      else delete next.us;
+    } else {
+      delete next.u;
+      delete next.uy;
+      delete next.us;
+    }
   }
   if (extras.startingResources != null) {
     const sr = encodeStartingResources(extras.startingResources);
@@ -544,9 +629,10 @@ export function decodeGarden(data) {
     sceneryType: data.sc ? decodeRle(data.sc, n) : null,
     treeStock: data.ts ? decodeRle(data.ts, n) : null,
     doodadType: data.dd ? decodeRle(data.dd, n) : null,
+    doodadColor: data.dc ? decodeRle(data.dc, n) : null,
     rockStock: data.rk ? decodeRleU16(data.rk, n) : null,
     backdrops: normalizeBackdrops(data.bd),
-    units: applyUnitYaws(normalizeUnits(data.u), data.uy),
+    units: applyUnitScales(applyUnitYaws(normalizeUnits(data.u), data.uy), data.us),
     buildings: normalizeBuildings(data.b),
     agoras: normalizeAgoras(data.g),
     startingResources: normalizeStartingResources(data.sr ?? data.startingResources),
@@ -562,6 +648,7 @@ export function decodeGarden(data) {
     cameraHalfF: Number(data.ch) > 0 ? Number(data.ch) : 0,
     neutralTeams: normalizeNeutralTeams(data.nr),
     teamByOwner: normalizeTeamByOwner(data.tm),
+    ownerIntents: normalizeOwnerIntents(data.ap),
     walls: decodeWalls(data.wl),
     mapType: data.mt != null && String(data.mt).trim() !== '' ? normalizeMapType(data.mt) : '',
     preview: typeof data.pv === 'string' ? data.pv : '',
@@ -624,6 +711,7 @@ export function fieldFromGarden(data) {
   if (g.doodadType?.length === field.width * field.height) {
     ensureDoodadArrays(field);
     field.doodadType.set(g.doodadType);
+    if (g.doodadColor?.length === field.doodadColor.length) field.doodadColor.set(g.doodadColor);
   }
   clearOffTableScenery(field);
   if (g.backdrops?.length) field.backdrops = cloneBackdrops(g.backdrops);
@@ -632,6 +720,7 @@ export function fieldFromGarden(data) {
     field.walls = g.walls;
     applyWallOccupancy(field, g.walls);
   }
+  applyStandardOccupancy(field);
   return field;
 }
 
@@ -762,6 +851,7 @@ export function applyGardenPlacements(world, field, garden, keepOwners = null) {
       y: hasWorld ? fx.fromFloat(u.z) : tileCenterY(u.tz),
       hp: Number.isFinite(Number(u.hp)) ? u.hp | 0 : undefined,
       named: isNamedUnit(u.name),
+      scale: u.scale,
       ...fixedFaceFromYaw(u.yaw),
     });
   }
@@ -773,6 +863,7 @@ export function applyGardenPlacements(world, field, garden, keepOwners = null) {
       x: fx.toFloat(snapped.x),
       z: fx.toFloat(snapped.z),
       yaw: b.yaw,
+      scale: b.scale,
     }));
   }
   if (agoras.length) {

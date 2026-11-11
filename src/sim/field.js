@@ -177,15 +177,49 @@ export const TERRAIN = {
   GRAVEL: 4,
   /** Cobble pavers. Overlay of the pave set. */
   TILE: 5,
+  /** Pattern on the cobble. Top of the pave set. */
+  DECORATIVE: 6,
+  /** Cracked earth. Base of the burn set; charred draws over it. */
+  SCORCHED: 7,
+  /** Black stone. Overlay of the burn set; lava draws over it. */
+  CHARRED: 8,
+  /** Molten rock. Top of the burn set. */
+  LAVA: 9,
 };
 
-/** Which 4×4 atlas PNG a tile's shore comes from. 3 is the natural junction sheet. */
+/** Which 4×4 atlas PNG a tile's shore comes from. 3, 6, and 11 are junction sheets. */
 export const ATLAS = {
   GRASS_DIRT: 0,
   GRASS_WATER: 1,
   DIRT_WATER: 2,
   TILE_GRAVEL: 4,
+  /** Gravel blob on dirt. Tile and decorative count as gravel on this shore. */
+  GRAVEL_DIRT: 5,
+  /** Decorative blob on tile. */
+  DECORATIVE_TILE: 7,
+  /** Scorched blob on dirt. Charred and lava count as scorched on this shore. */
+  SCORCHED_DIRT: 8,
+  /** Charred blob on scorched. */
+  CHARRED_SCORCHED: 9,
+  /** Lava blob on charred. */
+  LAVA_CHARRED: 10,
 };
+
+/** Sheet id sits above this. Twelve bits hold a junction key. */
+export const LAYER_SHIFT = 12;
+const LAYER_CELL_MASK = (1 << LAYER_SHIFT) - 1;
+
+export function packLayer(sheet, cell) {
+  return (sheet << LAYER_SHIFT) | (cell & LAYER_CELL_MASK);
+}
+
+export function layerSheet(layer) {
+  return layer >>> LAYER_SHIFT;
+}
+
+export function layerCell(layer) {
+  return layer & LAYER_CELL_MASK;
+}
 
 const ATLAS_CELL_FULL = 6;
 const ATLAS_CELL_EMPTY = 12;
@@ -193,14 +227,25 @@ const ATLAS_CELL_EMPTY = 12;
 /**
  * Sets that blend only among themselves. Grass / dirt / water stay on their
  * own sheets. `order` is low to high - later members draw over earlier ones.
- * `pairs` is [high, low, atlas]. Two members need one sheet. A third member
- * needs a sheet for each pair it forms; until those exist, a lower tile
- * touched by two higher members shows only the higher blob.
+ * `pairs` is [high, low, atlas]. Two members need one sheet. A higher member
+ * with no sheet onto a lower tile counts as the member beneath it.
+ * Gravel meets dirt on atlas-gravel-dirt, and scorched on atlas-scorched-dirt.
+ * Both shores are sampled from the dirt tile.
  */
 export const TERRAIN_BLEND_SETS = [
   {
-    order: [TERRAIN.GRAVEL, TERRAIN.TILE],
-    pairs: [[TERRAIN.TILE, TERRAIN.GRAVEL, ATLAS.TILE_GRAVEL]],
+    order: [TERRAIN.GRAVEL, TERRAIN.TILE, TERRAIN.DECORATIVE],
+    pairs: [
+      [TERRAIN.TILE, TERRAIN.GRAVEL, ATLAS.TILE_GRAVEL],
+      [TERRAIN.DECORATIVE, TERRAIN.TILE, ATLAS.DECORATIVE_TILE],
+    ],
+  },
+  {
+    order: [TERRAIN.SCORCHED, TERRAIN.CHARRED, TERRAIN.LAVA],
+    pairs: [
+      [TERRAIN.CHARRED, TERRAIN.SCORCHED, ATLAS.CHARRED_SCORCHED],
+      [TERRAIN.LAVA, TERRAIN.CHARRED, ATLAS.LAVA_CHARRED],
+    ],
   },
 ];
 
@@ -230,7 +275,7 @@ export function isBlendAtlas(id) {
 }
 
 /**
- * Packed `sheet << 8 | cell` for a side blend set, or null for grass / dirt / water.
+ * Packed `sheet << LAYER_SHIFT | cell` for a side blend set, or null for grass / dirt / water.
  * The top member is the solid cell. A lower member shows the highest overlay
  * touching its corners, or the empty cell when nothing does.
  */
@@ -243,18 +288,22 @@ export function blendSetLayer(types, width, height, x, z) {
   if (self === top) {
     const under = set.order[rank - 1];
     const sheet = pairAtlas(set, top, under);
-    return ((sheet >= 0 ? sheet : set.pairs[0][2]) << 8) | ATLAS_CELL_FULL;
+    return packLayer(sheet >= 0 ? sheet : set.pairs[0][2], ATLAS_CELL_FULL);
   }
   for (let i = set.order.length - 1; i > rank; i--) {
     const above = set.order[i];
-    const cell = terrainCornerCell(types, width, height, x, z, above);
-    if (cell === ATLAS_CELL_EMPTY) continue;
     const sheet = pairAtlas(set, above, self);
     if (sheet < 0) continue;
-    return (sheet << 8) | cell;
+    const also = [];
+    for (let j = i + 1; j < set.order.length; j++) {
+      if (pairAtlas(set, set.order[j], self) < 0) also.push(set.order[j]);
+    }
+    const cell = terrainCornerCell(types, width, height, x, z, above, ...also);
+    if (cell === ATLAS_CELL_EMPTY) continue;
+    return packLayer(sheet, cell);
   }
   const sheet = pairAtlas(set, set.order[rank + 1], self);
-  return ((sheet >= 0 ? sheet : set.pairs[0][2]) << 8) | ATLAS_CELL_EMPTY;
+  return packLayer(sheet >= 0 ? sheet : set.pairs[0][2], ATLAS_CELL_EMPTY);
 }
 
 /** World-Y scale for heightMap (0–1) - tile ripples plus edge-locked region lift. */
@@ -264,6 +313,21 @@ export const HEIGHT_AMPLITUDE = 14;
  * A constant offset, so a lake stays at its own elevation instead of scaling toward y = 0.
  */
 export const WATER_RECESS = 0.45;
+
+/** Water and lava. Each levels as its own pool and does not mix with the other. */
+export function isLiquidTerrain(terrain) {
+  return terrain === TERRAIN.WATER || terrain === TERRAIN.LAVA;
+}
+
+/**
+ * Impassable liquid. Open water is atlas cell 12. Every lava tile is the pool;
+ * the charred bank stays walkable.
+ */
+export function isBlockedLiquid(field, i) {
+  const t = field?.terrainTypes?.[i];
+  if (t === TERRAIN.LAVA) return true;
+  return t === TERRAIN.WATER && field.tileType?.[i] === 12;
+}
 /**
  * Bank tiles may slide toward their pond's waterline, but only this far (world Y).
  * Enough to take the roll out of a normal shore. A steep bank stays a bank.
@@ -339,8 +403,10 @@ export function createField(seed = 0, dims = {}) {
     /** Yellow ring inside the table silhouette - survives tree fell clears. */
     tableSlowMask: new Uint8Array(n),
     sceneryType: new Uint8Array(n),
-    /** Visual-only Forge stamps (mushrooms, wagons). No pass / gather. */
+    /** Forge stamps (mushrooms, wagons, torches, derricks, windvanes, standards). */
     doodadType: new Uint8Array(n),
+    /** Banner swatch index for standards. 0 is the first army color. */
+    doodadColor: new Uint8Array(n),
     // Per-tile wood remaining / burn timer (0 when no living tree).
     treeStock: new Uint8Array(n),
     treeBurn: new Uint16Array(n),
@@ -437,6 +503,7 @@ export function fieldSnapshot(field) {
       : [],
     sceneryType: field.sceneryType.slice(),
     doodadType: field.doodadType?.slice?.() ?? new Uint8Array(field.width * field.height),
+    doodadColor: field.doodadColor?.slice?.() ?? new Uint8Array(field.width * field.height),
     treeStock: field.treeStock?.slice?.() ?? new Uint8Array(field.width * field.height),
     treeBurn: field.treeBurn instanceof Uint16Array
       ? field.treeBurn.slice()
@@ -470,6 +537,7 @@ export function fieldSnapshot(field) {
     };
   }
   if (field.wallBlock?.length) snapshot.wallBlock = field.wallBlock.slice();
+  if (field.standardBlock?.length) snapshot.standardBlock = field.standardBlock.slice();
   const tileMask = field.activeMask ?? field.tileMask ?? field.enabledMask;
   if (tileMask?.slice) snapshot.activeMask = tileMask.slice();
   if (field.chunkMask && typeof field.chunkMask[Symbol.iterator] === 'function') {
@@ -489,7 +557,8 @@ export function fieldSnapshot(field) {
   return snapshot;
 }
 
-function waterTouchesBank(water, width, height, x, z) {
+function waterTouchesBank(liquid, width, height, x, z) {
+  const self = liquid[z * width + x];
   for (let dz = -1; dz <= 1; dz++) {
     const nz = z + dz;
     if (nz < 0 || nz >= height) return true;
@@ -497,16 +566,16 @@ function waterTouchesBank(water, width, height, x, z) {
     for (let dx = -1; dx <= 1; dx++) {
       if (dx === 0 && dz === 0) continue;
       const nx = x + dx;
-      if (nx < 0 || nx >= width || water[row + nx] === 0) return true;
+      if (nx < 0 || nx >= width || liquid[row + nx] !== self) return true;
     }
   }
   return false;
 }
 
 /**
- * Flatten each connected body of water toward its own shoreline.
- * The bank stays on the felt. Open water levels off at that pond's elevation,
- * not at the lowest point on the map.
+ * Flatten each connected body of water or lava toward its own shoreline.
+ * The bank stays on the felt. Open liquid levels off at that pond's elevation,
+ * not at the lowest point on the map. A lava pool beside a lake stays its own body.
  */
 export function rebuildWaterSurface(field) {
   const { width, height, heightMap, terrainTypes } = field;
@@ -517,27 +586,27 @@ export function rebuildWaterSurface(field) {
     level = new Float32Array(n);
     field.waterLevel = level;
   }
-  const water = new Uint8Array(n);
-  let waterCount = 0;
+  const liquid = new Uint8Array(n);
+  let liquidCount = 0;
   for (let i = 0; i < n; i++) {
     level[i] = heightMap[i];
-    if (terrainTypes[i] === TERRAIN.WATER) {
-      water[i] = 1;
-      waterCount++;
-    }
+    const id = terrainTypes[i] === TERRAIN.WATER ? 1 : terrainTypes[i] === TERRAIN.LAVA ? 2 : 0;
+    if (!id) continue;
+    liquid[i] = id;
+    liquidCount++;
   }
   field.waterSurfaceReady = true;
-  if (waterCount === 0) return level;
+  if (liquidCount === 0) return level;
 
   const comp = new Int32Array(n);
   comp.fill(-1);
   const dist = new Uint16Array(n);
   dist.fill(0xffff);
-  const queue = new Int32Array(waterCount);
+  const queue = new Int32Array(liquidCount);
   let compId = 0;
   let qt = 0;
   for (let i = 0; i < n; i++) {
-    if (water[i] === 0 || comp[i] !== -1) continue;
+    if (liquid[i] === 0 || comp[i] !== -1) continue;
     let qh = qt;
     queue[qt++] = i;
     comp[i] = compId;
@@ -545,6 +614,7 @@ export function rebuildWaterSurface(field) {
       const cur = queue[qh++];
       const x = cur % width;
       const z = (cur / width) | 0;
+      const kind = liquid[cur];
       for (let dz = -1; dz <= 1; dz++) {
         const nz = z + dz;
         if (nz < 0 || nz >= height) continue;
@@ -554,7 +624,7 @@ export function rebuildWaterSurface(field) {
           const nx = x + dx;
           if (nx < 0 || nx >= width) continue;
           const j = row + nx;
-          if (water[j] === 0 || comp[j] !== -1) continue;
+          if (liquid[j] !== kind || comp[j] !== -1) continue;
           comp[j] = compId;
           queue[qt++] = j;
         }
@@ -567,7 +637,7 @@ export function rebuildWaterSurface(field) {
   for (let z = 0; z < height; z++) {
     for (let x = 0; x < width; x++) {
       const i = z * width + x;
-      if (water[i] === 0 || !waterTouchesBank(water, width, height, x, z)) continue;
+      if (liquid[i] === 0 || !waterTouchesBank(liquid, width, height, x, z)) continue;
       dist[i] = 0;
       queue[qt++] = i;
     }
@@ -577,20 +647,21 @@ export function rebuildWaterSurface(field) {
     const cur = queue[qh++];
     const x = cur % width;
     const z = (cur / width) | 0;
+    const kind = liquid[cur];
     const nd = dist[cur] + 1;
-    if (x > 0 && water[cur - 1] && dist[cur - 1] > nd) {
+    if (x > 0 && liquid[cur - 1] === kind && dist[cur - 1] > nd) {
       dist[cur - 1] = nd;
       queue[qt++] = cur - 1;
     }
-    if (x + 1 < width && water[cur + 1] && dist[cur + 1] > nd) {
+    if (x + 1 < width && liquid[cur + 1] === kind && dist[cur + 1] > nd) {
       dist[cur + 1] = nd;
       queue[qt++] = cur + 1;
     }
-    if (z > 0 && water[cur - width] && dist[cur - width] > nd) {
+    if (z > 0 && liquid[cur - width] === kind && dist[cur - width] > nd) {
       dist[cur - width] = nd;
       queue[qt++] = cur - width;
     }
-    if (z + 1 < height && water[cur + width] && dist[cur + width] > nd) {
+    if (z + 1 < height && liquid[cur + width] === kind && dist[cur + width] > nd) {
       dist[cur + width] = nd;
       queue[qt++] = cur + width;
     }
@@ -601,7 +672,7 @@ export function rebuildWaterSurface(field) {
   const allSum = new Float64Array(compId);
   const allCnt = new Uint32Array(compId);
   for (let i = 0; i < n; i++) {
-    if (water[i] === 0) continue;
+    if (liquid[i] === 0) continue;
     const id = comp[i];
     allSum[id] += heightMap[i];
     allCnt[id]++;
@@ -617,7 +688,7 @@ export function rebuildWaterSurface(field) {
 
   const shoreCap = WATER_SHORE_SLIDE / HEIGHT_AMPLITUDE;
   for (let i = 0; i < n; i++) {
-    if (water[i] === 0) continue;
+    if (liquid[i] === 0) continue;
     const orig = heightMap[i];
     const delta = (plane[comp[i]] - orig) * WATER_FLAT;
     const d = dist[i];
@@ -645,7 +716,7 @@ export function rebuildWaterSurface(field) {
       field.waterDirty = mask;
     }
     for (let i = 0; i < n; i++) {
-      if (terrainTypes[i] !== TERRAIN.WATER) continue;
+      if (!isLiquidTerrain(terrainTypes[i])) continue;
       if (Math.abs(prev[i] - level[i]) > 1e-4) mask[i] = 1;
     }
   }
@@ -673,7 +744,7 @@ function relaxWaterSlope(field, level) {
   const n = width * height;
   if (!heightMap || heightMap.length !== n) return;
   const visAt = (i) => {
-    if (terrainTypes[i] !== TERRAIN.WATER) return heightMap[i];
+    if (!isLiquidTerrain(terrainTypes[i])) return heightMap[i];
     const e = edgeLockAt(field, i);
     return level[i] - (WATER_RECESS * e) / HEIGHT_AMPLITUDE;
   };
@@ -681,7 +752,7 @@ function relaxWaterSlope(field, level) {
   for (let iter = 0; iter < 24; iter++) {
     let moved = false;
     for (let i = 0; i < n; i++) {
-      if (terrainTypes[i] !== TERRAIN.WATER) continue;
+      if (!isLiquidTerrain(terrainTypes[i])) continue;
       const x = i % width;
       const z = (i / width) | 0;
       let lo = -Infinity;
@@ -726,15 +797,16 @@ export function cornerHeightWorld(field, cx, cz) {
   return tileHeightWorld(field, cx, cz);
 }
 
-/** World Y for a tile. Water sits in a shallow dish on a smoothed local surface. */
+/** World Y for a tile. Water and lava sit in a shallow dish on a smoothed local surface. */
 export function tileHeightWorld(field, tx, tz) {
   const x = tx < 0 ? 0 : tx >= field.width ? field.width - 1 : tx;
   const z = tz < 0 ? 0 : tz >= field.height ? field.height - 1 : tz;
   const i = z * field.width + x;
   ensureWaterSurface(field);
-  const h = field.terrainTypes[i] === TERRAIN.WATER ? field.waterLevel[i] : field.heightMap[i];
+  const liquid = isLiquidTerrain(field.terrainTypes[i]);
+  const h = liquid ? field.waterLevel[i] : field.heightMap[i];
   const y = h * HEIGHT_AMPLITUDE;
-  if (field.terrainTypes[i] === TERRAIN.WATER) return y - WATER_RECESS * edgeLockAt(field, i);
+  if (liquid) return y - WATER_RECESS * edgeLockAt(field, i);
   return y;
 }
 
@@ -1636,7 +1708,7 @@ function waterDishOffsets(field) {
   const offset = new Float32Array(n);
   const { terrainTypes, waterLevel, heightMap } = field;
   for (let i = 0; i < n; i++) {
-    if (terrainTypes[i] === TERRAIN.WATER) offset[i] = waterLevel[i] - heightMap[i];
+    if (isLiquidTerrain(terrainTypes[i])) offset[i] = waterLevel[i] - heightMap[i];
   }
   return offset;
 }
@@ -1646,7 +1718,7 @@ function applyWaterDish(field, offset) {
   if (!field.waterLevel || field.waterLevel.length !== n) field.waterLevel = new Float32Array(n);
   const { terrainTypes, waterLevel, heightMap } = field;
   for (let i = 0; i < n; i++) {
-    waterLevel[i] = terrainTypes[i] === TERRAIN.WATER ? heightMap[i] + offset[i] : heightMap[i];
+    waterLevel[i] = isLiquidTerrain(terrainTypes[i]) ? heightMap[i] + offset[i] : heightMap[i];
   }
   field.waterSurfaceReady = true;
 }
@@ -1690,9 +1762,9 @@ export function composeHeightMap(field, opts = {}) {
 }
 
 /**
- * Land painted over water keeps the height you were looking at.
- * Open water is flattened up off the basin; without this, dirt falls back into that hole
- * and a raise/lower of the lake is lost.
+ * Land painted over water or lava keeps the height you were looking at.
+ * Open liquid is flattened up off the basin; without this, dirt falls back into that hole
+ * and a raise/lower of the pool is lost.
  * `indices` must still have the pre-change water plane in `waterLevel`.
  * @param {number[]} indices
  */
@@ -1717,7 +1789,7 @@ export function adoptDisplayedWaterHeight(field, indices) {
 }
 
 function visibleHeight01(field, i) {
-  if (field.terrainTypes[i] === TERRAIN.WATER) {
+  if (isLiquidTerrain(field.terrainTypes[i])) {
     return field.waterLevel[i] - (WATER_RECESS * edgeLockAt(field, i)) / HEIGHT_AMPLITUDE;
   }
   return field.heightMap[i];
@@ -1829,7 +1901,7 @@ export function paintRegionLift(field, tx, tz, delta, radius = 0) {
     const e = edgeLock[i];
     const desired = desiredHold[k];
     let targetH = desired;
-    if (terrainTypes[i] === TERRAIN.WATER) {
+    if (isLiquidTerrain(terrainTypes[i])) {
       const offset = waterLevel[i] - heightMap[i];
       targetH = desired - offset + (WATER_RECESS * e) / HEIGHT_AMPLITUDE;
     }
@@ -1930,7 +2002,7 @@ export function paintRegionLevel(field, tx, tz, target, strength = 1, radius = 0
     const e = edgeLock[i];
     const desired = desiredHold[k];
     let targetH = desired;
-    if (terrainTypes[i] === TERRAIN.WATER) {
+    if (isLiquidTerrain(terrainTypes[i])) {
       const offset = waterLevel[i] - heightMap[i];
       targetH = desired - offset + (WATER_RECESS * e) / HEIGHT_AMPLITUDE;
     }
@@ -2104,8 +2176,8 @@ function applyTerrainTransitions(field) {
       const i = z * width + x;
       const side = blendSetLayer(terrainTypes, width, height, x, z);
       if (side != null) {
-        atlasId[i] = side >> 8;
-        tileType[i] = side & 255;
+        atlasId[i] = layerSheet(side);
+        tileType[i] = layerCell(side);
         continue;
       }
       const terrain = terrainTypes[i];
@@ -2125,24 +2197,39 @@ function applyTerrainTransitions(field) {
   }
 }
 
-/** Atlas cell covering every corner of tile (x, z) that `terrain` touches. 12 = none. */
-export function terrainCornerCell(types, width, height, x, z, terrain) {
+/**
+ * Atlas cell covering every corner of tile (x, z) that `terrain` touches. 12 = none.
+ * Extra ids count as the same blob.
+ */
+export function terrainCornerCell(types, width, height, x, z, terrain, ...also) {
   let caseNum = 0;
-  if (cornerTouches(types, width, height, x, z, terrain)) caseNum += 1;
-  if (cornerTouches(types, width, height, x, z + 1, terrain)) caseNum += 2;
-  if (cornerTouches(types, width, height, x + 1, z, terrain)) caseNum += 4;
-  if (cornerTouches(types, width, height, x + 1, z + 1, terrain)) caseNum += 8;
+  if (cornerTouches(types, width, height, x, z, terrain, also)) caseNum += 1;
+  if (cornerTouches(types, width, height, x, z + 1, terrain, also)) caseNum += 2;
+  if (cornerTouches(types, width, height, x + 1, z, terrain, also)) caseNum += 4;
+  if (cornerTouches(types, width, height, x + 1, z + 1, terrain, also)) caseNum += 8;
   return CASE_TO_ATLAS[caseNum];
 }
 
-function cornerTouches(types, width, height, cx, cz, terrain) {
+/** Corners of `terrain` plus every higher member of its blend set. */
+export function blendCoverCornerCell(types, width, height, x, z, terrain) {
+  const member = blendMembership.get(terrain);
+  if (!member) return terrainCornerCell(types, width, height, x, z, terrain);
+  const { set, rank } = member;
+  const also = [];
+  for (let i = rank + 1; i < set.order.length; i++) also.push(set.order[i]);
+  return terrainCornerCell(types, width, height, x, z, terrain, ...also);
+}
+
+function cornerTouches(types, width, height, cx, cz, terrain, also) {
   for (let dz = -1; dz <= 0; dz++) {
     const tz = cz + dz;
     if (tz < 0 || tz >= height) continue;
     for (let dx = -1; dx <= 0; dx++) {
       const tx = cx + dx;
       if (tx < 0 || tx >= width) continue;
-      if (types[tz * width + tx] === terrain) return true;
+      const t = types[tz * width + tx];
+      if (t === terrain) return true;
+      for (let i = 0; i < also.length; i++) if (t === also[i]) return true;
     }
   }
   return false;
@@ -2186,7 +2273,7 @@ export function refreshTerrainDerived(field) {
 }
 
 function updatePassFromWater(field) {
-  const { width, height, activeMask, terrainTypes, tileType, pass } = field;
+  const { width, height, activeMask, pass } = field;
   const n = width * height;
   pass.fill(1);
   for (let i = 0; i < n; i++) {
@@ -2194,8 +2281,8 @@ function updatePassFromWater(field) {
       pass[i] = 0;
       continue;
     }
-    // Pure water (solid atlas cell) is impassable; shore transitions stay walkable.
-    if (terrainTypes[i] === TERRAIN.WATER && tileType[i] === 12) pass[i] = 0;
+    // Open water and every lava tile are impassable. A water shore stays walkable.
+    if (isBlockedLiquid(field, i)) pass[i] = 0;
   }
 }
 

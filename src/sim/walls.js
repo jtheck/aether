@@ -5,7 +5,7 @@
 // (two) leave that span open. A shut door or shut gate stays blocked.
 // fieldFromGarden stamps that into field.pass, and the match draws the same runs.
 
-import { TERRAIN, TILE_SIZE_F, worldHalfFFromField, worldHalfZFFromField } from './field.js';
+import { isBlockedLiquid, TILE_SIZE_F, worldHalfFFromField, worldHalfZFFromField } from './field.js';
 import { SCENERY, rockFootprintRadiusForStock } from './scenery.js';
 
 export const WALL_KINDS = ['castle', 'dungeon'];
@@ -753,10 +753,6 @@ function markRunBlocked(field, mask, run) {
   }
 }
 
-function solidWater(field, i) {
-  return field.terrainTypes?.[i] === TERRAIN.WATER && field.tileType?.[i] === 12;
-}
-
 function rockCovers(field, tx, tz) {
   const { width, height, sceneryType } = field;
   if (!sceneryType) return false;
@@ -777,8 +773,9 @@ function rockCovers(field, tx, tz) {
 
 function canRelease(field, i) {
   if (field.activeMask?.[i] === 0) return false;
-  if (solidWater(field, i)) return false;
+  if (isBlockedLiquid(field, i)) return false;
   if (field.tableEdge?.[i]) return false;
+  if (field.standardBlock?.[i]) return false;
   const tz = (i / field.width) | 0;
   const tx = i - tz * field.width;
   if (rockCovers(field, tx, tz)) return false;

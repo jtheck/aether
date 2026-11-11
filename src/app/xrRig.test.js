@@ -8,6 +8,7 @@ import {
   stickAxes,
   xrStickMotion,
   xrJumpHead,
+  xrFitHead,
   lookDownOffset,
   smoothFlatDirection,
   yawBetween,
@@ -70,37 +71,77 @@ describe('readQuestTouch', () => {
 });
 
 describe('xrStickMotion', () => {
-  it('slides only when both sticks throw the same way', () => {
+  it('lets either stick pan, and adds both when they throw the same way', () => {
+    const lone = xrStickMotion({ stickX: 0, stickY: -1 }, { stickX: 0, stickY: 0 });
+    assert.equal(lone.forward, 1);
+    assert.equal(lone.strafe, 0);
+    assert.equal(lone.yaw, 0);
+    assert.equal(lone.zoom, 0);
     const both = xrStickMotion(
       { stickX: 0, stickY: -1 },
       { stickX: 0, stickY: -1 },
     );
-    assert.ok(both.forward > 0);
+    assert.equal(both.forward, 2);
     assert.equal(both.strafe, 0);
-    assert.equal(both.yaw, 0);
-    const lone = xrStickMotion({ stickX: 0, stickY: -1 }, { stickX: 0, stickY: 0 });
-    assert.equal(lone.forward, 0);
-    assert.equal(lone.strafe, 0);
-    const right = xrStickMotion({ stickX: 1, stickY: 0 }, { stickX: 1, stickY: 0 });
-    assert.ok(right.strafe > 0);
+    const right = xrStickMotion({ stickX: 1, stickY: 0 }, { stickX: 0, stickY: 0 });
+    assert.equal(right.strafe, 1);
     assert.equal(right.forward, 0);
-    const left = xrStickMotion({ stickX: -1, stickY: 0 }, { stickX: -1, stickY: 0 });
-    assert.ok(left.strafe < 0);
+    const left = xrStickMotion({ stickX: -0.25, stickY: 0 }, { stickX: -0.25, stickY: 0 });
+    assert.equal(left.strafe, -0.5);
+    const nudge = xrStickMotion({ stickX: 0.05, stickY: 0 }, { stickX: 0, stickY: 0 });
+    assert.equal(nudge.strafe, 0.05);
+    assert.equal(nudge.yaw, 0);
   });
 
-  it('yaws on opposite up/down and zooms out on a pinch', () => {
+  it('yaws on opposite up/down and zooms out on a pinch, with no throw gate', () => {
     const yaw = xrStickMotion(
       { stickX: 0, stickY: -0.8 },
       { stickX: 0, stickY: 0.8 },
     );
     assert.ok(yaw.yaw > 0);
     assert.equal(yaw.zoom, 0);
+    assert.equal(yaw.forward, 0);
+    const feather = xrStickMotion(
+      { stickX: 0, stickY: -0.05 },
+      { stickX: 0, stickY: 0.05 },
+    );
+    assert.ok(feather.yaw > 0);
+    assert.ok(feather.yaw < yaw.yaw);
     const pinch = xrStickMotion(
       { stickX: 0.8, stickY: 0 },
       { stickX: -0.8, stickY: 0 },
     );
-    assert.ok(pinch.zoom > 0);
+    assert.equal(pinch.zoom, 0.8);
     assert.equal(pinch.yaw, 0);
+    assert.equal(pinch.strafe, 0);
+    const spread = xrStickMotion(
+      { stickX: -1, stickY: 0 },
+      { stickX: 1, stickY: 0 },
+    );
+    assert.equal(spread.zoom, -1);
+    assert.equal(spread.strafe, 0);
+  });
+
+  it('lets a hard turn or lift quiet the pan and leaves a light one alone', () => {
+    const hard = xrStickMotion(
+      { stickX: 1, stickY: -1 },
+      { stickX: 1, stickY: 1 },
+    );
+    assert.ok(hard.yaw > 0);
+    assert.ok(hard.strafe < 0.2);
+    const light = xrStickMotion(
+      { stickX: 1, stickY: -0.2 },
+      { stickX: 1, stickY: 0.2 },
+    );
+    assert.ok(light.yaw > 0);
+    assert.ok(light.strafe > 1.5);
+    assert.ok(light.strafe > hard.strafe);
+    const lift = xrStickMotion(
+      { stickX: 1, stickY: -1 },
+      { stickX: -1, stickY: -1 },
+    );
+    assert.equal(lift.zoom, 1);
+    assert.ok(lift.forward < 0.2);
   });
 });
 
@@ -132,6 +173,18 @@ describe('clampXrHead', () => {
     const far = clampXrHead([30, 12, 0], bounds);
     assert.ok(Math.hypot(far[0], far[2]) <= 20.001);
     assert.equal(far[1], 12);
+  });
+});
+
+describe('xrFitHead', () => {
+  it('keeps the orbit distance and puts the look-down on the target', () => {
+    const fit = xrFitHead([0, 80, 40], { x: 0, y: 4, z: 0 }, () => 2);
+    assert.equal(fit.eye[0], 0);
+    assert.equal(fit.eye[2], 40);
+    assert.ok(Math.abs(fit.eye[1] - (2 + 40 * Math.tan(XR_LOOK_DOWN))) < 1e-6);
+    assert.ok(fit.facing[1] < 0);
+    const reach = (fit.eye[1] - 2) / Math.tan(XR_LOOK_DOWN);
+    assert.ok(Math.abs(fit.eye[2] + fit.facing[1] * reach) < 1e-4);
   });
 });
 

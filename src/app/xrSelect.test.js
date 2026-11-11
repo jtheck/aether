@@ -2,8 +2,11 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   STROKE_MAX_PTS,
+  beamState,
+  clipLaserHit,
   controllerRay,
   createXrSelect,
+  laserReach,
   noteStrokePoint,
   strokeLoop,
   strokeReach,
@@ -24,7 +27,9 @@ function rayMatrix(ox, oy, oz, dx, dy, dz) {
 describe('xr stroke helpers', () => {
   it('reads the target ray off the matrix and normalizes it', () => {
     const ray = controllerRay(rayMatrix(1, 2, 3, 0, -2, 0));
-    assert.deepEqual(ray, { ox: 1, oy: 2, oz: 3, dx: 0, dy: -1, dz: 0 });
+    assert.deepEqual(ray, {
+      ox: 1, oy: 2, oz: 3, dx: 0, dy: -1, dz: 0, ux: 0, uy: 1, uz: 0,
+    });
   });
 
   it('samples by spacing and keeps tracking once full', () => {
@@ -226,6 +231,20 @@ describe('createXrSelect', () => {
     assert.equal(h.calls.length, 0);
   });
 
+  it('suppressTap lets a lasso through and drops a grip tap', () => {
+    const h = harness();
+    h.right.grip(true);
+    sweepSquare(h, h.right);
+    h.right.grip(false);
+    h.step({ suppressTap: true });
+    assert.deepEqual(h.calls.map((c) => c.kind), ['loop']);
+    h.right.grip(true);
+    h.step({ suppressTap: true });
+    h.right.grip(false);
+    h.step({ suppressTap: true });
+    assert.deepEqual(h.calls.map((c) => c.kind), ['loop']);
+  });
+
   it('canBegin vetoes a press', () => {
     const h = harness();
     h.right.grip(true);
@@ -233,5 +252,28 @@ describe('createXrSelect', () => {
     h.right.grip(false);
     h.step();
     assert.equal(h.calls.length, 0);
+  });
+});
+
+describe('laser reach', () => {
+  it('reaches past the board and stops a shallow aim there', () => {
+    const half = 416;
+    const ray = { ox: 0, oy: 30, oz: 0, dx: 0, dy: -0.02, dz: Math.sqrt(1 - 0.0004) };
+    const reach = laserReach(ray, half, half, 0);
+    assert.ok(reach > Math.hypot(half, half));
+    assert.ok(reach < half * 4);
+    const t = -ray.oy / ray.dy;
+    const far = { x: ray.ox + ray.dx * t, y: 0, z: ray.oz + ray.dz * t, t };
+    assert.ok(far.t > reach);
+    const clipped = clipLaserHit(ray, far, reach);
+    assert.ok(Math.abs(clipped.t - reach) < 1e-6);
+    const near = { x: 12, y: 0, z: 4, t: 40 };
+    assert.equal(clipLaserHit(ray, near, reach), near);
+    const state = beamState({
+      groundHeight: () => 0,
+      rayToGround: () => clipped,
+    }, ray, clipped);
+    assert.equal(state.tip, null);
+    assert.ok(Math.abs(state.length - reach) < 1e-6);
   });
 });

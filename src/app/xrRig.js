@@ -1,4 +1,4 @@
-import { PAD, stickCameraStep } from './input/gamepad.js';
+import { STICK_SPLIT_YAW } from './input/gamepad.js';
 import { setXrEyeFromPose } from '../render/xrEye.js';
 
 // Quest Touch. Trigger and grip are always the first two buttons.
@@ -17,8 +17,10 @@ const JUMP_BACK = 0.8;
 export const XR_LOOK_DOWN = 0.36;
 /** Slow tail after the synthetic tilt has caught most of a head turn. */
 export const XR_LOOK_FOLLOW = 2.25;
-/** Pinch and stick-click zoom, a little quicker than the desktop pad step. */
-const XR_ZOOM_SCALE = 1.25;
+/** Earlier headset scheme: full right-stick yaw, radians per second. */
+const XR_DIRECT_YAW = 1.4;
+/** Full oppose yaw, midway between that direct yaw and the pad's oppose step. */
+const XR_YAW_RATE = (XR_DIRECT_YAW + STICK_SPLIT_YAW * 60) / 2;
 /** Initial catch-up rate while the tilt is well behind the viewer yaw. */
 export const XR_LOOK_SNAP = 12;
 const XR_LOOK_SNAP_ARC = Math.PI / 6;
@@ -226,9 +228,9 @@ function hand(sources, handedness) {
 
 /**
  * Headset rig for the match. The first frame parks the head on the desktop
- * camera. After that the sticks use the pad's two-stick camera: both thrown
- * the same way slide, opposite up/down yaws, pinch zooms out. A stick click
- * (L3 / R3) turns both sticks into yaw and zoom. Look-down eases toward
+ * camera. After that either stick pans, with no deadzone, and both sticks
+ * in the same direction add. A hard turn or lift quiets that pan. Opposite
+ * up/down yaws and a pinch lifts; a lone stick never does. Look-down eases toward
  * viewer yaw so every heading settles to the same pitch without attaching
  * the synthetic adjustment rigidly to small head motion.
  * While `rightStickBusy()` is true the sticks do not move the head.
@@ -262,37 +264,101 @@ export function createXrRig(eye, bounds = null, opts = {}) {
   };
 }
 
+function stickAxis(v) {
+  if (!Number.isFinite(v)) return 0;
+  return v > 1 ? 1 : v < -1 ? -1 : v;
+}
+
 /**
- * Pad camera step from two Quest sticks. `yaw` is positive for a right turn,
- * which is the sign `yawSpace` already uses. `strafe` is viewer-right: a
- * right throw moves right (the pad step drags an orbit target the other way).
- * `zoom` is positive to pull back.
- * @param {{ stickX?: number, stickY?: number, stickClick?: { pressed?: boolean } }} left
- * @param {{ stickX?: number, stickY?: number, stickClick?: { pressed?: boolean } }} right
- * @param {number} [radius]
+ * Opposite throws on one axis, −1..1. A resting stick is not an opponent,
+ * so one hand stays a pure pan. Linear from the first opposition.
+ * `dir` is sign(b − a).
  */
-export function xrStickMotion(left, right, radius) {
-  const buttons = [];
-  buttons[PAD.L3] = !!left?.stickClick?.pressed;
-  buttons[PAD.R3] = !!right?.stickClick?.pressed;
-  const step = stickCameraStep({
-    lx: left?.stickX || 0,
-    ly: left?.stickY || 0,
-    rx: right?.stickX || 0,
-    ry: right?.stickY || 0,
-    buttons,
-  }, radius);
+function oppose(a, b) {
+  if (!(a * b < 0)) return 0;
+  const dir = Math.sign(b - a);
+  if (!dir) return 0;
+  const mag = (Math.abs(a) + Math.abs(b)) * 0.5;
+  return dir * (mag > 1 ? 1 : mag);
+}
+
+/** Pan still left when a turn or lift is fully opposed. */
+const XR_PAN_DURING_GESTURE = 0.06;
+
+/** Quiet the slide as a turn or lift gets aggressive. A light oppose barely cuts. */
+function gesturePanScale(amount) {
+  const t = amount > 1 ? 1 : amount < 0 ? 0 : amount;
+  const u = t * t * (3 - 2 * t);
+  return 1 - u * (1 - XR_PAN_DURING_GESTURE);
+}
+
+/**
+ * Either stick pans. Two sticks thrown the same way add, up to double.
+ * Opposite up/down yaws (left up and right down turns right). Pinch lifts
+ * and spread lowers, in place. A hard turn or lift dampens the pan.
+ * No deadzone. `yaw` is positive for a right turn, per 60 Hz frame,
+ * which is the sign `yawSpace` already uses. `zoom` is a -1..1 lift, positive up.
+ * @param {{ stickX?: number, stickY?: number }} left
+ * @param {{ stickX?: number, stickY?: number }} right
+ */
+export function xrStickMotion(left, right) {
+  const lx = stickAxis(left?.stickX);
+  const ly = stickAxis(left?.stickY);
+  const rx = stickAxis(right?.stickX);
+  const ry = stickAxis(right?.stickY);
+  const yawOppose = oppose(ly, ry);
+  const lift = -oppose(lx, rx);
+  const scale = gesturePanScale(Math.max(Math.abs(yawOppose), Math.abs(lift)));
   return {
-    strafe: -step.panRight || 0,
-    forward: step.panForward,
-    yaw: -step.yaw || 0,
-    zoom: step.zoom * XR_ZOOM_SCALE,
+    strafe: (lx + rx) * scale || 0,
+    forward: -(ly + ry) * scale || 0,
+    yaw: (yawOppose * XR_YAW_RATE) / 60 || 0,
+    zoom: lift || 0,
   };
 }
 
-/** Fly the head to look over (x, z) on the next frame, keeping its height and facing. */
-export function jumpXrRig(rig, x, z) {
-  if (Number.isFinite(x) && Number.isFinite(z)) rig.jump = { x, z };
+/**
+ * Head pose that puts an orbit shot on the headset look-down.
+ * Horizontal distance stays the orbit eye's, and the height drops or
+ * rises so the visor ray hits the look target.
+ * @param {[number, number, number]} eye
+ * @param {{ x: number, y?: number, z: number }} target
+ * @param {(x: number, z: number) => number} [floor]
+ */
+export function xrFitHead(eye, target, floor) {
+  const tx = target?.x || 0;
+  const tz = target?.z || 0;
+  const dx = tx - (eye?.[0] || 0);
+  const dz = tz - (eye?.[2] || 0);
+  const dist = Math.hypot(dx, dz);
+  const sampled = typeof floor === 'function' ? floor(tx, tz) : target?.y;
+  const ground = Number.isFinite(sampled) ? sampled : 0;
+  if (!(dist > 0.5)) {
+    return {
+      eye: [eye?.[0] || 0, Math.max(eye?.[1] || 0, ground + 4), eye?.[2] || 0],
+      facing: null,
+    };
+  }
+  return {
+    eye: [eye[0], ground + dist * Math.tan(XR_LOOK_DOWN), eye[2]],
+    facing: [dx / dist, dz / dist],
+  };
+}
+
+/**
+ * Fly the head on the next frame. With only x/z, keep height and facing
+ * and stand back from the point. A y and facing replace the whole pose
+ * (level loads and campaign shots).
+ * @param {{ x: number, z: number }} [pose]
+ */
+export function jumpXrRig(rig, x, z, pose = null) {
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+  rig.jump = {
+    x,
+    z,
+    y: Number.isFinite(pose?.y) ? pose.y : null,
+    facing: pose?.facing || null,
+  };
 }
 
 /**
@@ -334,11 +400,18 @@ export function stepXrRig(rig, ctx, frame, time) {
     rig.seeded = true;
     rig.lastTime = time;
   } else if (rig.jump) {
-    const dest = xrJumpHead(head, basis.forward, rig.jump, rig.bounds);
+    const j = rig.jump;
     rig.jump = null;
+    const dest = Number.isFinite(j.y)
+      ? clampXrHead([j.x, j.y, j.z], rig.bounds)
+      : xrJumpHead(head, basis.forward, j, rig.bounds);
     next = loco.getOffsetReferenceSpace(
       new XRRigidTransform(referenceOffset(head, dest)),
     );
+    if (j.facing) {
+      const yaw = yawBetween(basis.forward, j.facing);
+      if (Math.abs(yaw) > 1e-4) next = yawSpace(next, dest, yaw);
+    }
     const s = rig.smooth;
     s.strafe = s.forward = s.yaw = s.zoom = 0;
     rig.lastTime = time;
@@ -362,25 +435,23 @@ export function stepXrRig(rig, ctx, frame, time) {
     if (dt > 0) {
       const raw = rig.rightStickBusy?.()
         ? { strafe: 0, forward: 0, yaw: 0, zoom: 0 }
-        : xrStickMotion(left, right, Math.max(24, head[1]));
+        : xrStickMotion(left, right);
       const s = rig.smooth;
       if (raw.strafe === 0 && raw.forward === 0 && raw.yaw === 0 && raw.zoom === 0) {
         s.strafe = s.forward = s.yaw = s.zoom = 0;
       } else {
-        // Pad rates are per 60 Hz tick. Damp those, then scale by real dt.
+        // Pan and lift are -1..1 throws. Yaw is still per 60 Hz tick.
         s.strafe = damp(s.strafe, raw.strafe, dt);
         s.forward = damp(s.forward, raw.forward, dt);
         s.yaw = damp(s.yaw, raw.yaw * 60, dt);
-        s.zoom = damp(s.zoom, raw.zoom * 60, dt);
-        const slide = rig.speed * dt * 0.5;
-        const zoom = s.zoom * dt;
-        const rise = zoom * Math.tan(XR_LOOK_DOWN);
+        s.zoom = damp(s.zoom, raw.zoom, dt);
+        const slide = rig.speed * dt;
         const dest = clampXrHead([
           head[0] + basis.right[0] * s.strafe * slide
-            + basis.forward[0] * (s.forward * slide - zoom),
-          head[1] + rise,
+            + basis.forward[0] * s.forward * slide,
+          head[1] + s.zoom * slide,
           head[2] + basis.right[1] * s.strafe * slide
-            + basis.forward[1] * (s.forward * slide - zoom),
+            + basis.forward[1] * s.forward * slide,
         ], rig.bounds);
         next = loco.getOffsetReferenceSpace(
           new XRRigidTransform(referenceOffset(head, dest)),

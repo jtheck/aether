@@ -14,6 +14,7 @@ import {
   composeHeightMap,
   ensureWaterSurface,
   rebuildWaterSurface,
+  isLiquidTerrain,
 } from './field.js';
 
 export const DEFAULT_CELL_SIZE = 16;
@@ -850,7 +851,7 @@ export function paintTerrainBrush(field, tx, tz, terrainType, radius = 0) {
   const r2 = r * r;
   const dirty = [];
   const leavingWater = [];
-  const toLand = terrainType !== TERRAIN.WATER;
+  const toLand = !isLiquidTerrain(terrainType);
   if (toLand) ensureWaterSurface(field);
   for (let dz = -r; dz <= r; dz++) {
     for (let dx = -r; dx <= r; dx++) {
@@ -861,7 +862,7 @@ export function paintTerrainBrush(field, tx, tz, terrainType, radius = 0) {
       const i = z * field.width + x;
       if (field.activeMask[i] === 0) continue;
       if (field.terrainTypes[i] !== terrainType) {
-        if (toLand && field.terrainTypes[i] === TERRAIN.WATER) leavingWater.push(i);
+        if (toLand && isLiquidTerrain(field.terrainTypes[i])) leavingWater.push(i);
         field.terrainTypes[i] = terrainType;
         dirty.push({ x, z });
       }

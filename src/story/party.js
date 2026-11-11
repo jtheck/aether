@@ -73,6 +73,8 @@ export function mergePartyUnits(gardenUnits, party) {
       tz: slot.tz | 0,
       name: String(slot.name),
       hp: p.hp | 0,
+      ...(Number.isFinite(Number(slot.yaw)) && Math.abs(Number(slot.yaw)) > 1e-4 ? { yaw: Number(slot.yaw) } : {}),
+      ...(Number(slot.scale) > 0 ? { scale: Number(slot.scale) } : {}),
     });
     byName.delete(normalizeSpeaker(slot.name));
   }
@@ -214,7 +216,7 @@ export function assignHeroOwners(units, playerIds, seed = 0) {
  * Patch an encoded garden so the worker spawns the right owners.
  * Solo and 2–4p: deal the four heroes. Unnamed extras (enemy camps, trained
  * leftovers) keep the owner they already have.
- * Adventure maps do not carry an agora.
+ * An agora painted in Forge stays, so a side with an Intent can actually play.
  */
 export function prepareAdventureGarden(gardenJson, {
   humanPlayers = [0],
@@ -228,7 +230,7 @@ export function prepareAdventureGarden(gardenJson, {
   if (party?.length) units = mergePartyUnits(units, party);
   units = assignHeroOwners(units, players, seed);
 
-  const extras = { units, agoras: [] };
+  const extras = { units };
   if (bank) extras.startingResources = bank;
   return patchGarden(gardenJson, extras);
 }

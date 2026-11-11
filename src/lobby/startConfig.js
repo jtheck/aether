@@ -1,5 +1,7 @@
+import { matchAiPlayer } from '../sim/aiScript.js';
 import { sameUserId } from './ids.js';
 import { gardenUrlForChapter, getMode, mapTilesForField } from './modes.js';
+import { lobbyAiPreset } from './roster.js';
 import { ownerSkinsFromSeats } from '../app/dlcCatalog.js';
 import { ownerColorsFromSeats } from '../render/ownerTints.js';
 
@@ -47,13 +49,35 @@ export function shareVisionForLobby(modeId, localPlayerId, teamByOwner, activeSl
 }
 
 /**
+ * Auto seats become sim players. Preset string is the temperament.
+ * Ranked rooms and modes that disallow Auto contribute nothing.
+ * @param {object} state
+ */
+function aiPlayersFromLobby(state) {
+  const mode = getMode(state?.mode);
+  if (!mode?.allowAi || state?.ranked) return [];
+  const out = [];
+  for (const seat of state?.seats ?? []) {
+    if (seat?.kind !== 'ai') continue;
+    const temperament = lobbyAiPreset(seat.ai) || 'steady';
+    out.push(matchAiPlayer(seat.index | 0, { temperament, script: null }));
+  }
+  out.sort((a, b) => a.owner - b.owner);
+  return out;
+}
+
+/**
  * Deterministic live config from a lobby snapshot. Owner id = seat index.
+ * Humans are lockstep peers. Auto seats are local sim players on that same index.
  * @param {object} state
  * @param {string | null} localUserId
  */
 export function liveConfigFromLobby(state, localUserId) {
   const humans = (state.seats ?? []).filter((s) => s.kind === 'human');
-  const activeSlots = humans.map((s) => s.index).sort((a, b) => a - b);
+  const aiPlayers = aiPlayersFromLobby(state);
+  const activeSlots = humans.map((s) => s.index);
+  for (const ai of aiPlayers) activeSlots.push(ai.owner);
+  activeSlots.sort((a, b) => a - b);
   const local = humans.find((s) => sameUserId(s.userId, localUserId));
   const localPlayerId = local ? local.index : -1;
   const maxOwner = activeSlots.length ? activeSlots[activeSlots.length - 1] + 1 : 0;
@@ -69,9 +93,9 @@ export function liveConfigFromLobby(state, localUserId) {
     mode: state.mode,
     seed: (state.settings?.seed ?? 0) >>> 0,
     localPlayerId,
-    humanPlayers: activeSlots,
+    humanPlayers: humans.map((s) => s.index).sort((a, b) => a - b),
     activeSlots,
-    aiPlayers: [],
+    aiPlayers,
     role: localPlayerId >= 0 ? 'player' : 'spectator',
     mapW,
     mapH,

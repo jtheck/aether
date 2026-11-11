@@ -9,6 +9,7 @@
 // so the next gathered food is not swallowed in a lump.
 
 import { addResource, getResource, MAX_RESOURCE_OWNERS } from './resources.js';
+import { getUnitDef } from './unitTypes.js';
 
 /** Ticks (20 Hz) for one living unit to consume 1 food. */
 export const FOOD_UPKEEP_PERIOD = 400;
@@ -43,6 +44,8 @@ function countLivingByOwner(w) {
   const n = w.count | 0;
   for (let i = 0; i < n; i++) {
     if (!w.alive[i]) continue;
+    // Placed creatures are not mouths. Army upkeep stays on the trained roster.
+    if (getUnitDef(w.type[i]).category === 'mob') continue;
     const o = w.owner[i] | 0;
     if (o < 0 || o >= MAX_RESOURCE_OWNERS) continue;
     popScratch[o]++;

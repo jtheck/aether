@@ -66,11 +66,15 @@ export function createStoryHud(host = document.body) {
     host.appendChild(bar);
   }
 
+  let shown = [];
+  let suppressed = false;
+
   return {
     show(input) {
       const visible = asList(input)
         .filter((line) => String(line?.text || '').trim())
         .slice(-CHAT_KEEP);
+      shown = visible;
       if (!visible.length) {
         bar.style.display = 'none';
         bar.innerHTML = '';
@@ -78,7 +82,15 @@ export function createStoryHud(host = document.body) {
       }
       const rows = visible.map((line, i) => rowHtml(line, i < visible.length - 1)).join('');
       bar.innerHTML = `<div style="${VEIL_STYLE}">${rows}</div>`;
-      bar.style.display = 'block';
+      bar.style.display = suppressed ? 'none' : 'block';
+    },
+    current() {
+      return shown;
+    },
+    /** Headset draws narrator copy on the ground, so the screen bar stays down. */
+    suppress(on) {
+      suppressed = !!on;
+      bar.style.display = suppressed || !shown.length ? 'none' : 'block';
     },
     setOffset(bottomPx) {
       bar.style.bottom = `${bottomPx}px`;
@@ -90,6 +102,7 @@ export function createStoryHud(host = document.body) {
       if (zIndex != null) bar.style.zIndex = String(zIndex);
     },
     hide() {
+      shown = [];
       bar.style.display = 'none';
     },
     dispose() {

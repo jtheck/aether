@@ -34,9 +34,13 @@ const BUILD_STEP_X = 6;
 const BUILD_STEP_Z = 6;
 /** Unit column just east of the west agora (stay well short of midfield). */
 const UNIT_TX = 56;
+/** Mobs sit west of that column so the army rows stay on the board. */
+const MOB_TX = 44;
+const MOB_TZ0 = 18;
+const MOB_STEP_Z = 16;
 /**
- * One row per unit type. 7 tiles apart, started so the last row of the
- * current roster still lands inside the 144-tile board.
+ * One row per army unit. 7 tiles apart, started so the last army row
+ * still lands inside the 144-tile board. Mobs use their own column.
  */
 const UNIT_TZ0 = 20;
 const UNIT_STEP_Z = 7;
@@ -151,10 +155,16 @@ function buildTesterGardenInner() {
 
   /** @type {{ owner: number, type: number, tx: number, tz: number }[]} */
   const units = [];
+  let armyRow = 0;
+  let mobRow = 0;
   for (let i = 0; i < UNIT_DEFS.length; i++) {
-    const tz = UNIT_TZ0 + i * UNIT_STEP_Z;
-    units.push({ owner: 0, type: UNIT_DEFS[i].id, tx: UNIT_TX, tz });
-    units.push({ owner: 1, type: UNIT_DEFS[i].id, tx: mirrorTx(UNIT_TX), tz });
+    const mob = UNIT_DEFS[i].category === 'mob';
+    const tx = mob ? MOB_TX : UNIT_TX;
+    const tz = mob ? MOB_TZ0 + mobRow * MOB_STEP_Z : UNIT_TZ0 + armyRow * UNIT_STEP_Z;
+    if (mob) mobRow++;
+    else armyRow++;
+    units.push({ owner: 0, type: UNIT_DEFS[i].id, tx, tz });
+    units.push({ owner: 1, type: UNIT_DEFS[i].id, tx: mirrorTx(tx), tz });
   }
 
   /** @type {{ owner: number, type: string, x: number, z: number, yaw: number }[]} */

@@ -1,7 +1,9 @@
-// Priest heal - same attack cooldown as smite. Holy Armor stays on abilityCd.
+// Priest heal - same attack cooldown as smite, one mana charge from the bank.
+// Holy Armor stays on abilityCd and spends the same bank.
 // Render-only pulses ride priestHealFx; they are not part of the checksum.
 
 import * as fx from './fixed.js';
+import { MANA_CHARGE, spendMana } from './mana.js';
 import { getUnitDef, isMechanical, UNIT } from './unitTypes.js';
 import { unitMaxHp } from './namedUnit.js';
 import { isAlly } from './teams.js';
@@ -11,6 +13,9 @@ import { queryCellBounds, spatialCellId } from './spatialGrid.js';
  * Flat pulse. Half of 50 HP, the band priest / wizard / villager sit on.
  */
 export const PRIEST_HEAL_AMOUNT = 25;
+
+/** One ready pip. The same charge Holy Armor spends. */
+export const PRIEST_HEAL_MANA = MANA_CHARGE;
 
 /**
  * Huddle, not smite range. Smite still reaches ~45; a heal only reaches
@@ -122,10 +127,12 @@ export function findPriestHealTarget(w, priest, allowOverheal) {
   return best;
 }
 
-/** Clamp a pulse onto the target and start the shared attack cooldown. */
+/** Clamp a pulse onto the target, spend one mana charge, start the attack cooldown. */
 export function applyPriestHeal(w, priest, target) {
   const missing = missingHp(w, target);
   if (missing <= 0) return false;
+  if ((w.mana?.[priest] | 0) < PRIEST_HEAL_MANA) return false;
+  if (!spendMana(w, priest)) return false;
   const gain = missing < PRIEST_HEAL_AMOUNT ? missing : PRIEST_HEAL_AMOUNT;
   w.hp[target] = (w.hp[target] | 0) + gain;
   w.attackCd[priest] = getUnitDef(w.type[priest]).attackCooldown;
@@ -134,14 +141,16 @@ export function applyPriestHeal(w, priest, target) {
 }
 
 /**
- * Spend the attack cooldown on a heal when a valid ally is in the huddle.
- * Confused priests keep swinging. Returns true when a heal landed.
+ * Spend the attack cooldown and one mana charge when a valid ally is in the huddle.
+ * Out of mana, the priest smites instead. Confused priests keep swinging.
+ * Returns true when a heal landed.
  */
 export function tryPriestHeal(w, priest, allowOverheal) {
   if (w.type[priest] !== UNIT.PRIEST) return false;
   if (!w.alive[priest] || (w.carriedBy?.[priest] >= 0)) return false;
   if ((w.distractCd[priest] | 0) > 0) return false;
   if ((w.attackCd[priest] | 0) > 0) return false;
+  if ((w.mana?.[priest] | 0) < PRIEST_HEAL_MANA) return false;
   const target = findPriestHealTarget(w, priest, allowOverheal);
   if (target < 0) return false;
   return applyPriestHeal(w, priest, target);

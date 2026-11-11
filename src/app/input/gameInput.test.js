@@ -1081,6 +1081,113 @@ describe('headset select', () => {
     assert.deepEqual([...selected.subarray(0, 3)], [1, 1, 0]);
   });
 
+  it('an empty field lasso cancels building placement', () => {
+    let placing = 'camp';
+    let cancelled = 0;
+    const input = createGameInput({
+      canvas: {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      },
+      renderer: {
+        pickSelectionHud: () => null,
+        pickControlGroupHud: () => null,
+        groundYAt: () => 0,
+        setSelectionBox: () => {},
+      },
+      world: { count: 0, alive: [], owner: [], type: [], carriedBy: [] },
+      selected: new Uint8Array(4),
+      localPlayerId: 0,
+      getUnitWorldPos: () => ({ x: 0, y: 0, z: 0 }),
+      enqueueCommand: () => {},
+      getPlacingType: () => placing,
+      setPlacingType: (t) => { placing = t; },
+      onPlacementCancel: () => { cancelled += 1; },
+      getAgoras: () => [],
+      getBuildings: () => [],
+    });
+    const loop = [{ x: -5, z: -5 }, { x: 5, z: -5 }, { x: 5, z: 5 }, { x: -5, z: 5 }];
+    assert.equal(input.groundLoopSelect(loop), true);
+    assert.equal(placing, null);
+    assert.equal(cancelled, 1);
+    assert.equal(input.isPlacing(), false);
+  });
+
+  it('a field lasso that catches a unit leaves placement without cancelling', () => {
+    let placing = 'camp';
+    let cancelled = 0;
+    const selected = new Uint8Array(2);
+    const input = createGameInput({
+      canvas: {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      },
+      renderer: {
+        pickSelectionHud: () => null,
+        pickControlGroupHud: () => null,
+        groundYAt: () => 0,
+        setSelectionBox: () => {},
+      },
+      world: { count: 1, alive: [1], owner: [0], type: [1], carriedBy: [-1] },
+      selected,
+      localPlayerId: 0,
+      getUnitWorldPos: (i, out) => {
+        out.x = 0;
+        out.y = 0;
+        out.z = 0;
+        return out;
+      },
+      enqueueCommand: () => {},
+      getPlacingType: () => placing,
+      setPlacingType: (t) => { placing = t; },
+      onPlacementCancel: () => { cancelled += 1; },
+      getAgoras: () => [],
+      getBuildings: () => [],
+    });
+    const loop = [{ x: -5, z: -5 }, { x: 5, z: -5 }, { x: 5, z: 5 }, { x: -5, z: 5 }];
+    assert.equal(input.groundLoopSelect(loop), true);
+    assert.equal(selected[0], 1);
+    assert.equal(placing, null);
+    assert.equal(cancelled, 0);
+  });
+
+  it('an empty field lasso cancels rally placement', () => {
+    let rallying = true;
+    let cancelled = 0;
+    let cleared = 0;
+    const input = createGameInput({
+      canvas: {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      },
+      renderer: {
+        pickSelectionHud: () => null,
+        pickControlGroupHud: () => null,
+        groundYAt: () => 0,
+        setSelectionBox: () => {},
+      },
+      world: { count: 0, alive: [], owner: [], type: [], carriedBy: [] },
+      selected: new Uint8Array(4),
+      localPlayerId: 0,
+      getUnitWorldPos: () => ({ x: 0, y: 0, z: 0 }),
+      enqueueCommand: () => {},
+      getPlacingType: () => null,
+      isPlacingRally: () => rallying,
+      onRallyCancel: () => {
+        rallying = false;
+        cancelled += 1;
+      },
+      clearRallyPlacement: () => {
+        rallying = false;
+        cleared += 1;
+      },
+      getAgoras: () => [],
+      getBuildings: () => [],
+    });
+    const loop = [{ x: -5, z: -5 }, { x: 5, z: -5 }, { x: 5, z: 5 }, { x: -5, z: 5 }];
+    assert.equal(input.groundLoopSelect(loop), true);
+    assert.equal(cancelled, 1);
+    assert.equal(cleared, 0);
+    assert.equal(rallying, false);
+  });
+
   it('trigger tap selects the unit on the ray and an empty tap clears', () => {
     const { input, selected, setRayHits } = makeXrHarness();
     setRayHits([1]);

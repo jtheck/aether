@@ -69,6 +69,10 @@ export function namesFromLobbySeats(seats) {
   if (!seats) return out;
   for (let i = 0; i < seats.length; i++) {
     const s = seats[i];
+    if (s?.kind === 'ai') {
+      out[s.index | 0] = 'Auto';
+      continue;
+    }
     if (s?.kind !== 'human') continue;
     const name = String(s.name || '').trim();
     if (!name) continue;

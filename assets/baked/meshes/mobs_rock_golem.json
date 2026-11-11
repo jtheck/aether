@@ -1,0 +1,68 @@
+{
+  "sourceUrl": "/assets/models/mobs/rock_golem.glb",
+  "version": 3,
+  "sockets": [],
+  "materials": [
+    {
+      "name": "Rock.017",
+      "baseColorFactor": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "metallicFactor": 1,
+      "roughnessFactor": 1,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "Rock.017",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "boundMin": [
+        -234.1560516357422,
+        -55.361942291259766,
+        -41.57872772216797
+      ],
+      "boundMax": [
+        92.2713623046875,
+        16.290599822998047,
+        188.7760467529297
+      ],
+      "positions": {
+        "offset": 0,
+        "length": 21744,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 86976,
+        "length": 21744,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 173952,
+        "length": 10926,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 217656,
+        "length": 14496,
+        "type": "f32"
+      }
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { canStart, claimSeat, countHumans, createRoster, moveRosterPerson, releaseSeat, setSeatReady, startBlockReason } from './roster.js';
+import { MATCH_AI_TEMPERAMENTS } from '../sim/ai.js';
+import { canStart, claimSeat, countHumans, createRoster, cycleSeatAuto, lobbyAiColor, LOBBY_AI_PRESETS, moveRosterPerson, releaseSeat, setSeatReady, startBlockReason } from './roster.js';
 
 describe('lobby roster', () => {
   it('seats teams as A A / B B', () => {
@@ -133,6 +134,68 @@ describe('lobby roster', () => {
     assert.equal(moved.seats[1].userId, 'eye');
     assert.equal(moved.seats[1].ready, false);
     assert.equal(moved.spectators[0].userId, 'p2');
+  });
+
+  it('cycles Auto through each preset, then frees the seat', () => {
+    assert.deepEqual(LOBBY_AI_PRESETS, MATCH_AI_TEMPERAMENTS);
+    let seats = createRoster('onevsone');
+    seats = claimSeat(seats, { userId: 'h', name: 'H', ready: true }).seats;
+    assert.equal(canStart('onevsone', seats), false);
+    for (const preset of LOBBY_AI_PRESETS) {
+      const cycled = cycleSeatAuto(seats, 1);
+      assert.equal(cycled.ok, true);
+      seats = cycled.seats;
+      assert.equal(seats[1].kind, 'ai');
+      assert.equal(seats[1].ai, preset);
+      assert.equal(seats[1].team, 0);
+    }
+    assert.equal(canStart('onevsone', seats), true);
+    const claimed = claimSeat(seats, { userId: 'g', name: 'G' }, 1);
+    assert.equal(claimed.ok, false);
+    seats = cycleSeatAuto(seats, 1).seats;
+    assert.equal(seats[1].kind, 'empty');
+    assert.equal(seats[1].ai, '');
+    assert.equal(canStart('onevsone', seats), false);
+    assert.equal(cycleSeatAuto(seats, 0).ok, false);
+  });
+
+  it('moves an Auto across teams into a 3v1 and will not drop it into watching', () => {
+    let seats = createRoster('teams');
+    seats = claimSeat(seats, { userId: 'h', name: 'H', ready: true }).seats;
+    for (const index of [1, 2, 3]) seats = cycleSeatAuto(seats, index).seats;
+    seats[1].ai = 'reckless';
+    const across = moveRosterPerson(seats, [], '', 1, { hostId: 'h', teams: true, seatIndex: 1 });
+    assert.equal(across.ok, true);
+    assert.deepEqual(across.seats.map((s) => s.team), [0, 1, 1, 1]);
+    assert.equal(across.seats[1].kind, 'ai');
+    assert.equal(across.seats[1].ai, 'reckless');
+    assert.equal(across.spectators.length, 0);
+    const stuck = moveRosterPerson(across.seats, [], '', 1, {
+      hostId: 'h', teams: true, seatIndex: 3, allowSpectators: true,
+    });
+    assert.equal(stuck.ok, false);
+    assert.equal(stuck.seats[3].kind, 'ai');
+    assert.deepEqual(LOBBY_AI_PRESETS.map(lobbyAiColor), [
+      '#8ea4b8',
+      '#c6b15a',
+      '#d4893a',
+      '#e15a32',
+      '#ff4d4d',
+    ]);
+  });
+
+  it('counts an Auto on the other team, and keeps one that moves with its seat', () => {
+    let seats = createRoster('teams');
+    seats = claimSeat(seats, { userId: 'h', name: 'H', ready: true }).seats;
+    seats = cycleSeatAuto(seats, 1).seats;
+    assert.equal(startBlockReason('teams', seats), 'Need both teams');
+    seats = cycleSeatAuto(seats, 2).seats;
+    assert.equal(canStart('teams', seats), true);
+    const moved = moveRosterPerson(seats, [], 'h', 1, { hostId: 'h', teams: true });
+    assert.equal(moved.seats[0].kind, 'ai');
+    assert.equal(moved.seats[0].ai, 'passive');
+    assert.equal(moved.seats[1].userId, 'h');
+    assert.equal(moved.seats[1].kind, 'human');
   });
 
   it('releases a seat back to empty', () => {

@@ -768,9 +768,11 @@
       box-sizing: border-box;
     }
     #ladder_pop .ladder-card, #ladder_hist .ladder-card { pointer-events: auto; }
-    body:has(#side_menu.is-open) #ladder_pop .ladder-card,
-    body:has(#side_menu.is-open) #ladder_hist .ladder-card {
+    body:has(#side_menu.is-open) #ladder_pop .ladder-card {
       width: min(420px, 100%);
+    }
+    body:has(#side_menu.is-open) #ladder_hist .ladder-card {
+      width: min(640px, 100%);
     }
     #ladder_pop {
       align-items: start;
@@ -839,16 +841,18 @@
     #ladder_hist_meta[hidden] { display: none; }
     #ladder_hist .ladder-card { width: min(640px, 94vw); max-height: min(78vh, 640px); }
     #ladder_hist .ladder-body { overflow: auto; min-height: 0; padding: 0 16px 14px; }
-    #ladder_hist table { width: 100%; border-collapse: collapse; margin: 0; }
-    #ladder_hist th, #ladder_hist td {
+    #ladder_hist .ladder-body > table { width: 100%; border-collapse: collapse; margin: 0; }
+    #ladder_hist .ladder-body > table th, #ladder_hist .ladder-body > table td {
       text-align: left; padding: 4px 8px; border-bottom: 1px solid #2a3140; font-weight: 400;
     }
-    #ladder_hist th { font-size: 11px; color: #8b93a7; }
-    #ladder_hist td.when, #ladder_hist td.num { white-space: nowrap; font-variant-numeric: tabular-nums; }
-    #ladder_hist td.num { text-align: right; }
-    #ladder_hist td.is-win, #ladder_hist td.is-loss { padding-right: 1.7em; }
-    #ladder_hist td.is-win { color: aqua; }
-    #ladder_hist td.is-loss { color: #e07070; }
+    #ladder_hist .ladder-body > table th { font-size: 11px; color: #8b93a7; }
+    #ladder_hist .ladder-body > table td.when,
+    #ladder_hist .ladder-body > table td.num { white-space: nowrap; font-variant-numeric: tabular-nums; }
+    #ladder_hist .ladder-body > table td.num { text-align: right; }
+    #ladder_hist .ladder-body > table td.is-win,
+    #ladder_hist .ladder-body > table td.is-loss { padding-right: 1.7em; }
+    #ladder_hist .ladder-body > table td.is-win { color: aqua; }
+    #ladder_hist .ladder-body > table td.is-loss { color: #e07070; }
     #ladder_hist .ladder-result { position: relative; display: inline-block; }
     #ladder_hist .ladder-mark {
       position: absolute; left: calc(100% + 4px); top: 50%; transform: translateY(-50%);
@@ -1569,9 +1573,10 @@
               <h5>If the XR button is not visible at the top of the menu, try visiting: chrome://flags/ in your browser, and Enable: 'WebXR Layers' and 'WebXR/WebGPU Binding'.</h5>
               <dl class="help-keys">
                 <dt>XR</dt><dd>Enter headset</dd>
-                <dt>Left stick</dt><dd>Walk</dd>
-                <dt>Right stick</dt><dd>Turn</dd>
-                <dt>Right stick, up and down</dt><dd>Height</dd>
+                <dt>Either stick</dt><dd>Pan</dd>
+                <dt>Sticks, opposite up and down</dt><dd>Turn</dd>
+                <dt>Sticks, pinch and spread</dt><dd>Up / down</dd>
+                <dt>Stick click</dt><dd>Jump home (left) or to the selection (right)</dd>
                 <dt>Trigger</dt><dd>Select what the beam hits</dd>
                 <dt>Trigger, sweep</dt><dd>Lasso select on the field</dd>
                 <dt>Grip + trigger</dt><dd>Add to selection</dd>

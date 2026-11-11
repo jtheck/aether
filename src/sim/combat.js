@@ -396,8 +396,9 @@ function resolveAttacks(w, field) {
   for (let i = 0; i < w.count; i++) {
     if (!w.alive[i]) continue;
     if (w.carriedBy?.[i] >= 0) continue;
-    // Idle priests may top off the huddle. A fight only swaps the shot they
-    // are about to fire, and only when most of that heal would land.
+    // Idle priests may top off the huddle when they have a mana charge.
+    // A fight only swaps the shot they are about to fire, and only when
+    // most of that heal would land. Empty mana keeps the smite.
     if (w.order[i] === w.ORDER.IDLE) {
       if (w.type[i] === UNIT.PRIEST) tryPriestHeal(w, i, true);
       continue;

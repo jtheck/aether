@@ -35,6 +35,7 @@ import { loadBakedUnitMeshParts } from './unitModels.js';
 import { softDetachMesh } from './meshLifecycle.js';
 import { SCALE_BOUNCE_MS, stageDropScale } from './scaleBounce.js';
 import { treeFireHeight } from './treeFire.js';
+import { attachTreeSnow } from './treeSnow.js';
 import { attachTreeSway } from './windSway.js';
 
 const ATLAS_URL = '/assets/textures/atlas-hd.png';
@@ -1448,7 +1449,11 @@ async function loadModelParts(engine, variant) {
       });
     })().then((parts) => {
       // Materials are still unbuilt here, so the plugin lands in the first pipeline.
-      if (variant.kind === SCENERY.TREE) attachTreeSway(parts.map((part) => part.mesh));
+      if (variant.kind === SCENERY.TREE) {
+        const meshes = parts.map((part) => part.mesh);
+        attachTreeSway(meshes);
+        attachTreeSnow(meshes);
+      }
       return parts;
     });
     cache.set(variant.modelUrl, promise);

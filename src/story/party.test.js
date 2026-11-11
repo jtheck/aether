@@ -114,7 +114,7 @@ describe('adventure party', () => {
     assert.ok(heroes.every((u) => u[0] === 2));
     assert.equal(extras.length, 1);
     assert.equal(extras[0][0], 4);
-    assert.equal(solo.g, undefined);
+    assert.deepEqual(solo.g, [[0, 1, 2]]);
   });
 
   it('reshuffles heroes per map seed and leaves trained extras with their owner', () => {

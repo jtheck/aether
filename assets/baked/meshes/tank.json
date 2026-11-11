@@ -114,22 +114,22 @@
       ],
       "positions": {
         "offset": 0,
-        "length": 264,
+        "length": 306,
         "type": "f32"
       },
       "normals": {
-        "offset": 1056,
-        "length": 264,
+        "offset": 1224,
+        "length": 306,
         "type": "f32"
       },
       "indices": {
-        "offset": 2112,
-        "length": 132,
+        "offset": 2448,
+        "length": 168,
         "type": "u32"
       },
       "uvs": {
-        "offset": 2640,
-        "length": 176,
+        "offset": 3120,
+        "length": 204,
         "type": "f32"
       }
     },
@@ -148,23 +148,23 @@
         3.4188895225524902
       ],
       "positions": {
-        "offset": 3344,
-        "length": 186,
+        "offset": 3936,
+        "length": 258,
         "type": "f32"
       },
       "normals": {
-        "offset": 4088,
-        "length": 186,
+        "offset": 4968,
+        "length": 258,
         "type": "f32"
       },
       "indices": {
-        "offset": 4832,
-        "length": 96,
+        "offset": 6000,
+        "length": 132,
         "type": "u32"
       },
       "uvs": {
-        "offset": 5216,
-        "length": 124,
+        "offset": 6528,
+        "length": 172,
         "type": "f32"
       }
     },
@@ -183,22 +183,22 @@
         6.208038806915283
       ],
       "positions": {
-        "offset": 5712,
+        "offset": 7216,
         "length": 552,
         "type": "f32"
       },
       "normals": {
-        "offset": 7920,
+        "offset": 9424,
         "length": 552,
         "type": "f32"
       },
       "indices": {
-        "offset": 10128,
+        "offset": 11632,
         "length": 288,
         "type": "u32"
       },
       "uvs": {
-        "offset": 11280,
+        "offset": 12784,
         "length": 368,
         "type": "f32"
       }
@@ -218,22 +218,22 @@
         4.143551349639893
       ],
       "positions": {
-        "offset": 12752,
+        "offset": 14256,
         "length": 396,
         "type": "f32"
       },
       "normals": {
-        "offset": 14336,
+        "offset": 15840,
         "length": 396,
         "type": "f32"
       },
       "indices": {
-        "offset": 15920,
+        "offset": 17424,
         "length": 252,
         "type": "u32"
       },
       "uvs": {
-        "offset": 16928,
+        "offset": 18432,
         "length": 264,
         "type": "f32"
       }

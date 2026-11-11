@@ -15,6 +15,7 @@ import {
 import { loadBakedUnitMeshParts, prefetchBakedMesh } from './unitModels.js';
 import { meshRoofY, roofChipLift, DEFAULT_BUILDING_ROOF } from './healthBars.js';
 import { BUILDING_FOOTPRINTS, BUILDING_MODEL_URLS, PLACEABLE_BUILDINGS, buildingMeshGroundCenter, buildingMeshOrigin } from '../sim/buildings.js';
+import { bodyScaleMul } from '../sim/namedUnit.js';
 import { TILE_SIZE_F } from '../sim/field.js';
 import { SCALE_RISE_MS, stageRiseScale } from './scaleBounce.js';
 import { MODEL_BASE_SCALE } from './modelScale.js';
@@ -298,9 +299,10 @@ export function applyGhostValidityTint(mat, valid) {
 /**
  * @param {'s' | 'm' | 'l' | string | undefined} size
  */
-function resolveSelScale(size) {
+function resolveSelScale(size, mul = 1) {
   const key = size === 's' || size === 'm' || size === 'l' ? size : 'm';
-  return BUILDING_SEL_SIZE[key] * MODEL_BASE_SCALE;
+  const m = mul > 0 ? mul : 1;
+  return BUILDING_SEL_SIZE[key] * MODEL_BASE_SCALE * m;
 }
 
 /**
@@ -524,7 +526,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
       for (let i = 0; i < n; i++) {
         const a = selAnchors[i];
         const gy = groundYAt(a.x, a.z);
-        writeFlatCollar(part.matrices, i, a.x, a.z, resolveSelScale(a.size), gy);
+        writeFlatCollar(part.matrices, i, a.x, a.z, resolveSelScale(a.size, a.mul), gy);
         if (part.colors) writeSelSlot(part.colors, i, a.progress);
       }
       setThinInstanceCount(part.mesh, n);
@@ -554,6 +556,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
       x: p.x,
       z: p.z,
       size: p.size === 's' || p.size === 'l' ? p.size : 'm',
+      mul: bodyScaleMul(p.mul),
       progress: Number.isFinite(p.progress) ? p.progress : 1,
     }));
     applySelectionHighlight();
@@ -658,7 +661,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
   }
 
   function constructScale(b) {
-    const base = meshFit(b.type, modelUrlFor(b.type, b.owner | 0)).scale;
+    const base = meshFit(b.type, modelUrlFor(b.type, b.owner | 0)).scale * bodyScaleMul(b.scale);
     if (b.built !== 0) return base;
     const stage = CONSTRUCT_STAGE_SCALE[constructionVisualStage(b.buildProgress, b.buildTime)] ?? SITE_SCALE;
     return base * stage;
@@ -799,8 +802,15 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
     s.modelUrl = modelUrlFor(b.type, b.owner | 0);
     const built = b.built === 0 ? 0 : 1;
     const stage = constructStage(b);
-    if (s.built === 0 && built === 1) beginRise(s, constructScale(b));
-    else if (built === 0 && stage > (s.scaleStage | 0)) beginRise(s, constructScale(b));
+    const want = constructScale(b);
+    if (s.built === 0 && built === 1) beginRise(s, want);
+    else if (built === 0 && stage > (s.scaleStage | 0)) beginRise(s, want);
+    else if (!s.rising && !s.falling && Math.abs((s.visScale ?? 0) - want) > 1e-3) {
+      s.visScale = want;
+      s.scaleFrom = want;
+      s.targetScale = want;
+      s.scaleT = 1;
+    }
     s.built = built;
     s.scaleStage = Math.max(s.scaleStage | 0, stage);
   }

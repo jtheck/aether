@@ -21,6 +21,7 @@ import {
 import * as fx from '../sim/fixed.js';
 import { TILE_SIZE_F, worldHalfFFromField, worldHalfZFFromField } from '../sim/field.js';
 import { BUILDING_FOOTPRINTS } from '../sim/buildings.js';
+import { TORCH_VISION_TILES, forEachTorch } from '../sim/doodads.js';
 import { isAlly } from '../sim/teams.js';
 import { UNIT_DEFS, getUnitDef } from '../sim/unitTypes.js';
 import { surfaceHeightAt, tableFloorYForField, terrainChunkLodSpec, terrainLookXZ } from './terrain.js';
@@ -1202,6 +1203,8 @@ export function createFogOfWar() {
         addSource(a.x, a.z, visionTilesForBuilding('agora'));
       }
     }
+    // Planted torches are a shared lamp. Every player gets the hole.
+    forEachTorch(field, (x, z) => addSource(x, z, TORCH_VISION_TILES));
     let removes = 0;
     let adds = 0;
     for (let s = 0; s < lastSrcN; s++) {

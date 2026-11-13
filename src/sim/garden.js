@@ -83,6 +83,15 @@ function decodeRleU16(str, length) {
   return out;
 }
 
+function treeLookNeedsSave(field) {
+  const look = field?.treeLook;
+  if (!look) return false;
+  for (let i = 0; i < look.length; i++) {
+    if (look[i]) return true;
+  }
+  return false;
+}
+
 function rockStockNeedsSave(field) {
   const stock = field?.rockStock;
   const types = field?.sceneryType;
@@ -511,6 +520,7 @@ export function encodeGarden(field, extras = {}) {
   if (authored) {
     out.sc = encodeRle(field.sceneryType);
     out.ts = encodeRle(field.treeStock);
+    if (treeLookNeedsSave(field)) out.tl = encodeRle(field.treeLook);
   }
   if (hasAuthoredDoodads(field)) {
     out.dd = encodeRle(field.doodadType);
@@ -628,6 +638,7 @@ export function decodeGarden(data) {
     terrainTypes: data.t != null && data.t !== '' ? decodeRle(data.t, n) : new Uint8Array(0),
     sceneryType: data.sc ? decodeRle(data.sc, n) : null,
     treeStock: data.ts ? decodeRle(data.ts, n) : null,
+    treeLook: data.tl ? decodeRle(data.tl, n) : null,
     doodadType: data.dd ? decodeRle(data.dd, n) : null,
     doodadColor: data.dc ? decodeRle(data.dc, n) : null,
     rockStock: data.rk ? decodeRleU16(data.rk, n) : null,
@@ -706,6 +717,7 @@ export function fieldFromGarden(data) {
     if (g.treeStock?.length === field.treeStock.length) field.treeStock.set(g.treeStock);
     field.sceneryAuthored = true;
     applyAuthoredScenery(field);
+    if (g.treeLook?.length === field.treeLook?.length) field.treeLook.set(g.treeLook);
     if (g.rockStock) applySavedRockStock(field, g.rockStock);
   }
   if (g.doodadType?.length === field.width * field.height) {

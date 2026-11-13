@@ -34,6 +34,8 @@ export const FROG_PHASE = {
   AWAY: 3,
   /** End-of-life dash into the nearest puddle / lake. */
   ESCAPE: 4,
+  /** Gliding across water: fast, directional, splashes the plague each stroke. */
+  SWIM: 5,
 };
 
 /** Initial frogs per cast, packed into a few messy clusters. */
@@ -63,6 +65,16 @@ export const FROG_SPLIT_CHANCE_Q8 = 72;
 const HOP_SPEED = fx.fromFloat(1.05);
 /** Escape hops are quick but short - many of them, not one mega-leap. */
 const ESCAPE_HOP_SPEED = fx.fromFloat(5.2);
+/** Swim strokes: fast, fairly straight glides that carry a frog across water. */
+const SWIM_SPEED = fx.fromFloat(3.0);
+const SWIM_STEP_MIN = fx.fromFloat(7);
+const SWIM_STEP_MAX = fx.fromFloat(12);
+/** A little sideways waggle so the glide isn't a ruler line. */
+const SWIM_LATERAL = fx.fromFloat(1.5);
+/** Heading drift per stroke - keeps swimmers directional, not marching. */
+const SWIM_DIR_WANDER = fx.fromFloat(0.1);
+/** Water is cheap travel: nibble one hop from the life budget every Nth stroke. */
+const SWIM_COST_EVERY = 3;
 const ESCAPE_HOP_DIST_MIN = fx.fromFloat(10.125);
 const ESCAPE_HOP_DIST_MAX = fx.fromFloat(16.875);
 /** Tiny pause between escape hops (ticks). */
@@ -130,6 +142,8 @@ export function createFrogStore(capacity = FROG_INITIAL_CAPACITY) {
     waterY: new Int32Array(capacity),
     /** Escape hops taken (cap). */
     escapeHops: new Uint8Array(capacity),
+    /** Swim strokes taken since entering water (drives cheap budget cost). */
+    swimStrokes: new Uint8Array(capacity),
     dirtyFlag: new Uint8Array(capacity),
     dirty: [],
   };
@@ -176,6 +190,7 @@ export function ensureFrogCapacity(store, minCapacity) {
   store.waterX = grow(store.waterX, Int32Array);
   store.waterY = grow(store.waterY, Int32Array);
   store.escapeHops = grow(store.escapeHops, Uint8Array);
+  store.swimStrokes = grow(store.swimStrokes, Uint8Array);
   store.dirtyFlag = grow(store.dirtyFlag, Uint8Array);
 
   const newFree = new Int32Array(newCap);
@@ -204,6 +219,7 @@ function freeFrog(store, slot) {
   store.hopsDone[slot] = 0;
   store.escaping[slot] = 0;
   store.escapeHops[slot] = 0;
+  store.swimStrokes[slot] = 0;
   store.activeCount--;
   store.freeStack[store.freeTop++] = slot;
   store.allocatorHash = Math.imul(
@@ -223,7 +239,18 @@ function setHop(store, slot, ox, oy, dx, dy, speed = HOP_SPEED) {
   store.hopAge[slot] = 0;
   const dist = fx.len(dx - ox, dy - oy);
   const ticks = dist > 0 ? Math.ceil(dist / Math.max(1, speed)) : 1;
-  store.hopDuration[slot] = Math.max(speed === ESCAPE_HOP_SPEED ? 4 : 8, ticks);
+  const minTicks =
+    speed === ESCAPE_HOP_SPEED ? 4 : speed === SWIM_SPEED ? 5 : 8;
+  store.hopDuration[slot] = Math.max(minTicks, ticks);
+}
+
+/** True if the world point sits on a water tile. */
+function isWaterTile(field, wx, wy) {
+  if (!field?.terrainTypes) return false;
+  const tx = worldToTile(wx);
+  const tz = worldToTileZ(wy);
+  if (tx < 0 || tz < 0 || tx >= field.width || tz >= field.height) return false;
+  return field.terrainTypes[tz * field.width + tx] === TERRAIN.WATER;
 }
 
 /** Nearest TERRAIN.WATER tile center, or null if none within range. */
@@ -336,6 +363,7 @@ function allocFrog(store) {
   store.waitTicks[slot] = 0;
   store.escaping[slot] = 0;
   store.escapeHops[slot] = 0;
+  store.swimStrokes[slot] = 0;
   store.activeCount++;
   if (slot + 1 > store.highWater) store.highWater = slot + 1;
   store.allocatorHash = Math.imul(
@@ -384,6 +412,38 @@ function planWanderHop(w, store, slot) {
   const dy =
     oy + fx.mul(nd.y, forward) + fx.mul(nd.x, lateral);
   setHop(store, slot, ox, oy, dx, dy);
+}
+
+/** One fast, mostly-straight glide along the frog's heading across water. */
+function planSwimStroke(w, store, slot) {
+  const rng = w.rng;
+  let dirX = store.dirX[slot];
+  let dirY = store.dirY[slot];
+  // Only a whisper of drift - swimmers hold a line better than hoppers.
+  const perpX = -dirY;
+  const perpY = dirX;
+  dirX = dirX + fx.mul(perpX, rngSigned(rng, SWIM_DIR_WANDER));
+  dirY = dirY + fx.mul(perpY, rngSigned(rng, SWIM_DIR_WANDER));
+  const nd = normalizeDir(dirX, dirY);
+  store.dirX[slot] = nd.x;
+  store.dirY[slot] = nd.y;
+
+  const forward = rngBetween(rng, SWIM_STEP_MIN, SWIM_STEP_MAX);
+  const lateral = rngSigned(rng, SWIM_LATERAL);
+  const ox = store.px[slot];
+  const oy = store.py[slot];
+  const dx = ox + fx.mul(nd.x, forward) + fx.mul(-nd.y, lateral);
+  const dy = oy + fx.mul(nd.y, forward) + fx.mul(nd.x, lateral);
+  setHop(store, slot, ox, oy, dx, dy, SWIM_SPEED);
+  store.phase[slot] = FROG_PHASE.SWIM;
+  store.waitTicks[slot] = 0;
+  markDirty(store, slot);
+}
+
+/** Enter swim mode when a hop lands on water: glide instead of lingering. */
+function beginSwim(w, store, slot) {
+  store.swimStrokes[slot] = 0;
+  planSwimStroke(w, store, slot);
 }
 
 /** Break combat focus - units gawk at the frogs instead of fighting. */
@@ -783,8 +843,39 @@ export function frogSystem(w, field = null) {
       store.damage[slot],
     );
     store.landPulse[slot] = 1;
+
+    if (phase === FROG_PHASE.SWIM) {
+      store.swimStrokes[slot] = Math.min(255, store.swimStrokes[slot] + 1);
+      // Water is cheap travel - only nibble the hop budget every few strokes.
+      if (
+        store.swimStrokes[slot] % SWIM_COST_EVERY === 0 &&
+        store.hopsLeft[slot] > 0
+      ) {
+        store.hopsLeft[slot]--;
+      }
+      if (store.hopsLeft[slot] <= 0) {
+        // Spent mid-water - the final splash already fired; sink and vanish.
+        freeFrog(store, slot);
+        continue;
+      }
+      if (isWaterTile(field, ix, iy)) {
+        planSwimStroke(w, store, slot);
+        continue;
+      }
+      // Made the far shore with budget to spare - hop on like normal.
+      store.swimStrokes[slot] = 0;
+      store.hopsDone[slot] = Math.min(255, store.hopsDone[slot] + 1);
+      beginLinger(w, store, slot);
+      continue;
+    }
+
     if (store.hopsLeft[slot] > 0) store.hopsLeft[slot]--;
     store.hopsDone[slot] = Math.min(255, store.hopsDone[slot] + 1);
+    if (store.hopsLeft[slot] > 0 && isWaterTile(field, ix, iy)) {
+      // Landed in the drink - become a fast swimmer spreading the plague.
+      beginSwim(w, store, slot);
+      continue;
+    }
     beginLinger(w, store, slot);
   }
 }
@@ -799,6 +890,7 @@ export function takeFrogUpdates(w) {
   const slots = new Uint16Array(n);
   const alive = new Uint8Array(n);
   const generation = new Uint32Array(n);
+  const owner = new Uint8Array(n);
   const px = new Float32Array(n);
   const py = new Float32Array(n);
   const originX = new Float32Array(n);
@@ -815,6 +907,7 @@ export function takeFrogUpdates(w) {
     slots[i] = slot;
     alive[i] = store.alive[slot];
     generation[i] = store.generation[slot];
+    owner[i] = store.owner[slot];
     px[i] = fx.toFloat(store.px[slot]);
     py[i] = fx.toFloat(store.py[slot]);
     originX[i] = fx.toFloat(store.originX[slot]);
@@ -833,6 +926,7 @@ export function takeFrogUpdates(w) {
     slots,
     alive,
     generation,
+    owner,
     px,
     py,
     originX,
@@ -877,6 +971,7 @@ export function mixFrogChecksum(mix, w) {
     mix(store.waterX[i]);
     mix(store.waterY[i]);
     mix(store.escapeHops[i]);
+    mix(store.swimStrokes[i]);
     mix(store.damage[i]);
   }
 }

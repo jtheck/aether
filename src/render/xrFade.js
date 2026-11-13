@@ -15,11 +15,19 @@ import {
 
 /** Closer than chrome HUD so the veil covers the visor. */
 export const XR_FADE_DEPTH = 0.28;
+/**
+ * Narrator card, past the chrome HUD (ICON_DEPTH 0.8). The veil stays on
+ * the visor; only the copy sits out here. Angular size is unchanged because
+ * the plate grows with depth.
+ */
+export const XR_FADE_CARD_DEPTH = 1.5;
 /** Extra tangent so stereo edges stay covered. */
 export const XR_FADE_COVER = 1.45;
 const FADE_ORDER = 520;
 const CARD_W = 1024;
 const CARD_H = 512;
+/** Visor height of the narrator plaque. Full-frustum 0.42 was a billboard. */
+const CARD_VIEW = 0.13;
 /** Ground narrator stays down until the veil is almost gone. */
 export const XR_FADE_SPEECH_CUT = 0.08;
 
@@ -92,7 +100,9 @@ function makeQuad() {
     -0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0,
   ]);
   const normals = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]);
-  const uvs = new Float32Array([0, 1, 1, 1, 1, 0, 0, 0]);
+  // Same as the speech panels: local +X is the viewer's left, so the
+  // left of the canvas sits on that edge and the front isn't mirrored.
+  const uvs = new Float32Array([1, 1, 0, 1, 0, 0, 1, 0]);
   const indices = new Uint32Array([0, 1, 2, 0, 2, 3]);
   return { positions, normals, uvs, indices };
 }
@@ -410,8 +420,8 @@ export function createXrFade(engine, scene) {
         /* raster can miss a frame */
       }
       const hud = xrHudEye() || eye;
-      const cardPose = xrFadePlane(hud.worldMatrix, frustum, XR_FADE_DEPTH * 0.92);
-      const cardH = cardPose.height * 0.42;
+      const cardPose = xrFadePlane(hud.worldMatrix, frustum, XR_FADE_CARD_DEPTH);
+      const cardH = cardPose.height * CARD_VIEW;
       const cardW = cardH * (CARD_W / CARD_H);
       placeMesh(card.mesh, cardPose, cardW, cardH);
       setShaderUniform(card.mat, 'fade', opacity > 0.01 ? opacity : 1);

@@ -1,9 +1,10 @@
-// Preview looks on the near tree mesh. Billboard cards are unchanged.
+// Per-tree looks on the near tree mesh. Billboard cards stay the plain canopy.
+// Instance color alpha carries the look (1 plain, 2 snow, 3 char). The thin
+// instance multiply uses that alpha, so the fragment divides it back out.
 // Snow uses the same soft noise as the char stands' ash, biased up so it
 // piles on the crown and outer fringe. No hard edge, so it does not speckle.
 // Char stands keep the green, with ash in the body and blackened spots
 // around the embers.
-// A real option can drive setTreeSnow later; 0 restores the plain canopy.
 //
 // The foliage is a double-sided shell, so a normal mix greys every face.
 // Patches come from the mesh shape (baked trees.glb: y 0.33–4.92,
@@ -13,7 +14,7 @@ import { markMaterialUboDirty } from '../vendor/lite/liteVendor.js';
 
 const SNOW_VERT = `
 out.snowP = position;
-out.treeXZ = finalWorld[3].xz;
+out.treeLook = instanceColor.a;
 `;
 
 const SNOW_FNS = `
@@ -40,14 +41,15 @@ let snowH = saturate((input.snowP.y - 0.33) / 4.59);
 let snowR = saturate(length(input.snowP.xz - vec2<f32>(-0.35, -0.15)) / 3.94);
 let coarse = tNoise3(input.snowP * 1.7);
 let fine = tNoise3(input.snowP * 3.6 + vec3<f32>(5.2, 1.4, 2.8));
-let charTree = tHash(floor(input.treeXZ / 28.0)) > 0.5;
+let look = input.treeLook;
+alpha = alpha / max(look, 1.0);
 let shade = clamp(
   max(input.vInstanceColor.r, max(input.vInstanceColor.g, input.vInstanceColor.b)) / 0.12,
   0.15,
   1.5
 );
-let soot = smoothstep(0.38, 0.78, coarse) * (1.0 - smoothstep(0.55, 0.92, snowH * 0.65 + snowR * 0.35));
-if (charTree && material.snowAmt > 0.0) {
+let soot = smoothstep(0.55, 0.85, coarse) * (1.0 - smoothstep(0.55, 0.92, snowH * 0.65 + snowR * 0.35));
+if (look > 2.5) {
   let hot = fine * smoothstep(0.12, 0.38, snowH);
   let scorch = smoothstep(0.56, 0.72, hot);
   let ember = smoothstep(0.76, 0.9, hot);
@@ -57,32 +59,38 @@ if (charTree && material.snowAmt > 0.0) {
   let ashy = mix(baseColor, vec3<f32>(gray * 1.15, gray, gray * 0.92) * 1.4, 0.82);
   baseColor = mix(baseColor, ashy, soot);
   baseColor = mix(baseColor, vec3<f32>(0.012, 0.009, 0.008), scorch);
-  baseColor = mix(baseColor, mix(vec3<f32>(0.015, 0.006, 0.004), vec3<f32>(0.12, 0.025, 0.006), flare), ember);
-  emissive = vec3<f32>(1.35, 0.055, 0.008) * ember * (0.04 + flare) * shade * material.snowAmt;
-} else {
+  baseColor = mix(baseColor, mix(vec3<f32>(0.008, 0.007, 0.006), vec3<f32>(0.12, 0.025, 0.006), flare), ember);
+  emissive = vec3<f32>(1.35, 0.055, 0.008) * ember * (0.012 + flare) * shade;
+} else if (look > 1.5) {
   let pile = snowH * 0.65 + snowR * 0.35;
   let drift = smoothstep(0.52, 0.64, coarse + (pile - 0.4) * 1.4);
-  let snowy = mix(baseColor, vec3<f32>(0.72, 0.76, 0.82), 0.92);
-  baseColor = mix(baseColor, snowy, drift * material.snowAmt);
+  // Instance color is the green size tint. Dark trees were staying grey and
+  // picking up the ember pulse. Floor it so every crown is the same white.
+  let inst = max(input.vInstanceColor.r, max(input.vInstanceColor.g, input.vInstanceColor.b));
+  let lift = clamp(inst / 0.08, 0.85, 1.0);
+  let snowy = vec3<f32>(0.566, 0.570, 0.580) * lift;
+  baseColor = mix(baseColor, snowy, drift);
+  emissive = vec3<f32>(0.0);
+} else {
+  emissive = vec3<f32>(0.0);
 }
 `;
 
 /** @type {Set<object>} */
 const snowMaterials = new Set();
-let snowAmount = 1;
+let charTrees = 0;
 let emberTime = 0;
 
 const plugin = {
   name: 'tree-snow',
   getUniforms: () => ({
     ubo: [
-      { name: 'snowAmt', type: 'f32' },
       { name: 'emberT', type: 'f32' },
     ],
   }),
   getVaryings: () => [
     { name: 'snowP', type: 'vec3<f32>' },
-    { name: 'treeXZ', type: 'vec2<f32>' },
+    { name: 'treeLook', type: 'f32' },
   ],
   getCustomCode(shaderType) {
     if (shaderType === 'vertex') return { CUSTOM_VERTEX_MAIN_END: SNOW_VERT };
@@ -95,23 +103,24 @@ const plugin = {
     return null;
   },
   writeUbo(data, offsets) {
-    const o = offsets.get('snowAmt');
-    if (o != null) data[o / 4] = snowAmount;
     const t = offsets.get('emberT');
     if (t != null) data[t / 4] = emberTime;
   },
 };
 
-/** Render clock only. Each ember stays dark, then flares for a short beat. */
-export function tickTreeSnow() {
-  if (!snowMaterials.size) return;
-  emberTime = performance.now() / 1000;
-  for (const mat of snowMaterials) markMaterialUboDirty(mat);
+/** Living char canopies. The ember clock stays off while every tree is plain. */
+export function adjustTreeEmbers(delta) {
+  charTrees = Math.max(0, charTrees + (delta | 0));
 }
 
-/** 1 = snow and char previews. 0 = current green. Takes effect next draw. */
-export function setTreeSnow(amount) {
-  snowAmount = Math.min(1, Math.max(0, Number(amount) || 0));
+export function resetTreeEmbers() {
+  charTrees = 0;
+}
+
+/** Render clock only. Each ember stays dark, then flares for a short beat. */
+export function tickTreeSnow() {
+  if (charTrees <= 0 || !snowMaterials.size) return;
+  emberTime = performance.now() / 1000;
   for (const mat of snowMaterials) markMaterialUboDirty(mat);
 }
 

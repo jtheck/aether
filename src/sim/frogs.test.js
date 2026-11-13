@@ -377,6 +377,103 @@ function spentFrogJumpsOffNearbyEdge() {
   assert.equal(w.frogs.activeCount, 0, 'frog despawns after hopping off the rim');
 }
 
+function frogsSwimAcrossWater() {
+  const field = createField(7);
+  const w = createWorld(51);
+  spawn(w, { x: 0, y: 0, type: UNIT.SHAMAN, owner: 0 });
+
+  // Clear a land corridor, then carve a wide water band across it (+X).
+  const tx0 = worldToTile(0);
+  const tz0 = worldToTile(0);
+  const W = field.width;
+  const H = field.height;
+  for (let dz = -5; dz <= 5; dz++) {
+    for (let dx = -5; dx <= 30; dx++) {
+      const tx = tx0 + dx;
+      const tz = tz0 + dz;
+      if (tx < 0 || tz < 0 || tx >= W || tz >= H) continue;
+      field.terrainTypes[tz * W + tx] =
+        dx >= 1 && dx <= 12 ? TERRAIN.WATER : TERRAIN.GRASS;
+    }
+  }
+  const waterStartX = tileCenterX(tx0 + 1);
+
+  spawnFrogPlague(w, {
+    owner: 0,
+    source: 0,
+    x: 0,
+    y: 0,
+    aimX: fx.fromInt(40),
+    aimY: 0,
+    damage: 4,
+    count: 1,
+  });
+  let slot = -1;
+  for (let s = 0; s < w.frogs.highWater; s++) {
+    if (w.frogs.alive[s]) { slot = s; break; }
+  }
+  assert.ok(slot >= 0);
+
+  // Aim the frog straight into the water band on its first hop.
+  const f = w.frogs;
+  f.dirX[slot] = fx.ONE;
+  f.dirY[slot] = 0;
+  f.px[slot] = 0;
+  f.py[slot] = 0;
+  f.originX[slot] = 0;
+  f.originY[slot] = 0;
+  f.destX[slot] = tileCenterX(tx0 + 2);
+  f.destY[slot] = tileCenterY(tz0);
+  f.phase[slot] = FROG_PHASE.WAIT;
+  f.waitTicks[slot] = 0;
+  f.hopsDone[slot] = 0;
+  f.hopsLeft[slot] = 10;
+
+  let sawSwim = false;
+  let maxSwimSpeed = 0;
+  let reachedShore = false;
+  let shoreHopsLeft = -1;
+  for (let t = 0; t < 400 && w.frogs.alive[slot]; t++) {
+    frogSystem(w, field);
+    const phase = f.phase[slot];
+    if (phase === FROG_PHASE.SWIM) {
+      sawSwim = true;
+      const dist = fx.len(
+        f.destX[slot] - f.originX[slot],
+        f.destY[slot] - f.originY[slot],
+      );
+      const dur = Math.max(1, f.hopDuration[slot]);
+      maxSwimSpeed = Math.max(maxSwimSpeed, fx.toFloat(dist) / dur);
+    } else if (
+      sawSwim &&
+      !reachedShore &&
+      !f.escaping[slot] &&
+      phase !== FROG_PHASE.ESCAPE &&
+      f.px[slot] > tileCenterX(tx0 + 12) &&
+      !isWaterTileAt(field, f.px[slot], f.py[slot])
+    ) {
+      reachedShore = true;
+      shoreHopsLeft = f.hopsLeft[slot];
+    }
+  }
+
+  assert.ok(sawSwim, 'landing on water flips the frog into SWIM');
+  // Swimming is clearly faster than the ~1.05 ground hop speed.
+  assert.ok(maxSwimSpeed > 2, 'swim strokes glide fast');
+  assert.ok(waterStartX > 0, 'water band sits on the +X side');
+  assert.ok(reachedShore, 'swimmer crosses the band to the far shore');
+  // Cheap travel: a wide band would cost most of a 10-hop budget at full price.
+  assert.ok(shoreHopsLeft >= 6, 'swimming barely dents the hop budget');
+}
+
+/** Local mirror of the sim's water test (helper is module-private). */
+function isWaterTileAt(field, wx, wy) {
+  const tx = worldToTile(wx);
+  const tz = worldToTile(wy);
+  if (tx < 0 || tz < 0 || tx >= field.width || tz >= field.height) return false;
+  return field.terrainTypes[tz * field.width + tx] === TERRAIN.WATER;
+}
+
 function confuseCanTurnOnAlly() {
   const w = createWorld(47);
   const a = spawn(w, {
@@ -414,6 +511,7 @@ endOfLifeHopsToNearestWater();
 frogsPopOffTheCaster();
 farWaterJustVanishes();
 spentFrogJumpsOffNearbyEdge();
+frogsSwimAcrossWater();
 confuseCanTurnOnAlly();
 assert.ok(FROG_LINGER_MIN > 0);
 assert.ok(FROG_LAUNCH_STAGGER > 0);

@@ -40,6 +40,7 @@ import {
 } from './tableShape.js';
 import { encodeGarden, decodeCelestial, decodeGarden, encodeRle, fieldFromGarden, applyGardenPlacements, placementOwnersToKeep } from './garden.js';
 import { clearAllScenery, paintSceneryBrush, populateScenery, rockYield, SCENERY } from './scenery.js';
+import { TREE_LOOK_SNOW, setTreeLook } from './trees.js';
 import { buildTesterGarden, TESTER_STARTING_RESOURCES } from './testerGarden.js';
 import {
   buildStressGarden,
@@ -445,6 +446,7 @@ describe('garden codec', () => {
     });
     field.sceneryType[8 * 32 + 8] = 1;
     field.treeStock[8 * 32 + 8] = 28;
+    setTreeLook(field, 8 * 32 + 8, TREE_LOOK_SNOW);
     field.doodadType[10 * 32 + 10] = 2;
     const json = encodeGarden(field, {
       name: 'placed',
@@ -457,6 +459,7 @@ describe('garden codec', () => {
     const g = decodeGarden(json);
     assert.equal(g.authoredScenery, true);
     assert.equal(g.sceneryType[8 * 32 + 8], 1);
+    assert.equal(g.treeLook[8 * 32 + 8], TREE_LOOK_SNOW);
     assert.equal(g.doodadType[10 * 32 + 10], 2);
     assert.equal(g.units.length, 1);
     assert.equal(g.buildings[0].type, 'camp');
@@ -465,6 +468,8 @@ describe('garden codec', () => {
     assert.deepEqual(g.startingResources, { wood: 400, stone: 50, mineral: 12, food: 80 });
     const again = fieldFromGarden(json);
     assert.equal(again.sceneryType[8 * 32 + 8], 1);
+    assert.equal(again.treeLook[8 * 32 + 8], TREE_LOOK_SNOW);
+    assert.equal(fieldSnapshot(again).treeLook[8 * 32 + 8], TREE_LOOK_SNOW);
     assert.equal(again.doodadType[10 * 32 + 10], 2);
 
     const world = createWorld(7);
@@ -709,7 +714,7 @@ describe('garden codec', () => {
     const again = encodeGarden(field, { units: g.units, buildings: g.buildings });
     assert.deepEqual(again.us, json.us);
     assert.equal(again.b[0][5], 2);
-    assert.equal(NAMED_UNIT_SCALE, 1.29);
+    assert.equal(NAMED_UNIT_SCALE, 1.4);
   });
 
   it('omits sr and uses the default opening bank', () => {

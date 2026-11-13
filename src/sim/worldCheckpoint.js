@@ -106,7 +106,7 @@ export function exportWorldCheckpoint(w, field, checksum) {
       i32: ['source', 'px', 'py', 'radius'],
     }),
     frogs: exportPoolStore(w.frogs, {
-      u8: ['alive', 'owner', 'phase', 'hopsLeft', 'hopsDone', 'landPulse', 'escaping', 'escapeHops'],
+      u8: ['alive', 'owner', 'phase', 'hopsLeft', 'hopsDone', 'landPulse', 'escaping', 'escapeHops', 'swimStrokes'],
       u16: ['hopAge', 'hopDuration', 'waitTicks', 'damage'],
       u32: ['generation'],
       i32: [
@@ -240,7 +240,7 @@ export function importWorldCheckpoint(w, field, checkpoint) {
     ensureFrogCapacity(w.frogs, need);
   }
   importPoolStore(w.frogs, checkpoint.frogs, {
-    u8: ['alive', 'owner', 'phase', 'hopsLeft', 'hopsDone', 'landPulse', 'escaping', 'escapeHops'],
+    u8: ['alive', 'owner', 'phase', 'hopsLeft', 'hopsDone', 'landPulse', 'escaping', 'escapeHops', 'swimStrokes'],
     u16: ['hopAge', 'hopDuration', 'waitTicks', 'damage'],
     u32: ['generation'],
     i32: [
@@ -698,6 +698,7 @@ function exportFieldMutable(field) {
     height: field.height,
     treeStockHash: field.treeStockHash | 0,
     treeStock: encodeTA(field.treeStock, n),
+    treeLook: encodeTA(field.treeLook, n),
     treeBurn: encodeTA(field.treeBurn, n),
     rockStockHash: field.rockStockHash | 0,
     rockStock: encodeTA(field.rockStock, n),
@@ -714,6 +715,10 @@ function importFieldMutable(field, data) {
   }
   decodeTAInto(field.treeStock, data.treeStock);
   decodeTAInto(field.treeBurn, data.treeBurn);
+  if (data.treeLook) {
+    ensureTreeArrays(field);
+    decodeTAInto(field.treeLook, data.treeLook);
+  }
   decodeTAInto(field.sceneryType, data.sceneryType);
   decodeTAInto(field.slowMask, data.slowMask);
   field.treeStockHash = data.treeStockHash | 0;

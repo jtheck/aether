@@ -291,6 +291,10 @@ export function sample(reel, time) {
       } else {
         camera = { ...to };
       }
+      camera.endTx = to.tx;
+      camera.endTz = to.tz;
+      camera.endRadius = to.radius;
+      camera.endAlpha = to.alpha;
       camera.id = clip.id;
       // Past the clip the pose is only the held end. Playback must not
       // pull a player who has already moved the camera back onto it.

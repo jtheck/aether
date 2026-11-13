@@ -1,8 +1,8 @@
 // A placed body can carry a scale. A named hero with no authored scale is still
-// 29% bigger, tougher, and harder-hitting. Buildings use the same scale for the
+// 40% bigger, tougher, and harder-hitting. Buildings use the same scale for the
 // mesh and hit points. Their footprint stays the plot they were given.
 
-export const NAMED_UNIT_SCALE = 1.29;
+export const NAMED_UNIT_SCALE = 1.4;
 export const BODY_SCALE_MIN = 0.5;
 export const BODY_SCALE_MAX = 4;
 /** Packed scale: 1000 is a normal body. 0 means "not authored". */

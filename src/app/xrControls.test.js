@@ -49,10 +49,11 @@ function makeHand(handedness) {
   };
 }
 
-function harness(spots = {}) {
+function harness() {
   const shown = [];
   const calls = [];
-  const jumped = [];
+  const followed = [];
+  const altitudes = [];
   const note = (kind) => (...args) => {
     calls.push({ kind, args });
     return true;
@@ -96,15 +97,15 @@ function harness(spots = {}) {
   const controls = createXrControls({
     renderer,
     getInput: () => input,
-    jumps: { home: () => spots.home ?? null, selection: () => spots.selection ?? null },
-    onJump: (x, z) => jumped.push([x, z]),
+    onFollowToggle: () => followed.push(1),
+    onAltitude: () => altitudes.push(1),
     now: () => nowMs,
   });
   const left = makeHand('left');
   const right = makeHand('right');
   const ctx = { input: { inputSources: [left.src, right.src] } };
   return {
-    controls, state, left, right, shown, calls, ctx, jumped,
+    controls, state, left, right, shown, calls, ctx, followed, altitudes,
     step: () => controls.step(ctx),
     advance: (ms) => { nowMs += ms; },
     kinds: () => calls.map((c) => c.kind),
@@ -179,31 +180,36 @@ describe('xr controls: play', () => {
   });
 });
 
-describe('xr controls: jumps', () => {
-  it('left stick click jumps home and right stick click jumps to the selection', () => {
-    const h = harness({ home: { x: -50, z: 10 }, selection: { x: 30, z: 40 } });
-    tap(h, h.left.stickClick);
+describe('xr controls: holds', () => {
+  it('right stick click toggles follow and left stick click cycles altitude', () => {
+    const h = harness();
     tap(h, h.right.stickClick);
-    assert.deepEqual(h.jumped, [[-50, 10], [30, 40]]);
+    tap(h, h.left.stickClick);
+    assert.equal(h.followed.length, 1);
+    assert.equal(h.altitudes.length, 1);
   });
 
-  it('stays put when there is nowhere to go, and a held click jumps once', () => {
-    const h = harness({ home: null, selection: { x: 1, z: 2 } });
-    tap(h, h.left.stickClick);
+  it('a held click fires once', () => {
+    const h = harness();
     h.right.stickClick(true);
     h.step();
     h.step();
-    assert.deepEqual(h.jumped, [[1, 2]]);
+    h.left.stickClick(true);
+    h.step();
+    h.step();
+    assert.equal(h.followed.length, 1);
+    assert.equal(h.altitudes.length, 1);
   });
 
-  it('jumps work while placing or in a pie menu', () => {
-    const h = harness({ selection: { x: 5, z: 5 } });
+  it('stick clicks still latch while placing or in a pie menu', () => {
+    const h = harness();
     h.state.placing = true;
     tap(h, h.right.stickClick);
     h.state.placing = false;
     h.state.radial = true;
-    tap(h, h.right.stickClick);
-    assert.equal(h.jumped.length, 2);
+    tap(h, h.left.stickClick);
+    assert.equal(h.followed.length, 1);
+    assert.equal(h.altitudes.length, 1);
   });
 
   it('grip selects; triggers never select', () => {

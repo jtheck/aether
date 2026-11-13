@@ -46,8 +46,8 @@ import { resumeMeshes, softDetachMesh, suspendMeshes } from './meshLifecycle.js'
 import { classifyGridTile, placementFillKind, placementGridWindow } from './placementGrid.js';
 import { tickTeamColorGlimmer } from './teamColor.js';
 import { tickTreeSnow } from './treeSnow.js';
-import { tickWind } from './windSway.js';
-import { ATLAS_GRID, CELL_EMPTY, SHEET_BURN_JUNCTION, SHEET_DIRT_JUNCTION, SHEET_JUNCTION, TERRAIN_LOOK, tileLayer } from './terrainLayers.js';
+import { getWindClock, tickWind } from './windSway.js';
+import { ATLAS_GRID, CELL_EMPTY, SHEET_BURN_JUNCTION, SHEET_DIRT_JUNCTION, SHEET_JUNCTION, SHEET_SHORE_JUNCTION, SHEET_SNOW_JUNCTION, SHEET_TURF_JUNCTION, TERRAIN_LOOK, tileLayer } from './terrainLayers.js';
 import { PAGE_BUCKET_BASE, createTerrainMaterials, loadTerrainAtlas } from './terrainAtlas.js';
 import * as fx from '../sim/fixed.js';
 
@@ -604,7 +604,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       if (disposed) return;
       const t0 = profile ? performance.now() : 0;
       specGlint.update(activeCamera, deltaMs);
-      tickWind();
+      tickWind(deltaMs);
       tickTreeSnow();
       tickTeamColorGlimmer();
       const tGlint = profile ? performance.now() : 0;
@@ -1298,7 +1298,7 @@ fn lavaGlow(p: vec2<f32>, t: f32) -> vec3<f32> {
     if (material) {
       setShaderUniform(material, 'sunDir', readSunDir(scene));
       // Render clock only. Never sim ticks, so replays and lockstep stay untouched.
-      setShaderUniform(material, 'time', performance.now() / 1000);
+      setShaderUniform(material, 'time', getWindClock());
     }
     if (!lod || !chunks.length || !camera) return;
     elapsed += deltaMs;
@@ -1341,7 +1341,7 @@ fn lavaGlow(p: vec2<f32>, t: f32) -> vec3<f32> {
 }
 
 function isCompositeSheet(sheet) {
-  return sheet === SHEET_JUNCTION || sheet === SHEET_DIRT_JUNCTION || sheet === SHEET_BURN_JUNCTION;
+  return sheet === SHEET_JUNCTION || sheet === SHEET_DIRT_JUNCTION || sheet === SHEET_BURN_JUNCTION || sheet === SHEET_SNOW_JUNCTION || sheet === SHEET_SHORE_JUNCTION || sheet === SHEET_TURF_JUNCTION;
 }
 
 /** Junction composites a field needs, so they can be built before meshing. */
@@ -1421,6 +1421,35 @@ function buildAtlasMeshesInRect(engine, field, look, active, tx0, tz0, tx1, tz1,
           // No composite yet: grass shore only, dirt blob missing.
           bucketId = ATLAS.GRASS_WATER;
           cell &= 15;
+        } else if (bucketId === SHEET_SHORE_JUNCTION) {
+          // No composite yet: the top cover's water sheet, dirt if nothing covers it.
+          const grassN = (cell >> 16) & 15;
+          const snowN = (cell >> 12) & 15;
+          const scorchN = (cell >> 8) & 15;
+          const gravelN = (cell >> 4) & 15;
+          if (grassN !== CELL_EMPTY) {
+            bucketId = ATLAS.GRASS_WATER;
+            cell = grassN;
+          } else if (snowN !== CELL_EMPTY) {
+            bucketId = ATLAS.SNOW_WATER;
+            cell = snowN;
+          } else if (scorchN !== CELL_EMPTY) {
+            bucketId = ATLAS.SCORCHED_WATER;
+            cell = scorchN;
+          } else if (gravelN !== CELL_EMPTY) {
+            bucketId = ATLAS.GRAVEL_WATER;
+            cell = gravelN;
+          } else {
+            bucketId = ATLAS.DIRT_WATER;
+            cell &= 15;
+          }
+        } else if (bucketId === SHEET_TURF_JUNCTION) {
+          bucketId = ATLAS.SNOW_WATER;
+          cell &= 15;
+        } else if (bucketId === SHEET_SNOW_JUNCTION && (cell & 15) === CELL_EMPTY) {
+          // No composite yet: snow blob only, grass absent.
+          bucketId = ATLAS.SNOW_DIRT;
+          cell = (cell >> 12) & 15;
         } else if (bucketId === SHEET_BURN_JUNCTION && (cell & 15) === CELL_EMPTY) {
           // No composite yet: scorched blob only, grass absent.
           bucketId = ATLAS.SCORCHED_DIRT;

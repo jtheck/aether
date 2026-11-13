@@ -15,11 +15,11 @@ import {
 } from './namedUnit.js';
 
 describe('named heroes', () => {
-  it('is 29% tougher and hits 29% harder', () => {
+  it('is 40% tougher and hits 40% harder', () => {
     const base = getUnitDef(UNIT.MYCO);
     assert.equal(namedUnitHp(base.hp), Math.round(base.hp * NAMED_UNIT_SCALE));
     assert.equal(namedUnitDamage(base.attackDamage, true), Math.round(base.attackDamage * NAMED_UNIT_SCALE));
-    assert.equal(NAMED_UNIT_SCALE, 1.29);
+    assert.equal(NAMED_UNIT_SCALE, 1.4);
 
     const w = createWorld(1);
     const plain = spawn(w, { type: UNIT.MYCO, owner: 0 });

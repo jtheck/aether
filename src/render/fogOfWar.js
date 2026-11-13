@@ -1121,6 +1121,7 @@ export function createFogOfWar() {
    *   world?: object,
    *   buildings?: object[],
    *   agoras?: object[],
+   *   frogVision?: { x: number, z: number, owner: number, radius?: number }[],
    *   field?: object,
    *   localPlayerId?: number,
    *   enabled?: boolean,
@@ -1205,6 +1206,15 @@ export function createFogOfWar() {
     }
     // Planted torches are a shared lamp. Every player gets the hole.
     forEachTorch(field, (x, z) => addSource(x, z, TORCH_VISION_TILES));
+    // Frogs that popped out of the water reveal their owner's surroundings.
+    const frogVision = input.frogVision;
+    if (frogVision) {
+      for (let i = 0; i < frogVision.length; i++) {
+        const s = frogVision[i];
+        if (!isVisionAlly(s.owner)) continue;
+        addSource(s.x, s.z, s.radius ?? CIV_VISION_TILES);
+      }
+    }
     let removes = 0;
     let adds = 0;
     for (let s = 0; s < lastSrcN; s++) {

@@ -220,6 +220,11 @@ export function setRadialPrice(id, spec) {
 }
 
 /** @param {string} id */
+export function radialPriceElement(id) {
+  return nodes.get(id) ?? null;
+}
+
+/** @param {string} id */
 export function hideRadialPrice(id) {
   const el = nodes.get(id);
   if (el) el.hidden = true;

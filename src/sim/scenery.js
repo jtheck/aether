@@ -14,8 +14,10 @@ import {
   ensureTreeArrays,
   fellTreeAt,
   growTreeAt,
+  setTreeLook,
   setTreeStock,
-  treeStageFromStock,
+  terrainHostsRocks,
+  terrainHostsTrees,
 } from './trees.js';
 
 /** Grove-sized fade band from the table outline. Same radius as grove feed. */
@@ -83,6 +85,9 @@ export const SPAWN_CLEAR_RADIUS_TILES = 6;
 const ROCK_RATE = 0.03;
 const TREE_GRASS_RATE = 0.2;
 const TREE_DIRT_RATE = 0.05;
+/** Fire keeps the burn mostly open and stacks the forest on the dirt patches. */
+const TREE_SCORCH_RATE = 0.02;
+const TREE_FIRE_DIRT_RATE = 0.45;
 /** Extra tiles between rock centers when a paint call does not ask for mesh-tight packing. */
 export const ROCK_PAINT_PAD = 1;
 /**
@@ -138,6 +143,12 @@ export function rockClearRadius(kind) {
   return 0;
 }
 
+/** Visual scale at empty (hidden) through a full pile. Full is well past the old mesh size. */
+const ROCK_SCALE_MIN = 0.55;
+const ROCK_SCALE_MAX = 1.7;
+/** Fraction of one stage a full-strength age dab takes at the brush center. */
+const AGE_PORTION = 0.42;
+
 export const ROCK_STAGE_MAX = 6;
 
 // Rock nodes yield stone/mineral. Small plain rocks give the rarer mineral;
@@ -173,14 +184,53 @@ export function rockStackCount(kind, stock) {
   return Math.min(ROCK_STACK_MAX, Math.ceil(stock / unit));
 }
 
-/** Visual scale of one layer. Lower layers stay full; the top shrinks as it is mined. */
+/** Visual scale of one layer. Lower layers stay full; the top follows remaining stock. */
 export function rockLayerScale(kind, stock, layer) {
   const unit = rockYield(kind);
   const count = rockStackCount(kind, stock);
   if (unit <= 0 || layer < 0 || layer >= count) return 0;
-  if (layer < count - 1) return 1;
+  if (layer < count - 1) return ROCK_SCALE_MAX;
   const into = stock - layer * unit;
-  return rockScaleForStage(rockStageFromStock(kind, into));
+  return rockMeshScale(into, unit);
+}
+
+/** Smooth size for a pile from empty to one full yield. */
+export function rockMeshScale(stock, full) {
+  if (stock <= 0 || full <= 0) return 0;
+  const t = stock >= full ? 1 : stock / full;
+  const eased = t * t * (3 - 2 * t);
+  return ROCK_SCALE_MIN + (ROCK_SCALE_MAX - ROCK_SCALE_MIN) * eased;
+}
+
+/**
+ * Stock for a generated rock. Two or three stages, around the old mesh size.
+ * Aging still grows a pile up to a full yield.
+ */
+export function naturalRockStock(kind, tx, tz, seed) {
+  const full = rockYield(kind);
+  const step = rockStockPerStage(kind);
+  if (full <= 0) return 0;
+  const roll = sceneryTileHash(tx, tz, ((seed >>> 0) + 6047) >>> 0);
+  const stages = roll < 0.7 ? 2 : 3;
+  return Math.min(full, stages * step);
+}
+
+/**
+ * Stock for a freshly painted rock. Spread across the fuller half of the pile
+ * so a stroke is not a field of pebbles.
+ */
+export function variedRockStartStock(kind, tx, tz, seed) {
+  const full = rockYield(kind);
+  const step = rockStockPerStage(kind);
+  if (full <= 0) return 0;
+  const roll = sceneryTileHash(tx, tz, ((seed >>> 0) + 7919) >>> 0);
+  const lifted = 1 - (1 - roll) * (1 - roll);
+  const t = 0.38 + lifted * 0.62;
+  let stock = Math.round(full * t);
+  const floor = Math.min(full, step * 2);
+  if (stock < floor) stock = floor;
+  if (stock > full) stock = full;
+  return stock;
 }
 
 export function rockStockPerStage(kind) {
@@ -192,15 +242,11 @@ export function rockStageFromStock(kind, stock) {
   return Math.min(ROCK_STAGE_MAX, Math.ceil(stock / rockStockPerStage(kind)));
 }
 
-/** Visual scale multiplier for a stage (1..6). Stage 0 → hidden. */
+/** Visual scale at the top of a stage (1..6). Stage 0 → hidden. */
 export function rockScaleForStage(stage) {
   if (stage <= 0) return 0;
-  if (stage === 1) return 0.40;
-  if (stage === 2) return 0.52;
-  if (stage === 3) return 0.64;
-  if (stage === 4) return 0.76;
-  if (stage === 5) return 0.88;
-  return 1;
+  const clamped = stage > ROCK_STAGE_MAX ? ROCK_STAGE_MAX : stage;
+  return rockMeshScale(clamped, ROCK_STAGE_MAX);
 }
 
 /**
@@ -467,13 +513,17 @@ export function mixRockChecksum(mix, field) {
  * @param {object} field
  * @param {object | null} world
  * @param {Array<[number, number]>} reservedWorldPoints
- * @param {{ keepExisting?: boolean, reserveTrees?: boolean }} [opts]
+ * @param {{ keepExisting?: boolean, reserveTrees?: boolean, treeLook?: number }} [opts]
  *   keepExisting leaves painted scenery and fills around it.
  *   reserveTrees (default true) keeps trees off reserved pads / unit tiles.
+ *   treeLook stamps the canopy on trees this pass plants (0 green, 1 snow, 2 char).
+ *   biome 'fire' thins trees on scorched ground and thickens them on dirt.
  */
 export function populateScenery(field, world = null, reservedWorldPoints = [], opts = {}) {
   const keepExisting = !!opts.keepExisting;
   const reserveTrees = opts.reserveTrees !== false;
+  const treeLook = Math.max(0, Math.min(2, opts.treeLook | 0));
+  const biome = opts.biome || '';
   const { width, height, seed, activeMask, pass, terrainTypes } = field;
   const n = width * height;
   const sceneryType = field.sceneryType?.length === n
@@ -499,6 +549,7 @@ export function populateScenery(field, world = null, reservedWorldPoints = [], o
     field.rockStockHash = 0;
     field.treeStock.fill(0);
     field.treeBurn.fill(0);
+    field.treeLook.fill(0);
     field.burningTrees.length = 0;
     field.treeDirty.length = 0;
     field.treeStockHash = 0;
@@ -508,13 +559,13 @@ export function populateScenery(field, world = null, reservedWorldPoints = [], o
   const occupied = new Uint8Array(n);
   if (keepExisting) seedOccupiedFromScenery(field, occupied);
 
-  // Pass 1: rocks on dirt.
+  // Pass 1: rocks on dirt and on the snow / scorched / gravel covers.
   for (let tz = 0; tz < height; tz++) {
     for (let tx = 0; tx < width; tx++) {
       const i = tz * width + tx;
       if (keepExisting && (sceneryType[i] !== SCENERY.NONE || (field.treeStock[i] > 0))) continue;
       if (!isEligible(field, i, reserved)) continue;
-      if (terrainTypes[i] !== TERRAIN.DIRT) continue;
+      if (!terrainHostsRocks(terrainTypes[i])) continue;
       if (sceneryTileHash(tx, tz, seed + 1000) >= ROCK_RATE) continue;
 
       const regionX = Math.floor(tx / 5);
@@ -525,12 +576,13 @@ export function populateScenery(field, world = null, reservedWorldPoints = [], o
         : sizeRoll < 0.7
           ? SCENERY.ROCK_MOSS
           : SCENERY.ROCK_SNOW;
-      const radius = rockFootprintRadius(kind);
+      const stock = naturalRockStock(kind, tx, tz, seed);
+      const radius = Math.max(0, rockFootprintRadiusForStock(kind, stock));
       if (!footprintAvailable(field, occupied, reserved, tx, tz, radius)) continue;
 
       sceneryType[i] = kind;
-      field.rockStock[i] = rockYield(kind);
-      field.rockStockHash = mixRockHash(field.rockStockHash | 0, i, field.rockStock[i]);
+      field.rockStock[i] = stock;
+      field.rockStockHash = mixRockHash(field.rockStockHash | 0, i, stock);
       markFootprint(field, occupied, pass, tx, tz, radius);
     }
   }
@@ -538,20 +590,21 @@ export function populateScenery(field, world = null, reservedWorldPoints = [], o
   // Yellow ring around rock-red (same overlay language as table edge).
   applyRockSlowBorder(field, occupied);
 
-  // Pass 2: trees on unoccupied grass/dirt.
+  // Pass 2: trees on unoccupied grass, dirt, and the biome covers.
   for (let tz = 0; tz < height; tz++) {
     for (let tx = 0; tx < width; tx++) {
       const i = tz * width + tx;
       if (!isEligible(field, i, reserved, reserveTrees) || occupied[i]) continue;
       if (keepExisting && (sceneryType[i] !== SCENERY.NONE || (field.treeStock[i] > 0))) continue;
       const terrain = terrainTypes[i];
-      if (terrain !== TERRAIN.GRASS && terrain !== TERRAIN.DIRT) continue;
-      const rate = terrain === TERRAIN.GRASS ? TREE_GRASS_RATE : TREE_DIRT_RATE;
+      if (!terrainHostsTrees(terrain)) continue;
+      const rate = treeRate(terrain, biome);
       if (sceneryTileHash(tx, tz, seed + 3000) >= rate) continue;
       sceneryType[i] = SCENERY.TREE;
       slowMask[i] = 1;
       occupied[i] = 1;
       field.treeStock[i] = defaultTreeStock(tx, tz, seed, field);
+      field.treeLook[i] = treeLook;
     }
   }
 
@@ -590,6 +643,14 @@ function structureClaims(field, tx, tz) {
 function structureClaimsIndex(field, i) {
   const mask = field.structureClaim;
   return !!mask && mask[i] === 1;
+}
+
+function treeRate(terrain, biome) {
+  if (biome === 'fire') {
+    if (terrain === TERRAIN.SCORCHED) return TREE_SCORCH_RATE;
+    if (terrain === TERRAIN.DIRT) return TREE_FIRE_DIRT_RATE;
+  }
+  return terrain === TERRAIN.DIRT || terrain === TERRAIN.SNOWGRASS ? TREE_DIRT_RATE : TREE_GRASS_RATE;
 }
 
 function isEligible(field, i, reserved, applyReserved = true) {
@@ -730,8 +791,7 @@ function tileHasTree(field, tx, tz) {
 }
 
 function isPaintLand(field, i) {
-  const terrain = field.terrainTypes?.[i];
-  return terrain === TERRAIN.GRASS || terrain === TERRAIN.DIRT;
+  return terrainHostsTrees(field.terrainTypes?.[i]);
 }
 
 function canPaintTreeLand(field, tx, tz) {
@@ -843,7 +903,9 @@ function stampRockCenter(field, tx, tz, kind, opts = {}) {
   field.sceneryType[i] = kind;
   if (field.rockStock) {
     const full = rockYield(kind);
-    const stock = opts.sapling ? rockStockPerStage(kind) : full;
+    let stock = full;
+    if (opts.stock != null) stock = opts.stock | 0;
+    else if (opts.sapling) stock = variedRockStartStock(kind, tx, tz, field.seed);
     field.rockStock[i] = stock > 0 ? stock : full;
     field.rockStockHash = mixRockHash(field.rockStockHash | 0, i, field.rockStock[i]);
   }
@@ -1028,6 +1090,7 @@ export function clearAllScenery(field) {
   field.sceneryType.fill(SCENERY.NONE);
   field.treeStock.fill(0);
   field.treeBurn.fill(0);
+  field.treeLook.fill(0);
   field.burningTrees.length = 0;
   field.treeDirty.length = 0;
   field.treeStockHash = 0;
@@ -1118,13 +1181,21 @@ export function paintSceneryBrush(field, tx, tz, kind, radius = 0, opts = {}) {
         continue;
       }
       if (kind === SCENERY.TREE) {
-        if (!canPaintTreeLand(field, x, z) || tileHasTree(field, x, z)) continue;
+        const look = opts.treeLook | 0;
+        if (opts.lookOnly) {
+          if (tileHasTree(field, x, z) && setTreeLook(field, i, look)) dirty.push({ x, z });
+          continue;
+        }
+        if (tileHasTree(field, x, z) || !canPaintTreeLand(field, x, z)) continue;
         const underTree = rockUnderTile(field, x, z);
         if (underTree && stampClear(field, underTree.tx, underTree.tz)) {
           dirty.push({ x: underTree.tx, z: underTree.tz });
         }
         if (field.sceneryType[i] !== SCENERY.NONE && stampClear(field, x, z)) dirty.push({ x, z });
-        if (growTreeAt(field, i, TREE_WOOD_PER_STAGE)) dirty.push({ x, z });
+        if (growTreeAt(field, i, defaultTreeStock(x, z, field.seed, field))) {
+          setTreeLook(field, i, look);
+          dirty.push({ x, z });
+        }
         continue;
       }
       const covered = rockUnderTile(field, x, z);
@@ -1136,7 +1207,11 @@ export function paintSceneryBrush(field, tx, tz, kind, radius = 0, opts = {}) {
       };
       if (!rockFootprintOpen(field, x, z, kind, { ...rockOpts, ignoreOtherScenery: true })) continue;
       replaceSceneryForRock(field, x, z, kind, dirty, placed);
-      if (stampRockCenter(field, x, z, kind, { ...rockOpts, sapling: true })) {
+      if (stampRockCenter(field, x, z, kind, {
+        ...rockOpts,
+        sapling: opts.stock == null,
+        stock: opts.stock,
+      })) {
         dirty.push({ x, z });
         placed.add(i);
       }
@@ -1146,39 +1221,59 @@ export function paintSceneryBrush(field, tx, tz, kind, radius = 0, opts = {}) {
   return dirty;
 }
 
-function stepTreeAt(field, tile, dir) {
-  const stock = field.treeStock?.[tile] | 0;
-  if (stock <= 0) return false;
-  const stage = treeStageFromStock(stock);
-  const next = dir > 0
-    ? Math.min(TREE_STAGE_GROVE_MAX, stage + 1)
-    : Math.max(1, stage - 1);
-  if (next === stage) return false;
-  return setTreeStock(field, tile, next * TREE_WOOD_PER_STAGE);
+function ageWeight(dx, dz, radius, strength) {
+  let s = Number(strength);
+  if (!Number.isFinite(s)) s = 1;
+  if (s < 0) s = 0;
+  else if (s > 1) s = 1;
+  if (s <= 0) return 0;
+  if (radius <= 0) return s;
+  const dist = Math.hypot(dx, dz);
+  const t = 1 - dist / (radius + 0.2);
+  const u = t < 0 ? 0 : t > 1 ? 1 : t;
+  const fall = u * u * (3 - 2 * u);
+  return s * (0.14 + 0.86 * fall);
 }
 
-function stepRockAt(field, tile, dir) {
+function ageBite(unit, weight) {
+  if (weight <= 0 || unit <= 0) return 0;
+  return Math.max(1, Math.round(unit * weight * AGE_PORTION));
+}
+
+function stepTreeAt(field, tile, dir, weight) {
+  const stock = field.treeStock?.[tile] | 0;
+  if (stock <= 0 || weight <= 0) return false;
+  const bite = ageBite(TREE_WOOD_PER_STAGE, weight);
+  const next = dir > 0
+    ? Math.min(TREE_STOCK_GROVE_MAX, stock + bite)
+    : Math.max(TREE_WOOD_PER_STAGE, stock - bite);
+  if (next === stock) return false;
+  return setTreeStock(field, tile, next);
+}
+
+function stepRockAt(field, tile, dir, weight) {
   const kind = field.sceneryType?.[tile] ?? 0;
-  if (kind < SCENERY.ROCK_PLAIN) return false;
+  if (kind < SCENERY.ROCK_PLAIN || weight <= 0) return false;
   const cur = field.rockStock?.[tile] | 0;
   if (cur <= 0) return false;
-  const step = rockStockPerStage(kind);
+  const bite = ageBite(rockStockPerStage(kind), weight);
   const full = rockYield(kind);
   if (dir > 0) {
     if (cur >= full) return false;
-    return setRockStock(field, tile, Math.min(full, cur + step));
+    return setRockStock(field, tile, Math.min(full, cur + bite));
   }
-  if (cur <= step) return false;
-  return setRockStock(field, tile, cur - step);
+  if (cur <= rockStockPerStage(kind)) return false;
+  return setRockStock(field, tile, cur - bite);
 }
 
-/** Age (dir > 0) or de-age living trees and rocks under the brush. One stage. */
-export function stepSceneryBrush(field, tx, tz, dir, radius = 0) {
+/** Age (dir > 0) or de-age living trees and rocks. Strength and distance soften the bite. */
+export function stepSceneryBrush(field, tx, tz, dir, radius = 0, opts = {}) {
   ensureSceneryArrays(field);
   const r = Math.max(0, radius | 0);
   const r2 = r * r;
+  const strength = opts.strength;
   const dirty = [];
-  const rocks = new Set();
+  const rocks = new Map();
   for (let dz = -r; dz <= r; dz++) {
     for (let dx = -r; dx <= r; dx++) {
       if (dx * dx + dz * dz > r2) continue;
@@ -1187,13 +1282,17 @@ export function stepSceneryBrush(field, tx, tz, dir, radius = 0) {
       if (x < 0 || z < 0 || x >= field.width || z >= field.height) continue;
       const i = z * field.width + x;
       if (field.activeMask?.[i] === 0) continue;
-      if (tileHasTree(field, x, z) && stepTreeAt(field, i, dir)) dirty.push({ x, z });
+      const weight = ageWeight(dx, dz, r, strength);
+      if (tileHasTree(field, x, z) && stepTreeAt(field, i, dir, weight)) dirty.push({ x, z });
       const rock = rockUnderTile(field, x, z);
-      if (rock) rocks.add(rock.tz * field.width + rock.tx);
+      if (!rock) continue;
+      const ri = rock.tz * field.width + rock.tx;
+      const prev = rocks.get(ri) ?? 0;
+      if (weight > prev) rocks.set(ri, weight);
     }
   }
-  for (const i of rocks) {
-    if (!stepRockAt(field, i, dir)) continue;
+  for (const [i, weight] of rocks) {
+    if (!stepRockAt(field, i, dir, weight)) continue;
     const z = (i / field.width) | 0;
     dirty.push({ x: i - z * field.width, z });
   }

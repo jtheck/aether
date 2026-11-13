@@ -66,6 +66,9 @@ describe('sample', () => {
     const midMove = sample(reel(), 6);
     assert.ok(midMove.camera.tx > 0 && midMove.camera.tx < 10);
     assert.ok(midMove.camera.radius < 200 && midMove.camera.radius > 45);
+    assert.equal(midMove.camera.endTx, 10);
+    assert.equal(midMove.camera.endTz, 20);
+    assert.equal(midMove.camera.endRadius, 45);
     assert.equal(midMove.line.speaker, 'Lady');
     assert.equal(midMove.lines.length, 1);
     assert.equal(midMove.lines[0].speaker, 'Lady');

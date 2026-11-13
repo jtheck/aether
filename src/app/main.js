@@ -84,7 +84,7 @@ import {
 import { menuGateState } from '../sim/menuGate.js';
 import { TILE_SIZE_F, worldToTile, worldToTileZ, worldHalfZFFromField, setActiveMapSize, SKIRMISH_MAP_W, SKIRMISH_MAP_H } from '../sim/field.js';
 import { agoraOverlayActive } from '../sim/agora.js';
-import { ownerResourcesFrom } from '../sim/resources.js';
+import { ownerResourcesFrom, canAffordBank, RESOURCE_KINDS } from '../sim/resources.js';
 import { formatGameNumber } from '../sim/formatGameNumber.js';
 import { createResourceBank } from './resourceBank.js';
 import { inputLatency } from './inputLatency.js';
@@ -113,12 +113,13 @@ import {
   exitXr,
   isXrSessionSupported,
 } from '../vendor/lite/liteVendor.js';
-import { createXrRig, jumpXrRig, stepXrRig, xrFitHead } from './xrRig.js';
+import { createXrRig, cycleXrAltitude, jumpXrRig, stepXrRig, toggleXrFollow, xrFitHead } from './xrRig.js';
 import { createXrControls } from './xrControls.js';
 import { clearXrEye } from '../render/xrEye.js';
 import { rimKeyForBuildingType, sharedRimKey } from '../render/workRadiusRings.js';
 import { coalesceSharedRallyMarkers } from '../render/rallyDash.js';
 import { createFogOfWar } from '../render/fogOfWar.js';
+import { pulseWindGust as emitWindPulse, setWindIntensity } from '../render/windSway.js';
 import { shareVisionOwnersFromCfg, spectatorFollowFog } from '../render/visionShare.js';
 import { selectionGroupsFromBuildings, selectionGroupsFromUnits } from '../render/selectionHud.js';
 import { isManaCaster, manaReadyCount } from '../sim/mana.js';
@@ -642,8 +643,19 @@ function shouldBootLoadingScreenMatch(bootCfg) {
 }
 
 let matchXr = null;
+/** One in-flight enter or exit. Overlapping menu trips used to double-request a session. */
+let xrFlight = null;
 /** Drive the visor veil from the HTML splash. No-op until the renderer boots. */
 let pushXrFade = () => {};
+const XR_AUTO_KEY = 'aether.xrAuto';
+let xrAutoOn = false;
+try {
+  xrAutoOn = localStorage.getItem(XR_AUTO_KEY) === '1';
+} catch {
+  xrAutoOn = false;
+}
+/** Enter headset if Auto is on. Assigned once the renderer exists. */
+let requestMatchXr = async () => {};
 
 function paintXrButton(on) {
   const button = document.getElementById('xr_button');
@@ -654,24 +666,80 @@ function paintXrButton(on) {
   button.setAttribute('aria-label', on ? 'Exit XR' : 'Enter XR');
 }
 
+function paintXrAutoButton() {
+  const button = document.getElementById('xr_auto');
+  if (!button) return;
+  button.classList.toggle('is-on', xrAutoOn);
+  button.setAttribute('aria-pressed', xrAutoOn ? 'true' : 'false');
+  button.title = xrAutoOn ? 'Auto XR on - enter on match load' : 'Auto XR off';
+}
+
+function writeXrAuto(on) {
+  xrAutoOn = !!on;
+  try {
+    localStorage.setItem(XR_AUTO_KEY, xrAutoOn ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+  paintXrAutoButton();
+}
+
+function toggleXrAuto() {
+  writeXrAuto(!xrAutoOn);
+}
+
+function armXrAutoAfterEnter() {
+  let stored = null;
+  try {
+    stored = localStorage.getItem(XR_AUTO_KEY);
+  } catch {
+    stored = null;
+  }
+  if (stored == null) writeXrAuto(true);
+}
+
+function runXrFlight(fn) {
+  const prev = xrFlight || Promise.resolve();
+  const p = prev.then(fn, fn);
+  xrFlight = p.finally(() => {
+    if (xrFlight === p) xrFlight = null;
+  });
+  return p;
+}
+
+/** Start a session during the load splash while the click still counts as a gesture. */
+function primeXrAutoEnter() {
+  if (!xrAutoOn || matchXr) return;
+  showMatchSplash();
+  void fadeSplashVeil(1);
+  void requestMatchXr().catch((err) => {
+    console.warn('[xr] auto enter failed', err);
+  });
+}
+
+/**
+ * @param {object} renderer
+ * @param {() => object | null | undefined} getInput
+ * @param {{ selection?: () => { x: number, z: number } | null }} [holds]
+ */
+async function stopMatchXr(renderer, ctx) {
+  if (!ctx) return;
+  if (matchXr === ctx) matchXr = null;
+  ctx.teardown?.();
+  try {
+    await exitXr(ctx);
+  } catch (err) {
+    console.warn('[xr] exit failed', err);
+  }
+}
+
 /**
  * @param {object} renderer
  * @param {() => object | null | undefined} getInput input api from setupInput (ray orders, radial, place)
- * @param {{ home?: () => { x: number, z: number } | null, selection?: () => { x: number, z: number } | null }} [jumps]
+ * @param {{ selection?: () => { x: number, z: number } | null }} [holds]
  */
-async function toggleMatchXr(renderer, getInput, jumps) {
-  if (matchXr) {
-    const ctx = matchXr;
-    matchXr = null;
-    ctx.xrControls?.dispose();
-    ctx.releaseCameraFit?.();
-    clearXrEye();
-    renderer.releaseHeadsetCamera?.();
-    paintXrButton(false);
-    noteHelpControlsDevice('mouse');
-    await exitXr(ctx);
-    return;
-  }
+async function startMatchXr(renderer, getInput, holds) {
+  if (matchXr) return;
   const shot = renderer.cameraController?.cameraEye?.();
   const cam = renderer.camera.worldMatrix;
   const rawEye = shot?.eye ?? [cam[12], cam[13], cam[14]];
@@ -683,11 +751,12 @@ async function toggleMatchXr(renderer, getInput, jumps) {
     : [-cam[8], -cam[10]]);
   let fitMark = fitted;
   let xrCamLive = true;
+  let closed = false;
   const controls = createXrControls({
     renderer,
     getInput,
-    jumps,
-    onJump: (x, z) => jumpXrRig(rig, x, z),
+    onFollowToggle: () => toggleXrFollow(rig),
+    onAltitude: () => cycleXrAltitude(rig),
   });
   const rig = createXrRig(eye, {
     floor: (x, z) => renderer.groundHeight(x, z),
@@ -697,13 +766,26 @@ async function toggleMatchXr(renderer, getInput, jumps) {
   }, { facing });
   function applyXrFit(next) {
     fitMark = next;
-    // Only teleport under the visor veil. Story samples in the open were a rollercoaster.
-    if ((renderer.xrFadeOpacity?.() ?? 0) >= 0.95) {
-      rig.pendingFit = null;
-      jumpXrRig(rig, next.eye[0], next.eye[2], { y: next.eye[1], facing: next.facing });
+    const a = renderer.xrFadeOpacity?.() ?? 0;
+    // Mid-fade stays queued. Clear or fully black can take the landing.
+    if (a > 0.02 && a < 0.95) {
+      rig.pendingFit = next;
       return;
     }
-    rig.pendingFit = next;
+    rig.pendingFit = null;
+    jumpXrRig(rig, next.eye[0], next.eye[2], { y: next.eye[1], facing: next.facing });
+  }
+  function teardown() {
+    if (closed) return;
+    closed = true;
+    xrCamLive = false;
+    renderer.cameraController?.setPoseListener?.(null);
+    controls.dispose();
+    clearXrEye();
+    renderer.releaseHeadsetCamera?.();
+    paintXrButton(false);
+    noteHelpControlsDevice('mouse');
+    if (matchXr) matchXr = null;
   }
   renderer.cameraController?.setPoseListener?.(() => {
     if (!xrCamLive) return;
@@ -721,39 +803,81 @@ async function toggleMatchXr(renderer, getInput, jumps) {
     if (dx * dx + dy * dy + dz * dz < 1 && face > 0.999) return;
     applyXrFit(next);
   });
-  matchXr = await enterXr(renderer.scene, {
-    depthNear: 0.08,
-    // Sky dome radius is 24000. A short far plane clips it to flat clear color.
-    depthFar: renderer.camera.farPlane || 40000,
-    onFrame: (ctx, frame, time) => {
-      stepXrRig(rig, ctx, frame, time);
-      const pending = rig.pendingFit;
-      if (pending && (renderer.xrFadeOpacity?.() ?? 0) >= 0.95) {
-        rig.pendingFit = null;
-        jumpXrRig(rig, pending.eye[0], pending.eye[2], { y: pending.eye[1], facing: pending.facing });
-      }
-      controls.step(ctx);
-    },
-    onEnd: () => {
-      xrCamLive = false;
-      renderer.cameraController?.setPoseListener?.(null);
-      matchXr = null;
-      controls.dispose();
-      clearXrEye();
-      renderer.releaseHeadsetCamera?.();
-      paintXrButton(false);
-    },
-  });
-  matchXr.xrControls = controls;
-  matchXr.rig = rig;
-  matchXr.releaseCameraFit = () => {
+  let session;
+  try {
+    session = await enterXr(renderer.scene, {
+      depthNear: 0.08,
+      // Sky dome radius is 24000. A short far plane clips it to flat clear color.
+      depthFar: renderer.camera.farPlane || 40000,
+      onFrame: (ctx, frame, time) => {
+        if (closed) return;
+        if (rig.follow) {
+          const at = holds?.selection?.();
+          rig.followAt = at && Number.isFinite(at.x) && Number.isFinite(at.z) ? at : null;
+        }
+        stepXrRig(rig, ctx, frame, time);
+        const pending = rig.pendingFit;
+        const fade = renderer.xrFadeOpacity?.() ?? 0;
+        if (pending && (fade >= 0.95 || fade <= 0.02)) {
+          rig.pendingFit = null;
+          jumpXrRig(rig, pending.eye[0], pending.eye[2], { y: pending.eye[1], facing: pending.facing });
+        }
+        controls.step(ctx);
+      },
+      onEnd: () => {
+        teardown();
+      },
+    });
+  } catch (err) {
+    teardown();
+    throw err;
+  }
+  if (closed || !session) {
+    teardown();
+    return;
+  }
+  session.xrControls = controls;
+  session.rig = rig;
+  session.teardown = teardown;
+  session.releaseCameraFit = () => {
     xrCamLive = false;
     renderer.cameraController?.setPoseListener?.(null);
   };
+  matchXr = session;
   const veil = document.getElementById('boot-veil');
   if (veil) pushXrFade(veilOpacity(veil), 0);
   paintXrButton(true);
+  armXrAutoAfterEnter();
   noteHelpControlsDevice('xr');
+}
+
+/**
+ * @param {object} renderer
+ * @param {() => object | null | undefined} getInput
+ * @param {{ selection?: () => { x: number, z: number } | null }} [holds]
+ */
+function toggleMatchXr(renderer, getInput, holds) {
+  if (!matchXr && xrFlight) return xrFlight;
+  return runXrFlight(async () => {
+    if (matchXr) {
+      const ctx = matchXr;
+      await stopMatchXr(renderer, ctx);
+      return;
+    }
+    await startMatchXr(renderer, getInput, holds);
+  });
+}
+
+/**
+ * @param {object} renderer
+ * @param {() => object | null | undefined} getInput
+ * @param {{ selection?: () => { x: number, z: number } | null }} [holds]
+ */
+function ensureMatchXr(renderer, getInput, holds) {
+  return runXrFlight(async () => {
+    if (matchXr) return;
+    await startMatchXr(renderer, getInput, holds);
+  });
 }
 
 async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide = 0, kothShard, solo = false }) {
@@ -880,6 +1004,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     world: session.state,
     buildings: livingBuildingList(session.buildings ?? buildings),
     agoras: session.agoras ?? agoras,
+    frogVision: renderer.frogVisionSources?.(Date.now()),
     field: session.field,
     exposedOwners: session.koth?.exposed,
     localPlayerId: bootCfg.localPlayerId,
@@ -904,9 +1029,20 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   rebuildRendererEntities(renderer, session, hideUnitForSync);
   setStatusText('');
   // Console: renderer.toggleShadows() / renderer.setShadowsEnabled(false)
+  // pulseWindGust() at camera target, or pulseWindGust(x, z); setWindIntensity(k)
   window.renderer = renderer;
   window.session = session;
   window.fog = fog;
+  window.pulseWindGust = (x, z) => {
+    if (x == null || z == null) {
+      const t = renderer.camera?.target;
+      x = t?.[0] ?? 0;
+      z = t?.[2] ?? 0;
+    }
+    emitWindPulse(x, z);
+    return { x, z };
+  };
+  window.setWindIntensity = setWindIntensity;
   window.dumpPools = () => {
     const world = session.state;
     const pools = renderer.poolStats?.() ?? {};
@@ -1175,6 +1311,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.setShadowsEnabled?.(false);
   }
   pushXrFade = (opacity, ms) => renderer.setXrFade?.(opacity, ms);
+  requestMatchXr = () => ensureMatchXr(renderer, () => inputApi, xrHolds);
+  paintXrAutoButton();
   /** Filled just before return so the menu callback can reach the live ctx. */
   const ctxRef = { current: null };
   let observerLobby = null;
@@ -1196,7 +1334,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     },
     xrSupported,
     getXrActive: () => !!matchXr,
-    onToggleXr: () => toggleMatchXr(renderer, () => inputApi, xrJumps),
+    onToggleXr: () => toggleMatchXr(renderer, () => inputApi, xrHolds),
+    getXrAuto: () => xrAutoOn,
+    onToggleXrAuto: () => toggleXrAuto(),
     onTogglePause: () => togglePlayPause(),
     isPlayPaused,
     canTogglePause,
@@ -1399,6 +1539,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         world: fogDecayOnly ? null : session.state,
         buildings: fogDecayOnly ? [] : livingBuildingList(session.buildings),
         agoras: fogDecayOnly ? [] : session.agoras,
+        frogVision: fogDecayOnly ? [] : renderer.frogVisionSources?.(Date.now()),
         exposedOwners: fogDecayOnly ? null : session.koth?.exposed,
         field: session.field,
         localPlayerId: view.localPlayerId,
@@ -1821,7 +1962,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       observing,
       localId: localPlayerId,
       session,
-      shareWith: fogShareVisionWith,
+      // Cinematic team-vision is fog only. Feeding it here listed every
+      // empty army on the spectator sheet (all 16 seats in VR).
+      shareWith: baseShareVisionWith,
     });
     const showSheet = sheetOwners.length > 0;
     const hillPresence = matchMeta.mode === 'koth' ? kothShard?.getLobbyPresence?.() : null;
@@ -2457,18 +2600,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   /** Last B / ~ tap - second press in the control-group window jumps the camera. */
   let lastAgoraHotkeyTap = null;
 
-  /** Headset stick-click jumps: where to fly, or null to stay put. */
-  const xrJumps = {
-    home() {
-      if (!bootInteractive || matchStory?.driving?.()) return null;
-      if ((session.role ?? 'player') !== 'player' || localPlayerId < 0) return null;
-      const index = pickOwnedAgoraIndex();
-      const a = session.agoras?.[index];
-      if (!a || !Number.isFinite(a.x) || !Number.isFinite(a.z)) return null;
-      if (placingType) applyPlacingType(null);
-      inputApi.setSelectedBuilding?.({ kind: 'agora', index });
-      return { x: a.x, z: a.z };
-    },
+  /** Headset follow lock: selection centroid, or null while nothing is selected. */
+  const xrHolds = {
     selection() {
       if (matchStory?.driving?.()) return null;
       return selectionFollowPoint();
@@ -3558,6 +3691,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (type === 'agora') {
         applyPlacingType(null);
         return true;
+      }
+      const bank = ownerResourcesFrom(session.resources, localPlayerId);
+      const spent = getBuildingCost(type);
+      const afterSpend = { ...bank };
+      for (let k = 0; k < RESOURCE_KINDS.length; k++) {
+        const kind = RESOURCE_KINDS[k];
+        const n = spent[kind] | 0;
+        if (n) afterSpend[kind] = (afterSpend[kind] | 0) - n;
+      }
+      if (!canAffordBank(afterSpend, spent)) {
+        applyPlacingType(null);
       }
       if (lastAgoraIndex >= 0) {
         inputApi.setSelectedBuilding?.({ kind: 'agora', index: lastAgoraIndex });
@@ -5761,6 +5905,7 @@ async function startSoloAiMatch(ctx, opts = {}) {
   if (!ctx?.session || !ctx.renderer) return;
   if (ctx._soloStarting) return;
   if (liveMatchOpen(ctx)) return;
+  primeXrAutoEnter();
   const {
     fog = true,
     sharedVision = false,
@@ -5819,6 +5964,7 @@ async function startSoloAiMatch(ctx, opts = {}) {
  */
 async function startUnitTesterMatch(ctx) {
   if (!ctx?.session || !ctx.renderer) return;
+  primeXrAutoEnter();
   let garden;
   try {
     garden = await loadTesterGarden();
@@ -5844,6 +5990,7 @@ async function startStressfulSituation(ctx) {
   if (!ctx?.session || !ctx.renderer) return;
   if (ctx._soloStarting) return;
   if (liveMatchOpen(ctx)) return;
+  primeXrAutoEnter();
   ctx._soloStarting = true;
   ctx.localSoloHold = true;
   try {
@@ -6328,6 +6475,7 @@ async function loadAdventureGardenUrl(ctx, url, kothShard, extras = {}) {
 
 async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
   if (!ctx?.session) return;
+  primeXrAutoEnter();
   const cfg = liveConfigFromLobby(snapshot, kothShard?.getUserId?.() ?? null);
   const spectating = cfg.localPlayerId < 0;
   if (spectating && !lobbyAllowsSpectators(snapshot.mode, snapshot.settings)) {
@@ -6457,6 +6605,12 @@ function updateCatchupProgress(session) {
 }
 
 function showMatchSplash() {
+  const live = document.getElementById('boot-splash');
+  if (live && live.dataset.leaving !== '1' && live.dataset.settle !== '1') {
+    closeMenuForSplash();
+    refreshLobbyUnderSplash();
+    return;
+  }
   splashGen += 1;
   let el = document.getElementById('boot-splash');
   let created = false;
@@ -6565,6 +6719,14 @@ function waitXrCaughtUp() {
 /** Board is in place. Fade the black off, then let the logo leave as usual. */
 async function revealBootSplash() {
   const gen = splashGen;
+  if (xrFlight) {
+    try {
+      await xrFlight;
+    } catch {
+      /* auto-enter failed; still lift the splash */
+    }
+  }
+  if (gen !== splashGen) return;
   await waitXrCaughtUp();
   if (gen !== splashGen) return;
   return fadeSplashVeil(0, gen).then(() => {

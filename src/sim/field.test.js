@@ -17,6 +17,7 @@ import {
   drySpawnPads,
   applySeededHeight,
   composeHeightMap,
+  biomeById,
   createField,
   generateHeightMap,
   consumeWaterDirty,
@@ -735,7 +736,7 @@ describe('terrain atlases', () => {
     assert.equal(field.atlasId[at(field, 5, 1)], ATLAS.DIRT_WATER);
   });
 
-  it('blends tile into gravel and leaves water beside them deep', () => {
+  it('blends tile into gravel and opens a gravel shore on water', () => {
     const field = createField(1, { width: 4, height: 4 });
     paintTerrain(field, TERRAIN.GRAVEL);
     for (let x = 0; x < 4; x++) field.terrainTypes[at(field, x, 3)] = TERRAIN.TILE;
@@ -752,8 +753,9 @@ describe('terrain atlases', () => {
       terrainCornerCell(field.terrainTypes, 4, 4, 1, 2, TERRAIN.TILE),
     );
     assert.notEqual(field.tileType[gravelEdge], 12);
-    assert.equal(field.tileType[water], 12);
-    assert.equal(field.pass[water], 0);
+    assert.equal(field.atlasId[water], ATLAS.GRAVEL_WATER);
+    assert.notEqual(field.tileType[water], 12);
+    assert.equal(field.pass[water], 1);
     assert.equal(field.pass[tile], 1);
     assert.equal(field.pass[gravelEdge], 1);
   });
@@ -896,6 +898,33 @@ describe('seeded terrain variety', () => {
     const cx = Math.floor(halfX / TILE_SIZE_F);
     const cz = cx;
     assert.equal(open.terrainTypes[cz * open.width + cx], kept.terrainTypes[cz * kept.width + cx]);
+  });
+
+  it('fills the grass role with the biome cover', () => {
+    const base = buildField(7, { width: 48, height: 48 });
+    for (const id of ['ice', 'fire', 'building']) {
+      const biome = biomeById(id);
+      const field = buildField(7, { width: 48, height: 48, biome: id });
+      let cover = 0;
+      let ground = 0;
+      for (let i = 0; i < field.terrainTypes.length; i++) {
+        const a = base.terrainTypes[i];
+        const b = field.terrainTypes[i];
+        if (a === TERRAIN.GRASS) {
+          assert.equal(b, biome.cover);
+          cover++;
+        } else if (id === 'ice' && a === TERRAIN.DIRT) {
+          assert.equal(b, TERRAIN.SNOWGRASS);
+          ground++;
+        } else {
+          assert.equal(b, a);
+        }
+      }
+      assert.ok(cover > 0, id);
+      if (id === 'ice') assert.ok(ground > 0, 'ice ground is snowy grass');
+    }
+    const unknown = buildField(7, { width: 48, height: 48, biome: 'nope' });
+    assert.deepEqual(unknown.terrainTypes, base.terrainTypes);
   });
 });
 

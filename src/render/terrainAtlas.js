@@ -17,14 +17,21 @@ import {
   PAVE_DIFFUSE,
   SHEET_BURN_JUNCTION,
   SHEET_DIRT_JUNCTION,
+  SHEET_SHORE_JUNCTION,
+  SHEET_SNOW_JUNCTION,
+  SHEET_TURF_JUNCTION,
   TERRAIN_DIFFUSE_LEVEL,
   blobMask,
   compositeBurnJunction,
   compositeDirtJunction,
   compositeJunction,
+  compositeShoreJunction,
+  compositeSnowJunction,
   junctionLookBlock,
   paveLookBytes,
+  shoreLookBlock,
   sheetLookMap,
+  turfLookBlock,
   srgbMipChain,
   terrainLookColors,
 } from './terrainLayers.js';
@@ -40,13 +47,28 @@ const BLEND_ATLAS_URLS = {
   [ATLAS.DECORATIVE_TILE]: '/assets/textures/atlas-decorative-tile.png',
   [ATLAS.CHARRED_SCORCHED]: '/assets/textures/atlas-charred-scorched.png',
   [ATLAS.LAVA_CHARRED]: '/assets/textures/atlas-lava-charred.png',
+  [ATLAS.LAVA_SCORCHED]: '/assets/textures/atlas-lava-scorched.png',
+  [ATLAS.FROZEN_SNOW]: '/assets/textures/atlas-frozen-snow.png',
+  [ATLAS.CHARRED_GRASS]: '/assets/textures/atlas-charred-grass.png',
+  [ATLAS.CHARRED_WATER]: '/assets/textures/atlas-charred-water.png',
+  [ATLAS.CHARRED_SNOWGRASS]: '/assets/textures/atlas-charred-snowgrass.png',
 };
 /** Overlay blobs on dirt. Decoded with the natural sheets for shared-corner composites. */
 const DIRT_OVERLAY_URLS = {
   [ATLAS.GRAVEL_DIRT]: '/assets/textures/atlas-gravel-dirt.png',
   [ATLAS.SCORCHED_DIRT]: '/assets/textures/atlas-scorched-dirt.png',
+  [ATLAS.SNOW_DIRT]: '/assets/textures/atlas-snow-dirt.png',
+  [ATLAS.SNOWGRASS_DIRT]: '/assets/textures/atlas-snowgrass-dirt.png',
+  [ATLAS.SNOW_SNOWGRASS]: '/assets/textures/atlas-snow-snowgrass.png',
 };
-const ATLAS_URLS = { ...NATURAL_ATLAS_URLS, ...BLEND_ATLAS_URLS, ...DIRT_OVERLAY_URLS };
+/** Cover blobs on water. Decoded with the natural sheets for shared-corner composites. */
+const WATER_OVERLAY_URLS = {
+  [ATLAS.SNOW_WATER]: '/assets/textures/atlas-snow-water.png',
+  [ATLAS.SCORCHED_WATER]: '/assets/textures/atlas-scorched-water.png',
+  [ATLAS.GRAVEL_WATER]: '/assets/textures/atlas-gravel-water.png',
+  [ATLAS.SNOWGRASS_WATER]: '/assets/textures/atlas-snowgrass-water.png',
+};
+const ATLAS_URLS = { ...NATURAL_ATLAS_URLS, ...BLEND_ATLAS_URLS, ...DIRT_OVERLAY_URLS, ...WATER_OVERLAY_URLS };
 /** Emissive maps are smooth; a quarter of the atlas resolution is plenty. */
 const LOOK_SCALE = 4;
 const PAGE_SLOTS = ATLAS_GRID * ATLAS_GRID;
@@ -77,7 +99,7 @@ async function createTerrainAtlas(engine) {
   const sheets = new Map();
   /** @type {Map<number, object>} */
   const looks = new Map();
-  /** @type {{ sheets: { gd: Uint8ClampedArray, gw: Uint8ClampedArray, dw: Uint8ClampedArray, gv: Uint8ClampedArray, sd: Uint8ClampedArray }, mask: Float32Array, size: number } | null} */
+  /** @type {{ sheets: { gd: Uint8ClampedArray, gw: Uint8ClampedArray, dw: Uint8ClampedArray, gv: Uint8ClampedArray, sd: Uint8ClampedArray, sn: Uint8ClampedArray, sw: Uint8ClampedArray, cw: Uint8ClampedArray, rw: Uint8ClampedArray }, mask: Float32Array, size: number } | null} */
   let source = null;
   let sourcePromise = null;
   let sourceUsers = 0;
@@ -95,12 +117,18 @@ async function createTerrainAtlas(engine) {
         decodeSheet(NATURAL_ATLAS_URLS[ATLAS.DIRT_WATER]),
         decodeSheet(DIRT_OVERLAY_URLS[ATLAS.GRAVEL_DIRT]),
         decodeSheet(DIRT_OVERLAY_URLS[ATLAS.SCORCHED_DIRT]),
-      ]).then(([gd, gw, dw, gv, sd]) => {
+        decodeSheet(DIRT_OVERLAY_URLS[ATLAS.SNOW_DIRT]),
+        decodeSheet(WATER_OVERLAY_URLS[ATLAS.SNOW_WATER]),
+        decodeSheet(WATER_OVERLAY_URLS[ATLAS.SCORCHED_WATER]),
+        decodeSheet(WATER_OVERLAY_URLS[ATLAS.GRAVEL_WATER]),
+        decodeSheet(DIRT_OVERLAY_URLS[ATLAS.SNOW_SNOWGRASS]),
+        decodeSheet(WATER_OVERLAY_URLS[ATLAS.SNOWGRASS_WATER]),
+      ]).then(([gd, gw, dw, gv, sd, sn, sw, cw, rw, sng, sgw]) => {
         const size = gw.size;
-        if (gd.size !== size || dw.size !== size || gv.size !== size || sd.size !== size) {
+        if (gd.size !== size || dw.size !== size || gv.size !== size || sd.size !== size || sn.size !== size || sw.size !== size || cw.size !== size || rw.size !== size || sng.size !== size || sgw.size !== size) {
           throw new Error('terrain atlas sheets differ in size');
         }
-        const px = { gd: gd.rgba, gw: gw.rgba, dw: dw.rgba, gv: gv.rgba, sd: sd.rgba };
+        const px = { gd: gd.rgba, gw: gw.rgba, dw: dw.rgba, gv: gv.rgba, sd: sd.rgba, sn: sn.rgba, sw: sw.rgba, cw: cw.rgba, rw: rw.rgba, sng: sng.rgba, sgw: sgw.rgba };
         source = { sheets: px, mask: blobMask(px, size), size };
         return source;
       }).finally(() => {
@@ -227,11 +255,18 @@ async function createTerrainAtlas(engine) {
     const col = cell % ATLAS_GRID;
     const row = (cell / ATLAS_GRID) | 0;
     const rgba = new Uint8Array(cellPx * cellPx * 4);
-    const weights = new Float32Array(cellPx * cellPx * 3);
     const cellKey = layerCell(key);
     const kind = layerSheet(key);
-    const paveLook = kind === SHEET_DIRT_JUNCTION || kind === SHEET_BURN_JUNCTION;
-    if (kind === SHEET_BURN_JUNCTION) compositeBurnJunction(source.sheets, source.mask, source.size, cellKey, rgba, weights);
+    const shore = kind === SHEET_SHORE_JUNCTION;
+    const turf = kind === SHEET_TURF_JUNCTION;
+    const weights = new Float32Array(cellPx * cellPx * (shore ? 4 : 3));
+    const paveLook = kind === SHEET_DIRT_JUNCTION || kind === SHEET_BURN_JUNCTION || kind === SHEET_SNOW_JUNCTION;
+    if (shore) compositeShoreJunction(source.sheets, source.mask, source.size, cellKey, rgba, weights);
+    else if (turf) {
+      const { sng, sw, sgw } = source.sheets;
+      compositeJunction({ gd: sng, gw: sw, dw: sgw }, source.mask, source.size, cellKey, rgba, weights);
+    } else if (kind === SHEET_SNOW_JUNCTION) compositeSnowJunction(source.sheets, source.mask, source.size, cellKey, rgba, weights);
+    else if (kind === SHEET_BURN_JUNCTION) compositeBurnJunction(source.sheets, source.mask, source.size, cellKey, rgba, weights);
     else if (kind === SHEET_DIRT_JUNCTION) compositeDirtJunction(source.sheets, source.mask, source.size, cellKey, rgba, weights);
     else compositeJunction(source.sheets, source.mask, source.size, cellKey, rgba, weights);
     const levels = srgbMipChain(rgba, cellPx);
@@ -249,7 +284,11 @@ async function createTerrainAtlas(engine) {
     const lookPx = cellPx / LOOK_SCALE;
     device.queue.writeTexture(
       { texture: page.look.texture, origin: { x: col * lookPx, y: row * lookPx } },
-      junctionLookBlock(weights, cellPx, LOOK_SCALE, LOOK.emissive, paveLook),
+      shore
+        ? shoreLookBlock(weights, cellPx, LOOK_SCALE, LOOK.emissive)
+        : turf
+          ? turfLookBlock(weights, cellPx, LOOK_SCALE, LOOK.emissive)
+          : junctionLookBlock(weights, cellPx, LOOK_SCALE, LOOK.emissive, paveLook),
       { bytesPerRow: lookPx * 4, rowsPerImage: lookPx },
       { width: lookPx, height: lookPx, depthOrArrayLayers: 1 },
     );
@@ -344,7 +383,7 @@ export function createTerrainMaterials(atlas, specTexture) {
     const look = atlas.lookFor(bucket);
     if (look) setStandardEmissiveTexture(mat, look);
     // The glint mask paints a red mark on lava. This sheet would phong it.
-    if (bucket === ATLAS.LAVA_CHARRED) bare.add(mat);
+    if (bucket === ATLAS.LAVA_CHARRED || bucket === ATLAS.LAVA_SCORCHED) bare.add(mat);
     else bindSpec(mat);
     materials.set(bucket, mat);
     return mat;

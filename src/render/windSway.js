@@ -4,6 +4,8 @@
 //
 // Gust band: sin(dot(worldXZ, (0.014, 0.011)) - t * 0.5). Water in terrain.js
 // uses the same band and clock - change both together.
+//
+// pulseWindGust() bumps global swayK (e.g. tower finish), then eases back to idle.
 
 import { markMaterialUboDirty } from '../vendor/lite/liteVendor.js';
 
@@ -16,14 +18,56 @@ const BANNER_AMPLITUDE = 0.07;
 
 /** @type {Set<object>} */
 const windMaterials = new Set();
-let windTime = 0;
 let windIntensity = 1;
+let windGustMul = 1;
+/** Wall-clock start of the active gust envelope; negative when idle. */
+let gustStartAt = -1;
+
+/** Global sway multiplier during a tower gust (1 = idle). */
+const GUST_PEAK = 5;
+/** Smooth rise — no instant jump in swayK. */
+const GUST_ATTACK_S = 0.65;
+/** Smooth fall after peak. */
+const GUST_DECAY_S = 4.0;
+
+function smoothstep01(t) {
+  const u = Math.max(0, Math.min(1, t));
+  return u * u * (3 - 2 * u);
+}
+
+function gustMulAt(now) {
+  if (gustStartAt < 0) return 1;
+  const age = now - gustStartAt;
+  const total = GUST_ATTACK_S + GUST_DECAY_S;
+  if (age >= total) {
+    gustStartAt = -1;
+    return 1;
+  }
+  const span = GUST_PEAK - 1;
+  if (age < GUST_ATTACK_S) return 1 + span * smoothstep01(age / GUST_ATTACK_S);
+  const u = (age - GUST_ATTACK_S) / GUST_DECAY_S;
+  return 1 + span * (1 - smoothstep01(u));
+}
 
 /** 1 = idle breeze. Raise for wind, storms, spells. Takes effect next frame. */
 export function setWindIntensity(k) {
   windIntensity = Math.max(0, Number(k) || 0);
 }
 export const setTreeSwayIntensity = setWindIntensity;
+
+/** Map-wide breeze swell; optional x/z ignored (kept for console / tower call sites). */
+export function pulseWindGust(_worldX, _worldZ) {
+  gustStartAt = performance.now() / 1000;
+}
+
+/** Render clock for the gust band sin(dot(xz), ...) - t * 0.5). */
+export function getWindClock() {
+  return performance.now() / 1000;
+}
+
+function getSwayK() {
+  return windIntensity * windGustMul;
+}
 
 const GUST = 'sin(dot(%B%,vec2<f32>(0.014,0.011))-material.swayT*0.5)';
 const gust = (base) => GUST.replace('%B%', base);
@@ -93,8 +137,8 @@ function createWindPlugin(name, code, params) {
     getCustomCode: (shaderType) =>
       shaderType === 'vertex' ? { CUSTOM_VERTEX_MAIN_END: code } : null,
     writeUbo(data, offsets) {
-      data[offsets.get('swayT') / 4] = windTime;
-      data[offsets.get('swayK') / 4] = windIntensity;
+      data[offsets.get('swayT') / 4] = getWindClock();
+      data[offsets.get('swayK') / 4] = getSwayK();
       for (const n of paramNames) data[offsets.get(n) / 4] = params[n];
     },
   };
@@ -156,9 +200,9 @@ export function attachBannerFlutter(meshes) {
   attach(cloth, createWindPlugin('banner-flutter', BANNER_CODE, { swayBase: top, swayH: top - bottom }));
 }
 
-/** Once per frame: advance the clock and re-upload the wind uniforms. */
-export function tickWind() {
+/** Once per frame: sample gust envelope and re-upload uniforms. */
+export function tickWind(_deltaMs = 16) {
+  windGustMul = gustMulAt(performance.now() / 1000);
   if (!windMaterials.size) return;
-  windTime = performance.now() / 1000;
   for (const mat of windMaterials) markMaterialUboDirty(mat);
 }

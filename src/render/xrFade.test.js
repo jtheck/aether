@@ -61,4 +61,7 @@ describe('paintFadeNarrator', () => {
     };
     paintFadeNarrator(ctx, w, h, [{ text: 'Wait.' }]);
     assert.equal(ops[0][0], 'clear');
-    assert.ok(ops.some((op
+    assert.ok(ops.some((op) => op[0] === 'text' && op[1] === 'Wait.'));
+    assert.ok(XR_FADE_SPEECH_CUT < 0.2);
+  });
+});

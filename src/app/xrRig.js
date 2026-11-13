@@ -1,4 +1,5 @@
 import { STICK_SPLIT_YAW } from './input/gamepad.js';
+import { chaseToward } from '../render/cameraController.js';
 import { setXrEyeFromPose } from '../render/xrEye.js';
 
 // Quest Touch. Trigger and grip are always the first two buttons.
@@ -24,6 +25,15 @@ const XR_YAW_RATE = (XR_DIRECT_YAW + STICK_SPLIT_YAW * 60) / 2;
 /** Initial catch-up rate while the tilt is well behind the viewer yaw. */
 export const XR_LOOK_SNAP = 12;
 const XR_LOOK_SNAP_ARC = Math.PI / 6;
+/**
+ * Heights above the local ground. The first locks onto the terrain each frame.
+ * The others ease toward a normal orbit and a far pullback.
+ */
+export const XR_ALTITUDE_BANDS = [11, 34, 90];
+/** Softer than selection follow so a height change does not yank the horizon. */
+const XR_ALTITUDE_EASE = 8;
+/** Same-direction throw, or a pinch, that lets go of a hold. Rest noise stays under this. */
+const XR_HOLD_BREAK = 0.22;
 
 function buttonAt(gamepad, index) {
   const b = gamepad?.buttons?.[index];
@@ -229,11 +239,14 @@ function hand(sources, handedness) {
 /**
  * Headset rig for the match. The first frame parks the head on the desktop
  * camera. After that either stick pans, with no deadzone, and both sticks
- * in the same direction add. A hard turn or lift quiets that pan. Opposite
- * up/down yaws and a pinch lifts; a lone stick never does. Look-down eases toward
+ * in the same direction add. The stick that moved first keeps panning; the
+ * other adds turn without quieting that pan. A pinch lifts in place and
+ * quiets the slide. A lone stick never turns. Look-down eases toward
  * viewer yaw so every heading settles to the same pitch without attaching
  * the synthetic adjustment rigidly to small head motion.
  * While `rightStickBusy()` is true the sticks do not move the head.
+ * `follow` eases the view onto `followAt` until a pan or a second click.
+ * `altitudeIndex` holds a band until a pinch. The lowest band locks to the ground.
  * @param {[number, number, number]} eye desktop camera world position
  * @param {object | null} [bounds]
  * @param {{ rightStickBusy?: () => boolean, facing?: [number, number] | null }} [opts]
@@ -253,6 +266,16 @@ export function createXrRig(eye, bounds = null, opts = {}) {
     hands: null,
     /** @type {{ x: number, z: number } | null} pending jumpXrRig target */
     jump: null,
+    /** Selection follow. `followAt` is refreshed each frame while this is on. */
+    follow: false,
+    /** @type {{ x: number, z: number } | null} */
+    followAt: null,
+    /** Armed altitude band, or null once a pinch lets go. */
+    altitudeIndex: null,
+    /** Last band a click chose, so the next click advances after a pinch. */
+    altitudePick: null,
+    /** Stick that started the current throw. The other one turns. */
+    panHand: null,
     /** Unpitched fly/yaw space. Look-down is applied on top each frame. */
     locomotion: null,
     /** Smoothed viewer-right axis used only by the synthetic look-down. */
@@ -282,38 +305,118 @@ function oppose(a, b) {
   return dir * (mag > 1 ? 1 : mag);
 }
 
-/** Pan still left when a turn or lift is fully opposed. */
+/** Pan still left when a pinch is fully opposed. Turning does not use this. */
 const XR_PAN_DURING_GESTURE = 0.06;
 
-/** Quiet the slide as a turn or lift gets aggressive. A light oppose barely cuts. */
+/** Quiet the slide as a pinch gets aggressive. A light oppose barely cuts. */
 function gesturePanScale(amount) {
   const t = amount > 1 ? 1 : amount < 0 ? 0 : amount;
   const u = t * t * (3 - 2 * t);
   return 1 - u * (1 - XR_PAN_DURING_GESTURE);
 }
 
+/** A pan large enough to drop selection follow. A pinch does not. */
+export function xrBreaksFollow(left, right, panHand = null) {
+  const m = xrStickMotion(left, right, panHand);
+  return Math.hypot(m.strafe, m.forward) >= XR_HOLD_BREAK;
+}
+
+/** A pinch large enough to drop the altitude band. One stick panning does not. */
+export function xrBreaksAltitude(left, right) {
+  const lift = -oppose(stickAxis(left?.stickX), stickAxis(right?.stickX));
+  return Math.abs(lift) >= XR_HOLD_BREAK;
+}
+
+/** Next altitude band. The first click from a free camera is just above the trees. */
+export function cycleXrAltitude(rig) {
+  const next = rig.altitudePick == null ? 0 : (rig.altitudePick + 1) % XR_ALTITUDE_BANDS.length;
+  rig.altitudePick = next;
+  rig.altitudeIndex = next;
+  return next;
+}
+
+export function toggleXrFollow(rig) {
+  rig.follow = !rig.follow;
+  if (!rig.follow) rig.followAt = null;
+}
+
+/**
+ * Ease a follow lock and an altitude band onto `head` (already moved by the sticks).
+ * A break skips that hold; the caller clears the flag.
+ * @param {[number, number, number]} head
+ * @param {[number, number]} forward
+ */
+export function xrHoldHead(head, forward, opts) {
+  let x = head[0];
+  let y = head[1];
+  let z = head[2];
+  const dt = Math.max(0, opts.dt || 0);
+  if (opts.follow && opts.followAt && !opts.breakFollow) {
+    const parked = xrJumpHead([x, y, z], forward, opts.followAt, opts.bounds);
+    const chased = chaseToward(x, z, parked[0], parked[2], dt);
+    x = chased.x;
+    z = chased.z;
+  }
+  const band = opts.altitudeIndex == null ? null : XR_ALTITUDE_BANDS[opts.altitudeIndex];
+  if (band != null && !opts.breakAltitude) {
+    const floorY = opts.bounds?.floor?.(x, z);
+    const base = Number.isFinite(floorY) ? floorY : 0;
+    const target = base + band;
+    // The low band is a ground hugger: eye height is the terrain plus the clearance.
+    if (opts.altitudeIndex === 0) y = target;
+    else {
+      const u = 1 - Math.exp(-XR_ALTITUDE_EASE * dt);
+      y += (target - y) * u;
+    }
+  }
+  return clampXrHead([x, y, z], opts.bounds);
+}
+
 /**
  * Either stick pans. Two sticks thrown the same way add, up to double.
- * Opposite up/down yaws (left up and right down turns right). Pinch lifts
- * and spread lowers, in place. A hard turn or lift dampens the pan.
+ * The stick already out keeps its pan; the other one's up/down turns
+ * (left up or right down turns right) and does not quiet that pan.
+ * Pinch lifts and spread lowers, in place, and a hard pinch quiets the slide.
  * No deadzone. `yaw` is positive for a right turn, per 60 Hz frame,
  * which is the sign `yawSpace` already uses. `zoom` is a -1..1 lift, positive up.
+ * `panHand` is the stick that started this throw, or null.
  * @param {{ stickX?: number, stickY?: number }} left
  * @param {{ stickX?: number, stickY?: number }} right
+ * @param {'left' | 'right' | null} [panHand]
  */
-export function xrStickMotion(left, right) {
+export function xrStickMotion(left, right, panHand = null) {
   const lx = stickAxis(left?.stickX);
   const ly = stickAxis(left?.stickY);
   const rx = stickAxis(right?.stickX);
   const ry = stickAxis(right?.stickY);
-  const yawOppose = oppose(ly, ry);
+  const lOn = lx !== 0 || ly !== 0;
+  const rOn = rx !== 0 || ry !== 0;
+  let primary = panHand === 'left' || panHand === 'right' ? panHand : null;
+  if (primary === 'left' && !lOn) primary = null;
+  if (primary === 'right' && !rOn) primary = null;
+  if (!primary) {
+    if (lOn && !rOn) primary = 'left';
+    else if (rOn && !lOn) primary = 'right';
+    else if (lOn && rOn) {
+      primary = Math.hypot(rx, ry) > Math.hypot(lx, ly) ? 'right' : 'left';
+    }
+  }
+  let forward = -(ly + ry);
+  let yaw = 0;
+  if (ly * ry < 0 && primary) {
+    const py = primary === 'left' ? ly : ry;
+    const sy = primary === 'left' ? ry : ly;
+    forward = -py;
+    yaw = ((primary === 'left' ? sy : -sy) * XR_YAW_RATE) / 60 || 0;
+  }
   const lift = -oppose(lx, rx);
-  const scale = gesturePanScale(Math.max(Math.abs(yawOppose), Math.abs(lift)));
+  const scale = gesturePanScale(Math.abs(lift));
   return {
-    strafe: (lx + rx) * scale || 0,
-    forward: -(ly + ry) * scale || 0,
-    yaw: (yawOppose * XR_YAW_RATE) / 60 || 0,
+    strafe: ((lx + rx) * scale) || 0,
+    forward: (forward * scale) || 0,
+    yaw,
     zoom: lift || 0,
+    panHand: primary,
   };
 }
 
@@ -433,10 +536,19 @@ export function stepXrRig(rig, ctx, frame, time) {
     const dt = Math.min(0.05, Math.max(0, (time - rig.lastTime) / 1000));
     rig.lastTime = time;
     if (dt > 0) {
-      const raw = rig.rightStickBusy?.()
+      const busy = !!rig.rightStickBusy?.();
+      const raw = busy
         ? { strafe: 0, forward: 0, yaw: 0, zoom: 0 }
-        : xrStickMotion(left, right);
+        : xrStickMotion(left, right, rig.panHand);
+      if (!busy) rig.panHand = raw.panHand ?? null;
+      const breakFollow = !busy && Math.hypot(raw.strafe, raw.forward) >= XR_HOLD_BREAK;
+      const breakAlt = !busy && xrBreaksAltitude(left, right);
+      if (breakFollow) rig.follow = false;
+      if (breakAlt) rig.altitudeIndex = null;
       const s = rig.smooth;
+      let dest = [head[0], head[1], head[2]];
+      let yawDt = 0;
+      let moved = false;
       if (raw.strafe === 0 && raw.forward === 0 && raw.yaw === 0 && raw.zoom === 0) {
         s.strafe = s.forward = s.yaw = s.zoom = 0;
       } else {
@@ -446,17 +558,36 @@ export function stepXrRig(rig, ctx, frame, time) {
         s.yaw = damp(s.yaw, raw.yaw * 60, dt);
         s.zoom = damp(s.zoom, raw.zoom, dt);
         const slide = rig.speed * dt;
-        const dest = clampXrHead([
+        dest = [
           head[0] + basis.right[0] * s.strafe * slide
             + basis.forward[0] * s.forward * slide,
           head[1] + s.zoom * slide,
           head[2] + basis.right[1] * s.strafe * slide
             + basis.forward[1] * s.forward * slide,
-        ], rig.bounds);
+        ];
+        yawDt = s.yaw * dt;
+        moved = true;
+      }
+      const held = xrHoldHead(dest, basis.forward, {
+        dt,
+        bounds: rig.bounds,
+        follow: rig.follow,
+        followAt: rig.followAt,
+        altitudeIndex: rig.altitudeIndex,
+        breakFollow,
+        breakAltitude: breakAlt,
+      });
+      if (held[0] !== dest[0] || held[1] !== dest[1] || held[2] !== dest[2]) {
+        dest = held;
+        moved = true;
+      } else if (moved) {
+        dest = clampXrHead(dest, rig.bounds);
+      }
+      if (moved) {
         next = loco.getOffsetReferenceSpace(
           new XRRigidTransform(referenceOffset(head, dest)),
         );
-        if (s.yaw !== 0) next = yawSpace(next, dest, s.yaw * dt);
+        if (yawDt !== 0) next = yawSpace(next, dest, yawDt);
       }
     }
   }

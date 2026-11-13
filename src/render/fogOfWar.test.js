@@ -158,6 +158,28 @@ describe('fogOfWar torches', () => {
   });
 });
 
+describe('fogOfWar surfacing frogs', () => {
+  it('reveals around a surfaced frog for its owner but not for enemies', () => {
+    const field = fakeField(40, 40);
+    const fog = createFogOfWar();
+    fog.reset(field);
+    const world = fakeWorld([]);
+    const base = {
+      world, field, localPlayerId: 0, enabled: true, buildings: [], agoras: [],
+    };
+
+    // An enemy's frog popping up must not light the local player's map.
+    fog.stamp({ ...base, frogVision: [{ x: 0, z: 0, owner: 1, radius: 7 }] });
+    assert.equal(fog.isWorldVisible(0, 0), false);
+
+    // Our own frog surfacing reveals its surroundings.
+    fog.stamp({ ...base, frogVision: [{ x: 0, z: 0, owner: 0, radius: 7 }] });
+    assert.equal(fog.isWorldVisible(0, 0), true);
+    assert.equal(fog.isWorldVisible(6 * TILE_SIZE_F, 0), true);
+    assert.equal(fog.isWorldVisible(20 * TILE_SIZE_F, 0), false);
+  });
+});
+
 describe('fogOfWar building stamps', () => {
   it('holds a hole from a lone farm with no units', () => {
     const field = fakeField(40, 40);

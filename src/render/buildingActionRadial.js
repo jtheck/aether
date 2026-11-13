@@ -2,7 +2,7 @@
 // (empty hub stays on the building). Thin outer chrome for units, upgrades,
 // building upgrades, and a fixed bottom Pause | Cancel pair; options pick
 // on pads/icons only.
-// Pad rings show progress; badges show queue counts.
+// Pad rings show progress; prison tallies show queue counts.
 
 import {
   addToScene,
@@ -15,14 +15,16 @@ import {
   flushThinInstances,
   registerTextRenderer,
   setThinInstances,
+  createShaderMaterial,
   markMaterialUboDirty,
+  setShaderUniform,
   setSubtreeVisible,
   updateDefaultTextData,
 } from '../vendor/lite/liteVendor.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
 import { loadIdleIconMeshes } from './vatUnits.js';
-import { formatGameNumber } from '../sim/formatGameNumber.js';
 import { localHudSkin, resolveUnitModelUrl } from '../app/dlcCatalog.js';
+import { PRISON_TALLY_WGSL } from './controlGroupHud.js';
 import {
   BUILDING_MENU_UNITS,
   BUILDING_MODEL_URLS,
@@ -61,11 +63,12 @@ import {
 import { formatResourceCost } from '../sim/resources.js';
 import {
   ensureRadialPriceHud,
-  formatRadialPriceText,
   hideRadialPrice,
   hideRadialPricesWithPrefix,
+  radialPriceElement,
   setRadialPrice,
 } from './radialPriceHud.js';
+import { createMenuDomPlate } from './screenDomHud.js';
 import { xrEye } from './xrEye.js';
 import { menuGateState } from '../sim/menuGate.js';
 
@@ -133,15 +136,14 @@ const PRICE_WASH = {
   unafford: [0.92, 0.55, 0.52, 1],
   locked: [0.28, 0.3, 0.32, 1],
 };
-const BADGE_FONT_SIZE = 34;
-const BADGE_SCREEN_SCALE = 0.95;
-const BADGE_OUT = 2.8;
-const BADGE_SIDE = 2.6;
-const BADGE_LIFT = 1.4;
-const BADGE_TEXT_COLOR = [1, 0.95, 0.55, 1];
-const EXTRA_FONT_SIZE = 30;
-const EXTRA_SCREEN_SCALE = 0.88;
-const EXTRA_TEXT_COLOR = [0.78, 0.86, 0.72, 1];
+const BADGE_OUT = 4.05;
+const BADGE_SIDE = 3.75;
+const BADGE_LIFT = 1.55;
+/** Queue tally quad, world units at HUD scale 1. Same glyphs as control groups. */
+const TALLY_SCALE = 3.4;
+const EXTRA_TALLY_SCALE = 3.05;
+const BADGE_TINT = [1, 0.95, 0.55];
+const EXTRA_TINT = [0.78, 0.86, 0.72];
 const MAX_OPTIONS = 8;
 const MENU_RING_ALPHA = 0.55;
 const PAD_HOVER_COLOR = [0.82, 0.96, 1];
@@ -745,6 +747,72 @@ function hideMesh(mesh) {
   mesh.markLocalDirty?.();
 }
 
+function makeQueueTallyMesh(engine, name) {
+  const positions = new Float32Array([
+    -0.5, 0, -0.5,
+    0.5, 0, -0.5,
+    0.5, 0, 0.5,
+    -0.5, 0, 0.5,
+  ]);
+  const normals = new Float32Array([0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0]);
+  const uvs = new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]);
+  const indices = new Uint32Array([0, 1, 2, 0, 2, 3]);
+  const mesh = createMeshFromData(engine, name, positions, normals, indices, uvs);
+  mesh.pickable = false;
+  if ('receiveShadows' in mesh) mesh.receiveShadows = false;
+  mesh.renderOrder = 232;
+  mesh.boundMin = [-1, -1, -1];
+  mesh.boundMax = [1, 1, 1];
+  return mesh;
+}
+
+function makeQueueTallyMaterial(name, rgb) {
+  const mat = createShaderMaterial({
+    name,
+    attributes: ['position', 'normal', 'uv'],
+    uniforms: [
+      'world',
+      'viewProjection',
+      { name: 'tint', type: 'vec3<f32>', defaultValue: rgb },
+      { name: 'count', type: 'f32', defaultValue: 0 },
+      { name: 'alpha', type: 'f32', defaultValue: 0 },
+      { name: 'originFix', type: 'vec3<f32>', defaultValue: [0, 0, 0] },
+    ],
+    needAlphaBlending: true,
+    blendMode: 'alpha',
+    depthWrite: false,
+    depthCompare: 'always',
+    backFaceCulling: false,
+    vertexSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+};
+@vertex fn mainVertex(input: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  let wp0 = shaderSystem.world * vec4<f32>(input.position, 1.0);
+  let wp = vec4<f32>(wp0.xyz + shaderUniforms.originFix, 1.0);
+  out.position = shaderSystem.viewProjection * wp;
+  out.uv = input.uv;
+  return out;
+}`,
+    fragmentSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+};
+${PRISON_TALLY_WGSL}
+@fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
+  let d = tallyDist(input.uv, shaderUniforms.count);
+  let mark = 1.0 - smoothstep(0.016, 0.036, d);
+  let alpha = mark * shaderUniforms.alpha;
+  if (alpha < 0.02) { discard; }
+  return vec4<f32>(shaderUniforms.tint, alpha);
+}`,
+  });
+  mat._menuOverlay = true;
+  mat._originFix = [0, 0, 0];
+  return mat;
+}
+
 /**
  * Pause (left) + Cancel (right) sit at screen-bottom (+π/2). Units, upgrades,
  * and building upgrades share the remaining band above them, in that order.
@@ -961,6 +1029,25 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     });
   }
 
+  /** @type {{ mesh: object, mat: object }[]} */
+  const badges = [];
+  /** @type {{ mesh: object, mat: object }[]} */
+  const extras = [];
+  for (let i = 0; i < MAX_OPTIONS; i++) {
+    const badgeMat = makeQueueTallyMaterial(`queue-tally-${i}`, BADGE_TINT);
+    const badgeMesh = makeQueueTallyMesh(engine, `queue-tally-${i}`);
+    badgeMesh.material = badgeMat;
+    hideMesh(badgeMesh);
+    addToScene(scene, badgeMesh);
+    badges.push({ mesh: badgeMesh, mat: badgeMat });
+    const extraMat = makeQueueTallyMaterial(`queue-extra-${i}`, EXTRA_TINT);
+    const extraMesh = makeQueueTallyMesh(engine, `queue-extra-${i}`);
+    extraMesh.material = extraMat;
+    hideMesh(extraMesh);
+    addToScene(scene, extraMesh);
+    extras.push({ mesh: extraMesh, mat: extraMat });
+  }
+
   // Dedicated cancel pad + 🚫 slash (no GLB).
   const cancelPadMesh = createAnnulusMesh(engine, 'action-menu-pad-cancel', {
     inner: PAD_INNER / PAD_OUTER,
@@ -1111,10 +1198,6 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   const labels = [];
   /** @type {{ data: object, layer: object, text: string }[]} */
   const prices = [];
-  /** @type {{ data: object, layer: object, text: string }[]} */
-  const badges = [];
-  /** @type {{ data: object, layer: object, text: string }[]} */
-  const extras = [];
   /** @type {{ data: object, layer: object, text: string } | null} */
   let cancelLabel = null;
   /** @type {{ data: object, layer: object, text: string, dull: boolean } | null} */
@@ -1157,36 +1240,6 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
         prices.push({ data, layer, text: '' });
         layers.push(layer);
       }
-      for (let i = 0; i < MAX_OPTIONS; i++) {
-        const data = createDefaultTextData(
-          screen.font,
-          BADGE_FONT_SIZE,
-          '0',
-          [1, 0.95, 0.55, 1],
-        );
-        const layer = createTextLayer(data, {
-          order: MAX_OPTIONS * 2 + i,
-          opacity: 0,
-          visible: false,
-        });
-        badges.push({ data, layer, text: '0' });
-        layers.push(layer);
-      }
-      for (let i = 0; i < MAX_OPTIONS; i++) {
-        const data = createDefaultTextData(
-          screen.font,
-          EXTRA_FONT_SIZE,
-          '+00',
-          EXTRA_TEXT_COLOR,
-        );
-        const layer = createTextLayer(data, {
-          order: MAX_OPTIONS * 3 + i,
-          opacity: 0,
-          visible: false,
-        });
-        extras.push({ data, layer, text: '' });
-        layers.push(layer);
-      }
       {
         const data = createDefaultTextData(
           screen.font,
@@ -1195,7 +1248,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
           CANCEL_LABEL_TEXT_COLOR,
         );
         const layer = createTextLayer(data, {
-          order: MAX_OPTIONS * 4,
+          order: MAX_OPTIONS * 2,
           opacity: 0,
           visible: false,
         });
@@ -1210,7 +1263,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
           PAUSE_LABEL_TEXT_COLOR,
         );
         const layer = createTextLayer(data, {
-          order: MAX_OPTIONS * 4 + 1,
+          order: MAX_OPTIONS * 2 + 1,
           opacity: 0,
           visible: false,
         });
@@ -1225,14 +1278,10 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       console.warn('[buildingActionRadial] native labels unavailable', err);
       for (const label of labels) disposeDefaultTextData(label.data);
       for (const price of prices) disposeDefaultTextData(price.data);
-      for (const badge of badges) disposeDefaultTextData(badge.data);
-      for (const extra of extras) disposeDefaultTextData(extra.data);
       if (cancelLabel) disposeDefaultTextData(cancelLabel.data);
       if (pauseLabel) disposeDefaultTextData(pauseLabel.data);
       labels.length = 0;
       prices.length = 0;
-      badges.length = 0;
-      extras.length = 0;
       cancelLabel = null;
       pauseLabel = null;
       textRenderer = null;
@@ -1339,9 +1388,60 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     label.layer._version++;
   }
 
+  /** @type {{ mesh: object, hide: () => void, sync: (el: HTMLElement | null) => { cssW: number, cssH: number, pad: number } | null }[]} */
+  const pricePlates = [];
+  for (let i = 0; i < MAX_OPTIONS; i++) {
+    pricePlates.push(createMenuDomPlate(engine, scene, `action-price-${i}`));
+  }
+
   function hidePrice(i) {
     hideLabel(prices[i]);
     hideRadialPrice(`action-${i}`);
+    pricePlates[i]?.hide();
+  }
+
+  function cssPixelsPerWorld(x, y, z) {
+    const worldToScreen = screen.worldToScreen;
+    if (!worldToScreen) return 0;
+    const a = worldToScreen(x, y, z);
+    const b = worldToScreen(x + bx, y + by, z + bz);
+    if (!a || !b) return 0;
+    return Math.hypot(b.x - a.x, b.y - a.y);
+  }
+
+  function posePricePlate(i, id, x, y, z) {
+    const plate = pricePlates[i];
+    if (!plate || !xrEye()) {
+      plate?.hide();
+      return;
+    }
+    const fitted = plate.sync(radialPriceElement(id));
+    if (!fitted) return;
+    const px = cssPixelsPerWorld(x, y, z);
+    if (!(px > 1e-3)) {
+      plate.hide();
+      return;
+    }
+    const upp = 1 / px;
+    const w = fitted.cssW * upp;
+    const h = fitted.cssH * upp;
+    const down = h * 0.5 - fitted.pad * upp;
+    placeMeshOriented(
+      plate.mesh,
+      x + tx * down,
+      y + ty * down,
+      z + tz * down,
+      1,
+      bx, by, bz,
+      nx, ny, nz,
+      tx, ty, tz,
+    );
+    if (plate.mesh.scaling) {
+      plate.mesh.scaling.x = w;
+      plate.mesh.scaling.y = 1;
+      plate.mesh.scaling.z = h;
+    }
+    plate.mesh.markLocalDirty?.();
   }
 
   function cameraEye(camera) {
@@ -1761,8 +1861,8 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       }
     }
     for (let i = 0; i < prices.length; i++) hidePrice(i);
-    for (const badge of badges) hideLabel(badge);
-    for (const extra of extras) hideLabel(extra);
+    for (const badge of badges) hideMesh(badge.mesh);
+    for (const extra of extras) hideMesh(extra.mesh);
     hideLabel(cancelLabel);
     hideLabel(pauseLabel);
     for (let i = 0; i < pads.length; i++) {
@@ -2008,7 +2108,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       return;
     }
     const batch = slot.iconKey ? icons.get(slot.iconKey) : null;
-    if (batch?.sprite && !xrEye()) {
+    if (batch?.sprite) {
       hideLabel(label);
       return;
     }
@@ -2038,7 +2138,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     const worldToScreen = screen.worldToScreen;
     const getViewport = screen.getViewport;
     const batch = slot?.iconKey ? icons.get(slot.iconKey) : null;
-    const spriteFlat = !!(batch?.sprite && !xrEye());
+    const spriteFlat = !!batch?.sprite;
     if (!slot || !open || !worldToScreen || !getViewport || (!slot.costText && !spriteFlat)) {
       hidePrice(i);
       return;
@@ -2060,24 +2160,6 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     const gate = owned ? 'owned' : (slot.gate ?? 'ok');
     const wash = owned ? DULL_TEXT_COLOR : (PRICE_WASH[slot.gate ?? 'ok'] ?? PRICE_WASH.ok);
     const nameWash = owned ? DULL_TEXT_COLOR : (LABEL_WASH[gate] ?? LABEL_WASH.ok);
-    if (xrEye() && price) {
-      hideRadialPrice(`action-${i}`);
-      if (!slot.costText) {
-        hideLabel(price);
-        return;
-      }
-      price.text = formatRadialPriceText(slot.cost);
-      placeScreenText(
-        price,
-        worldX,
-        worldY,
-        worldZ,
-        PRICE_SCREEN_SCALE * (hovered ? 1.05 : 1),
-        owned ? 0.72 : hovered ? 0.95 : 0.8,
-        wash,
-      );
-      return;
-    }
     hideLabel(price);
     setRadialPrice(`action-${i}`, {
       cost: slot.costText ? slot.cost : null,
@@ -2092,35 +2174,54 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       gate,
       bank: menuBank,
     });
+    posePricePlate(i, `action-${i}`, worldX, worldY, worldZ);
+  }
+
+  function placeQueueTally(entry, count, x, y, z, scale) {
+    if (!entry || count < 1 || !open) {
+      if (entry) hideMesh(entry.mesh);
+      return;
+    }
+    setShaderUniform(entry.mat, 'count', count);
+    setShaderUniform(entry.mat, 'alpha', fadeAlpha(1));
+    placeMeshOriented(
+      entry.mesh,
+      x,
+      y,
+      z,
+      scale * hudScale,
+      bx,
+      by,
+      bz,
+      nx,
+      ny,
+      nz,
+      tx,
+      ty,
+      tz,
+    );
   }
 
   function redrawBadge(i) {
     const badge = badges[i];
     const slot = slots[i];
     if (!badge || !slot) {
-      hideLabel(badge);
+      if (badge) hideMesh(badge.mesh);
       return;
     }
     const track = tracks.get(trackKey(slot.kind, slot.id));
     const count = track?.count | 0;
-    if (count < 1) {
-      hideLabel(badge);
-      return;
-    }
-    const text = formatGameNumber(count);
-    badge.text = text;
     const out = BADGE_OUT * hudScale;
     const side = BADGE_SIDE * hudScale;
     const lift = BADGE_LIFT * hudScale;
-    // Top-right of pad: outward along -tx (toward screen-up-ish) + along bx.
-    placeScreenText(
+    // Top-right of pad: outward along -tx (toward screen-up) + along bx.
+    placeQueueTally(
       badge,
+      count,
       slot.x - tx * out + bx * side + nx * lift,
       slot.y - ty * out + by * side + ny * lift,
       slot.z - tz * out + bz * side + nz * lift,
-      BADGE_SCREEN_SCALE,
-      1,
-      BADGE_TEXT_COLOR,
+      TALLY_SCALE,
     );
   }
 
@@ -2128,29 +2229,22 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     const extra = extras[i];
     const slot = slots[i];
     if (!extra || !slot) {
-      hideLabel(extra);
+      if (extra) hideMesh(extra.mesh);
       return;
     }
     const track = tracks.get(trackKey(slot.kind, slot.id));
     const n = track?.extra | 0;
-    if (n < 1) {
-      hideLabel(extra);
-      return;
-    }
-    const text = `+${formatGameNumber(n)}`;
-    extra.text = text;
     const out = BADGE_OUT * hudScale;
     const side = BADGE_SIDE * hudScale;
     const lift = BADGE_LIFT * hudScale;
-    // Opposite corner from the local queue badge, just outside the pad.
-    placeScreenText(
+    // Opposite corner from the framed building's queue.
+    placeQueueTally(
       extra,
+      n,
       slot.x - tx * out - bx * side + nx * lift,
       slot.y - ty * out - by * side + ny * lift,
       slot.z - tz * out - bz * side + nz * lift,
-      EXTRA_SCREEN_SCALE,
-      0.92,
-      EXTRA_TEXT_COLOR,
+      EXTRA_TALLY_SCALE,
     );
   }
 
@@ -2265,8 +2359,8 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
         applyPadHover(i, false);
         hideLabel(labels[i]);
         hidePrice(i);
-        hideLabel(badges[i]);
-        hideLabel(extras[i]);
+        hideMesh(badges[i].mesh);
+        hideMesh(extras[i].mesh);
         continue;
       }
       const slot = slots[i];
@@ -2462,8 +2556,8 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     for (const label of labels) hideLabel(label);
     for (let i = 0; i < prices.length; i++) hidePrice(i);
     hideRadialPricesWithPrefix('action-');
-    for (const badge of badges) hideLabel(badge);
-    for (const extra of extras) hideLabel(extra);
+    for (const badge of badges) hideMesh(badge.mesh);
+    for (const extra of extras) hideMesh(extra.mesh);
     hideLabel(cancelLabel);
     hideLabel(pauseLabel);
   }
@@ -2798,8 +2892,8 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     textRendererRegistered = false;
     for (const label of labels) disposeDefaultTextData(label.data);
     for (const price of prices) disposeDefaultTextData(price.data);
-    for (const badge of badges) disposeDefaultTextData(badge.data);
-    for (const extra of extras) disposeDefaultTextData(extra.data);
+    for (const badge of badges) hideMesh(badge.mesh);
+    for (const extra of extras) hideMesh(extra.mesh);
     if (cancelLabel) disposeDefaultTextData(cancelLabel.data);
     if (pauseLabel) disposeDefaultTextData(pauseLabel.data);
     hideAllProgress();

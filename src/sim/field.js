@@ -185,9 +185,32 @@ export const TERRAIN = {
   CHARRED: 8,
   /** Molten rock. Top of the burn set. */
   LAVA: 9,
+  /** Packed snow. Base of the snow set; frozen draws over it. */
+  SNOW: 10,
+  /** Ice crust. Top of the snow set. */
+  FROZEN: 11,
+  /** Snowy grass. Ground of the ice biome; snow draws over it. */
+  SNOWGRASS: 12,
 };
 
-/** Which 4×4 atlas PNG a tile's shore comes from. 3, 6, and 11 are junction sheets. */
+/**
+ * Generator trios. Cover fills the grass role, ground the dirt role, liquid the water role.
+ * @type {Record<string, { name: string, cover: number, ground: number, liquid: number }>}
+ */
+export const BIOMES = {
+  temperate: { name: 'Temperate', cover: TERRAIN.GRASS, ground: TERRAIN.DIRT, liquid: TERRAIN.WATER },
+  ice: { name: 'Ice', cover: TERRAIN.SNOW, ground: TERRAIN.SNOWGRASS, liquid: TERRAIN.WATER },
+  fire: { name: 'Fire', cover: TERRAIN.SCORCHED, ground: TERRAIN.DIRT, liquid: TERRAIN.WATER },
+  building: { name: 'Building', cover: TERRAIN.GRAVEL, ground: TERRAIN.DIRT, liquid: TERRAIN.WATER },
+};
+
+export const DEFAULT_BIOME = 'temperate';
+
+export function biomeById(id) {
+  return BIOMES[id] || BIOMES[DEFAULT_BIOME];
+}
+
+/** Which 4×4 atlas PNG a tile's shore comes from. 3, 6, 11, 14, 18, and 22 are junction sheets. */
 export const ATLAS = {
   GRASS_DIRT: 0,
   GRASS_WATER: 1,
@@ -203,10 +226,34 @@ export const ATLAS = {
   CHARRED_SCORCHED: 9,
   /** Lava blob on charred. */
   LAVA_CHARRED: 10,
+  /** Lava blob on scorched, when no charred sits between them. */
+  LAVA_SCORCHED: 23,
+  /** Snow blob on dirt. Frozen counts as snow on this shore. */
+  SNOW_DIRT: 12,
+  /** Frozen blob on snow. */
+  FROZEN_SNOW: 13,
+  /** Snow blob on water. Frozen counts as snow on this shore. */
+  SNOW_WATER: 15,
+  /** Scorched blob on water. Lava still counts as scorched here. Charred uses its own sheet. */
+  SCORCHED_WATER: 16,
+  /** Gravel blob on water. Tile and decorative count as gravel on this shore. */
+  GRAVEL_WATER: 17,
+  /** Snow blob on snowy grass. Frozen counts as snow on this shore. */
+  SNOW_SNOWGRASS: 19,
+  /** Snowy grass blob on dirt. */
+  SNOWGRASS_DIRT: 20,
+  /** Snowy grass blob on water. */
+  SNOWGRASS_WATER: 21,
+  /** Charred blob on grass. */
+  CHARRED_GRASS: 24,
+  /** Charred blob on water. Scorched still uses atlas-scorched-water. */
+  CHARRED_WATER: 25,
+  /** Charred blob on snowy grass. */
+  CHARRED_SNOWGRASS: 26,
 };
 
-/** Sheet id sits above this. Twelve bits hold a junction key. */
-export const LAYER_SHIFT = 12;
+/** Sheet id sits above this. Twenty bits hold a shore junction key. */
+export const LAYER_SHIFT = 20;
 const LAYER_CELL_MASK = (1 << LAYER_SHIFT) - 1;
 
 export function packLayer(sheet, cell) {
@@ -229,8 +276,12 @@ const ATLAS_CELL_EMPTY = 12;
  * own sheets. `order` is low to high - later members draw over earlier ones.
  * `pairs` is [high, low, atlas]. Two members need one sheet. A higher member
  * with no sheet onto a lower tile counts as the member beneath it.
- * Gravel meets dirt on atlas-gravel-dirt, and scorched on atlas-scorched-dirt.
- * Both shores are sampled from the dirt tile.
+ * Gravel meets dirt on atlas-gravel-dirt, scorched on atlas-scorched-dirt,
+ * and snow on atlas-snow-dirt. Those shores are sampled from the dirt tile.
+ * The same covers meet water on atlas-snow-water, atlas-scorched-water, and
+ * atlas-gravel-water. Dirt still meets water on atlas-dirt-water.
+ * Snowy grass meets snow on atlas-snow-snowgrass, dirt on atlas-snowgrass-dirt,
+ * and water on atlas-snowgrass-water. It is the ice biome's dirt.
  */
 export const TERRAIN_BLEND_SETS = [
   {
@@ -245,6 +296,13 @@ export const TERRAIN_BLEND_SETS = [
     pairs: [
       [TERRAIN.CHARRED, TERRAIN.SCORCHED, ATLAS.CHARRED_SCORCHED],
       [TERRAIN.LAVA, TERRAIN.CHARRED, ATLAS.LAVA_CHARRED],
+      [TERRAIN.LAVA, TERRAIN.SCORCHED, ATLAS.LAVA_SCORCHED],
+    ],
+  },
+  {
+    order: [TERRAIN.SNOW, TERRAIN.FROZEN],
+    pairs: [
+      [TERRAIN.FROZEN, TERRAIN.SNOW, ATLAS.FROZEN_SNOW],
     ],
   },
 ];
@@ -410,6 +468,8 @@ export function createField(seed = 0, dims = {}) {
     // Per-tile wood remaining / burn timer (0 when no living tree).
     treeStock: new Uint8Array(n),
     treeBurn: new Uint16Array(n),
+    /** Canopy look: 0 green, 1 snow, 2 char. Forge paint; shaders read this. */
+    treeLook: new Uint8Array(n),
     burningTrees: [],
     treeDirty: [],
     treeStockHash: 0,
@@ -439,12 +499,12 @@ export function createField(seed = 0, dims = {}) {
  * `spawnPads` (world x/z) keeps those starts on grass. Omit it to dry the
  * usual 1v1 and team pads. Pass `[]` to leave every lake where the seed put it.
  * @param {number} [seed]
- * @param {{ width?: number, height?: number, spawnPads?: Array<[number, number]>, spawnPadClearTiles?: number }} [dims]
+ * @param {{ width?: number, height?: number, spawnPads?: Array<[number, number]>, spawnPadClearTiles?: number, biome?: string }} [dims]
  */
 export function buildField(seed = 0, dims = {}) {
   const field = createField(seed, dims);
   generateHeightMap(field);
-  assignTerrainByElevation(field, dims.spawnPads, dims.spawnPadClearTiles);
+  assignTerrainByElevation(field, dims.spawnPads, dims.spawnPadClearTiles, dims.biome);
   seedRegionLift(field);
   composeHeightMap(field);
   applyTerrainTransitions(field);
@@ -456,11 +516,11 @@ export function buildField(seed = 0, dims = {}) {
  * Land mask and pass bits only. Same terrain as buildField - height is not
  * an input to the water cut - so a pre-match check can skip the mesh.
  * @param {number} [seed]
- * @param {{ width?: number, height?: number, spawnPads?: Array<[number, number]>, spawnPadClearTiles?: number }} [dims]
+ * @param {{ width?: number, height?: number, spawnPads?: Array<[number, number]>, spawnPadClearTiles?: number, biome?: string }} [dims]
  */
 export function buildTerrainField(seed = 0, dims = {}) {
   const field = createField(seed, dims);
-  assignTerrainByElevation(field, dims.spawnPads, dims.spawnPadClearTiles);
+  assignTerrainByElevation(field, dims.spawnPads, dims.spawnPadClearTiles, dims.biome);
   applyTerrainTransitions(field);
   updatePassFromWater(field);
   return field;
@@ -505,6 +565,7 @@ export function fieldSnapshot(field) {
     doodadType: field.doodadType?.slice?.() ?? new Uint8Array(field.width * field.height),
     doodadColor: field.doodadColor?.slice?.() ?? new Uint8Array(field.width * field.height),
     treeStock: field.treeStock?.slice?.() ?? new Uint8Array(field.width * field.height),
+    treeLook: field.treeLook?.slice?.() ?? new Uint8Array(field.width * field.height),
     treeBurn: field.treeBurn instanceof Uint16Array
       ? field.treeBurn.slice()
       : new Uint16Array(field.treeBurn ?? field.width * field.height),
@@ -2027,7 +2088,8 @@ export function applySeededHeight(field) {
 /** Extra lake clearance for the stress pie ring (larger than 1v1 pads). */
 export const STRESS_SPAWN_CLEAR_TILES = 8;
 
-function assignTerrainByElevation(field, spawnPads, spawnPadClearTiles) {
+function assignTerrainByElevation(field, spawnPads, spawnPadClearTiles, biomeId) {
+  const { cover, ground, liquid } = biomeById(biomeId);
   const { width, height, terrainTypes, seed } = field;
   const n = width * height;
   const layout = mapLayout(seed, width, height);
@@ -2049,19 +2111,19 @@ function assignTerrainByElevation(field, spawnPads, spawnPadClearTiles) {
     for (let x = 0; x < width; x++) {
       const i = z * width + x;
       if (landScore[i] < landWaterCut) {
-        terrainTypes[i] = TERRAIN.WATER;
+        terrainTypes[i] = liquid;
         continue;
       }
       open[i] = 1;
       dirtScore[i] = dirtScoreAt(layout, x, z, landScore[i]);
-      terrainTypes[i] = TERRAIN.GRASS;
+      terrainTypes[i] = cover;
     }
   }
 
   const landDirtCut = topFractionCut(dirtScore, open, layout.dirtFrac);
   for (let i = 0; i < n; i++) {
     if (open[i] && dirtScore[i] >= landDirtCut) {
-      terrainTypes[i] = TERRAIN.DIRT;
+      terrainTypes[i] = ground;
       open[i] = 0;
     }
   }
@@ -2079,16 +2141,16 @@ function assignTerrainByElevation(field, spawnPads, spawnPadClearTiles) {
   for (let i = 0; i < n; i++) {
     if (!open[i]) continue;
     const w = (weaveScore[i] - weaveMin) / weaveRange;
-    if (w < 0.32) terrainTypes[i] = TERRAIN.WATER;
-    else if (w > 0.62) terrainTypes[i] = TERRAIN.DIRT;
+    if (w < 0.32) terrainTypes[i] = liquid;
+    else if (w > 0.62) terrainTypes[i] = ground;
   }
 
-  // Steep height steps can skip grass. Keep a generated grass bank so those
-  // shores stay in the mid band. Painted water–dirt is not rewritten.
+  // Steep height steps can skip the cover. Keep a generated bank so those
+  // shores stay in the mid band. Painted liquid–ground is not rewritten.
   for (let z = 0; z < height; z++) {
     for (let x = 0; x < width; x++) {
       const i = z * width + x;
-      if (terrainTypes[i] !== TERRAIN.WATER) continue;
+      if (terrainTypes[i] !== liquid) continue;
       for (let dz = -1; dz <= 1; dz++) {
         for (let dx = -1; dx <= 1; dx++) {
           if (dx === 0 && dz === 0) continue;
@@ -2096,17 +2158,17 @@ function assignTerrainByElevation(field, spawnPads, spawnPadClearTiles) {
           const nz = z + dz;
           if (nx < 0 || nz < 0 || nx >= width || nz >= height) continue;
           const ni = nz * width + nx;
-          if (terrainTypes[ni] === TERRAIN.DIRT) terrainTypes[ni] = TERRAIN.GRASS;
+          if (terrainTypes[ni] === ground) terrainTypes[ni] = cover;
         }
       }
     }
   }
-  keepMatchSpawnsDry(field, spawnPads, spawnPadClearTiles);
+  keepMatchSpawnsDry(field, spawnPads, spawnPadClearTiles, cover, liquid);
 }
 
 /**
  * Agora pads sit on this inset (worldSetup.SPAWN_BASE_INSET).
- * A generated lake used to cover them; the pad stays grass so a match can start.
+ * A generated lake used to cover them; the pad stays on the biome cover so a match can start.
  */
 const MATCH_SPAWN_INSET = 0.6;
 const MATCH_SPAWN_CLEAR_TILES = 5;
@@ -2120,8 +2182,8 @@ function legacyMatchSpawnSpots(halfX, halfZ) {
   ];
 }
 
-/** Replace water with grass in a disc around each world-space pad. */
-export function drySpawnPads(field, spots, radiusTiles = MATCH_SPAWN_CLEAR_TILES) {
+/** Replace the liquid with the cover in a disc around each world-space pad. */
+export function drySpawnPads(field, spots, radiusTiles = MATCH_SPAWN_CLEAR_TILES, land = TERRAIN.GRASS, liquid = TERRAIN.WATER) {
   if (!field || !spots?.length) return;
   const { width, height, terrainTypes } = field;
   const halfX = width * TILE_SIZE_F * 0.5;
@@ -2139,17 +2201,17 @@ export function drySpawnPads(field, spots, radiusTiles = MATCH_SPAWN_CLEAR_TILES
         const x = cx + dx;
         if (x < 0 || x >= width) continue;
         const i = z * width + x;
-        if (terrainTypes[i] === TERRAIN.WATER) terrainTypes[i] = TERRAIN.GRASS;
+        if (terrainTypes[i] === liquid) terrainTypes[i] = land;
       }
     }
   }
 }
 
-function keepMatchSpawnsDry(field, spawnPads, clearTiles) {
+function keepMatchSpawnsDry(field, spawnPads, clearTiles, land, liquid) {
   const halfX = field.width * TILE_SIZE_F * 0.5;
   const halfZ = field.height * TILE_SIZE_F * 0.5;
   const spots = spawnPads === undefined ? legacyMatchSpawnSpots(halfX, halfZ) : spawnPads;
-  drySpawnPads(field, spots, clearTiles ?? MATCH_SPAWN_CLEAR_TILES);
+  drySpawnPads(field, spots, clearTiles ?? MATCH_SPAWN_CLEAR_TILES, land, liquid);
 }
 
 /**
@@ -2161,14 +2223,13 @@ function applyTerrainTransitions(field) {
   const { width, height, terrainTypes, tileType, atlasId } = field;
   const n = width * height;
   const grass = new Uint8Array(n);
-  const dirt = new Uint8Array(n);
   const land = new Uint8Array(n);
   for (let i = 0; i < n; i++) {
     const t = terrainTypes[i];
     grass[i] = t === TERRAIN.GRASS ? 1 : 0;
-    dirt[i] = t === TERRAIN.DIRT ? 1 : 0;
-    // Pave meets water on a hard edge, so it does not open a walkable shore.
-    land[i] = t !== TERRAIN.WATER && !blendMembership.has(t) ? 1 : 0;
+    // Every ground opens a walkable water shore, including the covers that
+    // borrow a shore sheet (frozen as snow, lava as scorched, tile as gravel).
+    land[i] = t !== TERRAIN.WATER ? 1 : 0;
   }
 
   for (let z = 0; z < height; z++) {
@@ -2183,18 +2244,35 @@ function applyTerrainTransitions(field) {
       const terrain = terrainTypes[i];
       if (terrain === TERRAIN.WATER) {
         tileType[i] = marchingCase(x, z, land, width, height);
-        const grassShore = marchingCase(x, z, grass, width, height) !== 12;
-        const dirtShore = marchingCase(x, z, dirt, width, height) !== 12;
-        atlasId[i] = dirtShore && !grassShore ? ATLAS.DIRT_WATER : ATLAS.GRASS_WATER;
+        atlasId[i] = waterAtlasId(terrainTypes, width, height, x, z);
       } else if (terrain === TERRAIN.DIRT) {
         atlasId[i] = ATLAS.GRASS_DIRT;
         tileType[i] = marchingCase(x, z, grass, width, height);
+      } else if (terrain === TERRAIN.SNOWGRASS) {
+        atlasId[i] = ATLAS.SNOW_SNOWGRASS;
+        tileType[i] = blendCoverCornerCell(terrainTypes, width, height, x, z, TERRAIN.SNOW);
       } else {
         atlasId[i] = ATLAS.GRASS_DIRT;
         tileType[i] = 6;
       }
     }
   }
+}
+
+/** Stored sheet for a water tile. Composites still render through `tileLayer`. */
+function waterAtlasId(types, width, height, x, z) {
+  if (terrainCornerCell(types, width, height, x, z, TERRAIN.GRASS) !== ATLAS_CELL_EMPTY) return ATLAS.GRASS_WATER;
+  if (blendCoverCornerCell(types, width, height, x, z, TERRAIN.SNOW) !== ATLAS_CELL_EMPTY) return ATLAS.SNOW_WATER;
+  if (terrainCornerCell(types, width, height, x, z, TERRAIN.CHARRED) !== ATLAS_CELL_EMPTY
+    && terrainCornerCell(types, width, height, x, z, TERRAIN.LAVA) === ATLAS_CELL_EMPTY
+    && terrainCornerCell(types, width, height, x, z, TERRAIN.SCORCHED) === ATLAS_CELL_EMPTY) {
+    return ATLAS.CHARRED_WATER;
+  }
+  if (blendCoverCornerCell(types, width, height, x, z, TERRAIN.SCORCHED) !== ATLAS_CELL_EMPTY) return ATLAS.SCORCHED_WATER;
+  if (blendCoverCornerCell(types, width, height, x, z, TERRAIN.GRAVEL) !== ATLAS_CELL_EMPTY) return ATLAS.GRAVEL_WATER;
+  if (terrainCornerCell(types, width, height, x, z, TERRAIN.SNOWGRASS) !== ATLAS_CELL_EMPTY) return ATLAS.SNOWGRASS_WATER;
+  if (terrainCornerCell(types, width, height, x, z, TERRAIN.DIRT) !== ATLAS_CELL_EMPTY) return ATLAS.DIRT_WATER;
+  return ATLAS.GRASS_WATER;
 }
 
 /**

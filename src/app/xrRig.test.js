@@ -9,6 +9,12 @@ import {
   xrStickMotion,
   xrJumpHead,
   xrFitHead,
+  xrBreaksFollow,
+  xrBreaksAltitude,
+  xrHoldHead,
+  cycleXrAltitude,
+  toggleXrFollow,
+  XR_ALTITUDE_BANDS,
   lookDownOffset,
   smoothFlatDirection,
   yawBetween,
@@ -93,20 +99,30 @@ describe('xrStickMotion', () => {
     assert.equal(nudge.yaw, 0);
   });
 
-  it('yaws on opposite up/down and zooms out on a pinch, with no throw gate', () => {
+  it('keeps the first stick panning while the other turns, and pinches in place', () => {
     const yaw = xrStickMotion(
       { stickX: 0, stickY: -0.8 },
       { stickX: 0, stickY: 0.8 },
     );
     assert.ok(yaw.yaw > 0);
     assert.equal(yaw.zoom, 0);
-    assert.equal(yaw.forward, 0);
+    assert.equal(yaw.forward, 0.8);
+    assert.equal(yaw.panHand, 'left');
+    const held = xrStickMotion(
+      { stickX: 0, stickY: -0.4 },
+      { stickX: 0, stickY: 1 },
+      'left',
+    );
+    assert.equal(held.forward, 0.4);
+    assert.equal(held.panHand, 'left');
+    assert.ok(held.yaw > yaw.yaw);
     const feather = xrStickMotion(
       { stickX: 0, stickY: -0.05 },
       { stickX: 0, stickY: 0.05 },
     );
     assert.ok(feather.yaw > 0);
     assert.ok(feather.yaw < yaw.yaw);
+    assert.equal(feather.forward, 0.05);
     const pinch = xrStickMotion(
       { stickX: 0.8, stickY: 0 },
       { stickX: -0.8, stickY: 0 },
@@ -122,25 +138,28 @@ describe('xrStickMotion', () => {
     assert.equal(spread.strafe, 0);
   });
 
-  it('lets a hard turn or lift quiet the pan and leaves a light one alone', () => {
+  it('does not quiet a turn, and still quiets a hard pinch', () => {
     const hard = xrStickMotion(
       { stickX: 1, stickY: -1 },
       { stickX: 1, stickY: 1 },
     );
     assert.ok(hard.yaw > 0);
-    assert.ok(hard.strafe < 0.2);
+    assert.equal(hard.strafe, 2);
+    assert.equal(hard.forward, 1);
     const light = xrStickMotion(
       { stickX: 1, stickY: -0.2 },
       { stickX: 1, stickY: 0.2 },
     );
     assert.ok(light.yaw > 0);
-    assert.ok(light.strafe > 1.5);
-    assert.ok(light.strafe > hard.strafe);
+    assert.ok(light.yaw < hard.yaw);
+    assert.equal(light.strafe, 2);
+    assert.equal(light.forward, 0.2);
     const lift = xrStickMotion(
       { stickX: 1, stickY: -1 },
       { stickX: -1, stickY: -1 },
     );
     assert.equal(lift.zoom, 1);
+    assert.equal(lift.yaw, 0);
     assert.ok(lift.forward < 0.2);
   });
 });
@@ -252,6 +271,80 @@ describe('smoothFlatDirection', () => {
     const smallFraction = yawBetween(from, small) / yawBetween(from, smallTarget);
     assert.ok(XR_LOOK_SNAP > XR_LOOK_FOLLOW);
     assert.ok(largeFraction > smallFraction * 2);
+  });
+});
+
+describe('xr holds', () => {
+  const bounds = { floor: () => 0, maxY: 400, maxRange: 1000, clearance: 6 };
+
+  it('a pan drops follow, including the stick that stays down while turning', () => {
+    assert.equal(xrBreaksFollow({ stickX: 0, stickY: -0.6 }, { stickX: 0, stickY: 0 }), true);
+    assert.equal(xrBreaksFollow({ stickX: 0, stickY: -1 }, { stickX: 0, stickY: 1 }), true);
+    assert.equal(xrBreaksFollow({ stickX: -1, stickY: 0 }, { stickX: 1, stickY: 0 }), false);
+    assert.equal(xrBreaksAltitude({ stickX: -0.6, stickY: 0 }, { stickX: 0.6, stickY: 0 }), true);
+    assert.equal(xrBreaksAltitude({ stickX: 0, stickY: -1 }, { stickX: 0, stickY: 0 }), false);
+    assert.equal(xrBreaksFollow({ stickX: 0.05, stickY: 0 }, { stickX: 0, stickY: 0 }), false);
+  });
+
+  it('follow eases toward the selection and stands back; altitude eases to the band', () => {
+    const followed = xrHoldHead([0, 50, 0], [0, 1], {
+      dt: 0.1,
+      bounds,
+      follow: true,
+      followAt: { x: 0, z: 100 },
+      altitudeIndex: null,
+    });
+    assert.ok(followed[2] > 20 && followed[2] < 100);
+    assert.equal(followed[1], 50);
+
+    const slope = { ...bounds, floor: (_x, z) => z };
+    const hugged = xrHoldHead([0, 50, 10], [0, 1], {
+      dt: 0.016,
+      bounds: slope,
+      follow: false,
+      altitudeIndex: 0,
+    });
+    assert.equal(hugged[0], 0);
+    assert.equal(hugged[2], 10);
+    assert.equal(hugged[1], 10 + XR_ALTITUDE_BANDS[0]);
+
+    const lifted = xrHoldHead([0, 50, 0], [0, 1], {
+      dt: 0.1,
+      bounds,
+      follow: false,
+      altitudeIndex: 1,
+    });
+    assert.equal(lifted[0], 0);
+    assert.equal(lifted[2], 0);
+    assert.ok(lifted[1] < 50 && lifted[1] > XR_ALTITUDE_BANDS[1]);
+  });
+
+  it('a break leaves that axis where the sticks put it', () => {
+    const stayed = xrHoldHead([4, 50, 8], [0, 1], {
+      dt: 0.1,
+      bounds,
+      follow: true,
+      followAt: { x: 0, z: 100 },
+      altitudeIndex: 2,
+      breakFollow: true,
+      breakAltitude: true,
+    });
+    assert.deepEqual(stayed, [4, 50, 8]);
+  });
+
+  it('altitude clicks walk the three bands and follow is a toggle', () => {
+    const rig = { altitudePick: null, altitudeIndex: null, follow: false, followAt: { x: 1, z: 2 } };
+    assert.equal(cycleXrAltitude(rig), 0);
+    assert.equal(cycleXrAltitude(rig), 1);
+    assert.equal(cycleXrAltitude(rig), 2);
+    assert.equal(cycleXrAltitude(rig), 0);
+    rig.altitudeIndex = null;
+    assert.equal(cycleXrAltitude(rig), 1);
+    toggleXrFollow(rig);
+    assert.equal(rig.follow, true);
+    toggleXrFollow(rig);
+    assert.equal(rig.follow, false);
+    assert.equal(rig.followAt, null);
   });
 });
 

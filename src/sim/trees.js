@@ -30,6 +30,37 @@ export const TREE_STOCK_MAX = 255;
 export const TREE_STOCK_NATURAL_MAX = TREE_WOOD_PER_STAGE * TREE_STAGE_MAX;
 export const TREE_STOCK_GROVE_MAX = TREE_WOOD_PER_STAGE * TREE_STAGE_GROVE_MAX;
 
+/** Canopy look. Plain is the green mesh. Snow and char are the tree shaders. */
+export const TREE_LOOK_PLAIN = 0;
+export const TREE_LOOK_SNOW = 1;
+export const TREE_LOOK_CHAR = 2;
+
+/** Ice generates snow canopies. Fire generates char. Every other biome stays green. */
+export function treeLookForBiome(id) {
+  if (id === 'ice') return TREE_LOOK_SNOW;
+  if (id === 'fire') return TREE_LOOK_CHAR;
+  return TREE_LOOK_PLAIN;
+}
+
+/** Grass, dirt, snowy grass, and the three biome covers. Lava and open water stay empty. */
+export function terrainHostsTrees(terrain) {
+  return terrain === TERRAIN.GRASS
+    || terrain === TERRAIN.DIRT
+    || terrain === TERRAIN.SNOWGRASS
+    || terrain === TERRAIN.SNOW
+    || terrain === TERRAIN.SCORCHED
+    || terrain === TERRAIN.GRAVEL;
+}
+
+/** Dirt, snowy grass, plus the covers that stand in for them across a biome. */
+export function terrainHostsRocks(terrain) {
+  return terrain === TERRAIN.DIRT
+    || terrain === TERRAIN.SNOWGRASS
+    || terrain === TERRAIN.SNOW
+    || terrain === TERRAIN.SCORCHED
+    || terrain === TERRAIN.GRAVEL;
+}
+
 /** Per-stage visual scale. 0 hidden; 1–6 natural; 7–12 grove / rim mound. */
 const TREE_STAGE_SCALES = [
   0,
@@ -112,6 +143,11 @@ export function ensureTreeArrays(field) {
   if (!(field.treeBurn instanceof Uint16Array) || field.treeBurn.length !== n) {
     field.treeBurn = new Uint16Array(n);
   }
+  if (field.treeLook?.length !== n) {
+    const next = new Uint8Array(n);
+    if (field.treeLook?.length) next.set(field.treeLook.subarray(0, Math.min(field.treeLook.length, n)));
+    field.treeLook = next;
+  }
   if (!Array.isArray(field.burningTrees)) field.burningTrees = [];
   if (!Array.isArray(field.treeDirty)) field.treeDirty = [];
   if (field.treeStockHash == null) field.treeStockHash = 0;
@@ -148,6 +184,7 @@ function fellTree(field, tileIndex) {
   field.slowMask[tileIndex] = tileKeepsSlowAfterTree(field, tileIndex) ? 1 : 0;
   field.treeStock[tileIndex] = 0;
   field.treeBurn[tileIndex] = 0;
+  if (field.treeLook) field.treeLook[tileIndex] = TREE_LOOK_PLAIN;
 }
 
 /**
@@ -181,7 +218,7 @@ export function igniteTree(field, tileIndex) {
 }
 
 /**
- * Empty grass/dirt tile that can accept a new tree (spore growth, etc.).
+ * Empty grass, dirt, snow, scorched, or gravel tile that can accept a new tree.
  * Spawn pads are cleared only at scenery populate - mid-game growth may fill them.
  * @param {Set<number>|null} [pendingTiles] tile indices already queued to grow
  */
@@ -191,8 +228,7 @@ export function canGrowTreeAt(field, tx, tz, pendingTiles = null) {
   const i = tz * field.width + tx;
   if (field.activeMask?.[i] === 0) return false;
   if (field.structureSlowMask?.[i]) return false;
-  const terrain = field.terrainTypes?.[i];
-  if (terrain !== TERRAIN.GRASS && terrain !== TERRAIN.DIRT) return false;
+  if (!terrainHostsTrees(field.terrainTypes?.[i])) return false;
   const kind = field.sceneryType?.[i] ?? SCENERY_NONE;
   if (kind !== SCENERY_NONE) return false;
   if ((field.treeStock?.[i] ?? 0) > 0) return false;
@@ -215,6 +251,7 @@ export function growTreeAt(field, tileIndex, stock) {
   field.sceneryType[tileIndex] = SCENERY_TREE;
   field.treeStock[tileIndex] = amount;
   field.treeBurn[tileIndex] = 0;
+  field.treeLook[tileIndex] = TREE_LOOK_PLAIN;
   field.slowMask[tileIndex] = 1;
   mixStockHash(field, tileIndex, amount);
   markTreeDirty(field, tileIndex);
@@ -255,6 +292,19 @@ export function setTreeStock(field, tileIndex, stock) {
   field.treeStock[tileIndex] = next;
   mixStockHash(field, tileIndex, next);
   markTreeDirty(field, tileIndex);
+  return true;
+}
+
+/** Paint a living tree's canopy. Plain, snow, or char. */
+export function setTreeLook(field, tileIndex, look) {
+  ensureTreeArrays(field);
+  if (tileIndex < 0 || tileIndex >= field.treeLook.length) return false;
+  if ((field.treeStock[tileIndex] | 0) <= 0) return false;
+  let next = look | 0;
+  if (next < TREE_LOOK_PLAIN) next = TREE_LOOK_PLAIN;
+  else if (next > TREE_LOOK_CHAR) next = TREE_LOOK_CHAR;
+  if (field.treeLook[tileIndex] === next) return false;
+  field.treeLook[tileIndex] = next;
   return true;
 }
 

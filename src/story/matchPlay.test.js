@@ -229,6 +229,46 @@ describe('createMatchStory', () => {
     assert.equal(sets.at(-1), 40);
   });
 
+  it('in XR snaps to the camera clip landing, not the lerp', () => {
+    const radii = [];
+    const cam = {
+      setPose(pose) { radii.push(pose.radius); },
+      stopFollow() {},
+    };
+    const story = createMatchStory({
+      getCamera: () => cam,
+      getField: () => ({ worldHalfF: 160, width: 80 }),
+      xrActive: () => true,
+    });
+    story.playIntro({
+      reels: [{
+        id: 'intro',
+        when: 'start',
+        clips: [
+          {
+            id: 'a',
+            kind: CLIP_CAMERA,
+            t: 0,
+            dur: 1,
+            fromTx: 0,
+            fromTz: 0,
+            fromRadius: 80,
+            fromAlpha: 0,
+            tx: 10,
+            tz: 0,
+            radius: 40,
+            alpha: 0,
+          },
+        ],
+      }],
+    });
+    assert.equal(radii[0], 40);
+    const n = radii.length;
+    for (let i = 0; i < 10; i++) story.tick(50);
+    assert.equal(radii.length, n);
+    story.skip();
+  });
+
   it('ignores a story with no start clips', () => {
     const story = createMatchStory({ getCamera: () => null, getField: () => null });
     assert.equal(story.playIntro({ reels: [] }), false);

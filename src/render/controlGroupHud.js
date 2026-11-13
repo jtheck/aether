@@ -279,56 +279,8 @@ function makePadMesh(engine, id) {
   return mesh;
 }
 
-function makePadMaterial(rgb) {
-  return createShaderMaterial({
-    name: 'ctrl-group-pad-tri2',
-    attributes: ['position', 'normal', 'uv'],
-    uniforms: [
-      'world',
-      'viewProjection',
-      { name: 'tint', type: 'vec3<f32>', defaultValue: rgb },
-      { name: 'fill', type: 'f32', defaultValue: 0 },
-      { name: 'glow', type: 'f32', defaultValue: 0 },
-      { name: 'count', type: 'f32', defaultValue: 0 },
-      { name: 'facing', type: 'f32', defaultValue: 1 },
-    ],
-    needAlphaBlending: true,
-    blendMode: 'alpha',
-    depthWrite: false,
-    depthCompare: 'always',
-    backFaceCulling: false,
-    vertexSource: `struct VertexOutput {
-  @builtin(position) position: vec4<f32>,
-  @location(0) uv: vec2<f32>,
-};
-@vertex fn mainVertex(input: VertexInput) -> VertexOutput {
-  var out: VertexOutput;
-  let wp = shaderSystem.world * vec4<f32>(input.position, 1.0);
-  out.position = shaderSystem.viewProjection * wp;
-  out.uv = input.uv;
-  return out;
-}`,
-    fragmentSource: `struct VertexOutput {
-  @builtin(position) position: vec4<f32>,
-  @location(0) uv: vec2<f32>,
-};
-fn sdTriangle(p: vec2<f32>, p0: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>) -> f32 {
-  let e0 = p1 - p0;
-  let e1 = p2 - p1;
-  let e2 = p0 - p2;
-  let v0 = p - p0;
-  let v1 = p - p1;
-  let v2 = p - p2;
-  let pq0 = v0 - e0 * clamp(dot(v0, e0) / max(dot(e0, e0), 1e-6), 0.0, 1.0);
-  let pq1 = v1 - e1 * clamp(dot(v1, e1) / max(dot(e1, e1), 1e-6), 0.0, 1.0);
-  let pq2 = v2 - e2 * clamp(dot(v2, e2) / max(dot(e2, e2), 1e-6), 0.0, 1.0);
-  let s = sign(e0.x * e2.y - e0.y * e2.x);
-  let d0 = vec2<f32>(dot(pq0, pq0), s * (v0.x * e0.y - v0.y * e0.x));
-  let d1 = vec2<f32>(dot(pq1, pq1), s * (v1.x * e1.y - v1.y * e1.x));
-  let d2 = vec2<f32>(dot(pq2, pq2), s * (v2.x * e2.y - v2.y * e2.x));
-  let d = min(min(d0, d1), d2);
-  return -sqrt(d.x) * sign(d.y);
-}
+/** Prison-tally SDF. Hashes through 15, one X at 16, XX at 32. */
+export const PRISON_TALLY_WGSL = /* wgsl */ `
 fn sdSeg(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
   let pa = p - a;
   let ba = b - a;
@@ -421,6 +373,59 @@ fn tallyDist(uv: vec2<f32>, count: f32) -> f32 {
   }
   return best;
 }
+`;
+
+function makePadMaterial(rgb) {
+  return createShaderMaterial({
+    name: 'ctrl-group-pad-tri2',
+    attributes: ['position', 'normal', 'uv'],
+    uniforms: [
+      'world',
+      'viewProjection',
+      { name: 'tint', type: 'vec3<f32>', defaultValue: rgb },
+      { name: 'fill', type: 'f32', defaultValue: 0 },
+      { name: 'glow', type: 'f32', defaultValue: 0 },
+      { name: 'count', type: 'f32', defaultValue: 0 },
+      { name: 'facing', type: 'f32', defaultValue: 1 },
+    ],
+    needAlphaBlending: true,
+    blendMode: 'alpha',
+    depthWrite: false,
+    depthCompare: 'always',
+    backFaceCulling: false,
+    vertexSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+};
+@vertex fn mainVertex(input: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  let wp = shaderSystem.world * vec4<f32>(input.position, 1.0);
+  out.position = shaderSystem.viewProjection * wp;
+  out.uv = input.uv;
+  return out;
+}`,
+    fragmentSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+};
+fn sdTriangle(p: vec2<f32>, p0: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>) -> f32 {
+  let e0 = p1 - p0;
+  let e1 = p2 - p1;
+  let e2 = p0 - p2;
+  let v0 = p - p0;
+  let v1 = p - p1;
+  let v2 = p - p2;
+  let pq0 = v0 - e0 * clamp(dot(v0, e0) / max(dot(e0, e0), 1e-6), 0.0, 1.0);
+  let pq1 = v1 - e1 * clamp(dot(v1, e1) / max(dot(e1, e1), 1e-6), 0.0, 1.0);
+  let pq2 = v2 - e2 * clamp(dot(v2, e2) / max(dot(e2, e2), 1e-6), 0.0, 1.0);
+  let s = sign(e0.x * e2.y - e0.y * e2.x);
+  let d0 = vec2<f32>(dot(pq0, pq0), s * (v0.x * e0.y - v0.y * e0.x));
+  let d1 = vec2<f32>(dot(pq1, pq1), s * (v1.x * e1.y - v1.y * e1.x));
+  let d2 = vec2<f32>(dot(pq2, pq2), s * (v2.x * e2.y - v2.y * e2.x));
+  let d = min(min(d0, d1), d2);
+  return -sqrt(d.x) * sign(d.y);
+}
+${PRISON_TALLY_WGSL}
 @fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
   let p = input.uv * 2.0 - 1.0;
   let face = shaderUniforms.facing;

@@ -292,6 +292,25 @@
     #header #xr_button { fill: #fff; }
     #header #xr_button:hover, #header #xr_button:focus-visible, #header #xr_button.is-on { fill: aqua; outline: none; }
     #header #xr_button:active { fill: darkmagenta; }
+    #header #xr_auto {
+      position: absolute;
+      top: 82px;
+      left: calc(min(300px, 86vw) - 66px);
+      z-index: 1;
+      width: 56px;
+      height: 20px;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: none;
+      color: #fff;
+      font: 600 11px/1 system-ui, sans-serif;
+      letter-spacing: 0.06em;
+      cursor: pointer;
+      pointer-events: auto;
+    }
+    #header #xr_auto:hover, #header #xr_auto:focus-visible, #header #xr_auto.is-on { color: aqua; outline: none; }
+    #header #xr_auto:active { color: darkmagenta; }
     #side_menu .page { display: none; flex: 1; overflow-y: auto; overflow-x: hidden; padding: 5px;}
     #side_menu .page[data-page="settings"] { user-select: none; }
     #side_menu .page[data-page="settings"] input[type="text"] { user-select: text; }
@@ -1206,6 +1225,7 @@
         <path d="M2.816 5.743H8.22v.599H2.816Z"/>
       </svg>
     </button>
+    <button type="button" id="xr_auto" hidden title="Auto XR off" aria-label="Auto XR" aria-pressed="false">Auto</button>
   </header>
   <div id="menu_b" title="Menu" hidden role="button" tabindex="0" aria-label="Open menu" aria-expanded="false" aria-controls="side_menu">
     <svg class="menu-icon" width="100%" height="100%" viewBox="0 0 26 26" aria-hidden="true"><path d="M13.834 7.576s9.03-.316 9.707-.854c.676-.539 1.076-1.46 1.076-1.46s-.348 2.096-.35 3.038c0 .94.495 2.816.495 2.816s-.975-1.292-1.452-1.603c-.476-.31-8.693-.457-8.693-.457l-1.67-.002s-9.018.19-9.7.37c-.68.181-1.988 1.51-1.988 1.51s.51-1.739.63-2.693c.12-.953-.65-2.89-.65-2.89s1.323 1.115 2.314 1.701c.99.586 8.564.506 8.564.506zM1.121 14.024s.755 1.26 1.838 1.938c1.082.676 9.677.33 9.677.33l1.674.038s8.009-.135 8.81-.38c.798-.244 1.669-1.478 1.669-1.478s-.375 2.046-.353 2.954c.02.907.443 2.919.443 2.919s-.649-1.273-1.469-1.968c-.822-.696-9.916-.591-9.916-.591l-1.711-.004s-7.573.677-8.35 1.154c-.776.477-2.09 1.801-2.09 1.801s.819-2.034.668-3.154c-.15-1.12-.89-3.559-.89-3.559z"/></svg>

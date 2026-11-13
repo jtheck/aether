@@ -123,6 +123,7 @@ import { FIREBALL_TRAIL_CULL, createFireballFx } from './fireballFx.js';
 import { createMushroomPreviews } from './mushrooms.js';
 import { createCarryLoads } from './carryLoads.js';
 import { createAgoraProps } from './agoras.js';
+import { createNameDecal } from './nameDecal.js';
 import { AGORA_DECK_Y, agoraWalkPadsFromList, agoraWalkYAt } from './agoraWalk.js';
 import { createBuildingProps } from './buildings.js';
 import { createBuildingRadialMenu } from './buildingRadial.js';
@@ -2282,10 +2283,54 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     clear() {
       pendingFrogUpdates.length = 0;
     },
+    visionSources: () => [],
     stats: () => null,
   };
   /** Queued placements until Phase B props are ready. */
   let pendingAgoras = null;
+  /** @type {{ x: number, z: number, yaw: number }[] | null} */
+  let splashStamps = null;
+  let splashDecal = { place() {} };
+  void createNameDecal(engine, scene, terrainYAt, {
+    url: '/assets/images/decals/splash.png',
+    width: 14,
+    height: 14,
+    capacity: 8,
+  }).then((decal) => {
+    splashDecal = decal;
+    if (splashStamps) decal.place(splashStamps);
+  }).catch((err) => {
+    console.warn('[nameDecal] splash failed', err);
+  });
+
+  /** Stable spot and spin so a fog refresh does not walk the paint. */
+  function splashStampsAround(list) {
+    const out = [];
+    const src = list ?? [];
+    for (let i = 0; i < src.length; i++) {
+      const a = src[i];
+      const u = splashUnit(((a.x * 10) | 0) ^ Math.imul(i + 1, 0x9e3779b1));
+      const v = splashUnit(((a.z * 10) | 0) ^ 0x68bc21eb);
+      const w = splashUnit((((a.x * 10) | 0) * 13) ^ ((a.z * 10) | 0));
+      const ang = u * Math.PI * 2;
+      // Plaza is about 9.5 across and the splash is 14 wide, so the center
+      // stays far enough that the paint clears the deck.
+      const dist = 22 + v * 8;
+      out.push({
+        x: a.x + Math.cos(ang) * dist,
+        z: a.z + Math.sin(ang) * dist,
+        yaw: w * Math.PI * 2,
+      });
+    }
+    return out;
+  }
+
+  function splashUnit(n) {
+    let h = Math.imul(n | 0, 0x9e3779b1);
+    h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
+    h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  }
   let pendingBuildings = null;
   let pendingRallyFlags = null;
   /** @type {any} */
@@ -4759,6 +4804,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     placeAgoras(list) {
       syncAgoraWalk(list);
       agoraProps.place(list ?? []);
+      splashStamps = splashStampsAround(list);
+      splashDecal.place(splashStamps);
       agoraProps.forEachShadowMesh?.(noteShadowMesh);
       invalidateShadowCasterBookkeeping();
       if (shadowsEnabled) applyShadowState();
@@ -5419,6 +5466,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     applyFrogUpdates(updatesList) {
       frogRenderer.applyUpdates(updatesList);
+    },
+
+    /** Vision pings where frogs have surfaced; fed to the fog stamp. */
+    frogVisionSources(now) {
+      return frogRenderer.visionSources ? frogRenderer.visionSources(now) : [];
     },
 
     applyLightningUpdates(updatesList) {

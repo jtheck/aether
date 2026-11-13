@@ -25,9 +25,15 @@ const FROG_SCALE = MODEL_BASE_SCALE;
 const HOP_ARC_OUT = 3.2;
 const HOP_ARC_AWAY = 2.4;
 const HOP_ARC_ESCAPE = 2.8;
+/** Swimming skims the surface - barely any arc. */
+const HOP_ARC_SWIM = 0.5;
 const BODY_HEIGHT = 0.15;
 /** Match sim tick length for local hop playback. */
 const TICK_MS = 50;
+/** A frog surfacing from water reveals this radius (tiles) for its owner. */
+const FROG_VISION_TILES = 7;
+/** How long the pop-out spot holds full sight before the fog trail fades it. */
+const FROG_VISION_TTL_MS = 1200;
 
 /**
  * Keep GPU draw count at buffer capacity. Lite records opaque thin-instance
@@ -97,7 +103,8 @@ function isHoppingPhase(phase) {
   return (
     phase === FROG_PHASE.OUT ||
     phase === FROG_PHASE.AWAY ||
-    phase === FROG_PHASE.ESCAPE
+    phase === FROG_PHASE.ESCAPE ||
+    phase === FROG_PHASE.SWIM
   );
 }
 
@@ -161,6 +168,12 @@ export async function createFrogRenderer(engine, scene, groundYAt, onLand) {
   let previousCount = 0;
   let dirty = true;
   let hopping = false;
+  /**
+   * Fog pings dropped where frogs pop out of the water. `born` is stamped on
+   * first read so expiry rides the fog's clock, whatever epoch it uses.
+   * @type {{ x: number, z: number, owner: number, born: number }[]}
+   */
+  const visionPings = [];
 
   function ensureCapacity(needed) {
     if (needed <= capacity) return;
@@ -192,6 +205,7 @@ export async function createFrogRenderer(engine, scene, groundYAt, onLand) {
     const peak =
       phase === FROG_PHASE.OUT ? HOP_ARC_OUT :
       phase === FROG_PHASE.ESCAPE ? HOP_ARC_ESCAPE :
+      phase === FROG_PHASE.SWIM ? HOP_ARC_SWIM :
       HOP_ARC_AWAY;
     return BODY_HEIGHT + 4 * t * (1 - t) * peak;
   }
@@ -275,6 +289,19 @@ export async function createFrogRenderer(engine, scene, groundYAt, onLand) {
           continue;
         }
         const prev = active.get(slot);
+        // Popped up onto land after swimming - drop a vision ping there.
+        if (
+          prev &&
+          prev.phase === FROG_PHASE.SWIM &&
+          patch.phase[i] !== FROG_PHASE.SWIM
+        ) {
+          visionPings.push({
+            x: patch.px[i],
+            z: patch.py[i],
+            owner: patch.owner ? patch.owner[i] : 0,
+            born: -1,
+          });
+        }
         const ox = patch.originX?.[i] ?? patch.px[i];
         const oz = patch.originY?.[i] ?? patch.py[i];
         const dx = patch.destX?.[i] ?? patch.px[i];
@@ -318,13 +345,35 @@ export async function createFrogRenderer(engine, scene, groundYAt, onLand) {
 
   function clear() {
     active.clear();
+    visionPings.length = 0;
     hopping = false;
     dirty = true;
+  }
+
+  /**
+   * Live pop-out vision sources for the fog stamp. Prunes expired pings.
+   * @param {number} now clock matching the fog stamp (ms)
+   * @returns {{ x: number, z: number, owner: number, radius: number }[]}
+   */
+  function visionSources(now) {
+    if (visionPings.length === 0) return [];
+    const out = [];
+    let w = 0;
+    for (let i = 0; i < visionPings.length; i++) {
+      const p = visionPings[i];
+      if (p.born < 0) p.born = now;
+      if (now - p.born > FROG_VISION_TTL_MS) continue;
+      visionPings[w++] = p;
+      out.push({ x: p.x, z: p.z, owner: p.owner, radius: FROG_VISION_TILES });
+    }
+    visionPings.length = w;
+    return out;
   }
 
   return {
     applyUpdates,
     clear,
+    visionSources,
     advance,
     activeCount() {
       return active.size;

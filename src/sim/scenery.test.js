@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createField, TERRAIN, worldToTile } from './field.js';
+import { buildField, createField, TERRAIN, worldToTile } from './field.js';
 import { UNIT, unitSlowMul, DEFAULT_SLOW_MUL } from './unitTypes.js';
 import * as fx from './fixed.js';
 import {
@@ -25,15 +25,24 @@ import {
   rockStageFromStock,
   rockStockPerStage,
   rockYield,
+  variedRockStartStock,
+  rockMeshScale,
   takeRockUpdates,
   treeEdgeBonusStages,
 } from './scenery.js';
 import {
   TREE_STAGE_GROVE_MAX,
   TREE_STAGE_MAX,
+  TREE_STAGE_MIN,
   TREE_STOCK_GROVE_MAX,
   TREE_STOCK_NATURAL_MAX,
+  TREE_LOOK_CHAR,
+  TREE_LOOK_PLAIN,
+  TREE_LOOK_SNOW,
   TREE_WOOD_PER_STAGE,
+  terrainHostsRocks,
+  terrainHostsTrees,
+  treeLookForBiome,
 } from './trees.js';
 import { applyTableSilhouette, paintTerrainBrush, setCellEnabled } from './tableShape.js';
 
@@ -151,6 +160,7 @@ damageRockPublishesAndShrinks();
 clearEmptiesTheMap();
 paintBrushRespectsFootprints();
 ageBrushStepsTreesAndRocks();
+paintedRocksVaryAndAgeFallsOff();
 rocksPack();
 sceneryDensityThinsTheBrush();
 archerAndApcKeepMoreTreeSpeed();
@@ -160,6 +170,7 @@ offTableSceneryIsCleared();
 waterBrushClearsScenery();
 placementClearsCoveringResources();
 paintSkipsStructureTiles();
+treeLookFollowsBrushAndBiome();
 console.log('scenery.test.js: ok (rock yield + stages + collision shrink + paint spacing + edge trees)');
 
 function blankLand() {
@@ -173,33 +184,94 @@ function ageBrushStepsTreesAndRocks() {
   const field = blankLand();
   assert.ok(paintSceneryBrush(field, 20, 20, SCENERY.TREE, 0).length > 0);
   const tree = tileAt(field, 20, 20);
-  assert.equal(field.treeStock[tree], TREE_WOOD_PER_STAGE, 'a painted tree starts as a sapling');
+  const planted = field.treeStock[tree];
+  assert.ok(planted >= TREE_WOOD_PER_STAGE * TREE_STAGE_MIN, 'a painted tree uses the natural sizes');
+  assert.ok(planted <= TREE_WOOD_PER_STAGE * TREE_STAGE_MAX);
+  assert.equal(planted % TREE_WOOD_PER_STAGE, 0);
+  const beforeTree = field.treeStock[tree];
   assert.equal(stepSceneryBrush(field, 20, 20, 1, 0).length, 1);
-  assert.equal(field.treeStock[tree], TREE_WOOD_PER_STAGE * 2);
+  const grew = field.treeStock[tree] - beforeTree;
+  assert.ok(grew > 0 && grew < TREE_WOOD_PER_STAGE, 'age nudges a tree instead of jumping a stage');
   field.treeStock[tree] = TREE_WOOD_PER_STAGE * TREE_STAGE_GROVE_MAX;
   assert.equal(stepSceneryBrush(field, 20, 20, 1, 0).length, 0, 'age stops at a grove giant');
   assert.equal(stepSceneryBrush(field, 20, 20, -1, 0).length, 1);
-  assert.equal(field.treeStock[tree], TREE_WOOD_PER_STAGE * (TREE_STAGE_GROVE_MAX - 1));
+  assert.ok(field.treeStock[tree] < TREE_WOOD_PER_STAGE * TREE_STAGE_GROVE_MAX);
+  assert.ok(field.treeStock[tree] > TREE_WOOD_PER_STAGE * (TREE_STAGE_GROVE_MAX - 1));
   field.treeStock[tree] = TREE_WOOD_PER_STAGE;
   assert.equal(stepSceneryBrush(field, 20, 20, -1, 0).length, 0, 'de-age leaves the sapling');
 
-  assert.ok(paintSceneryBrush(field, 30, 30, SCENERY.ROCK_SNOW, 0, { tight: true }).length > 0);
-  const rock = tileAt(field, 30, 30);
   const step = rockStockPerStage(SCENERY.ROCK_SNOW);
   const full = rockYield(SCENERY.ROCK_SNOW);
-  assert.equal(field.rockStock[rock], step, 'a painted rock starts at one stage');
+  assert.ok(paintSceneryBrush(field, 30, 30, SCENERY.ROCK_SNOW, 0, { tight: true, stock: step }).length > 0);
+  const rock = tileAt(field, 30, 30);
+  assert.equal(field.rockStock[rock], step, 'a forced young rock starts at one stage');
   assert.equal(passAt(field, 30, 30), 0, 'the nub occupies its tile');
   assert.equal(passAt(field, 32, 30), 1, 'a sapling snow rock does not block the outer ring');
-  for (let n = step; n < full; n += step) {
+  let guard = 0;
+  while (field.rockStock[rock] < full && guard < 80) {
+    const prev = field.rockStock[rock];
     assert.ok(stepSceneryBrush(field, 30, 30, 1, 0).length > 0);
+    const bite = field.rockStock[rock] - prev;
+    assert.ok(bite > 0 && bite < step, 'age takes less than a stage');
+    guard += 1;
   }
   assert.equal(field.rockStock[rock], full);
+  assert.ok(guard > ROCK_STAGE_MAX, 'filling a rock takes more than one dab per stage');
   assert.equal(passAt(field, 32, 30), 0, 'a full snow rock blocks the outer ring');
   assert.equal(stepSceneryBrush(field, 30, 30, 1, 0).length, 0, 'age stops at one full rock');
-  assert.ok(stepSceneryBrush(field, 32, 30, -1, 0).length > 0, 'de-age finds the rock from its disc');
-  assert.ok(stepSceneryBrush(field, 32, 30, -1, 0).length > 0);
-  assert.equal(field.rockStock[rock], full - step * 2);
+  let prev = field.rockStock[rock];
+  let opened = 0;
+  while (passAt(field, 32, 30) === 0 && opened < 40) {
+    assert.ok(stepSceneryBrush(field, 32, 30, -1, 0).length > 0, 'de-age finds the rock from its disc');
+    const now = field.rockStock[rock];
+    assert.ok(prev - now > 0 && prev - now < step);
+    prev = now;
+    opened += 1;
+  }
   assert.equal(passAt(field, 32, 30), 1, 'dropping below the outer stage opens that ring');
+  assert.ok(opened > 2);
+}
+
+function paintedRocksVaryAndAgeFallsOff() {
+  const field = blankLand();
+  const step = rockStockPerStage(SCENERY.ROCK_PLAIN);
+  const full = rockYield(SCENERY.ROCK_PLAIN);
+  const seen = new Set();
+  let min = Infinity;
+  let max = 0;
+  for (let i = 0; i < 24; i++) {
+    const stock = variedRockStartStock(SCENERY.ROCK_PLAIN, i, 3, field.seed);
+    seen.add(stock);
+    if (stock < min) min = stock;
+    if (stock > max) max = stock;
+    assert.ok(stock >= step * 2);
+    assert.ok(stock <= full);
+  }
+  assert.ok(seen.size >= 4, 'painted rocks do not share one size');
+  assert.ok(min < max);
+  assert.ok(rockMeshScale(full, full) > 1.4, 'a full rock is larger than the old mesh');
+  assert.ok(rockMeshScale(Math.round(full * 0.4), full) > 0.85);
+  assert.ok(rockMeshScale(full, full) > rockMeshScale(Math.round(full * 0.4), full));
+
+  assert.ok(placeRockAt(field, 20, 20, SCENERY.ROCK_PLAIN));
+  assert.ok(placeRockAt(field, 20, 28, SCENERY.ROCK_PLAIN));
+  const center = tileAt(field, 20, 20);
+  const rim = tileAt(field, 20, 28);
+  field.rockStock[center] = full;
+  field.rockStock[rim] = full;
+  stepSceneryBrush(field, 20, 20, -1, 8, { strength: 1 });
+  const centerDrop = full - field.rockStock[center];
+  const rimDrop = full - field.rockStock[rim];
+  assert.ok(rimDrop > 0, 'the rim still moves');
+  assert.ok(centerDrop > rimDrop, 'the rim of the brush ages less than the center');
+
+  const soft = blankLand();
+  assert.ok(placeRockAt(soft, 20, 20, SCENERY.ROCK_PLAIN));
+  const si = tileAt(soft, 20, 20);
+  soft.rockStock[si] = full;
+  stepSceneryBrush(soft, 20, 20, -1, 0, { strength: 0.2 });
+  const softDrop = full - soft.rockStock[si];
+  assert.ok(softDrop > 0 && softDrop < centerDrop, 'low strength takes a smaller bite');
 }
 
 function rocksPack() {
@@ -211,7 +283,8 @@ function rocksPack() {
   const moss = blankLand();
   assert.ok(paintSceneryBrush(moss, 20, 20, SCENERY.ROCK_MOSS, 0, tight).length > 0);
   assert.ok(paintSceneryBrush(moss, 22, 20, SCENERY.ROCK_MOSS, 0, tight).length > 0, 'moss rocks can sit two tiles apart');
-  const before = moss.rockStock[tileAt(moss, 20, 20)];
+  const before = variedRockStartStock(SCENERY.ROCK_MOSS, 20, 20, moss.seed);
+  assert.equal(moss.rockStock[tileAt(moss, 20, 20)], before);
   const beside = paintSceneryBrush(moss, 21, 20, SCENERY.ROCK_MOSS, 0, tight);
   assert.equal(beside.length, 0, 'painting a moss rock body does not add another');
   assert.notEqual(moss.sceneryType[tileAt(moss, 21, 20)], SCENERY.ROCK_MOSS);
@@ -223,19 +296,23 @@ function rocksPack() {
   assert.ok(paintSceneryBrush(pile, tx, tz, SCENERY.ROCK_PLAIN, 0, tight).length > 0);
   const i = tileAt(pile, tx, tz);
   const unit = rockYield(SCENERY.ROCK_PLAIN);
-  const sapling = rockStockPerStage(SCENERY.ROCK_PLAIN);
-  assert.equal(pile.rockStock[i], sapling);
+  const expected = variedRockStartStock(SCENERY.ROCK_PLAIN, tx, tz, pile.seed);
+  assert.equal(pile.rockStock[i], expected);
   assert.equal(paintSceneryBrush(pile, tx, tz, SCENERY.ROCK_PLAIN, 0, tight).length, 0, 'painting the same rock does not stack it');
-  assert.equal(pile.rockStock[i], sapling);
+  assert.equal(pile.rockStock[i], expected);
   applyAuthoredScenery(pile);
-  assert.equal(pile.rockStock[i], sapling, 'a scenery refresh keeps the painted stage');
+  assert.equal(pile.rockStock[i], expected, 'a scenery refresh keeps the painted stage');
 
   const grown = blankLand();
   paintSceneryBrush(grown, 12, 12, SCENERY.ROCK_PLAIN, 0, tight);
   paintSceneryBrush(grown, 12, 12, SCENERY.ROCK_PLAIN, 0, tight);
   populateScenery(grown, null, [], { keepExisting: true });
-  assert.equal(grown.rockStock[tileAt(grown, 12, 12)], sapling, 'generate leaves a painted rock at its stage');
-  assert.ok(unit > sapling);
+  assert.equal(
+    grown.rockStock[tileAt(grown, 12, 12)],
+    variedRockStartStock(SCENERY.ROCK_PLAIN, 12, 12, grown.seed),
+    'generate leaves a painted rock at its stage',
+  );
+  assert.ok(unit > rockStockPerStage(SCENERY.ROCK_PLAIN));
 }
 
 function sceneryDensityThinsTheBrush() {
@@ -510,4 +587,69 @@ function offTableSceneryIsCleared() {
   assert.equal(field.treeStock[4 * 32 + 4], 0);
   assert.equal(field.sceneryType[20 * 32 + 20], SCENERY.ROCK_PLAIN);
   assert.equal(clearOffTableScenery(field), false);
+}
+
+function treeLookFollowsBrushAndBiome() {
+  const field = blankLand();
+  const tree = tileAt(field, 20, 20);
+  assert.ok(paintSceneryBrush(field, 20, 20, SCENERY.TREE, 0).length > 0);
+  const stock = field.treeStock[tree];
+  assert.equal(field.treeLook[tree], TREE_LOOK_PLAIN);
+  assert.equal(paintSceneryBrush(field, 22, 22, SCENERY.TREE, 0, { lookOnly: true, treeLook: TREE_LOOK_CHAR }).length, 0);
+  assert.equal(field.sceneryType[tileAt(field, 22, 22)], SCENERY.NONE);
+  assert.ok(paintSceneryBrush(field, 20, 20, SCENERY.TREE, 0, { lookOnly: true, treeLook: TREE_LOOK_SNOW }).length > 0);
+  assert.equal(field.sceneryType[tree], SCENERY.TREE);
+  assert.equal(field.treeLook[tree], TREE_LOOK_SNOW);
+  assert.equal(field.treeStock[tree], stock);
+  assert.equal(paintSceneryBrush(field, 20, 20, SCENERY.TREE, 0, { lookOnly: true, treeLook: TREE_LOOK_SNOW }).length, 0);
+
+  const ice = buildField(11, { width: 48, height: 48, biome: 'ice' });
+  populateScenery(ice, null, [], { treeLook: treeLookForBiome('ice') });
+  const fire = buildField(11, { width: 48, height: 48, biome: 'fire' });
+  populateScenery(fire, null, [], { treeLook: treeLookForBiome('fire'), biome: 'fire' });
+  let iceTrees = 0;
+  let fireTrees = 0;
+  let snowTrees = 0;
+  let snowRocks = 0;
+  let scorchedTrees = 0;
+  let dirtTrees = 0;
+  for (let i = 0; i < ice.sceneryType.length; i++) {
+    const iceKind = ice.sceneryType[i];
+    if (iceKind === SCENERY.TREE) {
+      iceTrees++;
+      assert.equal(ice.treeLook[i], TREE_LOOK_SNOW);
+      if (ice.terrainTypes[i] === TERRAIN.SNOW) snowTrees++;
+    } else {
+      assert.equal(ice.treeLook[i], TREE_LOOK_PLAIN);
+    }
+    if (iceKind >= SCENERY.ROCK_PLAIN && ice.terrainTypes[i] === TERRAIN.SNOW) {
+      snowRocks++;
+      assert.ok(ice.rockStock[i] <= rockStockPerStage(iceKind) * 3);
+      assert.ok(ice.rockStock[i] < rockYield(iceKind));
+    }
+    if (fire.sceneryType[i] === SCENERY.TREE) {
+      fireTrees++;
+      assert.equal(fire.treeLook[i], TREE_LOOK_CHAR);
+      if (fire.terrainTypes[i] === TERRAIN.SCORCHED) scorchedTrees++;
+      if (fire.terrainTypes[i] === TERRAIN.DIRT) dirtTrees++;
+    }
+  }
+  assert.ok(iceTrees > 0 && fireTrees > 0, 'ice and fire still plant trees');
+  assert.ok(snowTrees > 0, 'snow keeps its trees');
+  assert.ok(dirtTrees > scorchedTrees, 'fire trees sit on the dirt');
+  assert.ok(scorchedTrees > 0, 'scorch keeps a few trees');
+  assert.ok(snowRocks > 0, 'snow takes rocks');
+  assert.equal(treeLookForBiome('temperate'), TREE_LOOK_PLAIN);
+  assert.equal(treeLookForBiome('building'), TREE_LOOK_PLAIN);
+
+  const snow = blankLand();
+  snow.terrainTypes[tileAt(snow, 12, 12)] = TERRAIN.SNOW;
+  snow.terrainTypes[tileAt(snow, 16, 16)] = TERRAIN.SCORCHED;
+  snow.terrainTypes[tileAt(snow, 18, 18)] = TERRAIN.GRAVEL;
+  assert.ok(paintSceneryBrush(snow, 12, 12, SCENERY.TREE, 0).length > 0);
+  assert.ok(paintSceneryBrush(snow, 16, 16, SCENERY.ROCK_PLAIN, 0).length > 0);
+  assert.ok(paintSceneryBrush(snow, 18, 18, SCENERY.TREE, 0).length > 0);
+  assert.equal(terrainHostsTrees(TERRAIN.SNOW), true);
+  assert.equal(terrainHostsRocks(TERRAIN.GRAVEL), true);
+  assert.equal(terrainHostsRocks(TERRAIN.GRASS), false);
 }

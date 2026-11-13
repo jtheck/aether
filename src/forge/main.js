@@ -20,7 +20,9 @@ import {
 } from '../vendor/lite/liteVendor.js';
 import { createPlacePreview } from './placePreview.js';
 import {
+  BIOMES,
   buildField,
+  DEFAULT_BIOME,
   FORGE_MAX_CHUNKS,
   FORGE_MIN_CHUNKS,
   LOD_MAP_CHUNKS,
@@ -88,9 +90,10 @@ import {
 } from '../app/workshop.js';
 import { RESOURCE_KINDS, STARTING_RESOURCES } from '../sim/resources.js';
 import { applyAuthoredScenery, clearAllScenery, clearOffTableScenery, clearSceneryCoveringTiles, clearSceneryOnWater, populateScenery, paintSceneryBrush, stepSceneryBrush, SCENERY } from '../sim/scenery.js';
+import { TREE_LOOK_CHAR, TREE_LOOK_PLAIN, TREE_LOOK_SNOW, treeLookForBiome } from '../sim/trees.js';
 import { DOODAD, applyStandardOccupancy, paintDoodadBrush } from '../sim/doodads.js';
 import { UNIT_DEFS } from '../sim/unitTypes.js';
-import { BUILDING_FOOTPRINTS, BUILDING_YAW_SNAP, PLACEABLE_BUILDINGS, forEachFootprintTile, snapBuildingWorld, snapBuildingYaw } from '../sim/buildings.js';
+import { BUILDING_FOOTPRINTS, PLACEABLE_BUILDINGS, forEachFootprintTile, snapBuildingWorld, snapBuildingYaw } from '../sim/buildings.js';
 import {
   OPENING_REACH,
   applyWallOccupancy,
@@ -196,6 +199,8 @@ const state = {
   terrain: TERRAIN.GRASS,
   lift: 0,
   scenery: SCENERY.TREE,
+  /** Canopy stamped by the tree brush. Green, snow, or char. */
+  treeLook: TREE_LOOK_PLAIN,
   /** 'place' stamps a sapling. 'age' and 'deage' step trees and rocks. */
   sceneryOp: 'place',
   stamp: 'scenery',
@@ -489,9 +494,11 @@ function newField(width, height, seed, extras = {}) {
   const half = (w * TILE_SIZE_F) / 2;
   const halfZ = (h * TILE_SIZE_F) / 2;
   const mapType = extras.mapType || state.mapType;
+  const biome = extras.biome || document.getElementById('map-biome')?.value || DEFAULT_BIOME;
   const next = buildField(seed, {
     width: w,
     height: h,
+    biome: BIOMES[biome] ? biome : DEFAULT_BIOME,
     spawnPads: spawnPadsForMapType(mapType, half, w, halfZ),
   });
   applyTableSilhouette(next, {
@@ -630,7 +637,11 @@ function settlePlacementScenery() {
 function placeGeneratedScenery() {
   if (!field) return;
   stampStructureClaim();
-  populateScenery(field, null, reservedFromPlacements());
+  const biome = document.getElementById('map-biome')?.value;
+  populateScenery(field, null, reservedFromPlacements(), {
+    biome,
+    treeLook: treeLookForBiome(biome),
+  });
   clearResourcesUnderPlacements();
   field.sceneryAuthored = true;
 }
@@ -1164,11 +1175,6 @@ function syncPlacePickUi() {
   const picks = livePicks();
   const remove = document.getElementById('btn-place-remove');
   if (remove) remove.disabled = picks.length === 0;
-  const canTurn = picks.some((p) => p.kind === 'unit' || p.kind === 'building');
-  const rotL = document.getElementById('place-rot-l');
-  const rotR = document.getElementById('place-rot-r');
-  if (rotL) rotL.disabled = !canTurn;
-  if (rotR) rotR.disabled = !canTurn;
   const nameEl = document.getElementById('place-name');
   const named = picks.length === 1 && picks[0].kind === 'unit'
     ? placeList('unit')?.[picks[0].index]
@@ -1196,6 +1202,24 @@ function syncPlacePickUi() {
   }
   if (scaleEl && sized.length && document.activeElement !== scaleEl) {
     scaleEl.value = String(Math.round(sized[0] * 100));
+  }
+  const yawEl = document.getElementById('place-yaw');
+  const yawLabel = document.getElementById('place-yaw-label');
+  const yaws = [];
+  for (const p of picks) {
+    if (p.kind !== 'unit' && p.kind !== 'building') continue;
+    const item = placeList(p.kind)?.[p.index];
+    if (!item) continue;
+    yaws.push(yawStepDeg(item, p.kind));
+  }
+  if (yawEl) yawEl.disabled = yaws.length === 0;
+  if (yawLabel) {
+    if (!yaws.length) yawLabel.textContent = '-';
+    else if (yaws.every((d) => d === yaws[0])) yawLabel.textContent = `${yaws[0]}°`;
+    else yawLabel.textContent = 'Mixed';
+  }
+  if (yawEl && yaws.length && document.activeElement !== yawEl) {
+    yawEl.value = String(yaws[0]);
   }
   syncFactionUi(picks);
   syncBench();
@@ -1914,65 +1938,50 @@ function moveGroupDrag(pos) {
   applyGroupDelta(placeDrag.origins, pos.x - placeDrag.x, pos.z - placeDrag.z);
 }
 
-function turnYaw(item, step, snap) {
-  let y = (Number(item.yaw) || 0) + step;
-  y = snap ? snapBuildingYaw(y) : Math.atan2(Math.sin(y), Math.cos(y));
-  item.yaw = Math.abs(y) < 1e-4 ? 0 : y;
+function yawStepDeg(item, kind) {
+  let y = Number(item?.yaw) || 0;
+  if (kind === 'building') y = snapBuildingYaw(y);
+  let deg = Math.round((y * 180) / Math.PI);
+  deg = ((deg % 360) + 360) % 360;
+  deg = Math.round(deg / 15) * 15;
+  return deg >= 360 ? 0 : deg;
 }
 
-function rotatePlacePick(dir) {
+function storePlaceYaw(item, kind, deg) {
+  const snapped = ((Math.round(Number(deg) / 15) * 15) % 360 + 360) % 360;
+  const rad = (snapped * Math.PI) / 180;
+  const y = kind === 'building' ? snapBuildingYaw(rad) : rad;
+  item.yaw = Math.abs(y) < 1e-4 ? 0 : y;
+  return snapped;
+}
+
+function writePlaceYaw(deg) {
   const picks = livePicks();
+  let shown = null;
+  let changed = false;
+  for (const pick of picks) {
+    if (pick.kind !== 'unit' && pick.kind !== 'building') continue;
+    const item = placeList(pick.kind)?.[pick.index];
+    if (!item) continue;
+    const next = storePlaceYaw(item, pick.kind, deg);
+    if (shown == null) shown = next;
+    changed = true;
+  }
+  const label = document.getElementById('place-yaw-label');
+  if (label && shown != null) label.textContent = `${shown}°`;
+  if (changed) updatePlaceMarkers();
+  return shown;
+}
+
+function nudgePlaceYaw(dir) {
+  const picks = livePicks().filter((p) => p.kind === 'unit' || p.kind === 'building');
   if (!picks.length) return;
-  if (picks.length === 1) {
-    const pick = picks[0];
-    const item = placeList(pick.kind)[pick.index];
-    if (pick.kind === 'building') turnYaw(item, dir * BUILDING_YAW_SNAP, true);
-    else if (pick.kind === 'unit') turnYaw(item, dir * (Math.PI / 8), false);
-    else return;
-    updatePlaceMarkers();
-    return;
+  for (const pick of picks) {
+    const item = placeList(pick.kind)?.[pick.index];
+    if (!item) continue;
+    storePlaceYaw(item, pick.kind, yawStepDeg(item, pick.kind) + dir * 15);
   }
-  const step = dir * (Math.PI / 8);
-  const worlds = picks.map((p) => placementWorld(p.kind, placeList(p.kind)[p.index]));
-  let cx = 0;
-  let cz = 0;
-  for (const w of worlds) {
-    cx += w.x;
-    cz += w.z;
-  }
-  cx /= worlds.length;
-  cz /= worlds.length;
-  const c = Math.cos(step);
-  const s = Math.sin(step);
-  const next = [];
-  for (let i = 0; i < picks.length; i++) {
-    const dx = worlds[i].x - cx;
-    const dz = worlds[i].z - cz;
-    const x = cx + c * dx - s * dz;
-    const z = cz + s * dx + c * dz;
-    const tile = tileAtWorld({ x, z });
-    if ((picks[i].kind === 'unit' || picks[i].kind === 'objective') && !tileOpen(tile.tx, tile.tz)) return;
-    next.push({ x, z, tx: tile.tx, tz: tile.tz });
-  }
-  for (let i = 0; i < picks.length; i++) {
-    const item = placeList(picks[i].kind)[picks[i].index];
-    if (picks[i].kind === 'unit') {
-      if (!writeUnitWorld(item, next[i].x, next[i].z)) return;
-      turnYaw(item, step, false);
-    } else if (picks[i].kind === 'objective') {
-      item.tx = next[i].tx;
-      item.tz = next[i].tz;
-    } else if (picks[i].kind === 'building') {
-      const snapped = snapBuildingWorld(String(item.type), fx.fromFloat(next[i].x), fx.fromFloat(next[i].z));
-      item.x = fx.toFloat(snapped.x);
-      item.z = fx.toFloat(snapped.z);
-      turnYaw(item, step, true);
-    } else if (picks[i].kind === 'agora') {
-      const snapped = snapBuildingWorld('agora', fx.fromFloat(next[i].x), fx.fromFloat(next[i].z));
-      item.x = fx.toFloat(snapped.x);
-      item.z = fx.toFloat(snapped.z);
-    }
-  }
+  syncPlacePickUi();
   updatePlaceMarkers();
 }
 
@@ -2341,6 +2350,78 @@ function pushGoalRing(pos, idx, x, z, radius) {
   }
 }
 
+function pickMarkerRadius(kind, item) {
+  if (kind === 'unit') return Math.max(3.2, TILE_SIZE_F * 0.95 * authoredUnitScale(item));
+  if (kind === 'objective') return Math.max(3.4, Math.min(7.5, (Number(item?.r) || 4) * 1.5));
+  const fp = BUILDING_FOOTPRINTS[item?.type] || (kind === 'agora' ? BUILDING_FOOTPRINTS.agora : null);
+  const half = (Math.max(fp?.w ?? 2, fp?.h ?? 2) * TILE_SIZE_F) * 0.5;
+  const mul = kind === 'building' ? bodyScaleMul(item?.scale) : 1;
+  return half * mul + TILE_SIZE_F * 0.7;
+}
+
+function pushPickCollar(pos, idx, x, z, radius, yaw) {
+  const band = Math.max(0.9, radius * 0.16);
+  const lip = 1.6;
+  const outer = radius;
+  const inner = Math.max(0.4, outer - band);
+  const n = 40;
+  const yAt = (px, pz, lift) => (field ? surfaceHeightAt(field, px, pz) : 0) + lift;
+  const ground = 0.45;
+  for (let i = 0; i < n; i++) {
+    const a0 = (i / n) * Math.PI * 2;
+    const a1 = ((i + 1) / n) * Math.PI * 2;
+    const c0 = Math.cos(a0);
+    const s0 = Math.sin(a0);
+    const c1 = Math.cos(a1);
+    const s1 = Math.sin(a1);
+    const ox0 = x + c0 * outer;
+    const oz0 = z + s0 * outer;
+    const ox1 = x + c1 * outer;
+    const oz1 = z + s1 * outer;
+    const ix0 = x + c0 * inner;
+    const iz0 = z + s0 * inner;
+    const ix1 = x + c1 * inner;
+    const iz1 = z + s1 * inner;
+    const base = pos.length / 3;
+    pos.push(
+      ox0, yAt(ox0, oz0, ground), oz0,
+      ox1, yAt(ox1, oz1, ground), oz1,
+      ix1, yAt(ix1, iz1, ground), iz1,
+      ix0, yAt(ix0, iz0, ground), iz0,
+    );
+    idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    const wall = pos.length / 3;
+    pos.push(
+      ox0, yAt(ox0, oz0, ground), oz0,
+      ox1, yAt(ox1, oz1, ground), oz1,
+      ox1, yAt(ox1, oz1, ground + lip), oz1,
+      ox0, yAt(ox0, oz0, ground + lip), oz0,
+    );
+    idx.push(wall, wall + 1, wall + 2, wall, wall + 2, wall + 3);
+  }
+  const dirX = Math.sin(yaw || 0);
+  const dirZ = Math.cos(yaw || 0);
+  const sideX = dirZ;
+  const sideZ = -dirX;
+  const halfW = Math.max(0.38, band * 0.42);
+  const near = inner * 0.45;
+  const far = outer + 0.35;
+  const y0 = yAt(x, z, ground);
+  const y1 = y0 + lip + 0.45;
+  const nx = x + dirX * near;
+  const nz = z + dirZ * near;
+  const fx0 = x + dirX * far;
+  const fz0 = z + dirZ * far;
+  const nose = pos.length / 3;
+  pos.push(
+    nx + sideX * halfW, y0, nz + sideZ * halfW,
+    fx0 + sideX * halfW, y0, fz0 + sideZ * halfW,
+    fx0 - sideX * halfW, y1, fz0 - sideZ * halfW,
+    nx - sideX * halfW, y1, nz - sideZ * halfW,
+  );
+  idx.push(nose, nose + 1, nose + 2, nose, nose + 2, nose + 3);
+}
+
 function pushBoxMarker(pos, idx, x, y, z, sx, sy, sz) {
   const x0 = x - sx * 0.5;
   const x1 = x + sx * 0.5;
@@ -2463,11 +2544,10 @@ function updatePlaceMarkers() {
     const picked = placeList(pick.kind)?.[pick.index];
     if (!picked) continue;
     const p = placementWorld(pick.kind, picked);
-    const span = Math.min(4.2, grabReach(pick.kind, picked) * 2);
-    pushBoxMarker(sPos, sIdx, p.x, groundY(p.x, p.z, 0.15), p.z, span, 0.25, span);
+    pushPickCollar(sPos, sIdx, p.x, p.z, pickMarkerRadius(pick.kind, picked), Number(picked.yaw) || 0);
   }
   if (sPos.length) {
-    addMarker('forge-pick', sPos, sIdx, [0.25, 1, 0.85]);
+    addMarker('forge-pick', sPos, sIdx, [0.35, 1, 0.92], 64, 0.95);
   }
   if (sceneRegistered) invalidateRenderBundles(engine);
 }
@@ -2682,6 +2762,9 @@ function brushColor() {
     if (state.terrain === TERRAIN.SCORCHED) return [0.54, 0.45, 0.22];
     if (state.terrain === TERRAIN.CHARRED) return [0.23, 0.24, 0.29];
     if (state.terrain === TERRAIN.LAVA) return [0.88, 0.32, 0.06];
+    if (state.terrain === TERRAIN.SNOW) return [0.77, 0.79, 0.85];
+    if (state.terrain === TERRAIN.SNOWGRASS) return [0.93, 0.94, 0.93];
+    if (state.terrain === TERRAIN.FROZEN) return [0.19, 0.27, 0.38];
     return [0.35, 0.88, 0.42];
   }
   if (state.stamp === 'doodad') {
@@ -2703,6 +2786,8 @@ function brushColor() {
   if (state.scenery === SCENERY.ROCK_PLAIN) return [0.78, 0.74, 0.68];
   if (state.scenery === SCENERY.ROCK_MOSS) return [0.48, 0.78, 0.42];
   if (state.scenery === SCENERY.ROCK_SNOW) return [0.78, 0.86, 0.96];
+  if (state.scenery === SCENERY.TREE && state.treeLook === TREE_LOOK_SNOW) return [0.77, 0.79, 0.85];
+  if (state.scenery === SCENERY.TREE && state.treeLook === TREE_LOOK_CHAR) return [0.42, 0.22, 0.12];
   return [0.32, 0.92, 0.40];
 }
 
@@ -3464,15 +3549,19 @@ function applyAt(pos, { add = false } = {}) {
     const stamp = state.stamp === 'doodad' ? state.doodad : state.scenery;
     const colorKey = state.stamp === 'doodad' && state.doodad === DOODAD.STANDARD
       ? `:${state.standardColor}`
-      : '';
+      : state.stamp !== 'doodad' && state.scenery === SCENERY.TREE
+        ? `:${state.treeLook}`
+        : '';
     const key = stepping
-      ? `step:${tx}:${tz}:${state.brush}:${state.sceneryOp}:${sceneryStepGen}`
-      : `scenery:${tx}:${tz}:${state.brush}:${state.stamp}:${stamp}:${state.sceneryDensity}${colorKey}`;
+      ? `step:${tx}:${tz}:${state.brush}:${state.sceneryOp}:${state.sceneryDensity}:${sceneryStepGen}`
+      : `scenery:${tx}:${tz}:${state.brush}:${state.stamp}:${stamp}:${state.sceneryOp}:${state.sceneryDensity}${colorKey}`;
     if (key === lastPaintKey) return;
     lastPaintKey = key;
     if (state.stamp !== 'doodad') stampStructureClaim();
     if (stepping) {
-      const dirty = stepSceneryBrush(field, tx, tz, state.sceneryOp === 'age' ? 1 : -1, state.brush);
+      const dirty = stepSceneryBrush(field, tx, tz, state.sceneryOp === 'age' ? 1 : -1, state.brush, {
+        strength: state.sceneryDensity / 10,
+      });
       if (dirty.length) {
         field.sceneryAuthored = true;
         if (terrain?.applyAuthoredSceneryTiles) {
@@ -3494,6 +3583,8 @@ function applyAt(pos, { add = false } = {}) {
         tight: true,
         density: state.sceneryDensity / 10,
         salt: scenerySalt,
+        treeLook: state.treeLook,
+        lookOnly: state.sceneryOp === 'look',
       });
     if (state.stamp !== 'doodad' && dirty.length) field.sceneryAuthored = true;
     if (dirty.length) {
@@ -5081,6 +5172,9 @@ function handLabel() {
     if (state.terrain === TERRAIN.SCORCHED) return 'Scorch';
     if (state.terrain === TERRAIN.CHARRED) return 'Char';
     if (state.terrain === TERRAIN.LAVA) return 'Lava';
+    if (state.terrain === TERRAIN.SNOW) return 'Snow';
+    if (state.terrain === TERRAIN.SNOWGRASS) return 'Snow grass';
+    if (state.terrain === TERRAIN.FROZEN) return 'Frozen';
     return 'Grass';
   }
   if (state.layer === 'table') return state.tableTool === 'props' ? 'Prop' : 'Table';
@@ -5088,6 +5182,9 @@ function handLabel() {
     if (state.stamp === 'doodad') return 'Doodad';
     if (state.sceneryOp === 'age') return 'Age';
     if (state.sceneryOp === 'deage') return 'De-age';
+    if (state.sceneryOp === 'look' && state.treeLook === TREE_LOOK_SNOW) return 'Snow type';
+    if (state.sceneryOp === 'look' && state.treeLook === TREE_LOOK_CHAR) return 'Char type';
+    if (state.sceneryOp === 'look') return 'Green type';
     return 'Trees';
   }
   if (state.layer === 'walls') return 'Wall';
@@ -5470,6 +5567,10 @@ function mountUi() {
       <label>Depth</label>
       <select id="map-chunks-y">${chunkSizeOptionsHtml()}</select>
       <p class="hint">* Past ${LOD_MAP_CHUNKS} chunks (${forgeTilesForChunks(LOD_MAP_CHUNKS)} tiles), LOD is enabled.</p>
+      <label>Biome</label>
+      <select id="map-biome">
+        ${Object.entries(BIOMES).map(([id, biome]) => `<option value="${id}"${id === DEFAULT_BIOME ? ' selected' : ''}>${biome.name}</option>`).join('')}
+      </select>
       <label>Seed</label>
       <input id="map-seed" type="number" value="${DEFAULT_SEED}">
       <div class="row">
@@ -5569,6 +5670,9 @@ function mountUi() {
         <button data-terrain="${TERRAIN.SCORCHED}"><i class="swatch" style="background:#8a7340"></i>Scorch</button>
         <button data-terrain="${TERRAIN.CHARRED}"><i class="swatch" style="background:#3a3d4a"></i>Char</button>
         <button data-terrain="${TERRAIN.LAVA}"><i class="swatch" style="background:#e05110"></i>Lava</button>
+        <button data-terrain="${TERRAIN.SNOW}"><i class="swatch" style="background:#c5c9da"></i>Snow</button>
+        <button data-terrain="${TERRAIN.SNOWGRASS}"><i class="swatch" style="background:#eeefee"></i>Snow grass</button>
+        <button data-terrain="${TERRAIN.FROZEN}"><i class="swatch" style="background:#304660"></i>Frozen</button>
         <button data-lift="1">Raise</button>
         <button data-lift="-1">Lower</button>
         <button data-lift="level">Level</button>
@@ -5580,7 +5684,10 @@ function mountUi() {
     </div>
     <div id="panel-scenery" class="panel" style="display:none">
       <div class="palette">
-        <button data-scenery="${SCENERY.TREE}" class="active"><i class="swatch" style="background:#3d6b32"></i>Tree</button>
+        <button data-scenery="${SCENERY.TREE}" class="active" title="Plant a tree at its natural size"><i class="swatch" style="background:#3d6b32"></i>Tree</button>
+        <button type="button" data-tree-look="${TREE_LOOK_PLAIN}" title="Paint the green canopy onto trees already there"><i class="swatch" style="background:#3d6b32"></i>Green</button>
+        <button type="button" data-tree-look="${TREE_LOOK_SNOW}" title="Paint the snow canopy onto trees already there"><i class="swatch" style="background:#c5c9da"></i>Snow</button>
+        <button type="button" data-tree-look="${TREE_LOOK_CHAR}" title="Paint the char canopy onto trees already there"><i class="swatch" style="background:#6a3a22"></i>Char</button>
         <button data-scenery="${SCENERY.ROCK_PLAIN}"><i class="swatch" style="background:#8a8680"></i>Rock</button>
         <button data-scenery="${SCENERY.ROCK_MOSS}"><i class="swatch" style="background:#5d7354"></i>Moss rock</button>
         <button data-scenery="${SCENERY.ROCK_SNOW}"><i class="swatch" style="background:#d5d8df"></i>Big rock</button>
@@ -5661,13 +5768,13 @@ function mountUi() {
         <div id="army-held-ink" class="ink"></div>
         <label>Size <span id="place-scale-label">-</span></label>
         <input id="place-scale" type="range" min="50" max="400" step="1" value="100" disabled>
-        <p class="hint">Scales the mesh for every selected unit and building. Units gain the same health and damage. A named unit with no size set stays at 129%. A building keeps its plot.</p>
+        <p class="hint">Scales the mesh for every selected unit and building. Units gain the same health and damage. A named unit with no size set stays at 140%. A building keeps its plot.</p>
+        <label>Turn <span id="place-yaw-label">-</span></label>
+        <input id="place-yaw" type="range" min="0" max="345" step="15" value="0" disabled>
         <select id="place-owner" hidden>
           ${FACTIONS.map((f) => `<option value="${f.id}"${f.id === 0 ? ' selected' : ''}>${f.name}</option>`).join('')}
         </select>
         <div class="row stay">
-          <button id="place-rot-l" type="button" disabled>Rotate left</button>
-          <button id="place-rot-r" type="button" disabled>Rotate right</button>
           <button id="btn-place-remove" type="button" disabled>Remove</button>
         </div>
       </div>
@@ -5912,6 +6019,12 @@ function mountUi() {
   ui.querySelectorAll('[data-lift]').forEach((b) => {
     b.addEventListener('click', () => setLift(liftToken(b.dataset.lift)));
   });
+  function syncTreeLookUi() {
+    const armed = state.stamp === 'scenery' && state.sceneryOp === 'look';
+    ui.querySelectorAll('[data-tree-look]').forEach((x) => {
+      x.classList.toggle('active', armed && Number(x.dataset.treeLook) === state.treeLook);
+    });
+  }
   function syncStandardColorUi() {
     const armed = state.stamp === 'doodad' && state.doodad === DOODAD.STANDARD;
     ui.querySelectorAll('[data-standard-color]').forEach((x) => {
@@ -5930,6 +6043,22 @@ function mountUi() {
       });
       ui.querySelectorAll('[data-scenery-op]').forEach((x) => x.classList.remove('active'));
       ui.querySelectorAll('[data-doodad]').forEach((x) => x.classList.remove('active'));
+      syncTreeLookUi();
+      syncStandardColorUi();
+      refreshBrushCursor();
+      syncHand();
+    });
+  });
+  ui.querySelectorAll('[data-tree-look]').forEach((b) => {
+    b.addEventListener('click', () => {
+      state.treeLook = Number(b.dataset.treeLook);
+      state.stamp = 'scenery';
+      state.sceneryOp = 'look';
+      state.scenery = SCENERY.TREE;
+      ui.querySelectorAll('[data-scenery]').forEach((x) => x.classList.remove('active'));
+      ui.querySelectorAll('[data-scenery-op]').forEach((x) => x.classList.remove('active'));
+      ui.querySelectorAll('[data-doodad]').forEach((x) => x.classList.remove('active'));
+      syncTreeLookUi();
       syncStandardColorUi();
       refreshBrushCursor();
       syncHand();
@@ -5944,6 +6073,7 @@ function mountUi() {
       ui.querySelectorAll('[data-scenery-op]').forEach((x) => {
         x.classList.toggle('active', x.dataset.sceneryOp === state.sceneryOp);
       });
+      syncTreeLookUi();
       syncStandardColorUi();
       refreshBrushCursor();
       syncHand();
@@ -5959,6 +6089,7 @@ function mountUi() {
       });
       ui.querySelectorAll('[data-scenery]').forEach((x) => x.classList.remove('active'));
       ui.querySelectorAll('[data-scenery-op]').forEach((x) => x.classList.remove('active'));
+      syncTreeLookUi();
       syncStandardColorUi();
       refreshBrushCursor();
       syncHand();
@@ -5975,6 +6106,7 @@ function mountUi() {
       });
       ui.querySelectorAll('[data-scenery]').forEach((x) => x.classList.remove('active'));
       ui.querySelectorAll('[data-scenery-op]').forEach((x) => x.classList.remove('active'));
+      syncTreeLookUi();
       syncStandardColorUi();
       refreshBrushCursor();
       syncHand();
@@ -6076,8 +6208,9 @@ function mountUi() {
     if (label) label.textContent = `${Math.round(scale * 100)}%`;
     if (changed) updatePlaceMarkers();
   });
-  document.getElementById('place-rot-l')?.addEventListener('click', () => rotatePlacePick(-1));
-  document.getElementById('place-rot-r')?.addEventListener('click', () => rotatePlacePick(1));
+  document.getElementById('place-yaw')?.addEventListener('input', (e) => {
+    writePlaceYaw(Number(e.target.value));
+  });
   document.getElementById('btn-place-remove')?.addEventListener('click', () => {
     if (!livePicks().length) return;
     deletePlacePick();
@@ -6164,7 +6297,12 @@ function mountUi() {
   renderWaveEditor();
   document.getElementById('btn-gen-scenery').addEventListener('click', () => {
     stampStructureClaim();
-    populateScenery(field, null, reservedFromPlacements(), { keepExisting: true });
+    const biome = document.getElementById('map-biome')?.value;
+    populateScenery(field, null, reservedFromPlacements(), {
+      keepExisting: true,
+      biome,
+      treeLook: treeLookForBiome(biome),
+    });
     clearResourcesUnderPlacements();
     field.sceneryAuthored = true;
     queueSceneryPaint(null, { full: true });
@@ -6802,7 +6940,7 @@ async function main() {
     if (state.layer === 'place' && !typing) {
       if (e.key === '[' || e.key === ']') {
         e.preventDefault();
-        rotatePlacePick(e.key === ']' ? 1 : -1);
+        nudgePlaceYaw(e.key === ']' ? 1 : -1);
         return;
       }
       if ((e.key === 'Delete' || e.key === 'Backspace') && state.placePicks.length) {

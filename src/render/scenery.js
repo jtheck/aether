@@ -19,6 +19,8 @@ import { TILE_SIZE_F, worldHalfFFromField, worldHalfZFFromField } from '../sim/f
 import {
   TREE_BURN_DAMAGE,
   TREE_BURN_DAMAGE_INTERVAL,
+  TREE_LOOK_CHAR,
+  TREE_LOOK_SNOW,
   TREE_STAGE_GROVE_MAX,
   TREE_STAGE_MAX,
   treeBurnsToDeath,
@@ -35,7 +37,7 @@ import { loadBakedUnitMeshParts } from './unitModels.js';
 import { softDetachMesh } from './meshLifecycle.js';
 import { SCALE_BOUNCE_MS, stageDropScale } from './scaleBounce.js';
 import { treeFireHeight } from './treeFire.js';
-import { attachTreeSnow } from './treeSnow.js';
+import { adjustTreeEmbers, attachTreeSnow, resetTreeEmbers } from './treeSnow.js';
 import { attachTreeSway } from './windSway.js';
 
 const ATLAS_URL = '/assets/textures/atlas-hd.png';
@@ -468,6 +470,16 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     const billboardMesh = createBillboardMesh(engine, variant, atlas);
     const billboardMatrices = new Float32Array(capacity * 16);
     const colors = makeDimColors(capacity, albedoDimFor(variant.kind));
+    if (isTree) {
+      for (let i = 0; i < live.length; i++) {
+        const look = instances[i].look | 0;
+        colors[i * 4 + 3] = treeLookAlpha(look);
+        if (look === TREE_LOOK_CHAR) {
+          instances[i].emberOn = true;
+          adjustTreeEmbers(1);
+        }
+      }
+    }
     setThinInstances(billboardMesh, billboardMatrices, capacity);
     setThinInstanceCount(billboardMesh, capacity);
     billboardMesh.pickable = false;
@@ -627,6 +639,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     p.yaw = placement.yaw;
     p.stock = stock;
     p.burn = 0;
+    p.look = kind === SCENERY.TREE ? (field.treeLook?.[tileIndex] | 0) : 0;
     p.stockScale = stockScale;
     p.targetScale = stockScale;
     p.scaleFrom = stockScale;
@@ -656,6 +669,10 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       else instanceByTile.delete(tile);
     }
     if (batch.variant.kind === SCENERY.TREE) treeByTile.delete(tile);
+    if (p.emberOn) {
+      p.emberOn = false;
+      adjustTreeEmbers(-1);
+    }
     const blank = makeEmptyTreeInstance();
     for (const key of Object.keys(blank)) p[key] = blank[key];
     writeHiddenMatrix(batch.billboardMatrices, index);
@@ -905,6 +922,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     p.yaw = placement.yaw;
     p.stock = stock;
     p.burn = burn;
+    p.look = field.treeLook?.[tileIndex] | 0;
     p.stockScale = targetScale > 0 ? targetScale * 0.12 : 0;
     p.scaleFrom = p.stockScale;
     p.targetScale = targetScale;
@@ -1191,13 +1209,15 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       colors[o] = r * fogMul;
       colors[o + 1] = g * fogMul;
       colors[o + 2] = b * fogMul;
+      colors[o + 3] = treeLookAlpha(p.look);
+      syncTreeEmber(p);
     } else {
       const c = ROCK_ALBEDO_DIM * fogMul;
       colors[o] = c;
       colors[o + 1] = c;
       colors[o + 2] = c;
+      colors[o + 3] = 1;
     }
-    colors[o + 3] = 1;
   }
 
   function tickHarvestPings() {
@@ -1307,6 +1327,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     harvestPings.clear();
     treeFreeSlots.length = 0;
     treeBatch = null;
+    resetTreeEmbers();
   }
 
   function forEachBurningTree(fn) {
@@ -1348,6 +1369,20 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
   };
 }
 
+function treeLookAlpha(look) {
+  const v = look | 0;
+  if (v === TREE_LOOK_SNOW) return 2;
+  if (v === TREE_LOOK_CHAR) return 3;
+  return 1;
+}
+
+function syncTreeEmber(p) {
+  const on = (p.look | 0) === TREE_LOOK_CHAR;
+  if (!!p.emberOn === on) return;
+  p.emberOn = on;
+  adjustTreeEmbers(on ? 1 : -1);
+}
+
 function makeEmptyTreeInstance() {
   return {
     tileIndex: -1,
@@ -1358,6 +1393,8 @@ function makeEmptyTreeInstance() {
     yaw: 0,
     stock: 0,
     burn: 0,
+    look: 0,
+    emberOn: false,
     stockScale: 0,
     targetScale: 0,
     scaleFrom: 0,
@@ -1698,6 +1735,7 @@ function collectInstances(field, variant, surfaceHeightAt) {
           yaw: placement.yaw,
           stock,
           burn: 0,
+          look: variant.kind === SCENERY.TREE ? (field.treeLook?.[i] | 0) : 0,
           stockScale,
           targetScale: stockScale,
           scaleFrom: stockScale,
@@ -2009,7 +2047,7 @@ function uploadBillboardColors(batch) {
     dst[i] = r;
     dst[i + 1] = g;
     dst[i + 2] = b;
-    dst[i + 3] = src[i + 3];
+    dst[i + 3] = tree ? 1 : src[i + 3];
   }
   setThinInstanceColors(batch.billboardMesh, dst);
 }

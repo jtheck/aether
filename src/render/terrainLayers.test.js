@@ -7,6 +7,8 @@ import {
   SHEET_BURN_JUNCTION,
   SHEET_DIRT_JUNCTION,
   SHEET_JUNCTION,
+  SHEET_SHORE_JUNCTION,
+  SHEET_SNOW_JUNCTION,
   TERRAIN_DIFFUSE_LEVEL,
   TERRAIN_EMISSIVE,
   TERRAIN_LOOK,
@@ -14,6 +16,10 @@ import {
   burnJunctionKey,
   compositeBurnJunction,
   compositeDirtJunction,
+  compositeShoreJunction,
+  compositeSnowJunction,
+  shoreJunctionKey,
+  snowJunctionKey,
   compositeJunction,
   junctionKey,
   lookTexel,
@@ -39,6 +45,9 @@ function grid(rows) {
     S: TERRAIN.SCORCHED,
     H: TERRAIN.CHARRED,
     L: TERRAIN.LAVA,
+    N: TERRAIN.SNOW,
+    F: TERRAIN.FROZEN,
+    Y: TERRAIN.SNOWGRASS,
   };
   rows.forEach((row, r) => {
     const z = height - 1 - r;
@@ -130,7 +139,7 @@ describe('tileLayer', () => {
     assert.deepEqual(layerAt(besideGrass, 0, 1), { sheet: ATLAS.GRASS_DIRT, cell: CELL_FULL });
     assert.deepEqual(layerAt(besideGrass, 0, 0), { sheet: ATLAS.TILE_GRAVEL, cell: CELL_EMPTY });
     const pond = grid(['RRR', 'RWR', 'RRR']);
-    assert.deepEqual(layerAt(pond, 1, 1), { sheet: ATLAS.GRASS_WATER, cell: CELL_EMPTY });
+    assert.deepEqual(layerAt(pond, 1, 1), { sheet: ATLAS.GRAVEL_DIRT, cell: CELL_FULL });
   });
 
   it('blends gravel and tile onto a dirt tile', () => {
@@ -186,6 +195,22 @@ describe('tileLayer', () => {
     const charredEdge = layerAt(lava, 1, 0);
     assert.equal(charredEdge.sheet, ATLAS.LAVA_CHARRED);
     assert.equal(charredEdge.cell, terrainCornerCell(lava.types, 3, 2, 1, 0, TERRAIN.LAVA));
+
+    const onScorched = grid(['LLL', 'SSS']);
+    assert.deepEqual(layerAt(onScorched, 1, 1), { sheet: ATLAS.LAVA_CHARRED, cell: CELL_FULL });
+    const scorchedShore = layerAt(onScorched, 1, 0);
+    assert.equal(scorchedShore.sheet, ATLAS.LAVA_SCORCHED);
+    assert.equal(scorchedShore.cell, terrainCornerCell(onScorched.types, 3, 2, 1, 0, TERRAIN.LAVA));
+
+    const onGrass = grid(['HHH', 'GGG']);
+    assert.equal(layerAt(onGrass, 1, 0).sheet, ATLAS.CHARRED_GRASS);
+    assert.deepEqual(layerAt(onGrass, 1, 1), { sheet: ATLAS.LAVA_CHARRED, cell: CELL_EMPTY });
+    const onTurf = grid(['HHH', 'YYY']);
+    assert.equal(layerAt(onTurf, 1, 0).sheet, ATLAS.CHARRED_SNOWGRASS);
+    const onWater = grid(['HHH', 'WWW']);
+    assert.equal(layerAt(onWater, 1, 0).sheet, ATLAS.CHARRED_WATER);
+    const charredPond = grid(['HHH', 'HWH', 'HHH']);
+    assert.deepEqual(layerAt(charredPond, 1, 1), { sheet: ATLAS.CHARRED_SCORCHED, cell: CELL_FULL });
   });
 
   it('blends the burn set onto dirt', () => {
@@ -210,10 +235,90 @@ describe('tileLayer', () => {
     assert.equal(j.cell, burnJunctionKey(CELL_EMPTY, scorch, grass));
 
     const pond = grid(['LLL', 'LWL', 'LLL']);
-    assert.deepEqual(layerAt(pond, 1, 1), { sheet: ATLAS.GRASS_WATER, cell: CELL_EMPTY });
+    assert.deepEqual(layerAt(pond, 1, 1), { sheet: ATLAS.SCORCHED_DIRT, cell: CELL_FULL });
     const besideGrass = grid(['GG', 'LL']);
     assert.deepEqual(layerAt(besideGrass, 0, 1), { sheet: ATLAS.GRASS_DIRT, cell: CELL_FULL });
     assert.deepEqual(layerAt(besideGrass, 0, 0), { sheet: ATLAS.LAVA_CHARRED, cell: CELL_FULL });
+  });
+
+  it('stacks frozen on snow and blends snow onto dirt', () => {
+    const frozen = grid(['FFF', 'NNN']);
+    assert.deepEqual(layerAt(frozen, 1, 1), { sheet: ATLAS.FROZEN_SNOW, cell: CELL_FULL });
+    const snowEdge = layerAt(frozen, 1, 0);
+    assert.equal(snowEdge.sheet, ATLAS.FROZEN_SNOW);
+    assert.equal(snowEdge.cell, terrainCornerCell(frozen.types, 3, 2, 1, 0, TERRAIN.FROZEN));
+
+    const snow = grid(['NNN', 'DDD']);
+    assert.deepEqual(layerAt(snow, 1, 1), { sheet: ATLAS.FROZEN_SNOW, cell: CELL_EMPTY });
+    const edge = layerAt(snow, 1, 0);
+    assert.equal(edge.sheet, ATLAS.SNOW_DIRT);
+    assert.equal(edge.cell, terrainCornerCell(snow.types, 3, 2, 1, 0, TERRAIN.SNOW));
+
+    const onDirt = grid(['FFF', 'DDD']);
+    const dirt = layerAt(onDirt, 1, 0);
+    assert.equal(dirt.sheet, ATLAS.SNOW_DIRT);
+    assert.equal(dirt.cell, terrainCornerCell(onDirt.types, 3, 2, 1, 0, TERRAIN.FROZEN));
+
+    const withGrass = grid(['GN', 'DD']);
+    const j = layerAt(withGrass, 0, 0);
+    assert.equal(j.sheet, SHEET_SNOW_JUNCTION);
+    const grass = terrainCornerCell(withGrass.types, 2, 2, 0, 0, TERRAIN.GRASS);
+    const snowCell = terrainCornerCell(withGrass.types, 2, 2, 0, 0, TERRAIN.SNOW);
+    assert.ok(grass !== CELL_EMPTY && grass !== CELL_FULL);
+    assert.ok(snowCell !== CELL_EMPTY && snowCell !== CELL_FULL);
+    assert.equal(j.cell, snowJunctionKey(snowCell, CELL_EMPTY, CELL_EMPTY, grass));
+
+    const besideGrass = grid(['GG', 'NN']);
+    assert.deepEqual(layerAt(besideGrass, 0, 1), { sheet: ATLAS.GRASS_DIRT, cell: CELL_FULL });
+    assert.deepEqual(layerAt(besideGrass, 0, 0), { sheet: ATLAS.FROZEN_SNOW, cell: CELL_EMPTY });
+
+    const pond = grid(['NNN', 'NWN', 'NNN']);
+    assert.deepEqual(layerAt(pond, 1, 1), { sheet: ATLAS.SNOW_DIRT, cell: CELL_FULL });
+
+    const turf = grid(['NNN', 'YYY']);
+    assert.deepEqual(layerAt(turf, 1, 1), { sheet: ATLAS.FROZEN_SNOW, cell: CELL_EMPTY });
+    const turfEdge = layerAt(turf, 1, 0);
+    assert.equal(turfEdge.sheet, ATLAS.SNOW_SNOWGRASS);
+    assert.equal(turfEdge.cell, terrainCornerCell(turf.types, 3, 2, 1, 0, TERRAIN.SNOW));
+    const turfOnDirt = grid(['YYY', 'DDD']);
+    assert.equal(layerAt(turfOnDirt, 1, 0).sheet, ATLAS.SNOWGRASS_DIRT);
+    const shore = grid(['YYY', 'WWW']);
+    assert.equal(layerAt(shore, 1, 0).sheet, ATLAS.SNOWGRASS_WATER);
+    const pool = grid(['YYY', 'YWY', 'YYY']);
+    assert.deepEqual(layerAt(pool, 1, 1), { sheet: ATLAS.SNOWGRASS_DIRT, cell: CELL_FULL });
+  });
+
+  it('blends snow, scorched, and gravel onto water', () => {
+    const snow = grid(['NNN', 'WWW']);
+    const snowEdge = layerAt(snow, 1, 0);
+    assert.equal(snowEdge.sheet, ATLAS.SNOW_WATER);
+    assert.equal(snowEdge.cell, terrainCornerCell(snow.types, 3, 2, 1, 0, TERRAIN.SNOW));
+    assert.notEqual(snowEdge.cell, CELL_EMPTY);
+    assert.notEqual(snowEdge.cell, CELL_FULL);
+
+    const frozen = grid(['FFF', 'WWW']);
+    const frozenEdge = layerAt(frozen, 1, 0);
+    assert.equal(frozenEdge.sheet, ATLAS.SNOW_WATER);
+    assert.equal(frozenEdge.cell, terrainCornerCell(frozen.types, 3, 2, 1, 0, TERRAIN.FROZEN));
+
+    const scorched = grid(['SSS', 'WWW']);
+    assert.equal(layerAt(scorched, 1, 0).sheet, ATLAS.SCORCHED_WATER);
+    const gravel = grid(['RRR', 'WWW']);
+    assert.equal(layerAt(gravel, 1, 0).sheet, ATLAS.GRAVEL_WATER);
+    const tile = grid(['TTT', 'WWW']);
+    assert.equal(layerAt(tile, 1, 0).sheet, ATLAS.GRAVEL_WATER);
+
+    const withDirt = grid(['ND', 'WW']);
+    const j = layerAt(withDirt, 0, 0);
+    assert.equal(j.sheet, SHEET_SHORE_JUNCTION);
+    const snowCell = terrainCornerCell(withDirt.types, 2, 2, 0, 0, TERRAIN.SNOW);
+    const dirt = terrainCornerCell(withDirt.types, 2, 2, 0, 0, TERRAIN.DIRT);
+    assert.ok(snowCell !== CELL_EMPTY && snowCell !== CELL_FULL);
+    assert.ok(dirt !== CELL_EMPTY && dirt !== CELL_FULL);
+    assert.equal(j.cell, shoreJunctionKey(dirt, CELL_EMPTY, CELL_EMPTY, snowCell, CELL_EMPTY));
+
+    const deep = grid(['WWW', 'WWW']);
+    assert.deepEqual(layerAt(deep, 1, 0), { sheet: ATLAS.GRASS_WATER, cell: CELL_EMPTY });
   });
 
   it('composites a dirt tile touched by grass and gravel', () => {
@@ -378,6 +483,64 @@ describe('blobMask and compositeJunction', () => {
     paint(burnJunctionKey(3, CELL_EMPTY, CELL_EMPTY));
     assert.deepEqual([...out.slice(0, 3)], GRAVEL);
     assert.deepEqual([...weights.slice(0, 3)], [0, 0, 1]);
+  });
+
+  it('lays grass over snow over scorched', () => {
+    const SNOW = [197, 201, 218];
+    const SCORCH = [120, 90, 40];
+    const blob = (x, y) => y < cellPx && x >= 3 * cellPx;
+    const snow = {
+      gd: sheet(size, (x, y) => (blob(x, y) ? GRASS : DIRT)),
+      gv: sheet(size, (x, y) => (blob(x, y) ? [140, 140, 140] : DIRT)),
+      sd: sheet(size, (x, y) => (blob(x, y) ? SCORCH : DIRT)),
+      sn: sheet(size, (x, y) => (blob(x, y) ? SNOW : DIRT)),
+    };
+    const mask = new Float32Array(size * size);
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) mask[y * size + x] = blob(x, y) ? 1 : 0;
+    const out = new Uint8Array(cellPx * cellPx * 4);
+    const weights = new Float32Array(cellPx * cellPx * 3);
+    const paint = (key) => compositeSnowJunction(snow, mask, size, key, out, weights);
+    paint(snowJunctionKey(3, CELL_EMPTY, CELL_EMPTY, CELL_EMPTY));
+    assert.deepEqual([...out.slice(0, 3)], SNOW);
+    assert.deepEqual([...weights.slice(0, 3)], [0, 0, 1]);
+    paint(snowJunctionKey(CELL_EMPTY, CELL_EMPTY, 3, CELL_EMPTY));
+    assert.deepEqual([...out.slice(0, 3)], SCORCH);
+    assert.deepEqual([...weights.slice(0, 3)], [0, 0, 1]);
+    paint(snowJunctionKey(CELL_EMPTY, CELL_EMPTY, CELL_EMPTY, 3));
+    assert.deepEqual([...out.slice(0, 3)], GRASS);
+    assert.deepEqual([...weights.slice(0, 3)], [1, 0, 0]);
+    paint(snowJunctionKey(3, CELL_EMPTY, 3, CELL_EMPTY));
+    assert.deepEqual([...out.slice(0, 3)], SNOW);
+  });
+
+  it('lays snow over dirt over water', () => {
+    const SNOW = [197, 201, 218];
+    const blob = (x, y) => y < cellPx && x >= 3 * cellPx;
+    const shore = {
+      gd: sheet(size, (x, y) => (blob(x, y) ? GRASS : DIRT)),
+      gw: sheet(size, (x, y) => (blob(x, y) ? GRASS : WATER)),
+      dw: sheet(size, (x, y) => (blob(x, y) ? DIRT : WATER)),
+      gv: sheet(size, () => DIRT),
+      sd: sheet(size, () => DIRT),
+      sn: sheet(size, (x, y) => (blob(x, y) ? SNOW : DIRT)),
+      rw: sheet(size, () => WATER),
+      cw: sheet(size, () => WATER),
+      sw: sheet(size, (x, y) => (blob(x, y) ? SNOW : WATER)),
+    };
+    const mask = new Float32Array(size * size);
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) mask[y * size + x] = blob(x, y) ? 1 : 0;
+    const out = new Uint8Array(cellPx * cellPx * 4);
+    const weights = new Float32Array(cellPx * cellPx * 4);
+    const paint = (key) => compositeShoreJunction(shore, mask, size, key, out, weights);
+    paint(shoreJunctionKey(CELL_EMPTY, CELL_EMPTY, CELL_EMPTY, 3, CELL_EMPTY));
+    assert.deepEqual([...out.slice(0, 3)], SNOW);
+    assert.deepEqual([...weights.slice(0, 4)], [0, 0, 0, 1]);
+    paint(shoreJunctionKey(3, CELL_EMPTY, CELL_EMPTY, CELL_EMPTY, CELL_EMPTY));
+    assert.deepEqual([...out.slice(0, 3)], DIRT);
+    assert.deepEqual([...weights.slice(0, 4)], [0, 1, 0, 0]);
+    paint(shoreJunctionKey(CELL_EMPTY, CELL_EMPTY, CELL_EMPTY, CELL_EMPTY, 3));
+    assert.deepEqual([...out.slice(0, 3)], GRASS);
+    assert.deepEqual([...weights.slice(0, 4)], [1, 0, 0, 0]);
   });
 });
 

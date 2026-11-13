@@ -60,11 +60,12 @@ import { menuGateState } from '../sim/menuGate.js';
 import { applyGhostValidityTint } from './buildings.js';
 import {
   ensureRadialPriceHud,
-  formatRadialPriceText,
   hideRadialPrice,
   hideRadialPricesWithPrefix,
+  radialPriceElement,
   setRadialPrice,
 } from './radialPriceHud.js';
+import { createMenuDomPlate } from './screenDomHud.js';
 import { xrEye } from './xrEye.js';
 
 /** Layout at HUD scale = 1 (ring outer radius in world units). */
@@ -1008,9 +1009,60 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     label.layer._version++;
   }
 
+  /** @type {{ mesh: object, hide: () => void, sync: (el: HTMLElement | null) => { cssW: number, cssH: number, pad: number } | null }[]} */
+  const pricePlates = [];
+  for (let i = 0; i < MAX_OPTIONS; i++) {
+    pricePlates.push(createMenuDomPlate(engine, scene, `build-price-${i}`));
+  }
+
   function hidePrice(i) {
     hideLabel(prices[i]);
     hideRadialPrice(`build-${i}`);
+    pricePlates[i]?.hide();
+  }
+
+  function cssPixelsPerWorld(x, y, z) {
+    const worldToScreen = screen.worldToScreen;
+    if (!worldToScreen) return 0;
+    const a = worldToScreen(x, y, z);
+    const b = worldToScreen(x + bx, y + by, z + bz);
+    if (!a || !b) return 0;
+    return Math.hypot(b.x - a.x, b.y - a.y);
+  }
+
+  function posePricePlate(i, id, x, y, z) {
+    const plate = pricePlates[i];
+    if (!plate || !xrEye()) {
+      plate?.hide();
+      return;
+    }
+    const fitted = plate.sync(radialPriceElement(id));
+    if (!fitted) return;
+    const px = cssPixelsPerWorld(x, y, z);
+    if (!(px > 1e-3)) {
+      plate.hide();
+      return;
+    }
+    const upp = 1 / px;
+    const w = fitted.cssW * upp;
+    const h = fitted.cssH * upp;
+    const down = h * 0.5 - fitted.pad * upp;
+    placeMeshOriented(
+      plate.mesh,
+      x + tx * down,
+      y + ty * down,
+      z + tz * down,
+      1,
+      bx, by, bz,
+      nx, ny, nz,
+      tx, ty, tz,
+    );
+    if (plate.mesh.scaling) {
+      plate.mesh.scaling.x = w;
+      plate.mesh.scaling.y = 1;
+      plate.mesh.scaling.z = h;
+    }
+    plate.mesh.markLocalDirty?.();
   }
 
   function hideMenuChrome() {
@@ -1652,7 +1704,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       return;
     }
     const batch = icons.get(slot.type);
-    if (batch?.sprite && !xrEye()) {
+    if (batch?.sprite) {
       hideLabel(label);
       return;
     }
@@ -1699,43 +1751,13 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     layer._version++;
   }
 
-  function showHeadsetPrice(price, text, wash, origin, viewport, opacity, scaleMul) {
-    if (
-      price.text !== text ||
-      price.wash !== wash ||
-      Math.abs((price.fadeA ?? -1) - opacity) > 0.02
-    ) {
-      updateDefaultTextData(
-        price.data,
-        text,
-        radialHudPremulRgba(wash, opacity),
-      );
-      price.text = text;
-      price.wash = wash;
-      price.fadeA = opacity;
-    }
-    const sx = (viewport.pixelWidth ?? viewport.width) / viewport.width;
-    const sy = (viewport.pixelHeight ?? viewport.height) / viewport.height;
-    const pixelRatio = (sx + sy) * 0.5;
-    const scale = PRICE_SCREEN_SCALE * pixelRatio * scaleMul;
-    const centerOffset = price.data.width * scale * 0.5;
-    const layer = price.layer;
-    layer.positionPx.x = origin.x * sx - centerOffset;
-    layer.positionPx.y = origin.y * sy;
-    layer.rotationRad = 0;
-    layer.scale = scale;
-    layer.opacity = 1;
-    layer.visible = true;
-    layer._version++;
-  }
-
   function redrawPrice(i) {
     const price = prices[i];
     const slot = slots[i];
     const worldToScreen = screen.worldToScreen;
     const getViewport = screen.getViewport;
     const batch = slot ? icons.get(slot.type) : null;
-    const spriteFlat = !!(batch?.sprite && !xrEye());
+    const spriteFlat = !!batch?.sprite;
     if (!slot || !open || !worldToScreen || !getViewport || (!slot.costText && !spriteFlat)) {
       hidePrice(i);
       return;
@@ -1755,23 +1777,6 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     }
     const gate = slot.gate ?? 'ok';
     const wash = PRICE_WASH[gate] ?? PRICE_WASH.ok;
-    if (xrEye() && price) {
-      hideRadialPrice(`build-${i}`);
-      if (!slot.costText) {
-        hideLabel(price);
-        return;
-      }
-      showHeadsetPrice(
-        price,
-        formatRadialPriceText(slot.cost),
-        wash,
-        origin,
-        viewport,
-        fadeAlpha(hovered ? 0.95 : 0.8),
-        hovered ? 1.05 : 1,
-      );
-      return;
-    }
     hideLabel(price);
     setRadialPrice(`build-${i}`, {
       cost: slot.costText ? slot.cost : null,
@@ -1786,6 +1791,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       gate,
       bank: menuBank,
     });
+    posePricePlate(i, `build-${i}`, worldX, worldY, worldZ);
   }
 
   function placingTintValid() {

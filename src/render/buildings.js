@@ -24,7 +24,7 @@ import { capacityFor } from '../sim/capacity.js';
 import { USE_GPU_PICK } from './pickMode.js';
 import { ownerTint } from './ownerTints.js';
 import { isTeamColorMaterial, prepareTeamColorMaterial, sceneTeamRgb } from './teamColor.js';
-import { attachWheatSway } from './windSway.js';
+import { attachWheatSway, pulseWindGust } from './windSway.js';
 import { nearestMeshInstanceHit, pickPartsFromMeshes } from './meshPick.js';
 
 /** Start small; grow by powers of two when place() needs more. */
@@ -803,7 +803,10 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
     const built = b.built === 0 ? 0 : 1;
     const stage = constructStage(b);
     const want = constructScale(b);
-    if (s.built === 0 && built === 1) beginRise(s, want);
+    if (s.built === 0 && built === 1) {
+      beginRise(s, want);
+      if (b.type === 'tower') pulseWindGust(b.x, b.z);
+    }
     else if (built === 0 && stage > (s.scaleStage | 0)) beginRise(s, want);
     else if (!s.rising && !s.falling && Math.abs((s.visScale ?? 0) - want) > 1e-3) {
       s.visScale = want;

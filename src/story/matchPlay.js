@@ -105,14 +105,18 @@ export function createMatchStory(opts = {}) {
     const cam = opts.getCamera?.();
     const field = opts.getField?.();
     if (!suppressCamera && s?.camera && cam && field) {
+      const xr = !!opts.xrActive?.();
       const shot = s.camera.id || `${s.camera.tx}|${s.camera.tz}|${s.camera.radius}`;
       const live = s.camera.char ? opts.getSpeakerPos?.(s.camera.char) : null;
-      const tile = worldFromTile(field, s.camera.tx, s.camera.tz);
+      // Headset takes the authored landing, not the lerp or the from-pose.
+      const tx = xr && Number.isFinite(s.camera.endTx) ? s.camera.endTx : s.camera.tx;
+      const tz = xr && Number.isFinite(s.camera.endTz) ? s.camera.endTz : s.camera.tz;
+      const tile = worldFromTile(field, tx, tz);
       const pose = {
         x: live?.x ?? tile.x,
         z: live?.z ?? tile.z,
-        radius: s.camera.radius,
-        alpha: s.camera.alpha,
+        radius: xr && Number.isFinite(s.camera.endRadius) ? s.camera.endRadius : s.camera.radius,
+        alpha: xr && Number.isFinite(s.camera.endAlpha) ? s.camera.endAlpha : s.camera.alpha,
       };
       // The sample is the camera, on the same tick as the line. An ease
       // lands about a second after the text that shares its time.

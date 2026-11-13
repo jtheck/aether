@@ -180,6 +180,60 @@ function uploadTexture(engine, tex, data, width, height) {
   );
 }
 
+function paintDomTree(ctx, el, alpha, union, scale) {
+  if (!ctx || !el || el.hidden) return;
+  const style = getComputedStyle(el);
+  if (style.display === 'none' || style.visibility === 'hidden') return;
+  const opacity = Number(style.opacity);
+  const next = alpha * (Number.isFinite(opacity) ? opacity : 1);
+  const tag = el.tagName.toLowerCase();
+  if (tag === 'svg') {
+    const box = el.getBoundingClientRect();
+    if (box.width > 0 && box.height > 0) {
+      const dw = Math.max(1, Math.round(box.width * scale));
+      const dh = Math.max(1, Math.round(box.height * scale));
+      const rec = loadIcon(el, dw, dh);
+      if (rec.img) {
+        ctx.globalAlpha = next;
+        ctx.drawImage(
+          rec.img,
+          (box.left - union.left) * scale,
+          (box.top - union.top) * scale,
+          dw,
+          dh,
+        );
+      }
+    }
+    return;
+  }
+  let text = '';
+  const nodes = el.childNodes;
+  for (let i = 0; i < nodes.length; i++) {
+    if (nodes[i].nodeType === 3) text += nodes[i].textContent;
+  }
+  text = text.replace(/\s+/g, ' ').trim();
+  if (text) {
+    const box = el.getBoundingClientRect();
+    if (box.width > 0 && box.height > 0) {
+      ctx.font = hudCanvasFont(style, scale);
+      ctx.fillStyle = style.color || '#cdd6e4';
+      ctx.globalAlpha = next;
+      ctx.textBaseline = 'middle';
+      const align = glyphAlign(el, style);
+      ctx.textAlign = align;
+      const x = align === 'center'
+        ? (box.left + box.width * 0.5 - union.left) * scale
+        : align === 'right'
+          ? (box.right - union.left) * scale
+          : (box.left - union.left) * scale;
+      const y = (box.top + box.height * 0.5 - union.top) * scale;
+      ctx.fillText(text, x, y);
+    }
+  }
+  const kids = el.children;
+  for (let i = 0; i < kids.length; i++) paintDomTree(ctx, kids[i], next, union, scale);
+}
+
 /**
  * @param {object} engine
  * @param {object} scene
@@ -263,57 +317,7 @@ function createQuad(engine, scene, name) {
   }
 
   function drawTree(el, alpha, union, scale) {
-    if (!ctx || !el || el.hidden) return;
-    const style = getComputedStyle(el);
-    if (style.display === 'none' || style.visibility === 'hidden') return;
-    const opacity = Number(style.opacity);
-    const next = alpha * (Number.isFinite(opacity) ? opacity : 1);
-    const tag = el.tagName.toLowerCase();
-    if (tag === 'svg') {
-      const box = el.getBoundingClientRect();
-      if (box.width > 0 && box.height > 0) {
-        const dw = Math.max(1, Math.round(box.width * scale));
-        const dh = Math.max(1, Math.round(box.height * scale));
-        const rec = loadIcon(el, dw, dh);
-        if (rec.img) {
-          ctx.globalAlpha = next;
-          ctx.drawImage(
-            rec.img,
-            (box.left - union.left) * scale,
-            (box.top - union.top) * scale,
-            dw,
-            dh,
-          );
-        }
-      }
-      return;
-    }
-    let text = '';
-    const nodes = el.childNodes;
-    for (let i = 0; i < nodes.length; i++) {
-      if (nodes[i].nodeType === 3) text += nodes[i].textContent;
-    }
-    text = text.replace(/\s+/g, ' ').trim();
-    if (text) {
-      const box = el.getBoundingClientRect();
-      if (box.width > 0 && box.height > 0) {
-        ctx.font = hudCanvasFont(style, scale);
-        ctx.fillStyle = style.color || '#cdd6e4';
-        ctx.globalAlpha = next;
-        ctx.textBaseline = 'middle';
-        const align = glyphAlign(el, style);
-        ctx.textAlign = align;
-        const x = align === 'center'
-          ? (box.left + box.width * 0.5 - union.left) * scale
-          : align === 'right'
-            ? (box.right - union.left) * scale
-            : (box.left - union.left) * scale;
-        const y = (box.top + box.height * 0.5 - union.top) * scale;
-        ctx.fillText(text, x, y);
-      }
-    }
-    const kids = el.children;
-    for (let i = 0; i < kids.length; i++) drawTree(kids[i], next, union, scale);
+    paintDomTree(ctx, el, alpha, union, scale);
   }
 
   /**
@@ -528,4 +532,160 @@ export function createScreenDomHud(engine, scene, screen) {
   }
 
   return { update, clear };
+}
+
+const DOM_PLATE_PAD = 2;
+
+/**
+ * Menu-plane copy of one HTML price row. The monitor keeps the DOM.
+ * The headset never sees that overlay, so the same pixels sit on the pad.
+ * @param {object} engine
+ * @param {object} scene
+ * @param {string} name
+ */
+export function createMenuDomPlate(engine, scene, name) {
+  const positions = new Float32Array([
+    -0.5, 0, -0.5,
+    0.5, 0, -0.5,
+    0.5, 0, 0.5,
+    -0.5, 0, 0.5,
+  ]);
+  const normals = new Float32Array([0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0]);
+  // local -Z is screen-up, local +X is screen-right. The canvas top is uv.y 0
+  // on this plane, so the row reads upright instead of spun 180.
+  const uvs = new Float32Array([1, 0, 0, 0, 0, 1, 1, 1]);
+  const indices = new Uint32Array([0, 1, 2, 0, 2, 3]);
+  const mesh = createMeshFromData(engine, name, positions, normals, indices, uvs);
+  mesh.pickable = false;
+  if ('receiveShadows' in mesh) mesh.receiveShadows = false;
+  mesh.renderOrder = 233;
+  mesh.boundMin = [-1, -1, -1];
+  mesh.boundMax = [1, 1, 1];
+  const mat = createShaderMaterial({
+    name,
+    attributes: ['position', 'normal', 'uv'],
+    uniforms: [
+      'world',
+      'viewProjection',
+      { name: 'originFix', type: 'vec3<f32>', defaultValue: [0, 0, 0] },
+    ],
+    samplers: ['glyph'],
+    needAlphaBlending: true,
+    blendMode: 'alpha',
+    depthWrite: false,
+    depthCompare: 'always',
+    backFaceCulling: false,
+    vertexSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+};
+@vertex fn mainVertex(input: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  let wp0 = shaderSystem.world * vec4<f32>(input.position, 1.0);
+  let wp = vec4<f32>(wp0.xyz + shaderUniforms.originFix, 1.0);
+  out.position = shaderSystem.viewProjection * wp;
+  out.uv = input.uv;
+  return out;
+}`,
+    fragmentSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+};
+@fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
+  let c = textureSample(glyph, glyphSampler, input.uv);
+  if (c.a < 0.04) { discard; }
+  return c;
+}`,
+  });
+  mat._menuOverlay = true;
+  mat._originFix = [0, 0, 0];
+  mesh.material = mat;
+  addToScene(scene, mesh);
+  setSubtreeVisible(mesh, false);
+
+  const blank = new Uint8Array(64 * 4 * 4);
+  let tex = createTexture2DFromPixels(engine, blank, 64, 4, {
+    srgb: true,
+    minFilter: 'linear',
+    magFilter: 'linear',
+  });
+  setShaderTexture(mat, 'glyph', tex);
+  let texW = 64;
+  let texH = 4;
+  const canvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
+  const ctx = canvas?.getContext('2d', { willReadFrequently: true }) ?? null;
+  let paintedKey = '';
+  let retryAt = 0;
+  let visible = false;
+
+  function hide() {
+    if (!visible) return;
+    setSubtreeVisible(mesh, false);
+    if (mesh.position) mesh.position.y = -9999;
+    mesh.markLocalDirty?.();
+    visible = false;
+  }
+
+  function ensureTexture(w, h) {
+    if (tex && texW === w && texH === h) return;
+    tex = createTexture2DFromPixels(engine, new Uint8Array(w * h * 4), w, h, {
+      srgb: true,
+      minFilter: 'linear',
+      magFilter: 'linear',
+    });
+    texW = w;
+    texH = h;
+    setShaderTexture(mat, 'glyph', tex);
+  }
+
+  /**
+   * Raster `el` when it changes.
+   * @param {HTMLElement | null | undefined} el
+   * @returns {{ cssW: number, cssH: number, pad: number } | null}
+   */
+  function sync(el) {
+    if (!ctx || !el || el.hidden) {
+      hide();
+      return null;
+    }
+    const box = el.getBoundingClientRect();
+    if (!(box.width > 0) || !(box.height > 0)) {
+      hide();
+      return null;
+    }
+    const union = padClientRect(
+      { left: box.left, top: box.top, width: box.width, height: box.height },
+      DOM_PLATE_PAD,
+    );
+    const key = `${contentKey(el, union)}|${el.style.opacity || ''}`;
+    if (performance.now() >= retryAt && key !== paintedKey) {
+      try {
+        const size = resourcePileTextureSize(union.width, union.height);
+        const scale = size.w / union.width;
+        canvas.width = size.w;
+        canvas.height = size.h;
+        ctx.clearRect(0, 0, size.w, size.h);
+        paintDomTree(ctx, el, 1, union, scale);
+        ctx.globalAlpha = 1;
+        const pixels = ctx.getImageData(0, 0, size.w, size.h);
+        const src = pixels.data;
+        const bytes = src.byteOffset === 0 ? src : new Uint8Array(src);
+        ensureTexture(size.w, size.h);
+        uploadTexture(engine, tex, bytes, size.w, size.h);
+        paintedKey = key;
+      } catch {
+        retryAt = performance.now() + 1000;
+        hide();
+        return null;
+      }
+    }
+    if (!paintedKey) {
+      hide();
+      return null;
+    }
+    visible = true;
+    return { cssW: union.width, cssH: union.height, pad: DOM_PLATE_PAD };
+  }
+
+  return { mesh, hide, sync };
 }

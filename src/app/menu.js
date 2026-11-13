@@ -59,6 +59,8 @@ import { focusMenuEl } from './input/gamepad.js';
  * @param {boolean} [opts.xrSupported]
  * @param {() => boolean} [opts.getXrActive]
  * @param {() => unknown} [opts.onToggleXr]
+ * @param {() => boolean} [opts.getXrAuto]
+ * @param {() => unknown} [opts.onToggleXrAuto]
  * @param {() => void} [opts.onTogglePause]
  * @param {() => boolean} [opts.isPlayPaused]
  * @param {() => boolean} [opts.canTogglePause]
@@ -74,6 +76,8 @@ export function setupMenu({
   xrSupported = false,
   getXrActive,
   onToggleXr,
+  getXrAuto,
+  onToggleXrAuto,
   onTogglePause,
   isPlayPaused,
   canTogglePause,
@@ -137,6 +141,15 @@ export function setupMenu({
         xrButton.setAttribute('aria-pressed', 'false');
         xrButton.setAttribute('aria-label', 'Enter XR');
       });
+    });
+  }
+  const xrAuto = /** @type {HTMLButtonElement | null} */ (document.getElementById('xr_auto'));
+  if (xrAuto) {
+    xrAuto.hidden = !xrSupported;
+    xrAuto.classList.toggle('is-on', !!getXrAuto?.());
+    xrAuto.setAttribute('aria-pressed', getXrAuto?.() ? 'true' : 'false');
+    xrAuto.addEventListener('click', () => {
+      onToggleXrAuto?.();
     });
   }
   const exitBtn = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#fullscreen_exit_b'));

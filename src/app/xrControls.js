@@ -11,10 +11,13 @@
 //                   loaded transport, or found an agora.
 //   X / A           cancel: back out of a pie or ghost-place, or clear the selection.
 //   Sticks          either stick pans, no deadzone. Both the same way add.
-//                   Opposite up/down turns, pinch lifts and spread lowers.
-//                   A hard turn or lift quiets the pan. Click jumps
-//                   (left home, right the selection) and does not take the
-//                   sticks off pan.
+//                   The stick already out keeps panning; the other turns.
+//                   Pinch lifts and spread lowers, and a hard pinch quiets
+//                   the pan. Right stick click
+//                   latches follow on the selection until a pan or another
+//                   click. Left stick click cycles three altitudes and holds
+//                   that band until a pinch. Neither click takes the sticks
+//                   off pan.
 // Control groups stay on the desktop and pad; the headset has no buttons for them.
 //
 // Pie menu open (agora build / building actions): point a beam at a slice.
@@ -56,18 +59,15 @@ function pickKey(pick) {
  * @param {{
  *   renderer: { rayToGround: Function, groundHeight: Function, setXrSelect: Function },
  *   getInput: () => object | null | undefined,
- *   jumps?: {
- *     home?: () => { x: number, z: number } | null,
- *     selection?: () => { x: number, z: number } | null,
- *   },
- *   onJump?: (x: number, z: number) => void,
+ *   onFollowToggle?: () => void,
+ *   onAltitude?: () => void,
  * }} opts
  */
 export function createXrControls({
   renderer,
   getInput,
-  jumps = {},
-  onJump,
+  onFollowToggle,
+  onAltitude,
   now = () => performance.now(),
 }) {
   const select = createXrSelect({ renderer, getInput });
@@ -243,11 +243,9 @@ export function createXrControls({
     }
   }
 
-  function stepJumps(hands) {
-    const at = hands.left.down.stickClick
-      ? jumps.home?.()
-      : hands.right.down.stickClick ? jumps.selection?.() : null;
-    if (at) onJump?.(at.x, at.z);
+  function stepHolds(hands) {
+    if (hands.right.down.stickClick) onFollowToggle?.();
+    if (hands.left.down.stickClick) onAltitude?.();
   }
 
   function stepBeams(hands, wide) {
@@ -291,7 +289,7 @@ export function createXrControls({
       if (placing) stepPlace(input, hands, used);
       else if (!radial) stepPlay(input, hands, used);
     }
-    stepJumps(hands);
+    stepHolds(hands);
     stepBeams(hands, placing || radial);
   }
 

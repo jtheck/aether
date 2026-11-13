@@ -1647,7 +1647,7 @@ function seedRegionLift(field) {
   field.regionLift.set(computeSeedRegionLift(field.seed, field.width, field.height));
 }
 
-function isEdgeLockedTile(field, tx, tz) {
+export function isTableEdgeLockedTile(field, tx, tz) {
   const { width, height, activeMask, tableEdge } = field;
   if (tx < 0 || tz < 0 || tx >= width || tz >= height) return true;
   const i = tz * width + tx;
@@ -1655,6 +1655,26 @@ function isEdgeLockedTile(field, tx, tz) {
   if (tableEdge && tableEdge[i]) return true;
   if (!tableEdge && (tx === 0 || tz === 0 || tx === width - 1 || tz === height - 1)) return true;
   return false;
+}
+
+function isEdgeLockedTile(field, tx, tz) {
+  return isTableEdgeLockedTile(field, tx, tz);
+}
+
+/**
+ * True when (tx, tz) is at least `minTiles` Manhattan steps inland of the rim.
+ * Half a chunk is EDGE_LOCK_TILES (8).
+ */
+export function tileInlandOfTableEdge(field, tx, tz, minTiles = EDGE_LOCK_TILES) {
+  if (!field) return false;
+  const span = Math.max(1, minTiles | 0);
+  for (let dz = 1 - span; dz < span; dz++) {
+    for (let dx = 1 - span; dx < span; dx++) {
+      if (Math.abs(dx) + Math.abs(dz) >= span) continue;
+      if (isTableEdgeLockedTile(field, tx + dx, tz + dz)) return false;
+    }
+  }
+  return true;
 }
 
 /** 0 on the table rim, 1 inward - keeps extra lift from spilling off the rails. */

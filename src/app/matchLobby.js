@@ -37,8 +37,9 @@ import {
   ingestChat,
   makeChatMessage,
 } from '../lobby/chat.js';
-import { getPlayerColor, getPlayerName, getUnitSkins } from './settings.js';
+import { getPlayerColor, getPlayerName, getUnitSkins, getLogoDecal, getTribeDecal } from './settings.js';
 import { localOwnedPacks, selectedSkins } from './dlcCatalog.js';
+import { resolveLogoDecalId, resolveTribeDecalId } from './decalCatalog.js';
 import { aetherSteam } from './steam.js';
 import { loadGardenRef, parseWorkshopRef } from './workshop.js';
 import { CMD } from '../sim/commands.js';
@@ -178,6 +179,8 @@ export function createMatchLobby({
       color: getPlayerColor(),
       dlc: localOwnedPacks(aetherSteam.ownedPacks()),
       skins: selectedSkins(localOwnedPacks(aetherSteam.ownedPacks()), getUnitSkins()),
+      logo: resolveLogoDecalId(getLogoDecal(), localOwnedPacks(aetherSteam.ownedPacks())),
+      tribe: resolveTribeDecalId(getTribeDecal()),
     };
   }
 
@@ -561,6 +564,8 @@ export function createMatchLobby({
       color: me.color,
       dlc: me.dlc,
       skins: me.skins,
+      logo: me.logo,
+      tribe: me.tribe,
       ready: Boolean(seatOf(seats, me.userId)?.ready),
     });
   }
@@ -760,6 +765,8 @@ export function createMatchLobby({
       color: msg.color,
       dlc: msg.dlc,
       skins: msg.skins,
+      logo: msg.logo,
+      tribe: msg.tribe,
       ready: Boolean(extra.ready ?? msg.ready),
     };
     const assigned = Array.isArray(rankedRoster) && rankedRoster.some((row) => Number.isInteger(row?.seat))

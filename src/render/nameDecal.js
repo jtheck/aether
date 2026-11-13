@@ -15,6 +15,7 @@ import {
 } from '../vendor/lite/liteVendor.js';
 import { assetUrl } from './assetRev.js';
 import { TILE_SIZE_F } from '../sim/field.js';
+import { softDetachMesh } from './meshLifecycle.js';
 
 /** Clear of the felt so the ink does not sink into the tiles. */
 export const NAME_DECAL_LIFT = 0.2;
@@ -40,7 +41,7 @@ export async function createNameDecal(engine, scene, groundYAt, opts) {
   const vertStride = cols + 1;
   const vertsPer = vertStride * (rows + 1);
   const idxPer = cols * rows * 6;
-  const empty = { place() {}, clear() {} };
+  const empty = { place() {}, clear() {}, dispose() {} };
   if (!(width > 0) || !(height > 0) || !opts.url) return empty;
 
   let tex;
@@ -151,6 +152,10 @@ export async function createNameDecal(engine, scene, groundYAt, opts) {
     place,
     clear() {
       place([]);
+    },
+    dispose() {
+      mesh.visible = false;
+      softDetachMesh(scene, mesh);
     },
   };
 }

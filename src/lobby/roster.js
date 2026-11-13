@@ -10,6 +10,8 @@ import { getMode } from './modes.js';
  *   color: string,
  *   dlc?: string[],
  *   skins?: Record<number, string>,
+ *   logo?: string,
+ *   tribe?: string,
  *   ready: boolean,
  *   replay?: boolean,
  *   ai?: string,
@@ -66,6 +68,10 @@ function copySkins(raw) {
   return out;
 }
 
+function copyDecalId(raw) {
+  return typeof raw === 'string' ? raw : '';
+}
+
 /** @param {string} modeId @returns {LobbySeat[]} */
 export function createRoster(modeId) {
   const mode = getMode(modeId);
@@ -79,6 +85,8 @@ export function createRoster(modeId) {
     color: '',
     dlc: [],
     skins: {},
+    logo: '',
+    tribe: '',
     ready: false,
     ai: '',
     kind: 'empty',
@@ -87,7 +95,13 @@ export function createRoster(modeId) {
 
 /** @param {LobbySeat[]} seats */
 export function cloneRoster(seats) {
-  return seats.map((s) => ({ ...s, dlc: copyDlc(s.dlc), skins: copySkins(s.skins) }));
+  return seats.map((s) => ({
+    ...s,
+    dlc: copyDlc(s.dlc),
+    skins: copySkins(s.skins),
+    logo: copyDecalId(s.logo),
+    tribe: copyDecalId(s.tribe),
+  }));
 }
 
 /** @param {LobbySeat[]} seats */
@@ -112,7 +126,7 @@ export function seatOf(seats, userId) {
 
 /**
  * @param {LobbySeat[]} seats
- * @param {{ userId: string, name?: string, color?: string, dlc?: string[], skins?: Record<number, string>, ready?: boolean }} player
+ * @param {{ userId: string, name?: string, color?: string, dlc?: string[], skins?: Record<number, string>, logo?: string, tribe?: string, ready?: boolean }} player
  * @param {number | null} [at] Seat index. Empty means the first open seat. A taken index is refused.
  */
 export function claimSeat(seats, player, at = null) {
@@ -126,6 +140,8 @@ export function claimSeat(seats, player, at = null) {
     if (player.color != null) existing.color = player.color;
     if (player.dlc != null) existing.dlc = copyDlc(player.dlc);
     if (player.skins != null) existing.skins = copySkins(player.skins);
+    if (player.logo != null) existing.logo = copyDecalId(player.logo);
+    if (player.tribe != null) existing.tribe = copyDecalId(player.tribe);
     if (player.ready != null) existing.ready = player.ready;
     return { seats: next, index: existing.index, ok: true };
   }
@@ -139,6 +155,8 @@ export function claimSeat(seats, player, at = null) {
   empty.color = player.color ?? '';
   empty.dlc = copyDlc(player.dlc);
   empty.skins = copySkins(player.skins);
+  empty.logo = copyDecalId(player.logo);
+  empty.tribe = copyDecalId(player.tribe);
   empty.ready = Boolean(player.ready);
   empty.replay = Boolean(player.replay);
   empty.ai = '';
@@ -243,6 +261,8 @@ function blankSeat(seat) {
   seat.color = '';
   seat.dlc = [];
   seat.skins = {};
+  seat.logo = '';
+  seat.tribe = '';
   seat.ready = false;
   seat.replay = false;
   seat.ai = '';
@@ -255,6 +275,8 @@ function writeSeat(seat, player, hostId) {
   seat.color = player.color ?? '';
   seat.dlc = copyDlc(player.dlc);
   seat.skins = copySkins(player.skins);
+  seat.logo = copyDecalId(player.logo);
+  seat.tribe = copyDecalId(player.tribe);
   seat.kind = 'human';
   seat.ready = sameUserId(player.userId, hostId);
   seat.replay = Boolean(player.replay);
@@ -268,6 +290,8 @@ function swapSeatPlayers(a, b) {
     color: a.color,
     dlc: copyDlc(a.dlc),
     skins: copySkins(a.skins),
+    logo: copyDecalId(a.logo),
+    tribe: copyDecalId(a.tribe),
     ready: a.ready,
     replay: Boolean(a.replay),
     ai: a.ai || '',
@@ -278,6 +302,8 @@ function swapSeatPlayers(a, b) {
   a.color = b.color;
   a.dlc = copyDlc(b.dlc);
   a.skins = copySkins(b.skins);
+  a.logo = copyDecalId(b.logo);
+  a.tribe = copyDecalId(b.tribe);
   a.ready = b.ready;
   a.replay = Boolean(b.replay);
   a.ai = b.ai || '';
@@ -287,6 +313,8 @@ function swapSeatPlayers(a, b) {
   b.color = hold.color;
   b.dlc = hold.dlc;
   b.skins = hold.skins;
+  b.logo = hold.logo;
+  b.tribe = hold.tribe;
   b.ready = hold.ready;
   b.replay = hold.replay;
   b.ai = hold.ai;
@@ -311,6 +339,8 @@ export function cycleSeatAuto(seats, index) {
     seat.color = '';
     seat.dlc = [];
     seat.skins = {};
+    seat.logo = '';
+    seat.tribe = '';
     seat.ready = false;
     seat.replay = false;
     return { seats: next, ok: true };

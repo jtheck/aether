@@ -23,11 +23,24 @@ import {
   getUnitSkins,
   setBuildingSkin,
   getBuildingSkins,
+  getLogoDecal,
+  setLogoDecal,
+  getTribeDecal,
+  setTribeDecal,
   shadowTier,
 } from './settings.js';
 import { setVolume } from './audio.js';
 import { aetherSteam } from './steam.js';
 import { localOwnedPacks, skinMenuModel } from './dlcCatalog.js';
+import {
+  DECAL_NONE,
+  LOGO_DECALS,
+  TRIBE_DECALS,
+  hasDecalDlc,
+  resolveLogoDecalId,
+  resolveTribeDecalId,
+} from './decalCatalog.js';
+import { assetUrl } from '../render/assetRev.js';
 import {
   escapeMenuStep,
   fullscreenButtonLabel,
@@ -56,6 +69,7 @@ import { focusMenuEl } from './input/gamepad.js';
  * @param {() => unknown} [opts.onOpenReplay]
  * @param {(hex: string) => unknown} [opts.onPlayerColorChange]
  * @param {() => unknown} [opts.onUnitSkinsChange]
+ * @param {() => unknown} [opts.onDecalsChange]
  * @param {boolean} [opts.xrSupported]
  * @param {() => boolean} [opts.getXrActive]
  * @param {() => unknown} [opts.onToggleXr]
@@ -73,6 +87,7 @@ export function setupMenu({
   onOpenReplay,
   onPlayerColorChange,
   onUnitSkinsChange,
+  onDecalsChange,
   xrSupported = false,
   getXrActive,
   onToggleXr,
@@ -357,6 +372,8 @@ export function setupMenu({
   const skinsClose = /** @type {HTMLButtonElement | null} */ (document.getElementById('skins_close'));
   const skinsList = /** @type {HTMLElement | null} */ (document.getElementById('skins_list'));
   const skinsStoreNote = /** @type {HTMLElement | null} */ (document.getElementById('skins_store_note'));
+  const logoPicks = /** @type {HTMLElement | null} */ (document.getElementById('decal_logo_picks'));
+  const tribePicks = /** @type {HTMLElement | null} */ (document.getElementById('decal_tribe_picks'));
 
   function paintSkins() {
     if (!skinsList) return;
@@ -408,8 +425,65 @@ export function setupMenu({
       frag.appendChild(row);
     }
     skinsList.replaceChildren(frag);
-    if (skinsStoreNote) skinsStoreNote.hidden = !locked;
+    paintDecals(locked);
   }
+
+  function paintDecalRow(host, entries, selected, { locked = false } = {}) {
+    if (!host) return;
+    const frag = document.createDocumentFragment();
+    const addBtn = (id, label, src) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'decal-pick';
+      btn.dataset.id = id;
+      btn.title = label;
+      btn.setAttribute('aria-label', label);
+      btn.setAttribute('aria-pressed', selected === id ? 'true' : 'false');
+      if (selected === id) btn.classList.add('is-on');
+      if (locked) btn.disabled = true;
+      if (src) {
+        const img = document.createElement('img');
+        img.src = assetUrl(src);
+        img.alt = '';
+        img.decoding = 'async';
+        btn.appendChild(img);
+      } else {
+        btn.textContent = 'None';
+      }
+      frag.appendChild(btn);
+    };
+    addBtn(DECAL_NONE, 'None', '');
+    for (const entry of entries) addBtn(entry.id, entry.label, entry.url);
+    host.replaceChildren(frag);
+  }
+
+  function paintDecals(skinsLocked) {
+    const owned = localOwnedPacks(aetherSteam.ownedPacks());
+    const logoLocked = !hasDecalDlc(owned);
+    const logoSel = resolveLogoDecalId(getLogoDecal(), owned);
+    const tribeSel = resolveTribeDecalId(getTribeDecal());
+    paintDecalRow(logoPicks, LOGO_DECALS, logoSel, { locked: logoLocked });
+    paintDecalRow(tribePicks, TRIBE_DECALS, tribeSel);
+    if (skinsStoreNote) skinsStoreNote.hidden = !skinsLocked && !logoLocked;
+  }
+
+  function onDecalPickClick(slot, ev) {
+    const btn = ev.target instanceof Element ? ev.target.closest('.decal-pick') : null;
+    if (!btn || btn.disabled) return;
+    const id = btn.dataset.id ?? DECAL_NONE;
+    if (slot === 'logo') {
+      const owned = localOwnedPacks(aetherSteam.ownedPacks());
+      if (!hasDecalDlc(owned)) return;
+      setLogoDecal(id);
+    } else {
+      setTribeDecal(id);
+    }
+    onDecalsChange?.();
+    paintSkins();
+  }
+
+  logoPicks?.addEventListener('click', (ev) => onDecalPickClick('logo', ev));
+  tribePicks?.addEventListener('click', (ev) => onDecalPickClick('tribe', ev));
 
   function hidePop(pop, btn) {
     if (!pop || pop.hidden) return;

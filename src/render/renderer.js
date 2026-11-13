@@ -124,6 +124,15 @@ import { createMushroomPreviews } from './mushrooms.js';
 import { createCarryLoads } from './carryLoads.js';
 import { createAgoraProps } from './agoras.js';
 import { createNameDecal } from './nameDecal.js';
+import {
+  DECAL_NONE,
+  LOGO_DEFAULT_ID,
+  decalWorldSize,
+  fillOwnerDecals,
+  findLogoDecal,
+  findTribeDecal,
+  stampHashUnit,
+} from '../app/decalCatalog.js';
 import { AGORA_DECK_Y, agoraWalkPadsFromList, agoraWalkYAt } from './agoraWalk.js';
 import { createBuildingProps } from './buildings.js';
 import { createBuildingRadialMenu } from './buildingRadial.js';
@@ -2288,49 +2297,125 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   };
   /** Queued placements until Phase B props are ready. */
   let pendingAgoras = null;
-  /** @type {{ x: number, z: number, yaw: number }[] | null} */
-  let splashStamps = null;
-  let splashDecal = { place() {} };
-  void createNameDecal(engine, scene, terrainYAt, {
-    url: '/assets/images/decals/splash.png',
-    width: 14,
-    height: 14,
-    capacity: 8,
-  }).then((decal) => {
-    splashDecal = decal;
-    if (splashStamps) decal.place(splashStamps);
-  }).catch((err) => {
-    console.warn('[nameDecal] splash failed', err);
-  });
+  const emptyNameDecal = { place() {}, clear() {}, dispose() {} };
+  /** @type {{ x: number, z: number, owner?: number }[]} */
+  let lastAgoraDecalList = [];
+  let decalSalt = (opts.decalSalt ?? 0) >>> 0;
+  let ownerDecals = fillOwnerDecals({
+    seed: decalSalt,
+    ownerDecals: opts.ownerDecals,
+    aiPlayers: opts.decalAiPlayers,
+    localPlayerId: opts.localPlayerId,
+  }, opts.logoDecal != null || opts.tribeDecal != null
+    ? { logo: opts.logoDecal, tribe: opts.tribeDecal, ownedPacks: opts.decalOwnedPacks }
+    : null);
+  /** @type {Map<string, { place: Function, clear: Function, dispose?: Function }>} */
+  const decalByKey = new Map();
+  /** @type {Map<string, number>} */
+  const decalLoadGen = new Map();
 
-  /** Stable spot and spin so a fog refresh does not walk the paint. */
-  function splashStampsAround(list) {
-    const out = [];
-    const src = list ?? [];
+  /** Per-match graffiti. Fog may hide an agora; keep its stamp until setField. */
+  const splashByPad = new Map();
+
+  function splashPadKey(a, slot) {
+    return `${slot}:${Math.round(a.x * 10)}:${Math.round(a.z * 10)}`;
+  }
+
+  function picksForOwner(owner) {
+    return ownerDecals[owner]
+      ?? ownerDecals[String(owner)]
+      ?? { logo: LOGO_DEFAULT_ID, tribe: DECAL_NONE };
+  }
+
+  /** Stable hashed spot so every client paints the same, and fog does not walk it. */
+  function splashStampFor(a, slot) {
+    const key = splashPadKey(a, slot);
+    let stamp = splashByPad.get(key);
+    if (stamp) return stamp;
+    const salt = decalSalt >>> 0;
+    const ox = (a.x * 10) | 0;
+    const oz = (a.z * 10) | 0;
+    const owner = a.owner | 0;
+    const tag = slot === 'logo' ? 1 : 2;
+    const u = stampHashUnit(ox ^ Math.imul(salt, 0x9e3779b1) ^ Math.imul(tag, 0x85ebca6b));
+    const v = stampHashUnit(oz ^ Math.imul(salt ^ owner, 0x68bc21eb) ^ tag);
+    const w = stampHashUnit((ox * 13) ^ oz ^ salt ^ (owner << 8) ^ tag);
+    const ang = u * Math.PI * 2;
+    const dist = 22 + v * 8;
+    stamp = {
+      x: a.x + Math.cos(ang) * dist,
+      z: a.z + Math.sin(ang) * dist,
+      yaw: w * Math.PI * 2,
+    };
+    splashByPad.set(key, stamp);
+    return stamp;
+  }
+
+  function decalEntry(slot, id) {
+    if (!id || id === DECAL_NONE) return null;
+    return slot === 'logo' ? findLogoDecal(id) : findTribeDecal(id);
+  }
+
+  function placeDecalSlots() {
+    /** @type {Map<string, { x: number, z: number, yaw: number }[]>} */
+    const groups = new Map();
+    const src = lastAgoraDecalList ?? [];
     for (let i = 0; i < src.length; i++) {
       const a = src[i];
-      const u = splashUnit(((a.x * 10) | 0) ^ Math.imul(i + 1, 0x9e3779b1));
-      const v = splashUnit(((a.z * 10) | 0) ^ 0x68bc21eb);
-      const w = splashUnit((((a.x * 10) | 0) * 13) ^ ((a.z * 10) | 0));
-      const ang = u * Math.PI * 2;
-      // Plaza is about 9.5 across and the splash is 14 wide, so the center
-      // stays far enough that the paint clears the deck.
-      const dist = 22 + v * 8;
-      out.push({
-        x: a.x + Math.cos(ang) * dist,
-        z: a.z + Math.sin(ang) * dist,
-        yaw: w * Math.PI * 2,
-      });
+      const picks = picksForOwner(a.owner | 0);
+      if (picks.logo) {
+        const key = `logo:${picks.logo}`;
+        const list = groups.get(key) ?? [];
+        list.push(splashStampFor(a, 'logo'));
+        groups.set(key, list);
+      }
+      if (picks.tribe) {
+        const key = `tribe:${picks.tribe}`;
+        const list = groups.get(key) ?? [];
+        list.push(splashStampFor(a, 'tribe'));
+        groups.set(key, list);
+      }
     }
-    return out;
+    for (const [key, decal] of decalByKey) {
+      if (groups.has(key)) decal.place(groups.get(key));
+      else decal.clear();
+    }
+    for (const key of groups.keys()) {
+      if (!decalByKey.has(key)) void loadDecalKey(key);
+    }
   }
 
-  function splashUnit(n) {
-    let h = Math.imul(n | 0, 0x9e3779b1);
-    h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
-    h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
-    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  async function loadDecalKey(key) {
+    const split = key.indexOf(':');
+    const slot = key.slice(0, split);
+    const id = key.slice(split + 1);
+    const entry = decalEntry(slot, id);
+    const gen = (decalLoadGen.get(key) ?? 0) + 1;
+    decalLoadGen.set(key, gen);
+    if (!entry) return;
+    const size = decalWorldSize(entry);
+    let next = emptyNameDecal;
+    try {
+      next = await createNameDecal(engine, scene, terrainYAt, {
+        url: entry.url,
+        width: size.width,
+        height: size.height,
+        capacity: 8,
+      });
+    } catch (err) {
+      console.warn(`[nameDecal] ${key} failed`, err);
+    }
+    if (decalLoadGen.get(key) !== gen) {
+      next.dispose?.();
+      return;
+    }
+    decalByKey.get(key)?.dispose?.();
+    decalByKey.set(key, next);
+    placeDecalSlots();
   }
+
+  placeDecalSlots();
+
   let pendingBuildings = null;
   let pendingRallyFlags = null;
   /** @type {any} */
@@ -4800,12 +4885,42 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       return currentUnitZoomScale(def);
     },
 
+    /**
+     * Per-owner graffiti. Match seed salts stamp placement so every client agrees.
+     * @param {Record<number, { logo?: string, tribe?: string }>} map
+     * @param {{ seed?: number, aiPlayers?: unknown[], localPlayerId?: number, localPicks?: { logo?: string, tribe?: string, ownedPacks?: string[] } }} [opts]
+     */
+    setOwnerDecals(map, extra = {}) {
+      if (extra.seed != null) {
+        const next = extra.seed >>> 0;
+        if (next !== decalSalt) splashByPad.clear();
+        decalSalt = next;
+      }
+      ownerDecals = fillOwnerDecals({
+        seed: decalSalt,
+        ownerDecals: map,
+        aiPlayers: extra.aiPlayers,
+        localPlayerId: extra.localPlayerId,
+      }, extra.localPicks ?? null);
+      placeDecalSlots();
+    },
+
+    setOwnerDecal(owner, picks) {
+      const id = owner | 0;
+      if (id < 0) return;
+      ownerDecals = fillOwnerDecals({
+        seed: decalSalt,
+        ownerDecals: { ...ownerDecals, [id]: picks },
+      });
+      placeDecalSlots();
+    },
+
     /** Place static agora meshes (init / world rebuild). */
     placeAgoras(list) {
       syncAgoraWalk(list);
       agoraProps.place(list ?? []);
-      splashStamps = splashStampsAround(list);
-      splashDecal.place(splashStamps);
+      lastAgoraDecalList = list ?? [];
+      placeDecalSlots();
       agoraProps.forEachShadowMesh?.(noteShadowMesh);
       invalidateShadowCasterBookkeeping();
       if (shadowsEnabled) applyShadowState();
@@ -5295,6 +5410,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
      * onto 1v1 (and the overlay resizes with it).
      */
     setField(snap) {
+      splashByPad.clear();
       const gen = ++fieldGen;
       const ac = new AbortController();
       fieldAbort?.abort();

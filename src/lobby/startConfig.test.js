@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { installAdventureCampaign } from './adventureCampaign.js';
 import { chapterLabelFor, defaultSettings, gardenUrlForChapter, lobbyAllowsSpectators, mapTypeFitsLobby, selectableAdventureChapters } from './modes.js';
 import { liveConfigFromLobby, teamByOwnerForMode } from './startConfig.js';
+import { aiTribeDecalId, LOGO_DEFAULT_ID } from '../app/decalCatalog.js';
 
 const seats = [
   { index: 0, kind: 'human', userId: 'host-id', name: 'H', ready: true, dlc: ['first_responder'], color: '#ff0000' },
@@ -110,6 +111,8 @@ describe('lobby start config', () => {
     assert.equal(duel.teamByOwner, null);
     assert.equal(duel.localSolo, false);
     assert.equal(duel.inputDelayTicks, 1);
+    assert.deepEqual(duel.ownerDecals[0], { logo: LOGO_DEFAULT_ID, tribe: '' });
+    assert.deepEqual(duel.ownerDecals[1], { logo: LOGO_DEFAULT_ID, tribe: aiTribeDecalId(99, 1) });
 
     const uneven = [
       { ...seats[0], team: 0 },

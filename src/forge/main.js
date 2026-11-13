@@ -93,7 +93,7 @@ import { applyAuthoredScenery, clearAllScenery, clearOffTableScenery, clearScene
 import { TREE_LOOK_CHAR, TREE_LOOK_PLAIN, TREE_LOOK_SNOW, treeLookForBiome } from '../sim/trees.js';
 import { DOODAD, applyStandardOccupancy, paintDoodadBrush } from '../sim/doodads.js';
 import { UNIT_DEFS } from '../sim/unitTypes.js';
-import { BUILDING_FOOTPRINTS, PLACEABLE_BUILDINGS, forEachFootprintTile, snapBuildingWorld, snapBuildingYaw } from '../sim/buildings.js';
+import { BUILDING_FOOTPRINTS, PLACEABLE_BUILDINGS, forEachFootprintTile, snapBuildingWorld, snapBuildingYaw, agoraClearOfTableEdge } from '../sim/buildings.js';
 import {
   OPENING_REACH,
   applyWallOccupancy,
@@ -1888,6 +1888,9 @@ function applyGroupDelta(origins, dx, dz) {
     if (o.kind === 'unit' || o.kind === 'objective') {
       const tile = tileAtWorld({ x, z });
       if (!tileOpen(tile.tx, tile.tz)) return false;
+    } else if (o.kind === 'agora') {
+      const snapped = snapBuildingWorld('agora', fx.fromFloat(x), fx.fromFloat(z));
+      if (!agoraClearOfTableEdge(field, snapped.x, snapped.z)) return false;
     }
     next.push({ x, z });
   }
@@ -2271,6 +2274,7 @@ function applyPlace(pos, { remove = false } = {}) {
     renderWaveEditor();
   } else if (state.placeKind === 'agora') {
     const snapped = snapBuildingWorld('agora', fx.fromFloat(pos.x), fx.fromFloat(pos.z));
+    if (!agoraClearOfTableEdge(field, snapped.x, snapped.z)) return;
     state.agoras.push({ owner: state.owner, x: fx.toFloat(snapped.x), z: fx.toFloat(snapped.z) });
     settlePlacementScenery();
   } else {

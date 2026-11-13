@@ -133,6 +133,8 @@ import {
   fxTier,
   getPlayerColor,
   getBuildingSkins,
+  getLogoDecal,
+  getTribeDecal,
   getUnitSkins,
   msaaSamples,
   resolveAaEnabled,
@@ -251,6 +253,7 @@ import {
   selectedSkins,
   setLocalHudSkins,
 } from './dlcCatalog.js';
+import { resolveLogoDecalId, resolveTribeDecalId } from './decalCatalog.js';
 import { SCREENSHOT_HUD_CLASS, createScreenshotHud } from './screenshotHud.js';
 import { installNavGuard } from './navGuard.js';
 
@@ -429,6 +432,24 @@ function localSelectedBuildingSkins() {
 function applyBuildingSkinsToRenderer(renderer) {
   renderer?.setBuildingSkins?.(localSelectedBuildingSkins());
   void renderer?.refreshBuildingSkins?.();
+}
+
+function localDecalPicks() {
+  const owned = localOwnedPacks(aetherSteam.ownedPacks());
+  return {
+    logo: resolveLogoDecalId(getLogoDecal(), owned),
+    tribe: resolveTribeDecalId(getTribeDecal()),
+    ownedPacks: owned,
+  };
+}
+
+function applyOwnerDecalsToRenderer(renderer, cfg, localPlayerId) {
+  renderer?.setOwnerDecals?.(cfg?.ownerDecals, {
+    seed: cfg?.seed,
+    aiPlayers: cfg?.aiPlayers,
+    localPlayerId: localPlayerId ?? cfg?.localPlayerId,
+    localPicks: localDecalPicks(),
+  });
 }
 
 function applyOwnerPacksToRenderer(renderer, cfg, localPlayerId) {
@@ -980,6 +1001,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       : {},
     localPlayerId: bootCfg.localPlayerId,
     buildingSkins: bootBuildingSkins,
+    logoDecal: getLogoDecal(),
+    tribeDecal: getTribeDecal(),
+    decalOwnedPacks: localOwnedPacks(aetherSteam.ownedPacks()),
+    ownerDecals: bootCfg.ownerDecals,
+    decalSalt: simConfig.seed,
+    decalAiPlayers: session.aiPlayers,
     gpuCapacity: useNet ? kothMaxEntities(army) : count,
     field: session.field,
     onAnimLoadProgress: animStress > 0
@@ -1331,6 +1358,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     onUnitSkinsChange: () => {
       applyOwnerPacksToRenderer(renderer, {}, localPlayerId);
       applyBuildingSkinsToRenderer(renderer);
+    },
+    onDecalsChange: () => {
+      renderer.setOwnerDecal?.(localPlayerId, localDecalPicks());
     },
     xrSupported,
     getXrActive: () => !!matchXr,
@@ -5662,6 +5692,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
   ctx.setStoryCast?.([]);
   if (!liveConfigKeepsAdventure(cfg)) ctx.endAdventure?.();
   applyOwnerPacksToRenderer(ctx.renderer, cfg, cfg.localPlayerId ?? ctx.localPlayerId);
+  applyOwnerDecalsToRenderer(ctx.renderer, cfg, cfg.localPlayerId ?? ctx.localPlayerId);
   syncLobbyChrome(cfg.mode);
 
   const simMode = workerSimMode(cfg.mode);
@@ -6025,6 +6056,7 @@ async function startStressfulSituation(ctx) {
 
 function syncPresentation(ctx, cfg, options = {}) {
   applyOwnerPacksToRenderer(ctx.renderer, cfg, cfg.localPlayerId ?? ctx.localPlayerId);
+  applyOwnerDecalsToRenderer(ctx.renderer, cfg, cfg.localPlayerId ?? ctx.localPlayerId);
   if (!options.skipRenderSync && !ctx.session.resetting) forceRendererSync(ctx);
   ctx.setMatchMeta({ mode: cfg.mode ?? 'koth', matchId: cfg.matchId });
   if (cfg.localPlayerId != null) ctx.localPlayerId = cfg.localPlayerId;

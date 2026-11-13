@@ -3,6 +3,7 @@ import { sameUserId } from './ids.js';
 import { gardenUrlForChapter, getMode, mapTilesForField } from './modes.js';
 import { lobbyAiPreset } from './roster.js';
 import { ownerSkinsFromSeats } from '../app/dlcCatalog.js';
+import { ownerDecalsFromSeats } from '../app/decalCatalog.js';
 import { ownerColorsFromSeats } from '../render/ownerTints.js';
 
 /**
@@ -110,6 +111,7 @@ export function liveConfigFromLobby(state, localUserId) {
     localSolo,
     inputDelayTicks: localSolo ? 0 : 1,
     ownerSkins: ownerSkinsFromSeats(state.seats),
+    ownerDecals: ownerDecalsFromSeats(state.seats, (state.settings?.seed ?? 0) >>> 0),
     ownerColors: ownerColorsFromSeats(state.seats),
     ...vision,
   };

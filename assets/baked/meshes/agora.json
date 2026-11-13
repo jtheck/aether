@@ -80,33 +80,33 @@
       "materialIndex": 0,
       "reverseWinding": true,
       "boundMin": [
-        -9.835338592529297,
-        -4.536106109619141,
-        -9.680841445922852
+        -22.65119171142578,
+        -15.028664588928223,
+        -22.141511917114258
       ],
       "boundMax": [
-        9.888211250305176,
+        22.70406723022461,
         0.7873742580413818,
-        9.881367683410645
+        22.842729568481445
       ],
       "positions": {
         "offset": 0,
-        "length": 312,
+        "length": 600,
         "type": "f32"
       },
       "normals": {
-        "offset": 1248,
-        "length": 312,
+        "offset": 2400,
+        "length": 600,
         "type": "f32"
       },
       "indices": {
-        "offset": 2496,
-        "length": 162,
+        "offset": 4800,
+        "length": 306,
         "type": "u32"
       },
       "uvs": {
-        "offset": 3144,
-        "length": 208,
+        "offset": 6024,
+        "length": 400,
         "type": "f32"
       }
     },
@@ -125,22 +125,22 @@
         -1.916710615158081
       ],
       "positions": {
-        "offset": 3976,
+        "offset": 7624,
         "length": 204,
         "type": "f32"
       },
       "normals": {
-        "offset": 4792,
+        "offset": 8440,
         "length": 204,
         "type": "f32"
       },
       "indices": {
-        "offset": 5608,
+        "offset": 9256,
         "length": 102,
         "type": "u32"
       },
       "uvs": {
-        "offset": 6016,
+        "offset": 9664,
         "length": 136,
         "type": "f32"
       }
@@ -160,22 +160,22 @@
         7.625820636749268
       ],
       "positions": {
-        "offset": 6560,
+        "offset": 10208,
         "length": 48,
         "type": "f32"
       },
       "normals": {
-        "offset": 6752,
+        "offset": 10400,
         "length": 48,
         "type": "f32"
       },
       "indices": {
-        "offset": 6944,
+        "offset": 10592,
         "length": 24,
         "type": "u32"
       },
       "uvs": {
-        "offset": 7040,
+        "offset": 10688,
         "length": 32,
         "type": "f32"
       }

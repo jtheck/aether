@@ -17,6 +17,8 @@ import {
   findPath,
   snapToPassable,
   isTerrainSlowTile,
+  tileInlandOfTableEdge,
+  EDGE_LOCK_TILES,
 } from './field.js';
 import { fellTreeAt } from './trees.js';
 import { SCENERY, rockFootprintRadiusForStock } from './scenery.js';
@@ -1031,6 +1033,21 @@ export function forEachFootprintTile(field, typeId, xFixed, zFixed, fn) {
  * @param {number} xFixed
  * @param {number} zFixed
  */
+/**
+ * Agora pads stay inland of the table rim by half a chunk (EDGE_LOCK_TILES).
+ * @param {object} field
+ * @param {number} xFixed
+ * @param {number} zFixed
+ */
+export function agoraClearOfTableEdge(field, xFixed, zFixed) {
+  if (!field) return true;
+  let ok = true;
+  const complete = forEachFootprintTile(field, 'agora', xFixed, zFixed, (tx, tz) => {
+    if (!tileInlandOfTableEdge(field, tx, tz, EDGE_LOCK_TILES)) ok = false;
+  });
+  return complete && ok;
+}
+
 export function canPlaceBuildingAt(field, typeId, xFixed, zFixed) {
   if (!field?.pass || !getBuildingFootprint(typeId)) return false;
   let ok = true;
@@ -1041,7 +1058,9 @@ export function canPlaceBuildingAt(field, typeId, xFixed, zFixed) {
     else if (field.pass[i] === 0) ok = false;
     else if (field.structureSlowMask?.[i]) ok = false;
   });
-  return complete && ok && n > 0;
+  if (!complete || !ok || n <= 0) return false;
+  if (typeId === 'agora' && !agoraClearOfTableEdge(field, xFixed, zFixed)) return false;
+  return true;
 }
 
 /**

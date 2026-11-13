@@ -1,4 +1,11 @@
 import { DEFAULT_SKIN_ID, isDlcPackId, sanitizeBuildingSkins, sanitizeSkins } from './dlcCatalog.js';
+import {
+  DECAL_NONE,
+  LOGO_DEFAULT_ID,
+  TRIBE_DEFAULT_ID,
+  findLogoDecal,
+  findTribeDecal,
+} from './decalCatalog.js';
 
 // Player + graphics preferences, following v1's paradigm: one localStorage key
 // per setting holding a plain string, read back through a getter with a default.
@@ -14,6 +21,9 @@ const NAME_KEY = 'playerName';
 const COLOR_KEY = 'playerColor';
 const UNIT_SKINS_KEY = 'unitSkins';
 const BUILDING_SKINS_KEY = 'buildingSkins';
+const LOGO_DECAL_KEY = 'logoDecal';
+const TRIBE_DECAL_KEY = 'tribeDecal';
+const DECAL_NONE_STORE = 'none';
 
 /** v1 label set, kept verbatim so the slider reads the same in both versions. */
 export const SHADOW_LABELS = ['Off', 'Low', 'Med', 'Full'];
@@ -501,4 +511,39 @@ export function setBuildingSkin(buildingId, packId) {
   const clean = sanitizeBuildingSkins(next);
   write(BUILDING_SKINS_KEY, JSON.stringify(clean));
   return clean;
+}
+
+function readDecalId(key, find, fallback) {
+  const raw = read(key);
+  if (raw == null) return fallback;
+  if (raw === DECAL_NONE_STORE || raw === DECAL_NONE) return DECAL_NONE;
+  return find(raw) ? raw : fallback;
+}
+
+export function getLogoDecal() {
+  return readDecalId(LOGO_DECAL_KEY, findLogoDecal, LOGO_DEFAULT_ID);
+}
+
+export function setLogoDecal(id) {
+  if (id === DECAL_NONE || id === DECAL_NONE_STORE) {
+    write(LOGO_DECAL_KEY, DECAL_NONE_STORE);
+    return DECAL_NONE;
+  }
+  const next = findLogoDecal(id) ? id : LOGO_DEFAULT_ID;
+  write(LOGO_DECAL_KEY, next);
+  return next;
+}
+
+export function getTribeDecal() {
+  return readDecalId(TRIBE_DECAL_KEY, findTribeDecal, TRIBE_DEFAULT_ID);
+}
+
+export function setTribeDecal(id) {
+  if (id === DECAL_NONE || id === DECAL_NONE_STORE) {
+    write(TRIBE_DECAL_KEY, DECAL_NONE_STORE);
+    return DECAL_NONE;
+  }
+  const next = findTribeDecal(id) ? id : TRIBE_DEFAULT_ID;
+  write(TRIBE_DECAL_KEY, next);
+  return next;
 }

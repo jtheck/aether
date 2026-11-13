@@ -627,6 +627,17 @@ describe('buildings place', () => {
     field.pass[tile.tz * field.width + tile.tx] = 0;
     assert.equal(canPreviewPlaceBuilding(field, 'lab', snap.xFixed, snap.zFixed, funded), false);
   });
+
+  it('rejects agora within half a chunk of the table rim', () => {
+    const field = buildField(13, { width: 64, height: 64 });
+    const inland = snapFloat('agora', 0, 0);
+    clearClaim(field, 'agora', inland.x, inland.z);
+    assert.equal(canPlaceBuildingAt(field, 'agora', inland.xFixed, inland.zFixed), true);
+
+    const rim = snapFloat('agora', fx.toFloat(tileCenterX(2)), fx.toFloat(tileCenterY(2)));
+    clearClaim(field, 'agora', rim.x, rim.z);
+    assert.equal(canPlaceBuildingAt(field, 'agora', rim.xFixed, rim.zFixed), false);
+  });
 });
 
 describe('getBuildingDisplayName', () => {

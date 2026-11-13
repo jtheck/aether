@@ -24,7 +24,7 @@
 
 import { p2pDevModeFromLocation } from './net.js';
 import { loadFireIceServers } from './fireIce.js';
-import { getPlayerColor, getPlayerName, getUnitSkins } from './settings.js';
+import { getPlayerColor, getPlayerName, getUnitSkins, getLogoDecal, getTribeDecal } from './settings.js';
 import { ownerColorsFromRoster, sanitizeOwnerColor } from '../render/ownerTints.js';
 import { aetherSteam } from './steam.js';
 import { rememberLadderId } from './ladderId.js';
@@ -36,6 +36,12 @@ import {
   sanitizeSkins,
   selectedSkins,
 } from './dlcCatalog.js';
+import {
+  fillOwnerDecals,
+  ownerDecalsFromRoster,
+  resolveLogoDecalId,
+  resolveTribeDecalId,
+} from './decalCatalog.js';
 import {
   replayCatchUp,
   formatMatchTime,
@@ -422,6 +428,8 @@ export function createKothShard(options = {}) {
 
   /** userId → per-unit cosmetic pack ids (render-only, not hashed into sim). */
   const userSkins = new Map();
+  /** userId → graffiti picks (render-only). */
+  const userDecals = new Map();
   /** userId → profile hex (render-only; every client must paint the same army). */
   const userColors = new Map();
 
@@ -431,6 +439,34 @@ export function createKothShard(options = {}) {
 
   function localSkins() {
     return selectedSkins(localDlc(), getUnitSkins());
+  }
+
+  function localDecals() {
+    const dlc = localDlc();
+    return {
+      logo: resolveLogoDecalId(getLogoDecal(), dlc),
+      tribe: resolveTribeDecalId(getTribeDecal()),
+      ownedPacks: dlc,
+    };
+  }
+
+  function rememberUserDecals(userId, picks) {
+    if (!userId || !picks || typeof picks !== 'object' || Array.isArray(picks)) return;
+    userDecals.set(String(userId), {
+      logo: typeof picks.logo === 'string' ? picks.logo : '',
+      tribe: typeof picks.tribe === 'string' ? picks.tribe : '',
+    });
+  }
+
+  function ownerDecalsNow() {
+    if (localUserId) rememberUserDecals(localUserId, localDecals());
+    const fromRoster = ownerDecalsFromRoster(roster, userDecals);
+    return fillOwnerDecals({
+      seed,
+      ownerDecals: fromRoster,
+      localPlayerId,
+      aiPlayers: [],
+    }, localPlayerId >= 0 && fromRoster[localPlayerId] == null ? localDecals() : null);
   }
 
   function rememberUserSkins(userId, skins) {
@@ -489,6 +525,7 @@ export function createKothShard(options = {}) {
       startKey: liveStartKey,
       tick: session?.confirmedTick ?? 0,
       ownerSkins: ownerSkinsNow(),
+      ownerDecals: ownerDecalsNow(),
       ownerColors: ownerColorsNow(),
       reset,
     };
@@ -607,6 +644,7 @@ export function createKothShard(options = {}) {
         lobbyName: generateLobbyName(matchId),
         dlc: localDlc(),
         skins: localSkins(),
+        ...localDecals(),
         color: localColor(),
         ladderId: rememberLadderId(),
         role,
@@ -2314,6 +2352,7 @@ export function createKothShard(options = {}) {
         phase,
         dlc: localDlc(),
         skins: localSkins(),
+        ...localDecals(),
         color: localColor(),
       });
     }
@@ -4784,6 +4823,16 @@ export function createKothShard(options = {}) {
     } else if (msg.from && Array.isArray(msg.dlc)) {
       rememberUserDlc(msg.from, msg.dlc);
     }
+    if (msg.from && (typeof msg.logo === 'string' || typeof msg.tribe === 'string')) {
+      rememberUserDecals(msg.from, { logo: msg.logo, tribe: msg.tribe });
+    }
+    if (msg.ownerDecals && typeof msg.ownerDecals === 'object') {
+      for (const s of roster) {
+        if (s.state !== 'active' || !s.userId || userDecals.has(s.userId)) continue;
+        const picks = msg.ownerDecals[s.playerId] ?? msg.ownerDecals[String(s.playerId)];
+        if (picks) rememberUserDecals(s.userId, picks);
+      }
+    }
     if (msg.from && typeof msg.color === 'string' && rememberUserColor(msg.from, msg.color)) {
       if (phase === SHARD_PHASE.LIVE) notifyPresentationSync();
     }
@@ -4832,8 +4881,10 @@ export function createKothShard(options = {}) {
           startKey: liveStartKey,
           dlc: localDlc(),
           skins: localSkins(),
+          ...localDecals(),
           color: localColor(),
           ownerSkins: ownerSkinsNow(),
+          ownerDecals: ownerDecalsNow(),
           ownerColors: ownerColorsNow(),
         });
         if (phase === SHARD_PHASE.SANDBOX) maybeStartLive();
@@ -5306,6 +5357,9 @@ export function createKothShard(options = {}) {
         rememberUserSkins(data.from, data.skins);
       } else if (Array.isArray(data.dlc)) {
         rememberUserDlc(data.from, data.dlc);
+      }
+      if (typeof data.logo === 'string' || typeof data.tribe === 'string') {
+        rememberUserDecals(data.from, { logo: data.logo, tribe: data.tribe });
       }
       if (typeof data.color === 'string' && rememberUserColor(data.from, data.color)) {
         if (phase === SHARD_PHASE.LIVE) notifyPresentationSync();

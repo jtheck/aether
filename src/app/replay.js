@@ -97,6 +97,20 @@ function copyOwnerSkins(skins) {
   return out;
 }
 
+function copyOwnerDecals(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  /** @type {Record<string, { logo: string, tribe: string }>} */
+  const out = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    out[key] = {
+      logo: typeof value.logo === 'string' ? value.logo : '',
+      tribe: typeof value.tribe === 'string' ? value.tribe : '',
+    };
+  }
+  return out;
+}
+
 function copyOwnerColors(colors) {
   if (!colors || typeof colors !== 'object' || Array.isArray(colors)) return {};
   /** @type {Record<string, string>} */
@@ -136,6 +150,7 @@ export function replayConfigFromLive(cfg) {
     laneBases: Boolean(cfg.laneBases),
     skipDefaultSpawns: Boolean(cfg.skipDefaultSpawns),
     ownerSkins: copyOwnerSkins(cfg.ownerSkins),
+    ownerDecals: copyOwnerDecals(cfg.ownerDecals),
     ownerColors: copyOwnerColors(cfg.ownerColors),
     matchId: cfg.matchId ? String(cfg.matchId) : '',
   };

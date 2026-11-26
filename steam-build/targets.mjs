@@ -63,7 +63,10 @@ export const TARGETS = {
     chromiumFeatures: 'Vulkan,DefaultANGLEVulkan,VulkanFromANGLE,WebXRLayers,WebXRWebGPUBinding,OpenXR',
     // SteamVR on the Frame calls getsockopt(SO_PEERCRED) inside xrCreateInstance.
     // The XR sandbox kills that process, and the support check stays false.
-    chromiumExtra: '--disable-seccomp-filter-sandbox --disable-features=NWNewWin',
+    // Frame recommends 1728² but PC Link renders this headset at 2516².
+    // The patched Linux OpenXR path supports viewport scaling; cap it to the
+    // matching 2516 / 1728 ratio instead of accepting Frame's 8192² maximum.
+    chromiumExtra: '--disable-seccomp-filter-sandbox --disable-features=NWNewWin --webxr-max-framebuffer-scale=1.456',
     disableNodeMain: true,
     disableInjectScript: true,
     disableNode: true,

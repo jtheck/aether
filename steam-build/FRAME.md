@@ -205,28 +205,39 @@ The user denied some part of the requested configuration
 The first message was the application's interpretation; Chromium's actual
 failure was the unshowable VR permission prompt, not missing GPU support.
 
-## Known XR image-quality issue
+## XR image quality and viewport scaling
 
-The confirmed build enters XR, but its headset image appears lower-resolution
-than normal. The 1280×720 size in `frame-launch.js` applies only to the flat
-bootstrap window and does not control the XR projection texture.
+The initial working build rendered at **1728×1728 per eye**, while the same
+client in PC Link rendered at **2516×2516 per eye**. Frame reported:
 
-Before changing quality settings, log and compare:
+```text
+recommended=1728x1728 max=8192x8192
+```
 
-- `XRSession.nativeProjectionScaleFactor`
-- the projection layer's `textureWidth` and `textureHeight`
-- the OpenXR swapchain/shared-image dimensions
+The copy path was not accidentally resizing the image:
 
-The likely causes are Frame's default projection scale or an unintended scale
-in the Linux `XRGPUCopySwapChain` copy path. Increasing the projection layer
-scale without measuring these values could hide a copy-size bug and add a large
-GPU cost.
+```text
+source=3456x1728 destination=3456x1728 descriptor=3456x1728
+```
 
-A local, not-yet-deployed change in `src/build-lite.mjs` now makes Lite request
-`XRSession.nativeProjectionScaleFactor` and logs `[xr] projection` with the
-native scale and resulting texture dimensions. `npm run build:lite` succeeds.
-It remains undeployed because packaging the current working tree would include
-many unrelated `src/` changes.
+Chromium deliberately disabled viewport scaling on Linux, causing
+`nativeProjectionScaleFactor` to remain 1. Runtime commit `42c1bbd49890` enables
+the scaling path for this custom Linux runtime. The Frame package passes:
+
+```text
+--webxr-max-framebuffer-scale=1.456
+```
+
+That cap is `2516 / 1728`, preventing Chromium from selecting Frame's excessive
+8192² maximum. The deployed client requests `nativeProjectionScaleFactor` and
+logs `[xr] projection` with the resulting dimensions.
+
+Steam build **26942466** contains this scaling change. Expected verification:
+
+```text
+[xr] projection {"nativeScale":1.456...,"textureWidth":2516,"textureHeight":2516}
+[aether-xr-copy] source=5032x2516 destination=5032x2516 descriptor=5032x2516
+```
 
 The client intentionally leaves the NW.js 2D window alone when entering XR.
 An experiment that hid it with `chrome.app.window.current()` was reverted after
@@ -234,16 +245,16 @@ testing; Frame's existing window behavior is preferred.
 
 ## Cleanup guardrails
 
-Diagnostic Frame runtime build **26941548** contains the one-shot copy-dimension
-log. Set it live, enter XR once, then inspect:
+The runtime contains one-shot view and copy-dimension diagnostics. Inspect with:
 
 ```bash
-grep '\[aether-xr-copy\]' /tmp/aether.log | tail
+grep '\[aether-xr-view\]\|\[aether-xr-copy\]\|\[xr\] projection' /tmp/aether.log | tail
 ```
 
 Before changing the working build:
 
-- Preserve both runtime commits `e60fa39ee7e7` and `2b7a4ab2aac2`.
+- Preserve runtime commits `e60fa39ee7e7`, `2b7a4ab2aac2`,
+  `5b5905dc0c60`, and `42c1bbd49890`.
 - Remove the generated-background-page and copy-dimension diagnostic logs
   separately after diagnosis.
 - Keep Frame on its own runtime and depot; do not move Windows, Linux x64, or

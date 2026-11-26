@@ -71,7 +71,13 @@ It:
 - Handles WebGPU's top-left image origin without the OpenGL vertical flip.
 - Enables the WebGPU session feature on Linux.
 
-Three additional changes are currently uncommitted in the source tree:
+Follow-up runtime changes are committed as:
+
+```text
+2b7a4ab2aac2 nwjs: enable Aether WebGPU XR sessions on Frame
+```
+
+They include:
 
 1. `device/vr/openxr/openxr_device.cc`
    - Advertises `XRSessionFeature::WEBGPU` unconditionally.
@@ -87,6 +93,10 @@ Three additional changes are currently uncommitted in the source tree:
    - Logs the generated NW.js background page as `[aether-nw]`.
    - This is diagnostic instrumentation and should be removed after the build
      is made reproducible.
+4. `third_party/blink/renderer/modules/xr/xr_gpu_copy_swap_chain.{cc,h}`
+   - Logs the source and OpenXR destination dimensions once as
+     `[aether-xr-copy]`.
+   - This diagnoses severe image degradation without changing rendering.
 
 Preserve the user-activation check. The consent fix must not allow a page to
 enter immersive VR without a user gesture.
@@ -224,10 +234,18 @@ testing; Frame's existing window behavior is preferred.
 
 ## Cleanup guardrails
 
+Diagnostic Frame runtime build **26941548** contains the one-shot copy-dimension
+log. Set it live, enter XR once, then inspect:
+
+```bash
+grep '\[aether-xr-copy\]' /tmp/aether.log | tail
+```
+
 Before changing the working build:
 
-- Commit/export all three currently uncommitted Chromium changes.
-- Remove the generated-background-page diagnostic log separately.
+- Preserve both runtime commits `e60fa39ee7e7` and `2b7a4ab2aac2`.
+- Remove the generated-background-page and copy-dimension diagnostic logs
+  separately after diagnosis.
 - Keep Frame on its own runtime and depot; do not move Windows, Linux x64, or
   macOS to this custom runtime as part of cleanup.
 - Keep each architecture in its own depot. Do not restore the old combined

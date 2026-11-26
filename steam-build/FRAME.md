@@ -27,18 +27,17 @@ the Frame entry as a normal/default launch while XR remained functional.
 
 Steam's launch filtering exposes both ARM64 and x86-64 as Linux 64-bit, so two
 Linux launch entries cannot be cleanly architecture-scoped. Use one Linux
-launch option pointing to root `Aether`. Depot **5043862** ships the x86-64
-binary at that path and depot **5043863** ships the ARM64 binary at the same
-path. Each depot remains architecture-specific.
+launch option pointing to root `Aether`. Depot **5043862** supplies that root
+dispatcher and the x86-64 payload under `linux64/`; depot **5043863** installs
+the ARM64 payload under `linux-arm64/`. The dispatcher selects by `uname -m`.
+This avoids the ARM ELF overwriting root `Aether` on x86 Linux.
 
-Separate-depot packaging was uploaded as Steam build **26940437**:
+The corrected collision-free layout was uploaded as Steam build **26957512**:
 
-- Linux x86-64 depot 5043862: manifest **1156214623444483669**
-- Linux ARM64 depot 5043863: manifest **2057931815352484221** (unchanged)
+- Linux x86-64 depot 5043862: manifest **4555877832815487378**
+- Linux ARM64 depot 5043863: manifest **7794468492004346221**
 
-Before making that build live, replace the old `linux64/Aether` Linux launch
-entry with one Linux entry pointing to root `Aether`, then remove the duplicate
-Frame launch entry.
+The single Linux launch entry remains root `Aether`.
 
 ## Why stock NW.js did not work
 

@@ -5,7 +5,7 @@ Desktop shell that loads [https://aether.garden](https://aether.garden).
 ## Prerequisites
 
 1. App ID is **5043860** (`app/steam_appid.txt`). Depots that ship: Windows **5043861**, Linux x64 **5043862**, Frame/Linux ARM64 **5043863**, macOS **5043864**.
-   - Linux launch executable **`Aether`**, arguments empty. Both Linux depots use that root path; each depot contains only its native architecture.
+   - Linux launch executable **`Aether`**, arguments empty. Depot 5043862 supplies that root architecture dispatcher plus `linux64/`; depot 5043863 installs the ARM payload under `linux-arm64/`.
    - Mac launch executable **`Aether.app`**. The build is not notarized.
 2. Optional Steam redistributables: set `STEAMWORKS_SDK` to your SDK root before `dist` / upload.
 
@@ -47,9 +47,10 @@ Stock Linux Chromium does not support Æther's required WebGPU OpenXR session.
 The complete working configuration, source patches, build procedure, known
 launch behavior, and cleanup guardrails are in [FRAME.md](FRAME.md).
 
-Keep Linux x86-64 and Linux ARM64 as separate depots. Do not stage both
-architectures into the x86-64 depot. Steamworks needs only one Linux launch
-option pointing to root **`Aether`**; Steam selects the applicable depot.
+Keep Linux x86-64 and Linux ARM64 as separate depots. Steam reports both as
+Linux 64-bit and may install both, so architecture-specific ELFs must not share
+the same depot path. Steamworks uses one Linux launch option at root
+**`Aether`**; that dispatcher selects `linux64/` or `linux-arm64/`.
 
 ```powershell
 $env:STEAMWORKS_SDK="C:\Users\blind\steamworks_sdk"   # optional but needed for Steam API DLL

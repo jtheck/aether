@@ -22,11 +22,11 @@ function removeUserData(distDir) {
   }
 }
 
-function depotMapping(localFolder) {
+function depotMapping(localFolder, depotPath = '.') {
   return `\t\t"FileMapping"
 \t\t{
 \t\t\t"LocalPath" "${localFolder}/*"
-\t\t\t"DepotPath" "."
+\t\t\t"DepotPath" "${depotPath}"
 \t\t\t"recursive" "1"
 \t\t}
 \t\t"FileExclusion" "${localFolder}/.nw-user-data/*"`;
@@ -55,6 +55,12 @@ function linuxBins(prefix) {
 }
 
 function linuxExecProps(localFolder) {
+  if (localFolder === 'dist-linux-depot') {
+    return unixMode([
+      `${localFolder}/Aether`,
+      ...linuxBins(`${localFolder}/linux64`),
+    ]);
+  }
   return unixMode(linuxBins(localFolder));
 }
 
@@ -140,6 +146,18 @@ for (const entry of platforms) {
   }
   removeUserData(distDir);
   entry.folder = target.outDir;
+  entry.depotPath = '.';
+
+  if (target.id === 'linux') {
+    const stage = spawnSync(process.execPath, ['stage-linux-depot.mjs'], {
+      cwd: root,
+      stdio: 'inherit',
+    });
+    if (stage.status !== 0) process.exit(stage.status ?? 1);
+    entry.folder = 'dist-linux-depot';
+  } else if (target.id === 'linux-arm64') {
+    entry.depotPath = 'linux-arm64';
+  }
 }
 
 const buildDesc = 'aether-' + platforms.map(({ target }) => target.label).join('+');
@@ -150,7 +168,7 @@ const vdfPath = (p) => p.replace(/\\/g, '\\\\');
 const buildOutput = vdfPath(outputDir);
 const contentRoot = vdfPath(root);
 
-const depotLines = platforms.map(function ({ target, depotId, folder }) {
+const depotLines = platforms.map(function ({ target, depotId, folder, depotPath }) {
   const depotFolder = folder || target.outDir;
   const exec = target.ozone
     ? linuxExecProps(depotFolder)
@@ -159,7 +177,7 @@ const depotLines = platforms.map(function ({ target, depotId, folder }) {
       : '';
   return `\t\t"${depotId}"
 \t\t{
-${depotMapping(depotFolder)}
+${depotMapping(depotFolder, depotPath)}
 ${exec}
 \t\t}`;
 });

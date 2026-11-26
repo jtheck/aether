@@ -12,6 +12,7 @@ import {
   setPbrUnlit,
 } from '../vendor/lite/liteVendor.js';
 import { CONTRAST, EXPOSURE } from './celestial.js';
+import { attachBannerFlutter, attachChimeSway } from './windSway.js';
 
 /** Undo the scene exposure lift. Gamma and contrast are inverted per channel. */
 export const TEAM_COLOR_UNLIT = 1 / EXPOSURE;
@@ -179,8 +180,43 @@ export function isTeamColorName(name) {
   return String(name ?? '').toLowerCase().includes('teamcolor');
 }
 
+/** Second flag cloth on standards — white / black / red / … (not profile hex). */
+export function isAllyColorName(name) {
+  return String(name ?? '').toLowerCase().includes('allycolor');
+}
+
 export function isTeamColorMaterial(mat) {
   return isTeamColorName(mat?.name);
+}
+
+export function isAllyColorMaterial(mat) {
+  return isAllyColorName(mat?.name);
+}
+
+/**
+ * flag.glb: TeamColor = profile banner (same as units). AllyColor = slot identity.
+ * Authored name is read before prepareTeamColorMaterial renames materials.
+ */
+export function flagBannerRoleFromMaterial(mat) {
+  const name = mat?.name;
+  if (isAllyColorName(name)) return 'ally';
+  if (isTeamColorName(name)) return 'player';
+  return null;
+}
+
+/**
+ * TeamColor + AllyColor cloth on flag.glb: unlit tint + banner flutter.
+ * @param {object} engine
+ * @param {object[]} parts Baked flag meshes
+ */
+export function setupFlagBannerMeshes(engine, parts) {
+  for (const mesh of parts) {
+    if (flagBannerRoleFromMaterial(mesh.material)) {
+      prepareTeamColorMaterial(engine, mesh);
+    }
+  }
+  attachBannerFlutter(parts);
+  attachChimeSway(parts);
 }
 
 /**

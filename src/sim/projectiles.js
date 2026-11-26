@@ -137,6 +137,11 @@ export function spawnProjectile(w, {
   store.aimY[slot] = aimed.aimY;
   store.wanderOx[slot] = 0;
   store.wanderOy[slot] = 0;
+  if (def.lineRange > 0) {
+    const extended = extendAimToLineRange(x, y, aimed.aimX, aimed.aimY, def.lineRange);
+    store.aimX[slot] = extended.aimX;
+    store.aimY[slot] = extended.aimY;
+  }
   store.damage[slot] = damage;
   const flySpeed = speed != null && speed > 0 ? speed : def.speed;
   store.speed[slot] = flySpeed;
@@ -148,8 +153,10 @@ export function spawnProjectile(w, {
   const hitBase = slot * MAX_PATH_HITS;
   for (let h = 0; h < MAX_PATH_HITS; h++) store.pathHits[hitBase + h] = -1;
 
-  const dx = aimed.aimX - x;
-  const dy = aimed.aimY - y;
+  const finalAimX = store.aimX[slot];
+  const finalAimY = store.aimY[slot];
+  const dx = finalAimX - x;
+  const dy = finalAimY - y;
   const dist = fx.len(dx, dy);
   setVelocity(store, slot, dx, dy, dist, flySpeed);
   const travelTicks = dist > 0 ? Math.ceil(dist / Math.max(1, flySpeed)) + 2 : 1;
@@ -242,6 +249,18 @@ function applyAimScatter(w, x, y, aimX, aimY, scatter) {
   };
 }
 
+function extendAimToLineRange(x, y, aimX, aimY, lineRange) {
+  const dx = aimX - x;
+  const dy = aimY - y;
+  const dist = fx.len(dx, dy);
+  if (dist <= 0 || lineRange <= dist) return { aimX, aimY };
+  const scale = fx.div(lineRange, dist);
+  return {
+    aimX: x + fx.mul(dx, scale),
+    aimY: y + fx.mul(dy, scale),
+  };
+}
+
 function setVelocity(store, slot, dx, dy, dist, speed) {
   if (dist <= 0) {
     store.vx[slot] = 0;
@@ -279,8 +298,7 @@ function alreadyPathHit(store, slot, entity) {
 
 function recordPathHit(store, slot, entity) {
   const n = store.hitCount[slot];
-  if (n >= MAX_PATH_HITS) return false;
-  store.pathHits[slot * MAX_PATH_HITS + n] = entity;
+  if (n < MAX_PATH_HITS) store.pathHits[slot * MAX_PATH_HITS + n] = entity;
   store.hitCount[slot] = n + 1;
   return true;
 }
@@ -353,6 +371,15 @@ function hitEntity(w, store, slot, def, entity, field) {
   }
 }
 
+/** Cannon and fireball always. Cinder rolls groundFireChance on land only. */
+function rollsGroundFire(w, def) {
+  const chance = def.groundFireChance;
+  if (chance == null) return !!def.leavesGroundFire;
+  if (chance <= 0 || !w?.rng) return false;
+  if (chance >= fx.ONE) return true;
+  return rngFrac(w.rng) < chance;
+}
+
 function impactOnWater(field, x, y) {
   if (!field?.terrainTypes) return false;
   const tx = worldToTile(x);
@@ -408,7 +435,7 @@ function applySplash(w, slot, impactX, impactY, def, field) {
   if (def.ignitesTrees && field && applyTreeSplash(field, impactX, impactY, radius)) {
     hit = true;
   }
-  if (def.leavesGroundFire && !impactOnWater(field, impactX, impactY)) {
+  if (!impactOnWater(field, impactX, impactY) && rollsGroundFire(w, def)) {
     // Slightly tighter than splash so walking the rim isn't a free DoT.
     const zoneRadius = fx.mul(radius, fx.fromFloat(0.85));
     spawnFireZone(w, {
@@ -460,10 +487,7 @@ function applyPathHits(w, store, slot, def, field) {
           fx.dist2(cx, cy, w.px[i], w.py[i]) <= radius2 &&
           !alreadyPathHit(store, slot, i)
         ) {
-          if (!recordPathHit(store, slot, i)) {
-            i = grid.next[i];
-            continue;
-          }
+          recordPathHit(store, slot, i);
           hitEntity(w, store, slot, def, i, field);
           any = true;
           if (store.hitCount[slot] >= pierce) return true;
@@ -546,7 +570,8 @@ export function projectileSystem(w, field) {
     if (!(def.splashRadius > 0)) {
       if (def.pathHit) {
         applyPathHits(w, store, slot, def, field);
-        if (store.hitCount[slot] >= (def.pierce || 1)) {
+        const pierceCap = def.pierce | 0;
+        if (pierceCap > 0 && store.hitCount[slot] >= pierceCap) {
           freeProjectile(w, slot, PROJECTILE_DESPAWN.HIT);
           continue;
         }

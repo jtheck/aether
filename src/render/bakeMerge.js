@@ -10,6 +10,10 @@ function isTeamColorName(name) {
   return String(name ?? '').toLowerCase().includes('teamcolor');
 }
 
+function isAllyColorName(name) {
+  return String(name ?? '').toLowerCase().includes('allycolor');
+}
+
 function q(n, digits = 4) {
   const x = Number(n);
   return Number.isFinite(x) ? +x.toFixed(digits) : 0;
@@ -37,6 +41,7 @@ function texKey(mat, imageField, liveField) {
 export function materialVisualKey(mat) {
   if (!mat) return 'null';
   if (isTeamColorName(mat.name)) return 'teamcolor';
+  if (isAllyColorName(mat.name)) return 'allycolor';
   return JSON.stringify({
     f: qv(mat.baseColorFactor, 4, [1, 1, 1, 1]),
     met: q(mat.metallicFactor ?? 1),
@@ -91,6 +96,7 @@ export function dedupeMaterials(materials) {
       keyTo.set(key, idx);
       const copy = { ...mat };
       if (key === 'teamcolor') copy.name = 'TeamColor';
+      if (key === 'allycolor') copy.name = 'AllyColor';
       next.push(copy);
     }
     remap[i] = idx;
@@ -235,7 +241,11 @@ export function mergeSlicedParts(parts, materials = []) {
     merged.push({
       ...geo,
       materialIndex,
-      materialName: key === 'teamcolor' ? 'TeamColor' : (mat?.name || src0.materialName || `part${merged.length}`),
+      materialName: key === 'teamcolor'
+        ? 'TeamColor'
+        : key === 'allycolor'
+          ? 'AllyColor'
+          : (mat?.name || src0.materialName || `part${merged.length}`),
       material: src0.material ?? mat ?? null,
     });
   }

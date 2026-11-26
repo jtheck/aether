@@ -1,3 +1,4 @@
+// STASHED ring. Not wired. The live agora menu is sceneCommandMenu.js.
 // Agora build menu - tilted annulus framing the agora. Hub hole stays on the
 // building; near the screen edge the disc slides off the building, then
 // shrinks, then fades.
@@ -115,10 +116,10 @@ const BUTTON_RING_ROTATIONS = /** @type {const} */ ({
   elemental: BUTTON_RING_BASE_ROTATION + BUTTON_RING_PAGE_STEP,
 });
 /**
- * Lean from horizontal toward the camera (not a full billboard).
- * ~32° - readable without standing the ring on end.
+ * Lean from horizontal toward the camera (not a billboard).
+ * Steeper than the old 32° so the ring is not laid back.
  */
-const MENU_TILT = 0.56;
+const MENU_TILT = 0.9;
 /**
  * Screen-edge pin (project agora → clamp → place on ray). Off for now - menu
  * stays above the agora. Flip to true when revisiting the HUD placement.

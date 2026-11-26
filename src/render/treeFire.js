@@ -1,6 +1,5 @@
-// Fire in the body of the tree. Tongues sit in the trunk and inner canopy
-// and are large enough to join, so the tree reads as burning - not as
-// pinprick lights on the outer leaves.
+// Fire in the outer canopy shell. Tongues sit just inside the foliage surface
+// so particles poke through the mesh instead of hiding in the trunk core.
 
 /** Keep in sync with scenery tree variant `modelScale`. */
 export const TREE_MODEL_SCALE = 0.9;
@@ -9,6 +8,12 @@ export const TREE_MESH_HEIGHT = 4.92;
 
 /** Camp socket scale is inherent × model (3 × 1.25). */
 export const CAMP_SOCKET_SCALE = 3.75;
+
+/** Push mesh-local anchors toward the bark / leaf shell (1 = old inner core). */
+export const TREE_FIRE_SHELL_RADIAL = 1.52;
+/** Crown sites lift toward the top of the mesh so smoke clears the silhouette. */
+export const TREE_FIRE_SHELL_LIFT_LEAF = 0.28;
+export const TREE_FIRE_SHELL_LIFT_TRUNK = 0.12;
 
 /**
  * Sites in trees.glb local space, inside the foliage (mesh radius reaches
@@ -26,7 +31,7 @@ export const TREE_FIRE_ANCHORS = [
   { x: -1.15, y: 1.55, z: 0.7, kind: 'leaf' },
   { x: 0.15, y: 2.15, z: 1.05, kind: 'leaf' },
   { x: -0.55, y: 2.85, z: -1.05, kind: 'leaf' },
-  { x: 0.75, y: 3.45, z: 0.45, kind: 'leaf', smoke: true },
+  { x: 0.75, y: 3.45, z: 0.45, kind: 'leaf' },
 ];
 
 export function treeWorldScale(stockScale) {
@@ -68,7 +73,7 @@ export function treeMeshToWorld(x, y, z, mx, my, mz, stockScale, yaw = 0, lean =
  */
 export function treeFireTongueScale(kind, stockScale) {
   const grow = Math.max(0.75, Math.min(1.7, treeWorldScale(stockScale) / 1.2));
-  return (kind === 'trunk' ? 2.15 : 2.75) * grow;
+  return (kind === 'trunk' ? 3.1 : 4.05) * grow;
 }
 
 /**
@@ -110,7 +115,18 @@ export function forEachTreeFireAnchor(tree, fn, indices = null) {
     const i = indices ? indices[k] : k;
     const a = TREE_FIRE_ANCHORS[i];
     if (!a) continue;
-    const w = treeMeshToWorld(tree.x, tree.y, tree.z, a.x, a.y, a.z, stockScale, yaw, lean);
+    const lift = a.kind === 'trunk' ? TREE_FIRE_SHELL_LIFT_TRUNK : TREE_FIRE_SHELL_LIFT_LEAF;
+    const w = treeMeshToWorld(
+      tree.x,
+      tree.y,
+      tree.z,
+      a.x * TREE_FIRE_SHELL_RADIAL,
+      a.y + lift,
+      a.z * TREE_FIRE_SHELL_RADIAL,
+      stockScale,
+      yaw,
+      lean,
+    );
     fn({
       x: w.x,
       y: w.y,

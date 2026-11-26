@@ -1146,6 +1146,7 @@ export function setupLobbyUi({
     e.stopPropagation();
   });
 
+  setDrawerOpen('adventure', true);
   refresh();
   return {
     refresh,

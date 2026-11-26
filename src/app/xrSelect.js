@@ -1,12 +1,23 @@
-// Headset select. Grip down shows that hand's beam; turning the controller
-// past a few degrees while held paints a lasso on the field, release selects
-// inside it. A grip tap that never turned selects what the beam hit at the
-// press (aim-assisted onto a nearby unit). Both hands run their own gesture.
-// Holding the other grip still is shift: the release adds, and the still grip
-// selects nothing when it lets go. Two lassos at once make one selection (the
-// later release adds to the earlier).
+// Headset select. The select button (grip by default, trigger when
+// XR_SWAP_TRIGGER_GRIP) shows that hand's beam; turning the controller past a
+// few degrees while held paints a lasso on the field, release selects inside
+// it. A tap that never turned selects what the beam hit at the press
+// (aim-assisted onto a nearby unit). Both hands run their own gesture.
+// Holding the other select button still is shift: the release adds, and the
+// still button selects nothing when it lets go. Two lassos at once make one
+// selection (the later release adds to the earlier).
 
-import { lassoOuterLoop } from './input/gamepadLasso.js';
+import {
+  appendBrushStamps,
+  BRUSH_WORLD_MIN_FRAC,
+  brushLoopXZ,
+  brushRadiusWorld,
+  lassoOuterLoop,
+  stepBrushRadius,
+  triggerBrushPressure,
+} from './input/gamepadLasso.js';
+import { questSelectHeld } from './xrQuestButtons.js';
+import { XR_SWAP_TRIGGER_GRIP } from './controlMods.js';
 
 /** Stroke sample spacing as a fraction of head height over the field. */
 const SAMPLE_FRAC = 0.012;
@@ -15,8 +26,7 @@ const TAP_DEG = 3;
 export const TAP_COS = Math.cos((TAP_DEG * Math.PI) / 180);
 /** Tap aim assist reach around the beam's ground hit, as a fraction of head height. */
 const TAP_SLOP_FRAC = 0.025;
-/** Lasso line width as a fraction of head height. */
-const LINE_FRAC = 0.006;
+/** Beam stub width when no live brush radius yet (head heights). */
 const LINE_MIN = 0.08;
 /** Beam length when the ray misses the field, in head heights. */
 const MISS_REACH = 3;
@@ -170,7 +180,7 @@ function hitOnGround(renderer, hit) {
  * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number }} ray
  * @param {{ x: number, y: number, z: number } | null} [hit]
  */
-export function beamState(renderer, ray, hit = renderer.rayToGround(ray), loop = null) {
+export function beamState(renderer, ray, hit = renderer.rayToGround(ray), loop = null, brushR = 0) {
   const head = rayHeadHeight(renderer, ray);
   const onGround = hitOnGround(renderer, hit);
   return {
@@ -178,13 +188,23 @@ export function beamState(renderer, ray, hit = renderer.rayToGround(ray), loop =
     length: hit ? Math.hypot(hit.x - ray.ox, hit.y - ray.oy, hit.z - ray.oz) : head * MISS_REACH,
     loop,
     tip: onGround ? { x: hit.x, z: hit.z } : null,
-    width: Math.max(LINE_MIN, head * LINE_FRAC),
+    width: Math.max(LINE_MIN, brushR > 0 ? brushR * 2 : head * BRUSH_WORLD_MIN_FRAC * 2),
   };
 }
 
-function gripHeld(src) {
-  return !!(src.gamepad?.buttons?.[1]?.pressed || src.squeezing);
+function selectTriggerValue(src) {
+  const idx = XR_SWAP_TRIGGER_GRIP ? 0 : 1;
+  const b = src?.gamepad?.buttons?.[idx];
+  const v = b?.value;
+  if (Number.isFinite(v) && v > 0) return v;
+  return b?.pressed || src?.squeezing ? 1 : 0;
 }
+
+function selectBrushPressure(src) {
+  return triggerBrushPressure(selectTriggerValue(src));
+}
+
+const gripHeld = questSelectHeld;
 
 /**
  * @param {{
@@ -204,6 +224,9 @@ export function createXrSelect({ renderer, getInput }) {
    *   pressHead: number,
    *   minDot: number,
    *   stroke: { x: number, z: number }[],
+   *   stamps: { x: number, y: number, r: number }[],
+   *   brushR: number,
+   *   brushScratch: { x: number, y: number }[],
    *   modifier: boolean,
    * }>}
    */
@@ -228,7 +251,9 @@ export function createXrSelect({ renderer, getInput }) {
       shift = true;
     }
     const add = shift || chainAdd;
-    const loop = swept ? strokeLoop(g.stroke) : null;
+    const loop = swept
+      ? (g.stamps.length ? brushLoopXZ(g.stamps, g.brushScratch) : strokeLoop(g.stroke))
+      : null;
     end(key, g);
     if (!swept && g.modifier) return;
     if (gestures.size > 0) chainAdd = true;
@@ -247,6 +272,7 @@ export function createXrSelect({ renderer, getInput }) {
   function begin(src, ray) {
     const hit = renderer.rayToGround(ray);
     const head = rayHeadHeight(renderer, ray);
+    const pressure = selectBrushPressure(src);
     const g = {
       slot: src.handedness || 'none',
       pressRay: ray,
@@ -254,9 +280,15 @@ export function createXrSelect({ renderer, getInput }) {
       pressHead: head,
       minDot: 1,
       stroke: [],
+      stamps: [],
+      brushR: stepBrushRadius(0, brushRadiusWorld(head, pressure)),
+      brushScratch: [],
       modifier: false,
     };
-    if (hit) noteStrokePoint(g.stroke, hit.x, hit.z, head * SAMPLE_FRAC);
+    if (hit) {
+      noteStrokePoint(g.stroke, hit.x, hit.z, head * SAMPLE_FRAC);
+      appendBrushStamps(g.stamps, hit.x, hit.z, g.brushR);
+    }
     gestures.set(src.source, g);
     return g;
   }
@@ -274,14 +306,18 @@ export function createXrSelect({ renderer, getInput }) {
     const p = g.pressRay;
     const dot = ray.dx * p.dx + ray.dy * p.dy + ray.dz * p.dz;
     if (dot < g.minDot) g.minDot = dot;
+    const head = rayHeadHeight(renderer, ray);
     const hit = renderer.rayToGround(ray);
-    if (hit) noteStrokePoint(g.stroke, hit.x, hit.z, rayHeadHeight(renderer, ray) * SAMPLE_FRAC);
-    renderer.setXrSelect(g.slot, beamState(
-      renderer,
-      ray,
-      hit,
-      g.minDot < TAP_COS ? strokeLoop(g.stroke) : null,
-    ));
+    const pressure = selectBrushPressure(src);
+    g.brushR = stepBrushRadius(g.brushR, brushRadiusWorld(head, pressure));
+    if (hit) {
+      noteStrokePoint(g.stroke, hit.x, hit.z, head * SAMPLE_FRAC);
+      appendBrushStamps(g.stamps, hit.x, hit.z, g.brushR);
+    }
+    const loop = g.minDot < TAP_COS
+      ? (g.stamps.length ? brushLoopXZ(g.stamps, g.brushScratch) : strokeLoop(g.stroke))
+      : null;
+    renderer.setXrSelect(g.slot, beamState(renderer, ray, hit, loop, g.brushR));
   }
 
   function endAll() {

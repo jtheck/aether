@@ -25,6 +25,7 @@ import { kill } from './combat.js';
 import { livingByOwner } from './world.js';
 import { clearEngagement } from './engagement.js';
 import { applyCastCombo } from './combos.js';
+import { meleeMissesAir } from './attackMode.js';
 import { isFlyer, isMechanical, isTransport, UNIT, unitAttacksBuildings } from './unitTypes.js';
 import { becomeBrigand, revertBrigand } from './brigand.js';
 import {
@@ -401,6 +402,11 @@ function applyAttack(world, field, ids, target, buildingIndex, doorIndex) {
   for (let k = 0; k < ids.length; k++) {
     const i = ids[k];
     if (!world.alive[i] || isCarried(world, i)) continue;
+    const repairingAllyMachine =
+      world.type[i] === UNIT.ENGINEER &&
+      world.owner[i] === world.owner[target] &&
+      isMechanical(world.type[target]);
+    if (!repairingAllyMachine && meleeMissesAir(world.type[i], world.type[target])) continue;
     becomeBrigand(world, i);
     dropTransportSeek(world, i);
     // Engineers convert ally-mechanical attacks into repair orders.

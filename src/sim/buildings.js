@@ -52,7 +52,7 @@ import { GENERATED_BUILDING_SPAWN_LOCAL } from './buildingSpawnLocal.generated.j
 /** @typedef {'unit' | 'upgrade' | 'building'} BuildingMenuItemKind */
 
 /** Placement / ghost yaw snaps (radians). Visual only - footprints stay axis-aligned. */
-export const BUILDING_YAW_SNAP = Math.PI / 12;
+export const BUILDING_YAW_SNAP = Math.PI / 6;
 
 /**
  * Baked spawn empties from building GLBs (`spawn_anchor` local translation).
@@ -106,7 +106,10 @@ export function buildingLocalToWorld(bx, bz, yawRad, lx, lz) {
  */
 export function snapBuildingYaw(yawRad) {
   if (!Number.isFinite(yawRad)) return 0;
-  return Math.round(yawRad / BUILDING_YAW_SNAP) * BUILDING_YAW_SNAP;
+  const step = BUILDING_YAW_SNAP;
+  const y = Math.atan2(Math.sin(yawRad), Math.cos(yawRad));
+  const n = Math.round(y / step);
+  return Math.atan2(Math.sin(n * step), Math.cos(n * step));
 }
 
 /** v1's fallback map seed. The plot's resting facing is a hash of its cell. */
@@ -116,8 +119,10 @@ const TILE_YAW_SEED = 12345;
  * By AIM_YAW_FULL the ghost matches the pointer. The band between eases,
  * so leaving the middle does not pop. The cell edge is half a tile out.
  */
-const AIM_YAW_DEAD = 0.18;
-const AIM_YAW_FULL = 0.42;
+const AIM_YAW_DEAD = 0.3;
+const AIM_YAW_FULL = 0.56;
+/** Ignore smaller aim nudges — smoothing handles the rest. */
+export const PLACEMENT_TRAVEL_EPS = 0.2;
 
 /** Resting facing for a snapped plot. Eight directions, stable for that cell. */
 export function buildingTileYaw(snapX, snapZ, tileSize = TILE_SIZE_F) {
@@ -132,9 +137,10 @@ export function buildingTileYaw(snapX, snapZ, tileSize = TILE_SIZE_F) {
 }
 
 /** Shortest-arc blend. `t` is 0 at `from` and 1 at `to`. */
-function lerpYaw(from, to, t) {
+export function lerpBuildingYaw(from, to, t) {
+  const k = Math.max(0, Math.min(1, t));
   const d = Math.atan2(Math.sin(to - from), Math.cos(to - from));
-  return from + d * t;
+  return from + d * k;
 }
 
 /**
@@ -158,7 +164,60 @@ export function buildingAimYaw(aimX, aimZ, snapX, snapZ, tileSize = TILE_SIZE_F)
   if (dist >= full) return aim;
   const t = (dist - tile * AIM_YAW_DEAD) / (full - tile * AIM_YAW_DEAD);
   const s = t * t * (3 - 2 * t);
-  return lerpYaw(rest, aim, s);
+  return lerpBuildingYaw(rest, aim, s);
+}
+
+/**
+ * Nearest {@link BUILDING_YAW_SNAP} snap; on an exact midpoint between steps, pick the step
+ * closest to {@link hintYaw} so hysteresis does not favor “sticky” angles.
+ */
+export function snapBuildingYawNearest(rawYaw, hintYaw = 0) {
+  if (!Number.isFinite(rawYaw)) return 0;
+  const step = BUILDING_YAW_SNAP;
+  const y = Math.atan2(Math.sin(rawYaw), Math.cos(rawYaw));
+  const hint = snapBuildingYaw(hintYaw);
+  const q = y / step;
+  const fl = Math.floor(q);
+  const frac = q - fl;
+  const midEps = 1e-7;
+  let n;
+  if (frac < 0.5 - midEps) n = fl;
+  else if (frac > 0.5 + midEps) n = fl + 1;
+  else {
+    const lo = snapBuildingYaw(fl * step);
+    const hi = snapBuildingYaw((fl + 1) * step);
+    const dLo = Math.abs(Math.atan2(Math.sin(lo - hint), Math.cos(lo - hint)));
+    const dHi = Math.abs(Math.atan2(Math.sin(hi - hint), Math.cos(hi - hint)));
+    n = dLo <= dHi ? fl : fl + 1;
+  }
+  return snapBuildingYaw(n * step);
+}
+
+/**
+ * Placement ghost facing from drag direction (world Δ aim, or ghost hop).
+ * Snaps to the nearest building yaw step; keeps {@link priorYaw} when travel is tiny.
+ */
+export function buildingPlacementTravelYaw(dx, dz, priorYaw, minDist = PLACEMENT_TRAVEL_EPS) {
+  const rest = snapBuildingYaw(Number.isFinite(priorYaw) ? priorYaw : 0);
+  const dist = Math.hypot(dx, dz);
+  if (!(dist >= minDist)) return rest;
+  return snapBuildingYawNearest(Math.atan2(dx, dz), rest);
+}
+
+/**
+ * Footprint hop: at most one {@link BUILDING_YAW_SNAP} step toward the hop
+ * bearing (never the full turn in a single tile crossing).
+ */
+export function buildingPlacementFootprintHopYaw(dx, dz, priorYaw) {
+  const rest = snapBuildingYaw(Number.isFinite(priorYaw) ? priorYaw : 0);
+  const dist = Math.hypot(dx, dz);
+  if (!(dist >= 1e-4)) return rest;
+  const aim = snapBuildingYawNearest(Math.atan2(dx, dz), rest);
+  const delta = Math.atan2(Math.sin(aim - rest), Math.cos(aim - rest));
+  const step = BUILDING_YAW_SNAP;
+  if (Math.abs(delta) <= step * 0.5) return rest;
+  if (Math.abs(delta) <= step + 1e-9) return aim;
+  return snapBuildingYaw(rest + Math.sign(delta) * step);
 }
 
 /**
@@ -877,14 +936,56 @@ export function snapBuildingWorld(typeId, xFixed, zFixed) {
 }
 
 /**
- * World span the pointer turns a ghost inside. Odd plots use one tile, the
- * center tile. A 2×2 sits on a corner, so the turn spans the whole footprint.
+ * World span for placement rotation bands (radii scale with {@link AIM_YAW_DEAD}
+ * and {@link AIM_YAW_FULL}). Matches the footprint’s long axis so dragging to the
+ * pad edge lands near “full” pointer tracking on every building size.
  * @param {string} typeId
  */
 export function buildingAimSpan(typeId) {
   const fp = getBuildingFootprint(typeId);
-  if (!fp || fp.w !== 2 || fp.h !== 2) return TILE_SIZE_F;
-  return TILE_SIZE_F * 2;
+  if (!fp) return TILE_SIZE_F;
+  const tiles = Math.max(fp.w | 0, fp.h | 0);
+  return TILE_SIZE_F * Math.max(1, tiles);
+}
+
+/**
+ * Footprint geometric center in world float for a snapped placement point.
+ * Orbit / yaw uses this pivot (equals the snap for built-in footprints).
+ * @param {string} typeId
+ * @param {number} xFixed placement snap X (Q16.16)
+ * @param {number} zFixed
+ */
+export function buildingFootprintCenterWorld(typeId, xFixed, zFixed) {
+  const b = buildingFootprintBounds(typeId, xFixed, zFixed);
+  if (!b) {
+    return { x: fx.toFloat(xFixed), z: fx.toFloat(zFixed) };
+  }
+  const cx =
+    (fx.toFloat(tileCenterX(b.x0)) + fx.toFloat(tileCenterX(b.x0 + b.w - 1))) * 0.5;
+  const cz =
+    (fx.toFloat(tileCenterY(b.z0)) + fx.toFloat(tileCenterY(b.z0 + b.h - 1))) * 0.5;
+  return { x: cx, z: cz };
+}
+
+/**
+ * @param {string} typeId
+ * @returns {{
+ *   spanWorld: number,
+ *   deadRadius: number,
+ *   fullRadius: number,
+ *   yawSnapRad: number,
+ *   yawSnapSteps: number,
+ * }}
+ */
+export function placementAimBand(typeId) {
+  const span = buildingAimSpan(typeId);
+  return {
+    spanWorld: span,
+    deadRadius: span * AIM_YAW_DEAD,
+    fullRadius: span * AIM_YAW_FULL,
+    yawSnapRad: BUILDING_YAW_SNAP,
+    yawSnapSteps: Math.round((2 * Math.PI) / BUILDING_YAW_SNAP),
+  };
 }
 
 /**
@@ -1628,9 +1729,8 @@ export function applyPlaceBuilding(w, field, cmd) {
   if (type === 'agora') {
     if (!selectionHasAgoraFound(w, cmd.entities, owner)) return -1;
     const bank = ownerBank(w, owner);
-    const purse = !!w.koth;
-    if (!canAffordAgoraFound(bank, purse)) return -1;
-    refundCost = cloneRefundCost(agoraFoundCost(bank, purse));
+    if (!canAffordAgoraFound(bank)) return -1;
+    refundCost = cloneRefundCost(agoraFoundCost(bank));
     if (!spendResources(w, owner, refundCost)) return -1;
   } else if (!spendResources(w, owner, getBuildingCost(type))) {
     return -1;

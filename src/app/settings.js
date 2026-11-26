@@ -171,6 +171,7 @@ export const PLAYER_COLORS = [
   COPPER,
   { hex: '#3CB038', name: 'Light Green' },
   { hex: '#232323', name: 'Dark Grey' },
+  { hex: '#000000', name: 'Black' },
   { hex: '#B82880', name: 'Pink' },
 ];
 

@@ -4,7 +4,7 @@
 /** @type {Readonly<Record<string, { x: number, y: number, z: number }>>} */
 export const GENERATED_BUILDING_SPAWN_LOCAL = Object.freeze({
   "barracks": Object.freeze({ x: -7.836507320404053, y: 0.6802647113800049, z: -4.89863920211792 }),
-  "factory": Object.freeze({ x: 1.390432357788086, y: 1.3514665365219116, z: 6.3429059982299805 }),
+  "factory": Object.freeze({ x: 1.1618136167526245, y: 1.3982555866241455, z: 6.760910511016846 }),
   "tavern": Object.freeze({ x: 0.13993564248085022, y: 1.1949361562728882, z: -4.495212554931641 }),
   "workshop": Object.freeze({ x: -4.270832061767578, y: 1.2745810747146606, z: 4.848942279815674 }),
 });

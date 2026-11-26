@@ -104,7 +104,7 @@ describe('building combat', () => {
     assert.ok(w.buildings[bi].hp < startHp);
   });
 
-  it('priests ignore building ATTACK orders and do not auto-acquire placeables', () => {
+  it('priests staff buildings in melee but never holy-slash them from afar', () => {
     const w = richWorld(11);
     const field = buildField(11, { width: 64, height: 64 });
     const bi = placeFinished(w, field, { owner: 1, type: 'camp', x: 12, z: 0, hp: 80 });
@@ -118,17 +118,11 @@ describe('building combat', () => {
     applyCommands(w, field, [
       { type: CMD.ATTACK, entities: [priest], target: -1, buildingIndex: bi },
     ]);
-    assert.equal(w.order[priest], ORDER.IDLE);
-    assert.equal(w.targetBuilding[priest], -1);
-    for (let t = 0; t < 12; t++) {
-      combatSystem(w, field);
-      w.tick++;
-    }
-    assert.equal(w.targetBuilding[priest], -1);
-    assert.equal(w.order[priest], ORDER.IDLE);
+    assert.equal(w.order[priest], ORDER.ATTACK);
+    assert.equal(w.targetBuilding[priest], bi);
     for (let t = 0; t < 40; t++) step(w, field);
-    assert.equal(w.buildings[bi].hp, startHp);
     assert.equal(w.projectiles.activeCount, 0);
+    assert.ok(w.buildings[bi].hp < startHp, 'melee staff chips the camp once adjacent');
   });
 
   it('monks ignore buildings and only fight on a pointed target or grouped attack-move', () => {

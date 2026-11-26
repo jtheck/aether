@@ -5,6 +5,7 @@
 
 import * as fx from './fixed.js';
 import { applyDamage } from './damage.js';
+import { meleeMissesAir } from './attackMode.js';
 import { getUnitDef } from './unitTypes.js';
 import { isHostile } from './teams.js';
 import { claimEngagement, clearEngagement } from './engagement.js';
@@ -480,6 +481,7 @@ export function maybeConfuseAlly(w, i) {
   for (let j = 0; j < w.count; j++) {
     if (j === i || !w.alive[j]) continue;
     if (w.owner[j] !== w.owner[i]) continue;
+    if (meleeMissesAir(w.type[i], w.type[j])) continue;
     const d2 = fx.dist2(w.px[i], w.py[i], w.px[j], w.py[j]);
     if (d2 > CONFUSE_RADIUS2) continue;
     if (d2 < bestD2 || (d2 === bestD2 && (best < 0 || j < best))) {

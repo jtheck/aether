@@ -404,7 +404,7 @@ export function buildingHasWork(b) {
   return false;
 }
 
-/** Units of this type sitting on other selected buildings: `+3`. */
+/** Units of this type sitting on the other buildings: `+3`. */
 export function extraQueueBadge(extra) {
   const n = extra | 0;
   return n > 0 ? `+${n}` : '';
@@ -454,39 +454,54 @@ export function pickFirstBuiltIndex(indices, buildings) {
 }
 
 /**
- * Framed building's own queue plus extras on the rest of the group.
- * `count` / `progress` are the primary site; `extra` is other buildings.
+ * Framed building's own queue, plus the same tracks on every other living
+ * building of a selected type that this owner has. Selecting one barracks
+ * still shows the other barracks in the extra tally.
+ * `count` is the framed site. `extra` is the rest.
+ * `progress` is the soonest selected site of that track (not unselected extras).
  * @param {number[]} indices
- * @param {{ tracks?: { kind?: string, id?: string, count?: number, progress?: number }[], hp?: number }[] | null | undefined} buildings
+ * @param {{ owner?: number, type?: string, tracks?: { kind?: string, id?: string, count?: number, progress?: number }[], hp?: number }[] | null | undefined} buildings
  * @param {number} [primaryIndex]
  */
 export function aggregateBuildingTracks(indices, buildings, primaryIndex = -1) {
   const primary = primaryIndex | 0;
-  /** @type {Record<string, { progress: number, count: number, extra: number }>} */
-  const tracks = {};
+  const selected = new Set();
+  /** @type {Set<string>} */
+  const types = new Set();
   for (let k = 0; k < (indices?.length ?? 0); k++) {
     const i = indices[k] | 0;
-    const b = buildings?.[i];
-    if (!buildingAlive(b)) continue;
+    selected.add(i);
+    const t = buildings?.[i]?.type;
+    if (t) types.add(t);
+  }
+  const ownerB = buildings?.[primary] ?? buildings?.[indices?.[0]];
+  const owner = ownerB ? (ownerB.owner | 0) : 0;
+  const scanAll = primary >= 0;
+  /** @type {Record<string, { progress: number, count: number, extra: number }>} */
+  const tracks = {};
+  const n = buildings?.length ?? 0;
+  for (let i = 0; i < n; i++) {
+    if (!scanAll && !selected.has(i)) continue;
+    const b = buildings[i];
+    if (!buildingAlive(b) || (b.owner | 0) !== owner) continue;
+    if (scanAll && !selected.has(i) && !types.has(b.type)) continue;
     const isPrimary = primary < 0 || i === primary;
     for (const t of b?.tracks ?? []) {
       if (!t?.id || (t.count | 0) < 1) continue;
       const key = `${t.kind}:${t.id}`;
-      const n = t.count | 0;
+      const count = t.count | 0;
       const progress = Number(t.progress) || 0;
       const prev = tracks[key];
+      const selectedProg = selected.has(i) ? progress : 0;
       if (!prev) {
         tracks[key] = isPrimary
-          ? { progress, count: n, extra: 0 }
-          : { progress: 0, count: 0, extra: n };
+          ? { progress: selectedProg, count, extra: 0 }
+          : { progress: selectedProg, count: 0, extra: count };
         continue;
       }
-      if (isPrimary) {
-        prev.count += n;
-        prev.progress = progress;
-      } else {
-        prev.extra += n;
-      }
+      if (isPrimary) prev.count += count;
+      else prev.extra += count;
+      if (selectedProg > prev.progress) prev.progress = selectedProg;
     }
   }
   return tracks;

@@ -1,52 +1,62 @@
 // Headset control scheme for Quest Touch (two face buttons per hand,
-// stick + click, grip, trigger).
+// stick + click, grip, trigger). When XR_SWAP_TRIGGER_GRIP is on, trigger and
+// grip swap the roles below.
 //
-//   Grip            select: tap picks under the beam, hold and sweep lassoes.
-//                   Holding the other grip still makes a release additive.
-//   Left trigger    force-move at the left beam.
-//   Right trigger   attack-move at the right beam.
+//   Select button   tap picks under the beam, hold and sweep lassoes.
+//                   Holding the other select button still makes a release additive.
+//   Left action     force-move at the left beam; held repeats.
+//   Right action    attack-move at the right beam; held repeats.
 //                   A selected production building plants a train rally
 //                   (force-move / attack-move) even while its action pie is open.
-//   Y / B           unit ability at that hand's beam: cast, unload a
-//                   loaded transport, or found an agora.
-//   X / A           cancel: back out of a pie or ghost-place, or clear the selection.
+//   Face primary    unit ability at that hand's beam; held repeats (see controlMods).
+//   Face secondary  cancel: back out of a pie or ghost-place, or clear the selection.
 //   Sticks          either stick pans, no deadzone. Both the same way add.
 //                   The stick already out keeps panning; the other turns.
-//                   Pinch lifts and spread lowers, and a hard pinch quiets
-//                   the pan. Right stick click
+//                   Pinch/spread: free crawl, four stepped heights (ground-run
+//                   plus three floats), free roam above. Ground-run until a
+//                   full deliberate pinch. Right stick click
 //                   latches follow on the selection until a pan or another
-//                   click. Left stick click cycles three altitudes and holds
-//                   that band until a pinch. Neither click takes the sticks
-//                   off pan.
-// Control groups stay on the desktop and pad; the headset has no buttons for them.
+//                   click. Left stick click (hold) steps those four heights on a repeat timer.
+//                   Neither click takes the sticks off pan.
+// Wrist pads: control-group triangles in a row up the arm, pause on that
+// same face. The other hand's ray draws a dot on the row; its action
+// button taps the pad. Face A/B/X/Y stay on the controller, not the bracer.
 //
 // Pie menu open (agora build / building actions): point a beam at a slice.
-// A trigger or a grip on that slice picks it. Holding either on a unit
-// keeps queuing. A trigger that misses the pie
-// issues the same order as in play (rally when buildings are selected).
+// Action or select on that slice picks it. Holding either on a unit keeps
+// queuing. An action press that misses the pie issues the same order as in
+// play (rally when buildings are selected).
 // The sticks keep panning, turning, and lifting while a pie is open.
 // Ghost-place: the beam walks the ghost. Facing is where the beam sits
-// inside the plot. Either trigger stamps. X / A backs out, and so does a
-// grip sweep that catches nothing. A grip tap does not select.
-// A hand's aim beam shows while a finger rests on its trigger, and always in
-// a pie menu or ghost-place. The beam carries a wire handle straight back
-// from where it leaves the hand. Two pads on it — Move and Select on the
-// left, Attack and Select on the right — fire that laser's aim when the
-// other hand's trigger presses them.
+// inside the plot. Either action button stamps. X / A backs out, and so does a
+// select sweep that catches nothing. A select tap does not select.
+// Bracer + a short aim stub stay on while controllers track; full beam length
+// when the select button or trigger touch is down, or in a pie / ghost-place.
 
+import { heldRepeat } from './input/gamepad.js';
+import {
+  XR_ALTITUDE_CLICK_INITIAL_MS,
+  XR_ALTITUDE_CLICK_REPEAT_MS,
+  XR_HELD_CAST_INITIAL_MS,
+  XR_HELD_CAST_REPEAT_MS,
+  XR_HELD_ORDER_INITIAL_MS,
+  XR_HELD_ORDER_REPEAT_MS,
+} from './controlMods.js';
+import {
+  questActionDown,
+  questActionHeld,
+  questActionUp,
+  questSelectDown,
+  questSelectHeldPad,
+} from './xrQuestButtons.js';
 import { readQuestTouch } from './xrRig.js';
-import { beamState, createXrSelect, sourceRay } from './xrSelect.js';
-import { pickHandleButton } from '../render/xrLasso.js';
+import { beamState, createXrSelect, rayHeadHeight, sourceRay } from './xrSelect.js';
+import { pickHandleButton, wristAimLocal, wristControlGroupId, XR_BEAM_STUB_FRAC } from '../render/xrLasso.js';
 import { nextQueueHold, unitQueueKey } from './input/queueHold.js';
 
 const HANDS = /** @type {const} */ (['left', 'right']);
 const BUTTONS = /** @type {const} */ (['trigger', 'grip', 'primary', 'secondary', 'stickClick']);
-/** Pad 0 orders at that laser, pad 1 selects there. */
-const HANDLE_ACTION = {
-  left: ['move', 'select'],
-  right: ['attack', 'select'],
-};
-
+/** Hold left stick click to walk altitude presets (see controlMods for ms). */
 function blankHand() {
   return { trigger: false, grip: false, primary: false, secondary: false, stickClick: false, touch: false };
 }
@@ -61,6 +71,7 @@ function pickKey(pick) {
  *   getInput: () => object | null | undefined,
  *   onFollowToggle?: () => void,
  *   onAltitude?: () => void,
+ *   onPauseToggle?: () => void,
  * }} opts
  */
 export function createXrControls({
@@ -68,6 +79,7 @@ export function createXrControls({
   getInput,
   onFollowToggle,
   onAltitude,
+  onPauseToggle,
   now = () => performance.now(),
 }) {
   const select = createXrSelect({ renderer, getInput });
@@ -79,6 +91,17 @@ export function createXrControls({
   const beamUp = { left: false, right: false };
   let hoverKey = '';
   let trainHold = { id: null, heldAt: 0, lastAt: 0 };
+  /** Group id while the other trigger is down on a wrist pad (release needs hold assign). */
+  const wristGroupHold = { left: null, right: null };
+  let altitudeClickHold = 0;
+  let altitudeClickHeldAt = 0;
+  let altitudeClickLastAt = 0;
+  const castHold = { left: 0, right: 0 };
+  const castHeldAt = { left: 0, right: 0 };
+  const castLastAt = { left: 0, right: 0 };
+  const orderHold = { left: 0, right: 0 };
+  const orderHeldAt = { left: 0, right: 0 };
+  const orderLastAt = { left: 0, right: 0 };
 
   function clearTrainHold() {
     trainHold = { id: null, heldAt: 0, lastAt: 0 };
@@ -140,31 +163,58 @@ export function createXrControls({
     return { left: false, right: false };
   }
 
-  function beamWanted(hands, hand, placing, radial) {
-    const h = hands[hand];
-    return !!h.ray && (h.held.touch || h.held.grip || placing || radial);
+  function bracerVisible(handRay) {
+    return !!handRay;
+  }
+
+  function fullBeam(h, wideMenu) {
+    return h.held.touch || questSelectHeldPad(h.held) || wideMenu;
   }
 
   /**
    * Other-hand trigger on a visible handle pad. The pad uses the laser it
    * sits on. A held trigger keeps that hand from also ordering or queuing.
    */
-  function takeHandlePress(input, hands, placing, radial) {
+  function takeHandlePress(input, hands, placing, radialOpen) {
     const used = blankUsed();
-    if (!input || placing) return used;
+    if (!input) return used;
     for (const hand of HANDS) {
-      if (!beamWanted(hands, hand, placing, radial)) continue;
       const otherName = hand === 'left' ? 'right' : 'left';
       const other = hands[otherName];
-      if (!other.held.trigger || !other.ray) continue;
+      if (questActionDown(other.down) || questActionUp(other.up)) {
+        const heldId = wristGroupHold[otherName];
+        if (questActionUp(other.up) && heldId != null) {
+          input.handleControlGroupUp?.(heldId);
+          wristGroupHold[otherName] = null;
+          used[otherName] = true;
+        }
+      }
+    }
+    if (placing) return used;
+    for (const hand of HANDS) {
+      if (!bracerVisible(hands[hand].ray)) continue;
+      const otherName = hand === 'left' ? 'right' : 'left';
+      const other = hands[otherName];
+      if (!other.ray) continue;
       const hit = pickHandleButton(hands[hand].ray, other.ray);
-      if (hit == null) continue;
-      used[otherName] = true;
-      if (!other.down.trigger) continue;
-      const kind = HANDLE_ACTION[hand][hit];
-      if (kind === 'move') input.forceMoveAtRay?.(hands[hand].ray);
-      else if (kind === 'attack') input.attackMoveAtRay?.(hands[hand].ray);
-      else input.selectAtRay?.(hands[hand].ray);
+      if (hit == null) {
+        if (!questActionHeld(other.held) && wristGroupHold[otherName] != null) {
+          wristGroupHold[otherName] = null;
+          input.handleControlGroupCancel?.();
+        }
+        continue;
+      }
+      if (questActionHeld(other.held) || questActionDown(other.down)) used[otherName] = true;
+      if (!questActionDown(other.down)) continue;
+      if (hit === 5) {
+        onPauseToggle?.();
+        continue;
+      }
+      const gid = wristControlGroupId(hand, hit);
+      if (gid == null) continue;
+      wristGroupHold[otherName] = gid;
+      if (questSelectHeldPad(other.held)) input.handleControlGroupDown?.(gid, { addNow: true });
+      else input.pressControlGroup?.(gid);
     }
     return used;
   }
@@ -185,20 +235,22 @@ export function createXrControls({
         input.cancelRadial?.();
         return;
       }
-      const unitId = ((h.held.trigger && !used[hand]) || h.held.grip) ? unitQueueKey(beam[hand]) : null;
+      const unitId = ((questActionHeld(h.held) && !used[hand]) || questSelectHeldPad(h.held))
+        ? unitQueueKey(beam[hand])
+        : null;
       if (unitId) {
-        if (h.held.grip) claimed.add(h.src?.source);
+        if (questSelectHeldPad(h.held)) claimed.add(h.src?.source);
         const next = nextQueueHold(trainHold, unitId, now());
         trainHold = { id: next.id, heldAt: next.heldAt, lastAt: next.lastAt };
         if (next.fire) input.confirmRadialPick?.(beam[hand]);
         return;
       }
-      if (d.grip && beam[hand]) {
+      if (questSelectDown(d) && beam[hand]) {
         claimed.add(h.src?.source);
         input.confirmRadialPick?.(beam[hand]);
         return;
       }
-      if (d.trigger && !used[hand] && beam[hand]) {
+      if (questActionDown(d) && !used[hand] && beam[hand]) {
         input.confirmRadialPick?.(beam[hand]);
         return;
       }
@@ -207,11 +259,50 @@ export function createXrControls({
     issueTriggerOrders(input, hands, used);
   }
 
-  /** Left force-moves, right attack-moves. Buildings turn those into rallies. */
+  /** Left force-moves, right attack-moves. Held action buttons repeat on a timer. */
   function issueTriggerOrders(input, hands, used) {
-    const { left, right } = hands;
-    if (left.down.trigger && !used.left && left.ray) input.forceMoveAtRay?.(left.ray);
-    if (right.down.trigger && !used.right && right.ray) input.attackMoveAtRay?.(right.ray);
+    const t = now();
+    for (const hand of HANDS) {
+      const h = hands[hand];
+      const on = questActionHeld(h.held) && !used[hand] && h.ray ? 1 : 0;
+      const rep = heldRepeat(
+        on,
+        orderHold[hand],
+        t,
+        orderHeldAt[hand],
+        orderLastAt[hand],
+        XR_HELD_ORDER_INITIAL_MS,
+        XR_HELD_ORDER_REPEAT_MS,
+      );
+      orderHold[hand] = on;
+      orderHeldAt[hand] = rep.heldAt;
+      orderLastAt[hand] = rep.lastAt;
+      if (!rep.fire) continue;
+      if (hand === 'left') input.forceMoveAtRay?.(h.ray);
+      else input.attackMoveAtRay?.(h.ray);
+    }
+  }
+
+  /** Face primary held: repeat cast at each hand's beam (play mode only). */
+  function stepCastRepeat(input, hands) {
+    const t = now();
+    for (const hand of HANDS) {
+      const h = hands[hand];
+      const on = h.held.primary && h.ray ? 1 : 0;
+      const rep = heldRepeat(
+        on,
+        castHold[hand],
+        t,
+        castHeldAt[hand],
+        castLastAt[hand],
+        XR_HELD_CAST_INITIAL_MS,
+        XR_HELD_CAST_REPEAT_MS,
+      );
+      castHold[hand] = on;
+      castHeldAt[hand] = rep.heldAt;
+      castLastAt[hand] = rep.lastAt;
+      if (rep.fire) input.castAbilityAtRay?.(h.ray);
+    }
   }
 
   /** Ghost-place: the beam walks the ghost, either trigger stamps, X / A backs out. */
@@ -224,7 +315,7 @@ export function createXrControls({
     }
     if (hands[aimHand].ray) input.previewPlacementAtRay?.(hands[aimHand].ray);
     for (const hand of HANDS) {
-      if (hands[hand].down.trigger && !used[hand]) {
+      if (questActionDown(hands[hand].down) && !used[hand]) {
         input.confirmPlacementAtRay?.(hands[hand].ray);
         return;
       }
@@ -234,28 +325,52 @@ export function createXrControls({
   function stepPlay(input, hands, used) {
     issueTriggerOrders(input, hands, used);
     for (const hand of HANDS) {
-      const h = hands[hand];
-      if (h.down.secondary) {
+      if (hands[hand].down.secondary) {
         input.clearSelection?.();
         return;
       }
-      if (h.down.primary && h.ray) input.castAbilityAtRay?.(h.ray);
     }
+    stepCastRepeat(input, hands);
   }
 
   function stepHolds(hands) {
     if (hands.right.down.stickClick) onFollowToggle?.();
-    if (hands.left.down.stickClick) onAltitude?.();
+    const t = now();
+    const held = hands.left.held.stickClick ? 1 : 0;
+    const rep = heldRepeat(
+      held,
+      altitudeClickHold,
+      t,
+      altitudeClickHeldAt,
+      altitudeClickLastAt,
+      XR_ALTITUDE_CLICK_INITIAL_MS,
+      XR_ALTITUDE_CLICK_REPEAT_MS,
+    );
+    altitudeClickHold = held;
+    altitudeClickHeldAt = rep.heldAt;
+    altitudeClickLastAt = rep.lastAt;
+    if (rep.fire) onAltitude?.();
   }
 
   function stepBeams(hands, wide) {
     for (const hand of HANDS) {
       const h = hands[hand];
-      const want = !!h.ray && !select.isActive(hand) && (h.held.touch || wide);
+      const want = bracerVisible(h.ray) && !select.isActive(hand);
       if (want) {
         const state = beamState(renderer, h.ray);
+        if (!fullBeam(h, wide)) {
+          const head = rayHeadHeight(renderer, h.ray);
+          state.length = head * XR_BEAM_STUB_FRAC;
+        }
         const other = hand === 'left' ? 'right' : 'left';
-        state.hot = hands[other].ray ? pickHandleButton(h.ray, hands[other].ray) : null;
+        const hot = hands[other].ray ? pickHandleButton(h.ray, hands[other].ray) : null;
+        const poking = questActionHeld(hands[other].held);
+        state.hot = hot;
+        state.aim = hands[other].ray ? wristAimLocal(h.ray, hands[other].ray) : null;
+        state.press = {
+          pause: !!(poking && hot === 5),
+          group: poking && hot != null && hot >= 2 && hot <= 4 ? hot : -1,
+        };
         renderer.setXrSelect(hand, state);
         beamUp[hand] = true;
       } else if (beamUp[hand]) {

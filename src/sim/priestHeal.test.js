@@ -326,3 +326,43 @@ describe('priest heal', () => {
     }
   });
 });
+
+describe('priest melee', () => {
+  it('staffs a foe in the holy-slash dead zone', () => {
+    const w = createWorld(91);
+    const field = openField();
+    const priest = spawn(w, { x: 0, y: 0, type: UNIT.PRIEST, owner: 0 });
+    const foe = spawn(w, {
+      x: fx.fromInt(3),
+      y: 0,
+      type: UNIT.WARRIOR,
+      owner: 1,
+      hp: 80,
+    });
+    w.order[priest] = ORDER.ATTACK;
+    w.targetEntity[priest] = foe;
+    lockAttackFocus(w, priest);
+    w.attackCd[priest] = 0;
+    tick(w, field);
+    assert.equal(w.projectiles.activeCount, 0);
+    assert.ok(w.hp[foe] < 80);
+  });
+
+  it('still holy-slashes at stand-off range', () => {
+    const w = createWorld(92);
+    const field = openField();
+    const priest = spawn(w, { x: 0, y: 0, type: UNIT.PRIEST, owner: 0 });
+    const foe = spawn(w, {
+      x: fx.fromInt(12),
+      y: 0,
+      type: UNIT.WARRIOR,
+      owner: 1,
+    });
+    w.order[priest] = ORDER.ATTACK;
+    w.targetEntity[priest] = foe;
+    lockAttackFocus(w, priest);
+    w.attackCd[priest] = 0;
+    tick(w, field);
+    assert.equal(w.projectiles.activeCount, 1);
+  });
+});

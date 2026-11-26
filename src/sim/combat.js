@@ -1,7 +1,8 @@
 // Combat - acquire targets, chase, deal damage on cooldown.
 
 import * as fx from './fixed.js';
-import { ATTACK_DELIVERY, getUnitDef, UNIT, unitAttacksBuildings, unitIdleHunts } from './unitTypes.js';
+import { meleeMissesAir, strikeDamage, unitMeleeRange, usesMeleeStrike } from './attackMode.js';
+import { ATTACK_DELIVERY, getUnitDef, isFlyer, UNIT, unitAttacksBuildings, unitIdleHunts } from './unitTypes.js';
 import { unitAttackDamage } from './namedUnit.js';
 import { revertBrigand } from './brigand.js';
 import { isHostile } from './teams.js';
@@ -135,6 +136,7 @@ export function acquireTargets(w, field) {
       if (j === i || !w.alive[j] || !isHostile(w.owner[i], w.owner[j])) return;
       if (j === (w.leashDrop?.[i] ?? -1)) return;
       if (w.carriedBy?.[j] >= 0) return;
+      if (meleeMissesAir(w.type[i], w.type[j])) return;
       w.metrics.combatCandidates++;
       const d2 = fx.dist2(w.px[i], w.py[i], w.px[j], w.py[j]);
       if (d2 > aggro2) return;
@@ -314,6 +316,7 @@ function nearestHostileWithin(w, i, radius, minRange) {
   forEachNearby(w, w.px[i], w.py[i], radius, (j) => {
     if (j === i || !w.alive[j] || !isHostile(w.owner[i], w.owner[j])) return;
     if (w.carriedBy?.[j] >= 0) return;
+    if (meleeMissesAir(w.type[i], w.type[j])) return;
     const d2 = fx.dist2(w.px[i], w.py[i], w.px[j], w.py[j]);
     if (d2 > range2 || d2 < min2) return;
     if (d2 < bestD2 || (d2 === bestD2 && j < best)) {
@@ -326,7 +329,43 @@ function nearestHostileWithin(w, i, radius, minRange) {
 
 /** Nearest hostile whose center sits inside weapon range and outside min range. */
 function nearestHostileInWeaponRange(w, i, def) {
+  const mr = unitMeleeRange(def);
+  if (mr > 0) {
+    const close = nearestHostileWithin(w, i, mr + fx.fromFloat(6), 0);
+    if (close >= 0) return close;
+  }
   return nearestHostileWithin(w, i, def.attackRange, def.minRange);
+}
+
+function releaseAttack(w, field, i, def, opts) {
+  const dmg = unitAttackDamage(w, i, strikeDamage(w, i, def));
+  const melee = usesMeleeStrike(w, i, def);
+  const { target = -1, targetBuilding = -1, targetDoor = -1, aimX, aimY } = opts;
+  if (melee) {
+    if (target >= 0) {
+      if (!isFlyer(w.type[target])) applyDamage(w, target, dmg, i);
+    }
+    else if (targetDoor >= 0) applyDamageDoor(w, field, targetDoor, dmg);
+    else if (targetBuilding >= 0) {
+      applyDamageBuilding(w, field, targetBuilding, dmg, w.owner[i] | 0);
+    }
+    return;
+  }
+  spawnAttackShot(w, {
+    type: def.projectileType,
+    owner: w.owner[i],
+    source: i,
+    target,
+    targetBuilding,
+    targetDoor,
+    x: w.px[i],
+    y: w.py[i],
+    aimX,
+    aimY,
+    damage: dmg,
+    volley: def.volley,
+    volleySpread: def.volleySpread,
+  });
 }
 
 function nearestHostileBuildingInWeaponRange(w, i) {
@@ -354,7 +393,7 @@ function setAttackCooldown(w, i, def) {
   if (jitter > 1 && w.rng) cd += rngRange(w.rng, 0, jitter);
   w.attackCd[i] = cd;
 }
-function fireWhileMoving(w, i) {
+function fireWhileMoving(w, field, i) {
   if (w.attackCd[i] > 0 || w.distractCd[i] > 0) return;
   const def = getUnitDef(w.type[i]);
   const unit = nearestHostileInWeaponRange(w, i, def);
@@ -375,19 +414,11 @@ function fireWhileMoving(w, i) {
   } else {
     return;
   }
-  spawnAttackShot(w, {
-    type: def.projectileType,
-    owner: w.owner[i],
-    source: i,
+  releaseAttack(w, field, i, def, {
     target,
     targetBuilding,
-    x: w.px[i],
-    y: w.py[i],
     aimX,
     aimY,
-    damage: unitAttackDamage(w, i, def.attackDamage),
-    volley: def.volley,
-    volleySpread: def.volleySpread,
   });
   setAttackCooldown(w, i, def);
 }
@@ -404,7 +435,7 @@ function resolveAttacks(w, field) {
       continue;
     }
     if (w.order[i] === w.ORDER.ATTACK_MOVE && getUnitDef(w.type[i]).firesOnMove) {
-      fireWhileMoving(w, i);
+      fireWhileMoving(w, field, i);
       continue;
     }
     if (w.order[i] !== w.ORDER.ATTACK) continue;
@@ -417,6 +448,10 @@ function resolveAttacks(w, field) {
     const di = w.targetDoor?.[i] ?? -1;
     const door = di >= 0 ? w.doors?.[di] : null;
     const unitOk = target >= 0 && w.alive[target] && !(w.carriedBy?.[target] >= 0);
+    if (unitOk && meleeMissesAir(w.type[i], w.type[target])) {
+      endAttack(w, i);
+      continue;
+    }
     const buildingOk = isBuildingAlive(b) && unitAttacksBuildings(w.type[i]);
     const doorOk = isDoorAlive(door) && unitAttacksBuildings(w.type[i]);
     if (!unitOk && !buildingOk && !doorOk) {
@@ -437,24 +472,11 @@ function resolveAttacks(w, field) {
         w.vy[i] = 0;
         clearPath(w, i);
         if (w.attackCd[i] <= 0) {
-          if (def.attackDelivery === ATTACK_DELIVERY.PROJECTILE) {
-            spawnAttackShot(w, {
-              type: def.projectileType,
-              owner: w.owner[i],
-              source: i,
-              target: -1,
-              targetDoor: di,
-              x: w.px[i],
-              y: w.py[i],
-              aimX: door.x,
-              aimY: door.z,
-              damage: unitAttackDamage(w, i, def.attackDamage),
-              volley: def.volley,
-              volleySpread: def.volleySpread,
-            });
-          } else {
-            applyDamageDoor(w, field, di, unitAttackDamage(w, i, def.attackDamage));
-          }
+          releaseAttack(w, field, i, def, {
+            targetDoor: di,
+            aimX: door.x,
+            aimY: door.z,
+          });
           setAttackCooldown(w, i, def);
           if (!isDoorAlive(w.doors?.[di])) endAttack(w, i);
         }
@@ -471,44 +493,19 @@ function resolveAttacks(w, field) {
         if (w.type[i] === UNIT.PRIEST && tryPriestHeal(w, i, false)) {
           // Shared attack cooldown spent on the heal. Smite waits.
         } else if (unitOk) {
-          if (def.attackDelivery === ATTACK_DELIVERY.PROJECTILE) {
-            spawnAttackShot(w, {
-              type: def.projectileType,
-              owner: w.owner[i],
-              source: i,
-              target,
-              x: w.px[i],
-              y: w.py[i],
-              aimX: w.px[target],
-              aimY: w.py[target],
-              damage: unitAttackDamage(w, i, def.attackDamage),
-              volley: def.volley,
-              volleySpread: def.volleySpread,
-            });
-          } else {
-            applyDamage(w, target, unitAttackDamage(w, i, def.attackDamage), i);
-          }
+          releaseAttack(w, field, i, def, {
+            target,
+            aimX: w.px[target],
+            aimY: w.py[target],
+          });
           setAttackCooldown(w, i, def);
           if (!w.alive[target]) endAttack(w, i);
         } else {
-          if (def.attackDelivery === ATTACK_DELIVERY.PROJECTILE) {
-            spawnAttackShot(w, {
-              type: def.projectileType,
-              owner: w.owner[i],
-              source: i,
-              target: -1,
-              targetBuilding: bi,
-              x: w.px[i],
-              y: w.py[i],
-              aimX: b.x,
-              aimY: b.z,
-              damage: unitAttackDamage(w, i, def.attackDamage),
-              volley: def.volley,
-              volleySpread: def.volleySpread,
-            });
-          } else {
-            applyDamageBuilding(w, field, bi, unitAttackDamage(w, i, def.attackDamage), w.owner[i] | 0);
-          }
+          releaseAttack(w, field, i, def, {
+            targetBuilding: bi,
+            aimX: b.x,
+            aimY: b.z,
+          });
           setAttackCooldown(w, i, def);
           if (!isBuildingAlive(w.buildings?.[bi])) endAttack(w, i);
         }

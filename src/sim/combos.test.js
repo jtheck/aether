@@ -37,38 +37,44 @@ function crew(w, extra = []) {
 }
 
 describe('combo classify', () => {
-  it('matches 4 villagers + engineer; extra warriors ok; casters block', () => {
+  it('matches 1+ engineers; villagers and warriors ok; casters block', () => {
     const w = createWorld(8);
-    const base = crew(w);
-    assert.equal(selectionHasAgoraFound(w, base), true);
-    assert.equal(classifyCastSelection(w, base), COMBO.AGORA_FOUND);
+    const eng = spawn(w, { x: fx.fromInt(30), y: 0, type: UNIT.ENGINEER, owner: 0 });
+    assert.equal(selectionHasAgoraFound(w, [eng]), true);
+    assert.equal(classifyCastSelection(w, [eng]), COMBO.AGORA_FOUND);
 
-    const w2 = createWorld(8);
-    const ids2 = crew(w2, [{ type: UNIT.WARRIOR }]);
-    assert.equal(selectionHasAgoraFound(w2, ids2), true);
+    const vill = spawn(w, { x: fx.fromInt(20), y: 0, type: UNIT.VILLAGER, owner: 0 });
+    const war = spawn(w, { x: fx.fromInt(24), y: 0, type: UNIT.WARRIOR, owner: 0 });
+    assert.equal(selectionHasAgoraFound(w, [eng, vill, war]), true);
 
-    const w3 = createWorld(8);
-    const ids3 = crew(w3, [{ type: UNIT.WIZARD }]);
-    assert.equal(selectionHasAgoraFound(w3, ids3), false);
-    assert.equal(classifyCastSelection(w3, ids3), COMBO.COMPOUND);
+    const onlyVills = [];
+    for (let n = 0; n < 4; n++) {
+      onlyVills.push(spawn(w, { x: fx.fromInt(40 + n * 2), y: 0, type: UNIT.VILLAGER, owner: 0 }));
+    }
+    assert.equal(selectionHasAgoraFound(w, onlyVills), false);
+    assert.equal(classifyCastSelection(w, onlyVills), COMBO.COMPOUND);
+
+    const wiz = spawn(w, { x: fx.fromInt(50), y: 0, type: UNIT.WIZARD, owner: 0 });
+    assert.equal(selectionHasAgoraFound(w, [eng, wiz]), false);
+    assert.equal(classifyCastSelection(w, [eng, wiz]), COMBO.COMPOUND);
   });
 
-  it('costs half a mineral stack plus all wood and stone', () => {
+  it('costs 30 mineral plus half the wood, stone, and food', () => {
     assert.equal(AGORA_FOUND_MINERAL, 30);
-    assert.equal(canAffordAgoraFound({ mineral: 29 }), false);
-    assert.equal(canAffordAgoraFound({ mineral: 30, wood: 0, stone: 0 }), true);
+    assert.equal(canAffordAgoraFound({ mineral: 29, wood: 80, stone: 40, food: 20 }), false);
+    assert.equal(canAffordAgoraFound({ mineral: 30, wood: 0, stone: 0, food: 0 }), true);
     assert.deepEqual(agoraFoundCost({ wood: 80, stone: 45, mineral: 40, food: 12 }), {
       mineral: 30,
-      wood: 80,
-      stone: 45,
+      wood: 40,
+      stone: 22,
+      food: 6,
     });
-    assert.deepEqual(agoraFoundCost({ wood: 240, stone: 180, mineral: 60 }, true), {
+    assert.deepEqual(agoraFoundCost({ wood: 1, stone: 0, mineral: 30, food: 1 }), {
       mineral: 30,
-      wood: 120,
-      stone: 90,
+      wood: 0,
+      stone: 0,
+      food: 0,
     });
-    assert.equal(canAffordAgoraFound({ mineral: 30, wood: 119, stone: 90 }, true), false);
-    assert.equal(canAffordAgoraFound({ mineral: 30, wood: 120, stone: 90 }, true), true);
   });
 });
 
@@ -112,7 +118,7 @@ describe('agora found place', () => {
     assert.equal(w.buildings.length, 0);
   });
 
-  it('spends 30 mineral and zeroes wood/stone; cancel refunds the snapshot', () => {
+  it('spends 30 mineral and half the wood, stone, and food; cancel refunds the snapshot', () => {
     const field = openField();
     const w = createWorld(16);
     grantStartingResources(w, 0, { wood: 80, stone: 45, mineral: 40, food: 12 });
@@ -131,10 +137,10 @@ describe('agora found place', () => {
     assert.equal(w.buildings[0].type, 'agora');
     assert.equal(w.buildings[0].built, 0);
     assert.equal(getResource(w, 0, 'mineral'), 10);
-    assert.equal(getResource(w, 0, 'wood'), 0);
-    assert.equal(getResource(w, 0, 'stone'), 0);
-    assert.equal(getResource(w, 0, 'food'), 12);
-    assert.deepEqual(w.buildings[0].refundCost, { wood: 80, stone: 45, mineral: 30, food: 0 });
+    assert.equal(getResource(w, 0, 'wood'), 40);
+    assert.equal(getResource(w, 0, 'stone'), 23);
+    assert.equal(getResource(w, 0, 'food'), 6);
+    assert.deepEqual(w.buildings[0].refundCost, { wood: 40, stone: 22, mineral: 30, food: 6 });
 
     applyCommands(w, field, [{
       type: CMD.CANCEL_CONSTRUCTION,

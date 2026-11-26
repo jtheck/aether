@@ -76,6 +76,8 @@ import {
   rallySegmentWorldPoints,
   snapBuildingWorld,
   holdBuildingSnap,
+  BUILDING_YAW_SNAP,
+  lerpBuildingYaw,
   ownedFinishedBuildingTypes,
   getBuildingCost,
   getBuildingRequires,
@@ -161,8 +163,9 @@ import {
 import { setupInput } from './input.js';
 import { canvasCenterClient } from './input/gamepadCursor.js';
 import { isCameraFollowTypingTarget, selectionCentroidXZ, shouldHoldSelectionFollow } from './input/cameraFollow.js';
-import { menuHotkeyPick } from './input/menuHotkeys.js';
+import { menuHotkeyPick, MENU_OPTION_KEYS } from './input/menuHotkeys.js';
 import { createQueueHoldTimer, unitQueueKey } from './input/queueHold.js';
+import { HELD_CAST_INITIAL_MS, HELD_CAST_REPEAT_MS } from './controlMods.js';
 import { isControlGroupDoubleTap } from './input/controlGroups.js';
 import {
   aggregateBuildingTracks,
@@ -685,6 +688,15 @@ function paintXrButton(on) {
   button.title = on ? 'Exit XR' : 'Enter XR';
   button.setAttribute('aria-pressed', on ? 'true' : 'false');
   button.setAttribute('aria-label', on ? 'Exit XR' : 'Enter XR');
+  paintXrMode();
+}
+
+function paintXrMode() {
+  const el = document.getElementById('sim-xr-mode');
+  if (!el) return;
+  const show = !!matchXr;
+  if (show) el.textContent = 'Scene projecting in XR';
+  if (el.hidden !== !show) el.hidden = !show;
 }
 
 function paintXrAutoButton() {
@@ -759,8 +771,29 @@ async function stopMatchXr(renderer, ctx) {
  * @param {() => object | null | undefined} getInput input api from setupInput (ray orders, radial, place)
  * @param {{ selection?: () => { x: number, z: number } | null }} [holds]
  */
+function setXrDesktopWindowVisible(visible) {
+  const appWindow = globalThis.chrome?.app?.window?.current?.();
+  if (!appWindow) return false;
+  if (visible) appWindow.show();
+  else appWindow.hide();
+  return true;
+}
+
 async function startMatchXr(renderer, getInput, holds) {
   if (matchXr) return;
+  const xrApi = !!globalThis.navigator?.xr;
+  const xrGpuBinding = typeof globalThis.XRGPUBinding === 'function';
+  const webGpu = !!globalThis.navigator?.gpu;
+  let immersiveVr = false;
+  try {
+    immersiveVr = xrApi && await navigator.xr.isSessionSupported('immersive-vr');
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`OpenXR support check failed: ${detail} (XR=${xrApi}, XRGPUBinding=${xrGpuBinding}, WebGPU=${webGpu})`);
+  }
+  if (!immersiveVr) {
+    throw new Error(`OpenXR reports immersive-vr unsupported (XR=${xrApi}, XRGPUBinding=${xrGpuBinding}, WebGPU=${webGpu})`);
+  }
   const shot = renderer.cameraController?.cameraEye?.();
   const cam = renderer.camera.worldMatrix;
   const rawEye = shot?.eye ?? [cam[12], cam[13], cam[14]];
@@ -777,7 +810,8 @@ async function startMatchXr(renderer, getInput, holds) {
     renderer,
     getInput,
     onFollowToggle: () => toggleXrFollow(rig),
-    onAltitude: () => cycleXrAltitude(rig),
+    onAltitude: () => cycleXrAltitude(rig, rig.lastHead ?? rig.eye, rig.bounds),
+    onPauseToggle: () => getInput()?.togglePlayPause?.(),
   });
   const rig = createXrRig(eye, {
     floor: (x, z) => renderer.groundHeight(x, z),
@@ -799,6 +833,7 @@ async function startMatchXr(renderer, getInput, holds) {
   function teardown() {
     if (closed) return;
     closed = true;
+    setXrDesktopWindowVisible(true);
     xrCamLive = false;
     renderer.cameraController?.setPoseListener?.(null);
     controls.dispose();
@@ -851,12 +886,21 @@ async function startMatchXr(renderer, getInput, holds) {
     });
   } catch (err) {
     teardown();
+    const detail = err instanceof Error ? err.message : String(err);
+    if (/session configuration is not supported/i.test(detail)) {
+      throw new Error(
+        `OpenXR supports immersive-vr, but rejected the required WebGPU session feature `
+        + `(XR=${xrApi}, XRGPUBinding=${xrGpuBinding}, WebGPU=${webGpu}): ${detail}`,
+        { cause: err },
+      );
+    }
     throw err;
   }
   if (closed || !session) {
     teardown();
     return;
   }
+  setXrDesktopWindowVisible(false);
   session.xrControls = controls;
   session.rig = rig;
   session.teardown = teardown;
@@ -901,9 +945,34 @@ function ensureMatchXr(renderer, getInput, holds) {
   });
 }
 
+async function waitForXrSessionSupport(mode) {
+  if (!globalThis.navigator?.xr) return false;
+
+  const platform = `${navigator.userAgentData?.platform || navigator.platform || ''} ${navigator.userAgent || ''}`;
+  const retryUntil = globalThis.aetherDesktop && /linux/i.test(platform)
+    ? Date.now() + 12_000
+    : Date.now();
+
+  do {
+    if (await isXrSessionSupported(mode)) return true;
+    const remaining = retryUntil - Date.now();
+    if (remaining <= 0) return false;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(500, remaining)));
+  } while (true);
+}
+
+function isLinuxDesktopXrCandidate() {
+  const platform = `${navigator.userAgentData?.platform || navigator.platform || ''} ${navigator.userAgent || ''}`;
+  return !!globalThis.aetherDesktop && /linux/i.test(platform);
+}
+
 async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide = 0, kothShard, solo = false }) {
   const bootGardenRef = new URLSearchParams(location.search).get('garden') || '';
-  const xrSupportPromise = isXrSessionSupported('immersive-vr');
+  const linuxDesktopXr = isLinuxDesktopXrCandidate();
+  if (linuxDesktopXr) enableXrCompatibleAdapter();
+  const xrSupportPromise = linuxDesktopXr
+    ? Promise.resolve(true)
+    : waitForXrSessionSupport('immersive-vr');
   const skirmish = bootCfg.mode === 'skirmish';
   let kothLobbyUi = { refresh() {} };
   let lobbyUi = { refresh() {} };
@@ -1944,6 +2013,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     chatHud.refresh();
     paintResources();
     paintPlayPaused();
+    paintXrMode();
     hudDirty = 0;
   }
 
@@ -2235,7 +2305,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   let buildingWaypointPreview = false;
   /** @type {{ kind: 'agora' | 'building', index: number }[]} */
   let selectedBuildings = [];
-  /** Space held: camera zips to / locks on the current selection. */
+  /** Space toggled: camera chases the current selection until pan or Space again. */
   let spaceFollowHeld = false;
   /** Cleared when a pan drops follow. Selection changes and Space re-arm it. */
   let selectionFollowArmed = true;
@@ -2340,6 +2410,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     if (cam?.consumePanBrokeFollow?.()) {
       selectionFollowArmed = false;
+      if (!isObservingBoard()) spaceFollowHeld = false;
       return;
     }
     if (!spaceFollowHeld && !isObservingBoard()) return;
@@ -2563,8 +2634,14 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (!buildingWaypointPreview) renderer.setRallyGhost?.(null);
     syncRallyFlagMarkers();
   }
-  /** Radians - kept across multi-place until cancel / type switch. */
+  /** Snapped target facing (confirm + aim). */
   let placingYaw = 0;
+  /** Ghost mesh yaw — position snaps instantly; yaw eases (faster right after a hop). */
+  let placingYawVisual = 0;
+  let placementYawHopBlend = false;
+  const PLACEMENT_YAW_BLEND_MS = 95;
+  const PLACEMENT_YAW_HOP_BLEND_MS = 72;
+  const PLACEMENT_YAW_SETTLE_SNAP = BUILDING_YAW_SNAP * 0.12;
   /** Keep agora selected after placing so radial can reopen. */
   let lastAgoraIndex = -1;
 
@@ -2786,18 +2863,21 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       actionBuildingIndex,
     );
     // Feed the village auto-villager trickle into the display-only villager pad.
-    const villageIdx = firstVillageIndex(indices);
-    if (villageIdx >= 0) {
-      tracks['unit:villager'] = {
-        progress: villageVillagerProgress(
-          session.state,
-          session.buildings?.[villageIdx],
-          session.buildings,
-          session.agoras,
-        ),
-        count: 0,
-        extra: 0,
-      };
+    let bestVillage = -1;
+    for (let k = 0; k < indices.length; k++) {
+      const site = session.buildings?.[indices[k]];
+      if (!site || site.type !== 'village') continue;
+      if (site.hp != null && (site.hp | 0) <= 0) continue;
+      const p = villageVillagerProgress(
+        session.state,
+        site,
+        session.buildings,
+        session.agoras,
+      );
+      if (p > bestVillage) bestVillage = p;
+    }
+    if (bestVillage >= 0) {
+      tracks['unit:villager'] = { progress: bestVillage, count: 0, extra: 0 };
     }
     renderer.setActionRadialTracks?.(tracks);
     let anyWork = false;
@@ -2888,6 +2968,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.setSceneConfirm?.(null);
     if (!placingType) {
       placingYaw = 0;
+      placingYawVisual = 0;
+      placementYawHopBlend = false;
       renderer.setBuildingGhost?.(null);
     }
     if (placingType === 'silo') syncSiloPlacePreview();
@@ -2921,6 +3003,51 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
    * @param {number} yawRad
    * @returns {{ snapped: { x: number, z: number }, valid: boolean } | null}
    */
+  function pushPlacementGhostPose() {
+    if (!placingType || placingGhostX == null || placingGhostZ == null) return;
+    renderer.setBuildingGhost?.({
+      type: placingType,
+      x: placingGhostX,
+      z: placingGhostZ,
+      yaw: placingYawVisual,
+      valid: placingGhostValid,
+    });
+  }
+
+  function tickPlacementYawVisual(deltaMs) {
+    if (!placingType) return;
+    const target = placingYaw;
+    const yawErr = Math.abs(
+      Math.atan2(
+        Math.sin(target - placingYawVisual),
+        Math.cos(target - placingYawVisual),
+      ),
+    );
+    if (yawErr < 1e-7) {
+      if (placingYawVisual !== target) {
+        placingYawVisual = target;
+        placementYawHopBlend = false;
+        pushPlacementGhostPose();
+      }
+      return;
+    }
+
+    let tau = PLACEMENT_YAW_BLEND_MS;
+    if (placementYawHopBlend) {
+      tau = PLACEMENT_YAW_HOP_BLEND_MS;
+    } else {
+      const halfSnap = BUILDING_YAW_SNAP * 0.5;
+      tau =
+        yawErr < halfSnap ? PLACEMENT_YAW_BLEND_MS * 1.55 : PLACEMENT_YAW_BLEND_MS * 0.62;
+    }
+    const k = 1 - Math.exp(-Math.max(0, deltaMs) / tau);
+    const next = lerpBuildingYaw(placingYawVisual, target, k);
+    const left = Math.abs(Math.atan2(Math.sin(target - next), Math.cos(target - next)));
+    placingYawVisual = left <= PLACEMENT_YAW_SETTLE_SNAP ? target : next;
+    if (placingYawVisual === target) placementYawHopBlend = false;
+    pushPlacementGhostPose();
+  }
+
   function syncPlacementGhost(worldX, worldZ, yawRad) {
     if (!placingType) return null;
     const raw = snapBuildingWorld(placingType, fx.fromFloat(worldX), fx.fromFloat(worldZ));
@@ -2940,18 +3067,18 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     const sx = fx.toFloat(snapped.x);
     const sz = fx.toFloat(snapped.z);
     const valid = placementGhostValid(placingType, snapped.x, snapped.z);
+    const snapMoved =
+      placingGhostX != null &&
+      placingGhostZ != null &&
+      (Math.abs(sx - placingGhostX) > 1e-4 || Math.abs(sz - placingGhostZ) > 1e-4);
     placingGhostX = sx;
     placingGhostZ = sz;
     placingSnapX = snapped.x;
     placingSnapZ = snapped.z;
     placingGhostValid = valid;
-    renderer.setBuildingGhost?.({
-      type: placingType,
-      x: sx,
-      z: sz,
-      yaw: yawRad,
-      valid,
-    });
+    if (Number.isFinite(yawRad)) placingYaw = yawRad;
+    if (snapMoved) placementYawHopBlend = true;
+    pushPlacementGhostPose();
     renderer.setBuildingRadialPlacingValid?.(valid);
     if (placingType === 'silo') syncSiloPlacePreview();
     return { snapped, valid };
@@ -2967,13 +3094,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     const valid = placementGhostValid(placingType, snapped.x, snapped.z);
     if (valid === placingGhostValid) return;
     placingGhostValid = valid;
-    renderer.setBuildingGhost?.({
-      type: placingType,
-      x: fx.toFloat(snapped.x),
-      z: fx.toFloat(snapped.z),
-      yaw: placingYaw,
-      valid,
-    });
+    pushPlacementGhostPose();
     renderer.setBuildingRadialPlacingValid?.(valid);
   }
 
@@ -3756,6 +3877,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (typeof picked === 'string') {
         applyPlacingType(picked);
         placingYaw = 0;
+        placingYawVisual = 0;
         renderer.setBuildingGhost?.(null);
         return;
       }
@@ -3823,6 +3945,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           }
           applyPlacingType(picked.id);
           placingYaw = 0;
+          placingYawVisual = 0;
           renderer.setBuildingGhost?.(null);
           return;
         }
@@ -3874,6 +3997,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         }
         return;
       }
+      if (picked.kind === 'rally') {
+        if (!accept) return;
+        beginRallyPlacement();
+        return;
+      }
       if (picked.kind === 'cancel') {
         const group = liveActionIndices();
         const tracks = renderer.getActionRadialTracks?.() ?? {};
@@ -3922,6 +4050,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         }
         return;
       }
+      if (picked.kind === 'close') {
+        closeRadial();
+        return;
+      }
       if (picked.kind === 'category') {
         // Lock the page and drop any in-progress ghost so hover can browse again.
         applyPlacingType(null);
@@ -3952,6 +4084,26 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     },
   });
   const unitKeyHold = createQueueHoldTimer();
+  const castKeyHold = createQueueHoldTimer({
+    delay: HELD_CAST_INITIAL_MS,
+    interval: HELD_CAST_REPEAT_MS,
+  });
+  let castKeyCount = 0;
+  const castKeySet = new Set(MENU_OPTION_KEYS);
+  function fireKeyboardCast() {
+    const c = orderAimClient();
+    if (c) inputApi.castAbilityAt?.(c.clientX, c.clientY, 'keyboard');
+  }
+  function noteCastKeyDown() {
+    castKeyCount += 1;
+    if (castKeyCount !== 1) return;
+    fireKeyboardCast();
+    castKeyHold.start('cast', fireKeyboardCast);
+  }
+  function noteCastKeyUp() {
+    castKeyCount = Math.max(0, castKeyCount - 1);
+    if (castKeyCount === 0) castKeyHold.stop();
+  }
   function isPlayPaused() {
     if (replayCtl.isWatching?.()) {
       const speed = replayCtl.getHead?.()?.speed;
@@ -3992,6 +4144,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     paintPlayPaused();
     paintStatus();
   }
+  inputApi.togglePlayPause = togglePlayPause;
 
   window.addEventListener('keydown', (e) => {
     if ((sideMenu.isHelpOpen?.() || sideMenu.isSkinsOpen?.()) && e.code !== 'Escape') {
@@ -4008,6 +4161,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       e.preventDefault();
       if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
       if (!bootInteractive) return;
+      if (spaceFollowHeld) {
+        releaseSpaceFollow();
+        return;
+      }
       spaceFollowHeld = true;
       engageSelectionFollow();
       renderer.cameraController?.tick?.(16);
@@ -4024,7 +4181,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.repeat) {
-      if (unitKeyHold.key) e.preventDefault();
+      if (unitKeyHold.key || castKeySet.has(e.code)) e.preventDefault();
       return;
     }
     if (e.code === 'KeyO') {
@@ -4081,15 +4238,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
       return;
     }
-    if (
-      e.code === 'KeyQ' || e.code === 'KeyA' || e.code === 'KeyT'
-      || e.code === 'KeyG' || e.code === 'KeyH'
-    ) {
+    if (castKeySet.has(e.code)) {
       if (isCameraFollowTypingTarget(document.activeElement)) return;
       e.preventDefault();
       if (!bootInteractive) return;
-      const c = orderAimClient();
-      if (c) inputApi.castAbilityAt?.(c.clientX, c.clientY, 'keyboard');
+      noteCastKeyDown();
       return;
     }
     if (e.code === 'KeyU') {
@@ -4151,19 +4304,23 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   }
 
   window.addEventListener('keyup', (e) => {
+    if (castKeySet.has(e.code)) noteCastKeyUp();
     unitKeyHold.stop(e.code);
     inputApi.handleControlGroupKeyUp?.(e);
-    if (e.code === 'Space') releaseSpaceFollow();
     if (e.code === 'KeyO') screenshotHud.release();
   }, true);
   document.addEventListener('focusin', (e) => {
     if (isCameraFollowTypingTarget(e.target)) {
       releaseSpaceFollow();
       unitKeyHold.stop();
+      castKeyHold.stop();
+      castKeyCount = 0;
     }
   });
   window.addEventListener('blur', () => {
     unitKeyHold.stop();
+    castKeyHold.stop();
+    castKeyCount = 0;
     releaseSpaceFollow();
     screenshotHud.release();
     renderer.cameraController?.takeUserAim?.();
@@ -4177,6 +4334,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.cameraController?.takeUserAim?.();
     if (hidden) {
       unitKeyHold.stop();
+      castKeyHold.stop();
+      castKeyCount = 0;
       releaseSpaceFollow();
       screenshotHud.release();
     }
@@ -4588,6 +4747,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         }
       : null;
     inputApi.pollGamepad?.();
+    tickPlacementYawVisual(deltaMs);
     // Keep FX clocks in sync with pause (catch-up / KOTH also toggle pauseLockstep).
     renderer.setFxPaused?.(session.pauseLockstep);
     paintPlayPaused();

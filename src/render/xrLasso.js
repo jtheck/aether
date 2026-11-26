@@ -9,10 +9,12 @@ import {
   createTexture2DFromPixels,
   invalidateRenderBundles,
   setShaderTexture,
+  setShaderUniform,
   setSubtreeVisible,
   updateMeshPositions,
 } from '../vendor/lite/liteVendor.js';
 import { inwardNormals } from './selectionBox.js';
+import { CONTROL_GROUP_DEFS, controlGroupFacing, tallyGlyphs, tallyMarkLayout } from './controlGroupHud.js';
 
 const INK = [70 / 255, 230 / 255, 110 / 255];
 const MAX_QUADS = 640;
@@ -24,26 +26,228 @@ const BEAM_SIDES = 8;
 const BEAM_HAND_FRAC = 0.015;
 const LIFT = 0.75;
 /** Wire box straight back from the ray origin, in metres. */
-const HANDLE_W = 0.034;
 const HANDLE_H = 0.016;
-const HANDLE_D = 0.12;
 const HANDLE_ROD = 0.0022;
 /** Other-hand ray must meet a pad within this reach. */
-const HANDLE_REACH = 0.4;
+const HANDLE_REACH = 0.5;
+const WRIST_GROUP_HIT_SLOP = 0.01;
 const LABEL_W = 256;
 const LABEL_H = 128;
-/**
- * Two pads on the top of the handle. Index 0 is the hand's order
- * (move / attack), index 1 selects, both at this laser's aim.
- */
-const HANDLE_BUTTONS = [
-  { id: 0, min: [-0.03, HANDLE_H, -0.112], max: [-0.003, HANDLE_H + 0.014, -0.008] },
-  { id: 1, min: [0.003, HANDLE_H, -0.112], max: [0.03, HANDLE_H + 0.014, -0.008] },
-];
-const HANDLE_LABEL = {
-  left: ['Move', 'Select'],
-  right: ['Attack', 'Select'],
+const PAD_THICK = 0.014;
+const PAD_TOP = HANDLE_H + PAD_THICK;
+const PAD_SURFACE = HANDLE_H + 0.006; // pick volumes only
+/** Equilateral group triangles in a row up the arm (-Z), pointing across it. */
+const TRI_SIDE = 0.032;
+const TRI_GAP = 0.014;
+const TRI_PITCH = TRI_SIDE + TRI_GAP;
+const TRI_Z0 = -0.028;
+const FACE_BTN_R = 0.013;
+/** Pause is the next pad in that same row, on the same face. */
+const PAUSE_R = FACE_BTN_R;
+/** Other-hand aim dot, just above the pad tops. */
+const AIM_Y = PAD_SURFACE + 0.004;
+const AIM_R = 0.0045;
+const PAD_DEPRESS = 0.0035;
+export const XR_BEAM_STUB_FRAC = 1.15;
+
+function handlePad(x0, x1, z0, z1, id) {
+  return { id, min: [x0, HANDLE_H, z0], max: [x1, PAD_TOP, z1] };
+}
+
+function circlePad(cx, cz, r, id) {
+  return handlePad(cx - r, cx + r, cz - r, cz + r, id);
+}
+
+function eqTriPick(cx, cz, side, dir) {
+  const r = side / Math.sqrt(3);
+  const spin = (dir ?? 1) >= 0 ? 0 : Math.PI;
+  const out = [];
+  for (let k = 0; k < 3; k++) {
+    const a = spin - (k * 2 * Math.PI) / 3;
+    out.push([cx + Math.cos(a) * r, cz + Math.sin(a) * r]);
+  }
+  return out;
+}
+
+function eqTriPad(cx, cz, side, id, dir) {
+  const v = eqTriPick(cx, cz, side, dir);
+  let x0 = v[0][0];
+  let x1 = v[0][0];
+  let z0 = v[0][1];
+  let z1 = v[0][1];
+  for (let i = 1; i < v.length; i++) {
+    x0 = Math.min(x0, v[i][0]);
+    x1 = Math.max(x1, v[i][0]);
+    z0 = Math.min(z0, v[i][1]);
+    z1 = Math.max(z1, v[i][1]);
+  }
+  return { ...handlePad(x0, x1, z0, z1, id), tri: { cx, cz, side, dir } };
+}
+
+function pointInEqTri(x, z, tri, slop = 0) {
+  const grow = tri.side > 1e-6 ? (tri.side + slop * 2) / tri.side : 1;
+  const v = eqTriPick(tri.cx, tri.cz, tri.side * grow, tri.dir);
+  function side(ax, az, bx, bz) {
+    return (bx - ax) * (z - az) - (bz - az) * (x - ax);
+  }
+  const c0 = side(v[0][0], v[0][1], v[1][0], v[1][1]);
+  const c1 = side(v[1][0], v[1][1], v[2][0], v[2][1]);
+  const c2 = side(v[2][0], v[2][1], v[0][0], v[0][1]);
+  const neg = c0 < -1e-6 || c1 < -1e-6 || c2 < -1e-6;
+  const pos = c0 > 1e-6 || c1 > 1e-6 || c2 > 1e-6;
+  return !(neg && pos);
+}
+
+/** Group i (0..2) on the center line, further -Z is further up the arm. */
+export function wristGroupCenter(index) {
+  return [0, TRI_Z0 - index * TRI_PITCH];
+}
+
+/** Pause, one pitch past the last group, on the same face. */
+export function wristPauseCenter() {
+  return [0, TRI_Z0 - 3 * TRI_PITCH];
+}
+
+/** Same in/out alternation as the flat control-group column for that hand. */
+export function wristTriFacing(hand, index) {
+  return controlGroupFacing(hand === 'left' ? 'left' : 'right', index);
+}
+
+function wristPadCenter(i) {
+  if (i >= 5) return wristPauseCenter();
+  if (i >= 2) return wristGroupCenter(i - 2);
+  return wristGroupCenter(0);
+}
+
+/** 2–4 group triangles, 5 pause. Face A/B/X/Y pads are not on the bracer. */
+export function wristHandleButtons(hand) {
+  const buttons = [];
+  for (let i = 0; i < 3; i++) {
+    const c = wristGroupCenter(i);
+    buttons.push(eqTriPad(c[0], c[1], TRI_SIDE, i + 2, wristTriFacing(hand, i)));
+  }
+  const p = wristPauseCenter();
+  buttons.push(circlePad(p[0], p[1], PAUSE_R, 5));
+  return buttons;
+}
+
+export const WRIST_CONTROL_GROUPS = {
+  left: [0, 1, 4],
+  right: [2, 3, 5],
 };
+
+/** Control-group id for pad indices 2–4 on that beam's hand. */
+export function wristControlGroupId(hand, buttonId) {
+  const key = hand === 'left' || hand === 'right' ? hand : 'right';
+  if (!(buttonId >= 2 && buttonId <= 4)) return null;
+  const list = WRIST_CONTROL_GROUPS[key];
+  return list?.[buttonId - 2] ?? null;
+}
+
+function controlGroupRgb(id) {
+  for (let i = 0; i < CONTROL_GROUP_DEFS.length; i++) {
+    const d = CONTROL_GROUP_DEFS[i];
+    if (d.id === id) return d.rgb;
+  }
+  return INK;
+}
+
+function wristPadRgb(hand, buttonId) {
+  const gid = wristControlGroupId(hand, buttonId);
+  return gid == null ? INK : controlGroupRgb(gid);
+}
+
+function edgeRgb(rgb) {
+  const lum = rgb[0] * 0.3 + rgb[1] * 0.59 + rgb[2] * 0.11;
+  if (lum > 0.72) return rgb.map((c) => c * 0.32);
+  return rgb.map((c) => Math.min(1, c + (1 - c) * 0.62));
+}
+
+function pickPadBounds(box) {
+  const s = box.id >= 5 ? WRIST_GROUP_HIT_SLOP * 0.7 : WRIST_GROUP_HIT_SLOP;
+  return {
+    id: box.id,
+    tri: box.tri,
+    min: [box.min[0] - s, box.min[1] - s * 0.6, box.min[2] - s],
+    max: [box.max[0] + s, box.max[1] + s, box.max[2] + s],
+  };
+}
+
+/** Pick (x,y,z) → display-local vertex for handleDisplayQuat (x, z, y). */
+function bracerVert(x, y, z) {
+  return [x, z, y];
+}
+
+function eqTriVerts(cx, cz, side, dir) {
+  const y = PAD_SURFACE;
+  return eqTriPick(cx, cz, side, dir).map((p) => bracerVert(p[0], y, p[1]));
+}
+
+function appendEqTri(plate, pi, cx, cz, side, dir) {
+  const v = eqTriVerts(cx, cz, side, dir);
+  const base = plate.length / 3;
+  plate.push(...v[0], ...v[1], ...v[2]);
+  pi.push(base, base + 1, base + 2);
+}
+
+function appendEqTriWire(pos, idx, cx, cz, side, dir) {
+  const v = eqTriVerts(cx, cz, side, dir);
+  const rod = HANDLE_ROD * 0.65;
+  appendRod(pos, idx, v[0], v[1], rod);
+  appendRod(pos, idx, v[1], v[2], rod);
+  appendRod(pos, idx, v[2], v[0], rod);
+}
+
+function appendCircle(plate, pi, cx, cz, r, segments = 14, yPick = PAD_SURFACE) {
+  const y = yPick;
+  const base = plate.length / 3;
+  for (let i = 0; i < segments; i++) {
+    const a0 = (i / segments) * Math.PI * 2;
+    const a1 = ((i + 1) / segments) * Math.PI * 2;
+    plate.push(
+      ...bracerVert(cx, y, cz),
+      ...bracerVert(cx + Math.cos(a0) * r, y, cz + Math.sin(a0) * r),
+      ...bracerVert(cx + Math.cos(a1) * r, y, cz + Math.sin(a1) * r),
+    );
+    pi.push(base + i * 3, base + i * 3 + 1, base + i * 3 + 2);
+  }
+}
+
+function appendCircleWire(pos, idx, cx, cz, r, segments = 14, yPick = PAD_SURFACE) {
+  const y = yPick;
+  const rod = HANDLE_ROD * 0.75;
+  for (let i = 0; i < segments; i++) {
+    const a0 = (i / segments) * Math.PI * 2;
+    const a1 = ((i + 1) / segments) * Math.PI * 2;
+    appendRod(pos, idx,
+      bracerVert(cx + Math.cos(a0) * r, y, cz + Math.sin(a0) * r),
+      bracerVert(cx + Math.cos(a1) * r, y, cz + Math.sin(a1) * r),
+      rod,
+    );
+  }
+}
+
+function appendPauseBars(pos, idx, cx, cz) {
+  const y = PAD_SURFACE + 0.0016;
+  const gap = FACE_BTN_R * 0.35;
+  const w = FACE_BTN_R * 0.22;
+  const h = FACE_BTN_R * 0.95;
+  const rod = HANDLE_ROD * 0.85;
+  const verts = (ox) => ([
+    bracerVert(cx + ox - w, y, cz - h),
+    bracerVert(cx + ox + w, y, cz - h),
+    bracerVert(cx + ox + w, y, cz + h),
+    bracerVert(cx + ox - w, y, cz + h),
+  ]);
+  const a = verts(-gap);
+  const b = verts(gap);
+  for (const q of [a, b]) {
+    appendRod(pos, idx, q[0], q[1], rod);
+    appendRod(pos, idx, q[1], q[2], rod);
+    appendRod(pos, idx, q[2], q[3], rod);
+    appendRod(pos, idx, q[3], q[0], rod);
+  }
+}
 let handleSeq = 0;
 
 /**
@@ -283,7 +487,7 @@ export function arcBeamPoint(ray, length, t) {
   };
 }
 
-/** Controller frame. Local +Z is the laser, local -Z runs back along the handle. */
+/** Pick frame: local +Z is the laser, +Y is bracer up (wrist-projected). */
 function pointerFrame(ray) {
   const fx = ray.dx || 0;
   const fy = ray.dy || 0;
@@ -319,6 +523,15 @@ function pointerFrame(ray) {
   ry /= rl;
   rz /= rl;
   return { fx, fy, fz, ux, uy, uz, rx, ry, rz };
+}
+
+/** Pad labels and coloured meshes share this basis. */
+function handleDisplayQuat(frame) {
+  return quatFromBasis(
+    frame.rx, frame.ry, frame.rz,
+    frame.fx, frame.fy, frame.fz,
+    frame.ux, frame.uy, frame.uz,
+  );
 }
 
 function rayToHandle(frame, origin, ray) {
@@ -362,28 +575,58 @@ function rayHitLocalBox(ray, min, max) {
 
 /**
  * Which pad on `ray`'s handle `other` is pressing, or null.
- * 0 is the order pad, 1 is select. The other hand has to be close.
+ * 2–4 control groups, 5 pause. The other hand has to be close.
  */
+function bracerHand(ray) {
+  return ray?.hand === 'left' ? 'left' : 'right';
+}
+
 export function pickHandleButton(ray, other) {
   if (!ray || !other) return null;
   const frame = pointerFrame(ray);
   const local = rayToHandle(frame, { x: ray.ox, y: ray.oy, z: ray.oz }, other);
+  const buttons = wristHandleButtons(bracerHand(ray));
   let best = null;
   let bestT = HANDLE_REACH;
-  for (let i = 0; i < HANDLE_BUTTONS.length; i++) {
-    const box = HANDLE_BUTTONS[i];
+  for (let i = 0; i < buttons.length; i++) {
+    const box = pickPadBounds(buttons[i]);
     const t = rayHitLocalBox(local, box.min, box.max);
-    if (t != null && t < bestT) {
-      bestT = t;
-      best = box.id;
-    }
+    if (t == null || !(t < bestT)) continue;
+    const hx = local.ox + local.dx * t;
+    const hz = local.oz + local.dz * t;
+    if (box.tri && !pointInEqTri(hx, hz, box.tri, WRIST_GROUP_HIT_SLOP)) continue;
+    bestT = t;
+    best = box.id;
   }
   return best;
 }
 
+/**
+ * Where the other controller's ray meets the top of the bracer, in pick
+ * space, or null when it misses the button band. A dot, not a hand.
+ * @param {object} ray bracer ray
+ * @param {object} other other controller ray
+ */
+export function wristAimLocal(ray, other) {
+  if (!ray || !other) return null;
+  const frame = pointerFrame(ray);
+  const local = rayToHandle(frame, { x: ray.ox, y: ray.oy, z: ray.oz }, other);
+  if (Math.abs(local.dy) < 1e-5) return null;
+  const t = (AIM_Y - local.oy) / local.dy;
+  if (!(t >= 0) || t > HANDLE_REACH) return null;
+  const x = local.ox + local.dx * t;
+  const z = local.oz + local.dz * t;
+  const xLim = 0.05;
+  const zHi = wristGroupCenter(0)[1] + TRI_SIDE * 0.5 + 0.012;
+  const zLo = wristPauseCenter()[1] - PAUSE_R - 0.012;
+  if (x < -xLim || x > xLim || z > zHi || z < zLo) return null;
+  return { x, y: AIM_Y, z };
+}
+
 /** A point just above pad `id`, for tests and hover. */
 export function handleButtonPoint(ray, id) {
-  const box = HANDLE_BUTTONS[id];
+  const box = wristHandleButtons(bracerHand(ray)).find((b) => b.id === id);
+  if (!box) return null;
   const frame = pointerFrame(ray);
   const x = (box.min[0] + box.max[0]) * 0.5;
   const y = box.max[1] + 0.02;
@@ -441,14 +684,14 @@ function setQuat(mesh, q) {
   }
 }
 
-function makeInkMaterial(name, alpha) {
+function makeInkMaterial(name, alpha, ink = INK) {
   return createShaderMaterial({
     name,
     attributes: ['position'],
     uniforms: [
       'world',
       'viewProjection',
-      { name: 'ink', type: 'vec3<f32>', defaultValue: INK },
+      { name: 'ink', type: 'vec3<f32>', defaultValue: ink },
     ],
     needAlphaBlending: true,
     blendMode: 'alpha',
@@ -547,130 +790,163 @@ function appendBoxEdges(pos, idx, x0, x1, y0, y1, z0, z1, r) {
   }
 }
 
-/**
- * Wire box behind the laser, with two pads on top. Labels sit in the
- * handle frame: canvas top toward the beam, so they read when you look
- * down along the pointer.
- */
-function createPointerHandle(engine, scene) {
+/** Filled group triangles and a pause pad, one row on the bracer face. */
+function createPointerHandle(engine, scene, hand) {
   const id = handleSeq++;
-  const pos = [];
-  const idx = [];
-  appendBoxEdges(pos, idx, -HANDLE_W, HANDLE_W, -HANDLE_H, HANDLE_H, -HANDLE_D, 0, HANDLE_ROD);
-  for (let i = 0; i < HANDLE_BUTTONS.length; i++) {
-    const b = HANDLE_BUTTONS[i];
-    const y = HANDLE_H + 0.004;
-    appendBoxEdges(pos, idx, b.min[0], b.max[0], y, y + 0.004, b.min[2], b.max[2], HANDLE_ROD * 0.75);
-  }
-  const wire = meshFromLists(engine, `xr-handle-${id}`, pos, idx, makeInkMaterial(`xr-handle-ink-${id}`, '0.9'));
-  wire.renderOrder = 178;
-  addToScene(scene, wire);
-  setSubtreeVisible(wire, false);
-
+  const specs = wristHandleButtons(hand);
   const pads = [];
-  const hots = [];
-  for (let i = 0; i < HANDLE_BUTTONS.length; i++) {
-    const b = HANDLE_BUTTONS[i];
+  for (let i = 0; i < specs.length; i++) {
+    const spec = specs[i];
     const plate = [];
     const pi = [];
-    const y = HANDLE_H + 0.006;
-    const base = 0;
-    plate.push(b.min[0], y, b.min[2], b.max[0], y, b.min[2], b.max[0], y, b.max[2], b.min[0], y, b.max[2]);
-    pi.push(base, base + 1, base + 2, base, base + 2, base + 3);
-    const pad = meshFromLists(engine, `xr-pad-${id}-${i}`, plate, pi, makeInkMaterial(`xr-pad-ink-${id}-${i}`, '0.35'));
-    pad.renderOrder = 180;
-    addToScene(scene, pad);
-    setSubtreeVisible(pad, false);
-    const hotPos = plate.slice();
-    for (let v = 1; v < hotPos.length; v += 3) hotPos[v] += 0.0015;
-    const hot = meshFromLists(
-      engine,
-      `xr-pad-hot-${id}-${i}`,
-      hotPos,
-      pi,
-      makeInkMaterial(`xr-pad-hot-ink-${id}-${i}`, '0.9'),
-    );
+    const edgePos = [];
+    const edgeIdx = [];
+    const c = wristPadCenter(spec.id);
+    const rgb = wristPadRgb(hand, spec.id);
+    let bars = null;
+    if (spec.tri) {
+      appendEqTri(plate, pi, c[0], c[1], TRI_SIDE, spec.tri.dir);
+      appendEqTriWire(edgePos, edgeIdx, c[0], c[1], TRI_SIDE, spec.tri.dir);
+    } else {
+      appendCircle(plate, pi, c[0], c[1], PAUSE_R);
+      appendCircleWire(edgePos, edgeIdx, c[0], c[1], PAUSE_R);
+      const barPos = [];
+      const barIdx = [];
+      appendPauseBars(barPos, barIdx, c[0], c[1]);
+      const barMat = makeInkMaterial(`xr-pause-bars-${id}`, '0.96', [0.05, 0.1, 0.06]);
+      bars = meshFromLists(engine, `xr-pause-bars-${id}`, barPos, barIdx, barMat);
+      bars.renderOrder = 183;
+      addToScene(scene, bars);
+      setSubtreeVisible(bars, false);
+    }
+    const fillMat = makeInkMaterial(`xr-pad-ink-${id}-${spec.id}`, '0.94', rgb);
+    const fill = meshFromLists(engine, `xr-pad-${id}-${spec.id}`, plate, pi, fillMat);
+    fill.renderOrder = 180;
+    addToScene(scene, fill);
+    setSubtreeVisible(fill, false);
+    const edgeMat = makeInkMaterial(`xr-pad-edge-${id}-${spec.id}`, '0.96', edgeRgb(rgb));
+    const edge = meshFromLists(engine, `xr-pad-edge-${id}-${spec.id}`, edgePos, edgeIdx, edgeMat);
+    edge.renderOrder = 182;
+    addToScene(scene, edge);
+    setSubtreeVisible(edge, false);
+    const hotMat = makeInkMaterial(`xr-pad-hot-${id}-${spec.id}`, '0.55', edgeRgb(rgb));
+    const hot = meshFromLists(engine, `xr-pad-hot-${id}-${spec.id}`, plate, pi, hotMat);
     hot.renderOrder = 181;
     addToScene(scene, hot);
     setSubtreeVisible(hot, false);
-    pads.push(pad);
-    hots.push(hot);
+    const tally = spec.tri && typeof document !== 'undefined'
+      ? makeTallyLabel(engine, scene, `xr-tally-${id}-${spec.id}`)
+      : null;
+    pads.push({ id: spec.id, fill, edge, hot, bars, tally, rgb });
   }
 
-  const labels = [];
-  const canPaint = typeof document !== 'undefined';
-  if (canPaint) {
-    for (let i = 0; i < HANDLE_BUTTONS.length; i++) {
-      labels.push(makeHandleLabel(engine, scene, `xr-handle-label-${id}-${i}`));
-    }
-  }
+  const aimPlate = [];
+  const aimIdx = [];
+  appendCircle(aimPlate, aimIdx, 0, 0, AIM_R, 12, 0);
+  const aimMat = makeInkMaterial(`xr-aim-${id}`, '0.95', [0.9, 1, 0.92]);
+  const aimMesh = meshFromLists(engine, `xr-aim-${id}`, aimPlate, aimIdx, aimMat);
+  aimMesh.renderOrder = 186;
+  addToScene(scene, aimMesh);
+  setSubtreeVisible(aimMesh, false);
   let visible = false;
-  let paintedHand = '';
-  const parts = [wire, ...pads, ...hots, ...labels.map((label) => label.mesh)];
+  const tallySig = [];
+  const parts = [aimMesh];
+  for (let i = 0; i < pads.length; i++) {
+    parts.push(pads[i].fill, pads[i].edge, pads[i].hot);
+    if (pads[i].bars) parts.push(pads[i].bars);
+    if (pads[i].tally) parts.push(pads[i].tally.mesh);
+  }
 
   function hide() {
     if (!visible) return;
     for (let i = 0; i < parts.length; i++) setSubtreeVisible(parts[i], false);
     visible = false;
+    tallySig.length = 0;
   }
 
-  function poseRigid(mesh, ray, frame) {
+  function poseRigid(mesh, ray, frame, sink = 0) {
     if (mesh.position) {
-      mesh.position.x = ray.ox;
-      mesh.position.y = ray.oy;
-      mesh.position.z = ray.oz;
+      mesh.position.x = ray.ox + frame.ux * sink;
+      mesh.position.y = ray.oy + frame.uy * sink;
+      mesh.position.z = ray.oz + frame.uz * sink;
     }
-    setQuat(mesh, quatFromBasis(
-      frame.rx, frame.ry, frame.rz,
-      frame.ux, frame.uy, frame.uz,
-      frame.fx, frame.fy, frame.fz,
-    ));
+    setQuat(mesh, handleDisplayQuat(frame));
     mesh.markLocalDirty?.();
     setSubtreeVisible(mesh, true);
   }
 
-  function pose(ray, hot) {
+  function padSink(buttonId, press) {
+    if (!press) return 0;
+    if (buttonId === 5 && press.pause) return -PAD_DEPRESS;
+    if (press.group === buttonId) return -PAD_DEPRESS;
+    return 0;
+  }
+
+  function poseAim(ray, frame, aim) {
+    if (!aim) {
+      setSubtreeVisible(aimMesh, false);
+      return;
+    }
+    if (aimMesh.position) {
+      aimMesh.position.x = ray.ox + frame.rx * aim.x + frame.ux * aim.y + frame.fx * aim.z;
+      aimMesh.position.y = ray.oy + frame.ry * aim.x + frame.uy * aim.y + frame.fy * aim.z;
+      aimMesh.position.z = ray.oz + frame.rz * aim.x + frame.uz * aim.y + frame.fz * aim.z;
+    }
+    setQuat(aimMesh, handleDisplayQuat(frame));
+    aimMesh.markLocalDirty?.();
+    setSubtreeVisible(aimMesh, true);
+  }
+
+  function poseTally(pad, ray, frame, sink, count) {
+    const mesh = pad.tally?.mesh;
+    if (!mesh) return;
+    const n = count | 0;
+    if (!(n > 0)) {
+      setSubtreeVisible(mesh, false);
+      return;
+    }
+    const sig = `${n}|${pad.rgb.join(',')}`;
+    const slot = pad.id;
+    if (tallySig[slot] !== sig) {
+      pad.tally.paint(n, pad.rgb);
+      tallySig[slot] = sig;
+    }
+    const c = wristPadCenter(pad.id);
+    const y = PAD_SURFACE + 0.0022;
+    if (mesh.position) {
+      mesh.position.x = ray.ox + frame.rx * c[0] + frame.ux * (y + sink) + frame.fx * c[1];
+      mesh.position.y = ray.oy + frame.ry * c[0] + frame.uy * (y + sink) + frame.fy * c[1];
+      mesh.position.z = ray.oz + frame.rz * c[0] + frame.uz * (y + sink) + frame.fz * c[1];
+    }
+    if (mesh.scaling) {
+      const span = TRI_SIDE * 0.46;
+      mesh.scaling.x = span;
+      mesh.scaling.y = span;
+      mesh.scaling.z = 1;
+    }
+    setQuat(mesh, handleDisplayQuat(frame));
+    mesh.markLocalDirty?.();
+    setSubtreeVisible(mesh, true);
+  }
+
+  function pose(ray, hot, press, aim, counts) {
     if (!ray) {
       hide();
       return;
     }
     const frame = pointerFrame(ray);
-    poseRigid(wire, ray, frame);
-    for (let i = 0; i < pads.length; i++) poseRigid(pads[i], ray, frame);
-    for (let i = 0; i < hots.length; i++) {
-      if (hot === i) poseRigid(hots[i], ray, frame);
-      else setSubtreeVisible(hots[i], false);
-    }
-    const words = HANDLE_LABEL[ray.hand];
-    if (words && words.join() !== paintedHand) {
-      for (let i = 0; i < labels.length; i++) labels[i].paint(words[i]);
-      paintedHand = words.join();
-    }
-    for (let i = 0; i < labels.length; i++) {
-      const b = HANDLE_BUTTONS[i];
-      const x = (b.min[0] + b.max[0]) * 0.5;
-      const y = HANDLE_H + 0.012;
-      const z = (b.min[2] + b.max[2]) * 0.5;
-      const mesh = labels[i].mesh;
-      if (mesh.position) {
-        mesh.position.x = ray.ox + frame.rx * x + frame.ux * y + frame.fx * z;
-        mesh.position.y = ray.oy + frame.ry * x + frame.uy * y + frame.fy * z;
-        mesh.position.z = ray.oz + frame.rz * x + frame.uz * y + frame.fz * z;
-      }
-      if (mesh.scaling) {
-        mesh.scaling.x = (b.max[0] - b.min[0]) * 0.86;
-        mesh.scaling.y = (b.max[2] - b.min[2]) * 0.55;
-        mesh.scaling.z = 1;
-      }
-      // Local +Y is the laser (top of the glyphs). Local +X is the viewer's
-      // left when looking down on the pad, matching the story-panel UVs.
-      setQuat(mesh, quatFromBasis(
-        frame.rx, frame.ry, frame.rz,
-        frame.fx, frame.fy, frame.fz,
-        frame.ux, frame.uy, frame.uz,
-      ));
-      mesh.markLocalDirty?.();
-      setSubtreeVisible(mesh, true);
+    poseAim(ray, frame, aim);
+    for (let i = 0; i < pads.length; i++) {
+      const pad = pads[i];
+      const sink = padSink(pad.id, press);
+      poseRigid(pad.fill, ray, frame, sink);
+      poseRigid(pad.edge, ray, frame, sink);
+      if (pad.bars) poseRigid(pad.bars, ray, frame, sink);
+      if (hot === pad.id) poseRigid(pad.hot, ray, frame, sink + 0.0012);
+      else setSubtreeVisible(pad.hot, false);
+      const gid = wristControlGroupId(ray.hand, pad.id);
+      const count = gid == null || !counts ? 0 : counts[gid];
+      poseTally(pad, ray, frame, sink, count);
     }
     visible = true;
   }
@@ -678,7 +954,7 @@ function createPointerHandle(engine, scene) {
   return { hide, pose };
 }
 
-function makeHandleLabel(engine, scene, name) {
+function makeTallyLabel(engine, scene, name) {
   const positions = new Float32Array([
     -0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0,
   ]);
@@ -734,15 +1010,10 @@ function makeHandleLabel(engine, scene, name) {
   setShaderTexture(mat, 'glyph', tex);
   let warned = false;
 
-  function paint(text) {
+  function paint(count, rgb) {
     if (!ctx) return;
     try {
-      ctx.clearRect(0, 0, LABEL_W, LABEL_H);
-      ctx.fillStyle = '#eaffe8';
-      ctx.font = '64px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(text, LABEL_W * 0.5, LABEL_H * 0.5);
+      paintWristTally(ctx, LABEL_W, LABEL_H, count, rgb);
       const bytes = new Uint8Array(ctx.getImageData(0, 0, LABEL_W, LABEL_H).data);
       engine._device.queue.writeTexture(
         { texture: tex.texture },
@@ -761,12 +1032,78 @@ function makeHandleLabel(engine, scene, name) {
   return { mesh, paint };
 }
 
+/** Prison tallies on a clear plate. Strokes sit in the triangle, not a colour square. */
+function paintWristTally(ctx, w, h, count, rgb) {
+  ctx.clearRect(0, 0, w, h);
+  const n = count | 0;
+  if (!(n > 0)) return;
+  const r = rgb?.[0] ?? 1;
+  const g = rgb?.[1] ?? 1;
+  const b = rgb?.[2] ?? 1;
+  const lum = r * 0.3 + g * 0.59 + b * 0.11;
+  ctx.strokeStyle = lum > 0.62 ? '#141416' : '#f4fff2';
+  ctx.lineWidth = Math.max(8, Math.round(Math.min(w, h) * 0.045));
+  ctx.lineCap = 'round';
+  const side = Math.min(w, h);
+  const inset = side * 0.12;
+  const gap = side * 0.03;
+  const cell = (side - inset * 2 - gap) * 0.5;
+  const ox0 = (w - side) * 0.5;
+  const oy0 = (h - side) * 0.5;
+  function origin(q) {
+    const col = q % 2;
+    const row = (q / 2) | 0;
+    return [ox0 + inset + col * (cell + gap), oy0 + inset + row * (cell + gap)];
+  }
+  function strokeX(x0, y0, x1, y1) {
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.moveTo(x1, y0);
+    ctx.lineTo(x0, y1);
+    ctx.stroke();
+  }
+  const glyphs = tallyGlyphs(n);
+  if (glyphs.xCount >= 2) {
+    const m = side * 0.16;
+    strokeX(ox0 + m, oy0 + side * 0.22, ox0 + side * 0.48, oy0 + side * 0.78);
+    strokeX(ox0 + side * 0.52, oy0 + side * 0.22, ox0 + side - m, oy0 + side * 0.78);
+    return;
+  }
+  const marks = tallyMarkLayout(n);
+  for (let i = 0; i < marks.length; i++) {
+    const m = marks[i];
+    const [ox, oy] = origin(m.group);
+    if (m.stroke < 4) {
+      const uCount = Math.min(4, m.inGroup);
+      const span = cell * 0.78;
+      const x0 = ox + cell * 0.5 - span * 0.5;
+      const step = uCount > 1 ? span / (uCount - 1) : 0;
+      const x = x0 + m.stroke * step;
+      ctx.beginPath();
+      ctx.moveTo(x, oy + cell * 0.1);
+      ctx.lineTo(x, oy + cell * 0.9);
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(ox + cell * 0.1, oy + cell * 0.14);
+      ctx.lineTo(ox + cell * 0.9, oy + cell * 0.86);
+      ctx.stroke();
+    }
+  }
+  if (glyphs.xCount === 1) {
+    const [ox, oy] = origin(3);
+    const m = cell * 0.16;
+    strokeX(ox + m, oy + m, ox + cell - m, oy + cell - m);
+  }
+}
+
 /**
  * @param {object} engine
  * @param {object} scene
  * @param {(x: number, z: number) => number} groundYAt
  */
-export function createXrLassoOverlay(engine, scene, groundYAt) {
+export function createXrLassoOverlay(engine, scene, groundYAt, hand = 'right') {
   const ribbon = makeRibbonMesh(engine);
   ribbon.mesh.material = makeRibbonMaterial();
   addToScene(scene, ribbon.mesh);
@@ -777,7 +1114,7 @@ export function createXrLassoOverlay(engine, scene, groundYAt) {
   beam.mesh.material = makeBeamMaterial();
   addToScene(scene, beam.mesh);
   setSubtreeVisible(beam.mesh, false);
-  const handle = createPointerHandle(engine, scene);
+  const handle = createPointerHandle(engine, scene, hand);
 
   function setQuads(n) {
     const idx = n * 6;
@@ -832,7 +1169,7 @@ export function createXrLassoOverlay(engine, scene, groundYAt) {
     handle.hide();
   }
 
-  function poseBeam(ray, length, width, hot) {
+  function poseBeam(ray, length, width, hot, press, aim, counts) {
     if (!ray || !(length > 0)) {
       hideBeam();
       return;
@@ -870,7 +1207,7 @@ export function createXrLassoOverlay(engine, scene, groundYAt) {
     }
     updateMeshPositions(engine, beam.mesh, pos, 0, BEAM_RINGS * BEAM_SIDES);
     if (!beam.mesh.visible) setSubtreeVisible(beam.mesh, true);
-    handle.pose(ray, hot);
+    handle.pose(ray, hot, press, aim, counts);
   }
 
   function hide() {
@@ -886,11 +1223,12 @@ export function createXrLassoOverlay(engine, scene, groundYAt) {
      *   loop?: { x: number, z: number }[] | null,
      *   tip?: { x: number, z: number } | null,
      *   width?: number,
+     *   press?: { cast?: boolean, cancel?: boolean, pause?: boolean },
      * }} s `width` is the lasso line width in world units; the beam and tip scale off it.
      */
     show(s) {
       const width = s.width > 0 ? s.width : 0.5;
-      poseBeam(s.ray, s.length, width * 1.5, s.hot);
+      poseBeam(s.ray, s.length, width * 1.5, s.hot, s.press, s.aim, s.counts);
       let slot = 0;
       if (s.loop && s.loop.length >= 3) {
         const pts = densifyLoop(s.loop, width * 4, MAX_QUADS - TIP_SEGMENTS);

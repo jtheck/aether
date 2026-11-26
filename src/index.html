@@ -68,13 +68,13 @@
       overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
     }
     #status { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); z-index: 10001; font-size: 13px; opacity: 0.9; pointer-events: none; user-select: none; -webkit-user-select: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
-    #sim-paused {
+    #sim-paused, #sim-xr-mode {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
       z-index: 10000; margin: 0; pointer-events: none; user-select: none;
       font: 600 22px/1 system-ui, sans-serif; letter-spacing: 0.08em; color: #f2fbff;
       text-shadow: 0 1px 2px #000;
     }
-    #sim-paused[hidden] { display: none; }
+    #sim-paused[hidden], #sim-xr-mode[hidden] { display: none; }
     /* skinnyheader.png is optically left of its bbox; nudge loading status to match. */
     body:has(#boot-splash:not([data-leaving="1"])) #status {
       transform: translateX(calc(-50% - 22px));
@@ -140,16 +140,29 @@
       row-gap: 0.2em;
     }
     #observer-data .obs-pop { color: var(--pop-ink); opacity: 0.68; }
-    #radial-prices { position: fixed; inset: 0; z-index: 10002; pointer-events: none; }
+    #radial-prices {
+      position: fixed; left: -100000px; top: 0; margin: 0;
+      pointer-events: none;
+    }
     #radial-prices .radial-price {
       position: absolute; left: 0; top: 0;
       display: flex; flex-direction: column; align-items: center; gap: 1px;
-      font: 13px/1.15 system-ui, sans-serif;
+      font: 17px/1.15 system-ui, sans-serif;
       font-variant-numeric: tabular-nums; white-space: nowrap;
       text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
     }
     #radial-prices .radial-price-name { font-weight: 600; letter-spacing: 0.03em; }
-    #radial-prices .radial-price-row { display: flex; align-items: center; gap: 4px; }
+    #radial-prices .radial-price-row {
+      position: absolute; top: 20px; left: 0;
+      font-size: 13px;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      align-items: center;
+      justify-items: start;
+    }
+    #radial-prices .radial-price-cell {
+      display: flex; align-items: center; gap: 2px; min-width: 0;
+    }
     #radial-prices .radial-price svg { height: 1.05em; width: auto; overflow: visible; }
     #radial-prices .radial-price svg * { stroke: currentColor !important; fill: none !important; }
     #radial-prices .radial-price[hidden] { display: none; }
@@ -167,6 +180,7 @@
       font: 13px/1.3 system-ui, sans-serif;
     }
     #koth-controls[hidden] { display: none; }
+    body:has(#side_menu.is-open) #koth-controls { display: none; }
     #koth-controls.koth-controls-center {
       left: 50%;
       top: 50%;
@@ -1120,7 +1134,7 @@
     body.screenshot-hud :is(
       #status, #resources, #resource-bank, #observer-data, #radial-prices,
       #koth-controls, #match-lobby-overlay, #header, #menu_b, #side_menu,
-      #boot-splash, #match-over, #version, #replay-watch, #help_pop, #skins_pop, #sim-paused,
+      #boot-splash, #match-over, #version, #replay-watch, #help_pop, #skins_pop, #sim-paused, #sim-xr-mode,
       #chat-hud, #getfire_wrapper
     ),
     body.screenshot-hud .ble-root {
@@ -1140,6 +1154,7 @@
   <canvas id="canvas"></canvas>
   <div id="status"><span id="status-pop"></span><span id="status-time"></span><span id="status-side"></span></div>
   <div id="sim-paused" hidden>Paused</div>
+  <div id="sim-xr-mode" hidden>Scene projecting in XR</div>
   <div id="resources"></div>
   <div id="observer-data" hidden></div>
   <div id="resource-bank" hidden>
@@ -1290,8 +1305,8 @@
           </div>
         </div>
         <div class="lobby-drawer menu-mode" data-mode="adventure">
-          <button type="button" class="btn lobby-drawer-toggle" aria-expanded="false">Adventure</button>
-          <div class="lobby-drawer-body" hidden>
+          <button type="button" class="btn lobby-drawer-toggle" aria-expanded="true">Adventure</button>
+          <div class="lobby-drawer-body">
             <div class="lobby-type-list" role="list"></div>
             <div class="lobby-type-empty note">Listening for lobbies…</div>
             <button type="button" class="btn lobby-create">Create Adventure lobby</button>
@@ -1549,7 +1564,7 @@
                 <dt>Ctrl + 1–6</dt><dd>Assign control group</dd>
                 <dt>Shift + 1–6</dt><dd>Add selected units to control group</dd>
                 <dt>B or `</dt><dd>Open your Agora menu</dd>
-                <dt>Space</dt><dd>Follow selection (hold)</dd>
+                <dt>Space</dt><dd>Follow selection (tap to toggle)</dd>
                 <dt>Enter</dt><dd>Open chat</dd>
                 <dt>Escape</dt><dd>Back out: help, placement, menus</dd>
                 <dt>Arrows</dt><dd>PAN Camera</dd>
@@ -1606,12 +1621,14 @@
                 <dt>XR</dt><dd>Enter headset</dd>
                 <dt>Either stick</dt><dd>Pan</dd>
                 <dt>Sticks, opposite up and down</dt><dd>Turn</dd>
-                <dt>Sticks, pinch and spread</dt><dd>Up / down</dd>
-                <dt>Stick click</dt><dd>Jump home (left) or to the selection (right)</dd>
+                <dt>Sticks, pinch and spread</dt><dd>Free crawl under ground-run, step four heights between, free roam above the top</dd>
+                <dt>Left stick click</dt><dd>Cycle ground-run and the three floating heights</dd>
+                <dt>Right stick click</dt><dd>Follow the selection</dd>
                 <dt>Trigger</dt><dd>Select what the beam hits</dd>
                 <dt>Trigger, sweep</dt><dd>Lasso select on the field</dd>
                 <dt>Grip + trigger</dt><dd>Add to selection</dd>
                 <dt>Both triggers, sweep</dt><dd>Two lassos, one selection</dd>
+                <dt>Other trigger on wrist pads</dt><dd>Cast, cancel, a control group, or pause (underside); grip + group adds units</dd>
               </dl>
             </div>
           </details>

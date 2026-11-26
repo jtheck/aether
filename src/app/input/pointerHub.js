@@ -1,4 +1,6 @@
 import { isCameraFollowTypingTarget } from './cameraFollow.js';
+import { POINTER_LMB_CAST_WHILE_RMB_PAN } from '../controlMods.js';
+import { DRAG_THRESHOLD_PX } from './dragThreshold.js';
 
 /** Playfield chrome. Right-click pans the camera; it is not a browser menu. */
 const RMB_PASSTHROUGH_SELECTOR = '#chat-hud, #replay-watch, #match-lobby-overlay, #story-transport, #menu_b, #graffiti_b';
@@ -41,6 +43,8 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
    * @type {Map<number, { clientX: number, clientY: number, pointerType: string, buttons: number, button: number }>}
    */
   const held = new Map();
+  /** LMB down positions while RMB pan is active (cast on release). */
+  const panCastDown = new Map();
 
   function noteHeldDown(e) {
     held.set(e.pointerId, {
@@ -164,6 +168,10 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
       return;
     }
     if (e.button === 0) {
+      if (POINTER_LMB_CAST_WHILE_RMB_PAN && camera.isRmbPanning()) {
+        panCastDown.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        return;
+      }
       if (touch?.handlePointerDown(e)) return;
       game.handlePointerDown(e);
     }
@@ -205,6 +213,17 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
       return;
     }
     if (e.button === 0) {
+      if (POINTER_LMB_CAST_WHILE_RMB_PAN && panCastDown.has(e.pointerId)) {
+        const start = panCastDown.get(e.pointerId);
+        panCastDown.delete(e.pointerId);
+        if (
+          start
+          && Math.hypot(e.clientX - start.x, e.clientY - start.y) <= DRAG_THRESHOLD_PX
+        ) {
+          game.castAbilityAt?.(e.clientX, e.clientY, e.pointerType || 'mouse');
+        }
+        return;
+      }
       game.handlePointerUp(e);
     }
   }
@@ -262,6 +281,7 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
 
   function hardClearTouch() {
     held.clear();
+    panCastDown.clear();
     camera.clearKeyStates();
     camera.clearVelocity?.();
     if (camera.isRmbPanning()) {

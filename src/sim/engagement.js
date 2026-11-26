@@ -2,6 +2,7 @@
 
 import * as fx from './fixed.js';
 import { namedScaleOf } from './namedUnit.js';
+import { effectiveMeleeRange, prefersMeleeStand } from './attackMode.js';
 import { ATTACK_DELIVERY, getUnitDef } from './unitTypes.js';
 
 export const ENGAGEMENT_SLOTS = 16;
@@ -32,7 +33,7 @@ function chooseFreeSlot(mask, start) {
 export function claimEngagement(w, attacker, target) {
   const def = getUnitDef(w.type[attacker]);
   w.targetLoad[target]++;
-  if (def.attackDelivery !== ATTACK_DELIVERY.MELEE) {
+  if (def.attackDelivery !== ATTACK_DELIVERY.MELEE && !prefersMeleeStand(w, attacker, target, def)) {
     clearEngagement(w, attacker);
     return -1;
   }
@@ -69,12 +70,19 @@ export function rebuildEngagementClaims(w) {
 
 export function effectiveAttackRange(w, attacker, target) {
   const def = getUnitDef(w.type[attacker]);
-  if (def.attackDelivery !== ATTACK_DELIVERY.MELEE) return def.attackRange;
-  const targetDef = getUnitDef(w.type[target]);
-  const attackerSize = def.size * namedScaleOf(w, attacker);
-  const targetSize = targetDef.size * namedScaleOf(w, target);
-  const bodyClearance = fx.fromFloat((attackerSize + targetSize) * 0.35);
-  return def.attackRange + bodyClearance;
+  // Pure melee authors attackRange, not meleeRange. The staff helper returns 0
+  // for that, which parked warriors on the target's center and never in range.
+  if (def.attackDelivery === ATTACK_DELIVERY.MELEE) {
+    const targetDef = getUnitDef(w.type[target]);
+    const attackerSize = def.size * namedScaleOf(w, attacker);
+    const targetSize = targetDef.size * namedScaleOf(w, target);
+    const bodyClearance = fx.fromFloat((attackerSize + targetSize) * 0.35);
+    return def.attackRange + bodyClearance;
+  }
+  if (prefersMeleeStand(w, attacker, target, def)) {
+    return effectiveMeleeRange(w, attacker, target);
+  }
+  return def.attackRange;
 }
 
 export function engagementPoint(w, attacker, target) {
@@ -82,7 +90,7 @@ export function engagementPoint(w, attacker, target) {
   let slot = w.engagementSlot[attacker];
   if (slot < 0) slot = (Math.imul(attacker, 13) + Math.imul(target, 7)) & 15;
 
-  if (def.attackDelivery === ATTACK_DELIVERY.MELEE) {
+  if (def.attackDelivery === ATTACK_DELIVERY.MELEE || prefersMeleeStand(w, attacker, target, def)) {
     const radius = fx.mul(effectiveAttackRange(w, attacker, target), fx.fromFloat(0.88));
     return {
       x: w.px[target] + fx.mul(DIR_X[slot], radius),

@@ -1,6 +1,16 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { arcBeamPoint, densifyLoop, handleButtonPoint, pickHandleButton } from './xrLasso.js';
+import {
+  arcBeamPoint,
+  densifyLoop,
+  handleButtonPoint,
+  pickHandleButton,
+  wristAimLocal,
+  wristControlGroupId,
+  wristGroupCenter,
+  wristTriFacing,
+  WRIST_CONTROL_GROUPS,
+} from './xrLasso.js';
 
 describe('arcBeamPoint', () => {
   const ray = { ox: 2, oy: 8, oz: 3, dx: 0, dy: 0, dz: 1, ux: 1, uy: 0, uz: 0 };
@@ -28,13 +38,48 @@ describe('arcBeamPoint', () => {
 describe('handle buttons', () => {
   const aim = { ox: 0, oy: 1.5, oz: 0, dx: 0, dy: 0, dz: 1, ux: 0, uy: 1, uz: 0 };
 
-  it('a ray from above the order pad hits it, and a far ray does not', () => {
-    const p = handleButtonPoint(aim, 0);
-    const press = { ox: p.x, oy: p.y, oz: p.z, dx: 0, dy: -1, dz: 0 };
-    assert.equal(pickHandleButton(aim, press), 0);
-    const select = handleButtonPoint(aim, 1);
-    assert.equal(pickHandleButton(aim, { ox: select.x, oy: select.y, oz: select.z, dx: 0, dy: -1, dz: 0 }), 1);
+  it('hits a group triangle and the pause pad, and misses the old face buttons', () => {
+    assert.equal(handleButtonPoint(aim, 0), null);
+    assert.equal(handleButtonPoint(aim, 1), null);
+    const grp = handleButtonPoint(aim, 2);
+    assert.equal(pickHandleButton(aim, { ox: grp.x, oy: grp.y, oz: grp.z, dx: 0, dy: -1, dz: 0 }), 2);
+    const pause = handleButtonPoint({ ...aim, hand: 'left' }, 5);
+    const group = handleButtonPoint({ ...aim, hand: 'left' }, 4);
+    assert.equal(pickHandleButton({ ...aim, hand: 'left' }, { ox: pause.x, oy: pause.y, oz: pause.z, dx: 0, dy: -1, dz: 0 }), 5);
+    assert.ok(Math.abs(pause.y - group.y) < 1e-4);
+    assert.ok(pause.z < group.z);
     assert.equal(pickHandleButton(aim, { ox: 3, oy: 3, oz: 3, dx: 0, dy: -1, dz: 0 }), null);
+    assert.deepEqual(WRIST_CONTROL_GROUPS.left, [0, 1, 4]);
+    assert.equal(wristControlGroupId('left', 2), 0);
+    assert.equal(wristControlGroupId('right', 4), 5);
+  });
+
+  it('lays group triangles up the arm, alternating like the flat column', () => {
+    const a = handleButtonPoint({ ...aim, hand: 'left' }, 2);
+    const b = handleButtonPoint({ ...aim, hand: 'left' }, 3);
+    const c = handleButtonPoint({ ...aim, hand: 'left' }, 4);
+    assert.ok(a.z > b.z && b.z > c.z);
+    assert.ok(a.z - b.z > 0.03 && b.z - c.z > 0.03);
+    assert.ok(Math.abs((a.z + c.z) * 0.5 - b.z) < 1e-4);
+    assert.deepEqual(
+      [0, 1, 2].map((i) => wristTriFacing('left', i)),
+      [1, -1, 1],
+    );
+    assert.deepEqual(
+      [0, 1, 2].map((i) => wristTriFacing('right', i)),
+      [-1, 1, -1],
+    );
+    assert.ok(wristGroupCenter(0)[1] > wristGroupCenter(2)[1]);
+  });
+
+  it('marks where the other ray meets the bracer, and ignores a miss', () => {
+    const center = wristGroupCenter(1);
+    const hit = handleButtonPoint({ ...aim, hand: 'right' }, 3);
+    const over = { ox: hit.x, oy: hit.y + 0.04, oz: hit.z, dx: 0, dy: -1, dz: 0 };
+    const aimLocal = wristAimLocal({ ...aim, hand: 'right' }, over);
+    assert.ok(aimLocal);
+    assert.ok(Math.abs(aimLocal.z - center[1]) < 0.02);
+    assert.equal(wristAimLocal(aim, { ox: 3, oy: 3, oz: 3, dx: 0, dy: -1, dz: 0 }), null);
   });
 });
 

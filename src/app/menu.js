@@ -149,12 +149,22 @@ export function setupMenu({
   if (xrButton) {
     xrButton.hidden = !xrSupported;
     xrButton.addEventListener('click', () => {
+      const banner = document.getElementById('sim-xr-mode');
+      if (!getXrActive?.() && banner) {
+        banner.textContent = 'Starting XR…';
+        banner.hidden = false;
+      }
       Promise.resolve(onToggleXr?.()).catch((err) => {
         console.warn('[xr] session failed', err);
         xrButton.classList.remove('is-on');
         xrButton.title = 'Enter XR';
         xrButton.setAttribute('aria-pressed', 'false');
         xrButton.setAttribute('aria-label', 'Enter XR');
+        if (banner) {
+          const detail = err instanceof Error ? err.message : String(err || 'Unknown error');
+          banner.textContent = `XR failed: ${detail.slice(0, 240)}`;
+          banner.hidden = false;
+        }
       });
     });
   }

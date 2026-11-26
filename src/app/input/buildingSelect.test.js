@@ -134,10 +134,24 @@ describe('queue spread', () => {
     const tracks = aggregateBuildingTracks([0, 1], buildings, 0);
     assert.equal(tracks['unit:warrior'].count, 2);
     assert.equal(tracks['unit:warrior'].extra, 1);
-    assert.equal(tracks['unit:warrior'].progress, 0.2);
+    assert.equal(tracks['unit:warrior'].progress, 0.6);
     const onlyOther = aggregateBuildingTracks([0, 1], buildings, 1);
     assert.equal(onlyOther['unit:warrior'].count, 1);
     assert.equal(onlyOther['unit:warrior'].extra, 2);
+  });
+
+  it('counts other barracks of the same type when only one is selected', () => {
+    const buildings = [
+      { owner: 0, type: 'barracks', hp: 10, tracks: [{ kind: 'unit', id: 'warrior', count: 2, progress: 0.2 }] },
+      { owner: 0, type: 'barracks', hp: 10, tracks: [{ kind: 'unit', id: 'warrior', count: 4, progress: 0.95 }] },
+      { owner: 0, type: 'range', hp: 10, tracks: [{ kind: 'unit', id: 'archer', count: 3 }] },
+      { owner: 1, type: 'barracks', hp: 10, tracks: [{ kind: 'unit', id: 'warrior', count: 9 }] },
+    ];
+    const tracks = aggregateBuildingTracks([0], buildings, 0);
+    assert.equal(tracks['unit:warrior'].count, 2);
+    assert.equal(tracks['unit:warrior'].extra, 4);
+    assert.equal(tracks['unit:warrior'].progress, 0.2);
+    assert.equal(tracks['unit:archer'], undefined);
   });
 
   it('detects an upgrade already queued in the group', () => {

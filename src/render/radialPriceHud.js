@@ -2,7 +2,7 @@
 // train is 1 pop, so it is not worth listing.
 
 import { formatGameNumber } from '../sim/formatGameNumber.js';
-import { lackingCostKinds, resourceCostParts } from '../sim/resources.js';
+import { RESOURCE_KINDS, lackingCostKinds, resourceCostParts } from '../sim/resources.js';
 import { loadPriceIcons } from './resourceIconSheet.js';
 
 /** @type {HTMLElement | null} */
@@ -136,29 +136,34 @@ function fillRow(el, spec) {
     return;
   }
   row.hidden = false;
+  const byKind = new Map(parts.map((p) => [p.kind, p.amount]));
   const split = spec.gate === 'unafford';
   const lack = split ? new Set(lackingCostKinds(spec.bank, cost)) : null;
   const okCss = washCss(spec.okWash ?? spec.wash);
   const badCss = washCss(spec.wash);
-  for (let i = 0; i < parts.length; i++) {
-    if (i) {
-      const sep = document.createElement('span');
-      sep.className = 'radial-price-sep';
-      sep.textContent = '·';
-      row.appendChild(sep);
+  for (const kind of RESOURCE_KINDS) {
+    const cell = document.createElement('span');
+    cell.className = 'radial-price-cell';
+    const amount = byKind.get(kind) | 0;
+    if (amount > 0) {
+      const amt = document.createElement('span');
+      amt.className = 'radial-price-amt';
+      amt.textContent = formatGameNumber(amount);
+      cell.appendChild(amt);
+      const src = icons[kind];
+      const icon = src ? src.cloneNode(true) : null;
+      if (icon) {
+        icon.style.width = '1em';
+        icon.style.height = '1em';
+        cell.appendChild(icon);
+      }
+      if (split) {
+        const css = lack.has(kind) ? badCss : okCss;
+        amt.style.color = css;
+        if (icon) icon.style.color = css;
+      }
     }
-    const amt = document.createElement('span');
-    amt.className = 'radial-price-amt';
-    amt.textContent = formatGameNumber(parts[i].amount);
-    row.appendChild(amt);
-    const src = icons[parts[i].kind];
-    const icon = src ? src.cloneNode(true) : null;
-    if (icon) row.appendChild(icon);
-    if (split) {
-      const css = lack.has(parts[i].kind) ? badCss : okCss;
-      amt.style.color = css;
-      if (icon) icon.style.color = css;
-    }
+    row.appendChild(cell);
   }
 }
 
@@ -176,6 +181,8 @@ function fillRow(el, spec) {
  *   bank?: Record<string, number> | null,
  *   name?: string,
  *   nameWash?: number[],
+ *   costX?: number,
+ *   costRightX?: number,
  * } | null} spec
  */
 export function setRadialPrice(id, spec) {
@@ -216,6 +223,18 @@ export function setRadialPrice(id, spec) {
   el.style.opacity = spec.opacity == null ? '0.85' : String(spec.opacity);
   const pos = priceOverlayPos(spec.x, spec.y, spec.canvas);
   el.style.transform = `translate(${pos.x}px, ${pos.y}px) translate(-50%, 0)`;
+  const row = el.querySelector('.radial-price-row');
+  if (row && !row.hidden && spec.costX != null) {
+    const costPos = priceOverlayPos(spec.costX, spec.y, spec.canvas);
+    const rightPos = spec.costRightX == null
+      ? null
+      : priceOverlayPos(spec.costRightX, spec.y, spec.canvas);
+    const spanL = rightPos ? Math.min(costPos.x, rightPos.x) : costPos.x;
+    const spanW = rightPos ? Math.abs(rightPos.x - costPos.x) : 0;
+    const nameW = el.querySelector('.radial-price-name')?.offsetWidth || 0;
+    row.style.left = `${spanL - (pos.x - nameW / 2)}px`;
+    if (spanW > 0) row.style.width = `${spanW}px`;
+  }
   el.hidden = false;
 }
 

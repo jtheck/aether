@@ -120,6 +120,10 @@ function matchApm(samples, playerIndex, tick) {
   return Math.round((actions * 1200) / span);
 }
 
+function formatApm(n) {
+  return `${n}万`;
+}
+
 function statFor(doc, player, index) {
   const stats = doc.stats || [];
   if (player?.playerId) {
@@ -326,7 +330,7 @@ function statsTable(doc) {
       [src.gathered | 0, kindTitle(src.gatheredBy), true],
       [src.spent | 0, kindTitle(src.spentBy), false],
       [bankAverage(samples, i), '', true],
-      [matchApm(samples, i, doc.tick), '', false],
+      [formatApm(matchApm(samples, i, doc.tick)), '', false],
     ];
     for (const [value, title, group] of values) tr.append(cell(value, title, group));
     table.append(tr);

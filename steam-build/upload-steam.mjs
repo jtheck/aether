@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { TARGETS, TARGET_ORDER } from './targets.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const steampipeDir = path.join(root, 'steampipe');
@@ -31,17 +32,8 @@ function depotMapping(localFolder) {
 \t\t"FileExclusion" "${localFolder}/.nw-user-data/*"`;
 }
 
-function linuxExecProps(localFolder) {
-  const bins = [
-    `${localFolder}/Aether`,
-    `${localFolder}/Aether.sh`,
-    `${localFolder}/chrome_crashpad_handler`,
-    `${localFolder}/chrome-sandbox`,
-    `${localFolder}/nacl_helper`,
-    `${localFolder}/nacl_helper_bootstrap`,
-    `${localFolder}/package.nw/node-steam/node`,
-  ];
-  return bins.map(function (p) {
+function unixMode(localPaths) {
+  return localPaths.map(function (p) {
     return `\t\t"FileProperties"
 \t\t{
 \t\t\t"LocalPath" "${p}"
@@ -50,43 +42,107 @@ function linuxExecProps(localFolder) {
   }).join('\n');
 }
 
+function linuxBins(prefix) {
+  return [
+    `${prefix}/Aether`,
+    `${prefix}/Aether.sh`,
+    `${prefix}/chrome_crashpad_handler`,
+    `${prefix}/chrome-sandbox`,
+    `${prefix}/nacl_helper`,
+    `${prefix}/nacl_helper_bootstrap`,
+    `${prefix}/package.nw/node-steam/node`,
+  ];
+}
+
+function linuxExecProps(localFolder) {
+  return unixMode(linuxBins(localFolder));
+}
+
+function macExecProps(localFolder) {
+  const abs = path.join(root, localFolder);
+  const rels = [];
+  function walk(dir) {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (_err) {
+      return;
+    }
+    for (const ent of entries) {
+      if (ent.isSymbolicLink()) continue;
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!ent.isFile()) continue;
+      const parent = path.basename(dir);
+      if (parent === 'MacOS' || (ent.name === 'node' && parent === 'node-steam')) {
+        rels.push(localFolder + '/' + path.relative(abs, full).split(path.sep).join('/'));
+      }
+    }
+  }
+  walk(abs);
+  if (!rels.length) die('No Mac executables found in ' + localFolder + '. The .app bundle did not build.');
+  return unixMode(rels);
+}
+
 if (!fs.existsSync(configPath)) {
   if (fs.existsSync(examplePath)) {
     fs.copyFileSync(examplePath, configPath);
     console.log('[steam-upload] Created steampipe/config.json from example - edit depot IDs, then re-run.');
   }
-  die('Missing steampipe/config.json - set depots.win and depots.linux from partner site → SteamPipe → Depots.');
+  die('Missing steampipe/config.json - set depot IDs from partner site → SteamPipe → Depots.');
 }
 
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 const appId = String(config.appId || '480');
-const winDepotId = String(config.depots?.win || '').trim();
-const linuxDepotId = String(config.depots?.linux || '').trim();
-const buildDesc = String(config.buildDesc || 'aether-win64+linux64');
 
-const winOnly = process.argv.includes('--win-only');
-const linuxOnly = process.argv.includes('--linux-only');
-const platforms = winOnly ? ['win'] : linuxOnly ? ['linux'] : ['win', 'linux'];
+const onlyFlags = {
+  '--win-only': 'win',
+  '--linux-only': 'linux',
+  '--linux-arm64-only': 'linux-arm64',
+  '--osx-only': 'osx',
+};
+const picked = Object.entries(onlyFlags)
+  .filter(([flag]) => process.argv.includes(flag))
+  .map(([, id]) => id);
+const requested = picked.length ? picked : TARGET_ORDER;
 
-if (platforms.includes('win') && (!winDepotId || winDepotId.includes('PASTE_'))) {
-  die('Set depots.win in steampipe/config.json.');
+function depotReady(id) {
+  const value = String(id || '').trim();
+  return !!value && !value.includes('PASTE_');
 }
-if (platforms.includes('linux') && (!linuxDepotId || linuxDepotId.includes('PASTE_'))) {
-  die('Set depots.linux in steampipe/config.json.');
-}
 
-for (const plat of platforms) {
-  console.log('[steam-upload] Building dist-' + plat + '…');
-  const dist = spawnSync('npm', ['run', 'dist:' + plat], { cwd: root, stdio: 'inherit', shell: true });
+const platforms = [];
+for (const id of requested) {
+  const target = TARGETS[id];
+  const depotId = String(config.depots?.[target.depotKey] || '').trim();
+  if (!depotReady(depotId)) {
+    const msg = 'Set depots.' + target.depotKey + ' in steampipe/config.json.';
+    if (picked.length) die(msg);
+    console.log('[steam-upload] Skipping ' + id + ': ' + msg);
+    continue;
+  }
+  platforms.push({ target, depotId });
+}
+if (!platforms.length) die('No depots selected.');
+
+for (const entry of platforms) {
+  const { target } = entry;
+  console.log('[steam-upload] Building ' + target.outDir + '…');
+  const dist = spawnSync('npm', ['run', 'dist:' + target.id], { cwd: root, stdio: 'inherit', shell: true });
   if (dist.status !== 0) process.exit(dist.status ?? 1);
 
-  const distDir = path.join(root, 'dist-' + plat);
-  const launchBin = plat === 'linux' ? 'Aether' : 'Aether.exe';
-  if (!fs.existsSync(path.join(distDir, launchBin))) {
-    die('dist-' + plat + '/' + launchBin + ' missing after build.');
+  const distDir = path.join(root, target.outDir);
+  if (!fs.existsSync(path.join(distDir, target.launchRel))) {
+    die(target.outDir + '/' + target.launchRel + ' missing after build.');
   }
   removeUserData(distDir);
+  entry.folder = target.outDir;
 }
+
+const buildDesc = 'aether-' + platforms.map(({ target }) => target.label).join('+');
 
 const outputDir = path.join(root, 'steampipe-output');
 fs.mkdirSync(outputDir, { recursive: true });
@@ -94,20 +150,19 @@ const vdfPath = (p) => p.replace(/\\/g, '\\\\');
 const buildOutput = vdfPath(outputDir);
 const contentRoot = vdfPath(root);
 
-const depotLines = [];
-if (platforms.includes('win')) {
-  depotLines.push(`\t\t"${winDepotId}"
+const depotLines = platforms.map(function ({ target, depotId, folder }) {
+  const depotFolder = folder || target.outDir;
+  const exec = target.ozone
+    ? linuxExecProps(depotFolder)
+    : target.nwPlatform === 'osx'
+      ? macExecProps(depotFolder)
+      : '';
+  return `\t\t"${depotId}"
 \t\t{
-${depotMapping('dist-win')}
-\t\t}`);
-}
-if (platforms.includes('linux')) {
-  depotLines.push(`\t\t"${linuxDepotId}"
-\t\t{
-${depotMapping('dist-linux')}
-${linuxExecProps('dist-linux')}
-\t\t}`);
-}
+${depotMapping(depotFolder)}
+${exec}
+\t\t}`;
+});
 
 const appVdfPath = path.join(steampipeDir, `app_build_${appId}.vdf`);
 fs.writeFileSync(
@@ -129,7 +184,7 @@ ${depotLines.join('\n')}
 );
 
 console.log('[steam-upload] Wrote', appVdfPath);
-console.log('[steam-upload] Depots:', platforms.map((p) => (p === 'win' ? winDepotId : linuxDepotId)).join(' + '));
+console.log('[steam-upload] Depots:', platforms.map(({ target, depotId }) => target.id + '=' + depotId).join(' + '));
 
 const sdkRoot = (process.env.STEAMWORKS_SDK || 'C:\\Users\\blind\\steamworks_sdk').trim();
 const steamcmd = path.join(sdkRoot, 'tools', 'ContentBuilder', 'builder', 'steamcmd.exe');
@@ -152,6 +207,12 @@ if (run.status !== 0) {
 }
 
 console.log('[steam-upload] Done. Set the build live: https://partner.steamgames.com/apps/builds/' + appId);
-if (platforms.includes('linux')) {
-  console.log('[steam-upload] Linux launch option must be Aether (ELF, OS: Linux). Aether.exe is Windows/Proton only.');
+if (platforms.some(({ target }) => target.ozone)) {
+  console.log('[steam-upload] Linux launch executable is Aether (ELF). Aether.exe is Windows/Proton only.');
+}
+if (platforms.some(({ target }) => target.id === 'linux-arm64')) {
+  console.log('[steam-upload] Frame depot must be OS Linux, architecture 64-bit ARM. Launch executable Aether.');
+}
+if (platforms.some(({ target }) => target.id === 'osx')) {
+  console.log('[steam-upload] Mac launch executable is Aether.app. This build is not notarized.');
 }

@@ -2577,6 +2577,14 @@ const GRID_INK = {
   clear: { diffuse: [0.18, 1, 0.28], emissive: [0.08, 0.62, 0.12], alpha: 0.42 },
 };
 
+/** Placement ghost pad — same hues as dev G-grid, much quieter under the model ghost. */
+const PLACEMENT_GRID_INK = {
+  edge: { diffuse: GRID_INK.edge.diffuse, emissive: GRID_INK.edge.emissive, alpha: 0.26 },
+  blocked: { diffuse: GRID_INK.blocked.diffuse, emissive: GRID_INK.blocked.emissive, alpha: 0.22 },
+  structure: { diffuse: GRID_INK.structure.diffuse, emissive: GRID_INK.structure.emissive, alpha: 0.2 },
+  slow: { diffuse: GRID_INK.slow.diffuse, emissive: GRID_INK.slow.emissive, alpha: 0.18 },
+};
+
 /**
  * Dev overlay: teal edges, rose blocked, ochre structure-slow, gold tree/shore slow.
  * Edges are static; occupancy fills refresh from live pass/slow/structureSlow masks.
@@ -2812,7 +2820,7 @@ function placementOccupancySignature(field, win) {
 }
 
 /**
- * Placement-only G-grid: same ink plus green open tiles, clipped to the ghost pad.
+ * Placement-only G-grid: quiet occupancy ink around the ghost; footprint validity reads on the model.
  * @returns {{
  *   setFocus: (field: object | null, pos: { type: string, x: number, z: number, valid?: boolean } | null) => void,
  *   dispose: () => void,
@@ -2827,8 +2835,6 @@ export function createPlacementGridOverlay(engine, scene) {
   let structureSlowMesh = null;
   /** @type {object | null} */
   let slowMesh = null;
-  /** @type {object | null} */
-  let clearMesh = null;
   let lastSig = '';
 
   function disposeDevMesh(mesh) {
@@ -2841,12 +2847,10 @@ export function createPlacementGridOverlay(engine, scene) {
     disposeDevMesh(blockMesh);
     disposeDevMesh(structureSlowMesh);
     disposeDevMesh(slowMesh);
-    disposeDevMesh(clearMesh);
     edgeMesh = null;
     blockMesh = null;
     structureSlowMesh = null;
     slowMesh = null;
-    clearMesh = null;
   }
 
   function hide() {
@@ -2910,9 +2914,6 @@ export function createPlacementGridOverlay(engine, scene) {
     const slowPos = [];
     const slowIdx = [];
     let sv = 0;
-    const clearPos = [];
-    const clearIdx = [];
-    let cv = 0;
 
     for (let tz = win.z0; tz < win.z1; tz++) {
       for (let tx = win.x0; tx < win.x1; tx++) {
@@ -2937,19 +2938,18 @@ export function createPlacementGridOverlay(engine, scene) {
           uv = pushLocalFill(field, tx, tz, STRUCT_SLOW_LIFT, half, halfZ, structPos, structIdx, uv);
         } else if (fill === 'slow') {
           sv = pushLocalFill(field, tx, tz, SLOW_LIFT, half, halfZ, slowPos, slowIdx, sv);
-        } else if (fill === 'clear') {
-          cv = pushLocalFill(field, tx, tz, CLEAR_LIFT, half, halfZ, clearPos, clearIdx, cv);
         }
+        // Valid footprint reads on the building ghost; skip neon green claim fills.
       }
     }
 
     if (ev > 0) {
-      edgeMesh = makeDevMesh(engine, 'place-grid', edgePos, edgeIdx, GRID_INK.edge);
+      edgeMesh = makeDevMesh(engine, 'place-grid', edgePos, edgeIdx, PLACEMENT_GRID_INK.edge);
       addToScene(scene, edgeMesh);
       setSubtreeVisible(edgeMesh, true);
     }
     if (bv > 0) {
-      blockMesh = makeDevMesh(engine, 'place-blocked', blockPos, blockIdx, GRID_INK.blocked);
+      blockMesh = makeDevMesh(engine, 'place-blocked', blockPos, blockIdx, PLACEMENT_GRID_INK.blocked);
       addToScene(scene, blockMesh);
       setSubtreeVisible(blockMesh, true);
     }
@@ -2959,20 +2959,15 @@ export function createPlacementGridOverlay(engine, scene) {
         'place-structure-slow',
         structPos,
         structIdx,
-        GRID_INK.structure,
+        PLACEMENT_GRID_INK.structure,
       );
       addToScene(scene, structureSlowMesh);
       setSubtreeVisible(structureSlowMesh, true);
     }
     if (sv > 0) {
-      slowMesh = makeDevMesh(engine, 'place-slow', slowPos, slowIdx, GRID_INK.slow);
+      slowMesh = makeDevMesh(engine, 'place-slow', slowPos, slowIdx, PLACEMENT_GRID_INK.slow);
       addToScene(scene, slowMesh);
       setSubtreeVisible(slowMesh, true);
-    }
-    if (cv > 0) {
-      clearMesh = makeDevMesh(engine, 'place-clear', clearPos, clearIdx, GRID_INK.clear);
-      addToScene(scene, clearMesh);
-      setSubtreeVisible(clearMesh, true);
     }
   }
 

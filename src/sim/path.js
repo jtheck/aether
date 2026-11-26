@@ -4,6 +4,7 @@ import * as fx from './fixed.js';
 import { findPath, lineClear, worldToTile, worldToTileZ, TILE } from './field.js';
 import { getUnitDef, isFlyer, unitAvoidsSlow } from './unitTypes.js';
 import { ORDER } from './world.js';
+import { inMeleeReach, meleeMissesAir } from './attackMode.js';
 import { effectiveAttackRange, engagementPoint } from './engagement.js';
 import {
   attackBuildingInRange,
@@ -75,10 +76,12 @@ export function attackInRange(w, i) {
   if (w.targetEntity[i] >= 0) {
     const t = w.targetEntity[i];
     if (!w.alive[t]) return false;
+    if (meleeMissesAir(w.type[i], w.type[t])) return false;
     const def = getUnitDef(w.type[i]);
+    const d2 = fx.dist2(w.px[i], w.py[i], w.px[t], w.py[t]);
+    if (inMeleeReach(w, i, w.px[t], w.py[t], t)) return true;
     const range = effectiveAttackRange(w, i, t);
     const range2 = fx.mul(range, range);
-    const d2 = fx.dist2(w.px[i], w.py[i], w.px[t], w.py[t]);
     if (d2 > range2) return false;
     if (def.minRange > 0) {
       const min2 = fx.mul(def.minRange, def.minRange);

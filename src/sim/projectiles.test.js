@@ -495,7 +495,7 @@ function fireballAimScatterGrowsWithRange() {
   void field;
 }
 
-function sporeStreamHitsOnlyTarget() {
+function sporeStreamPiercesLine() {
   const field = openField();
   const w = createWorld(31);
   const myco = spawn(w, {
@@ -532,10 +532,10 @@ function sporeStreamHitsOnlyTarget() {
   for (let t = 0; t < 40 && w.projectiles.activeCount; t++) {
     projectileSystem(w, field);
   }
-  assert.equal(w.hp[front], frontHp, 'head mushroom does not pierce the path');
+  assert.ok(w.hp[front] < frontHp, 'units in front of the aim point take the hit');
   assert.ok(w.hp[back] < backHp, 'aimed target still takes the hit');
   const bloomFx = takeSporeBloomUpdates(w);
-  assert.ok(bloomFx?.headCount >= 1, 'hit publishes a head mushroom');
+  assert.ok(bloomFx?.headCount >= 2, 'each hit publishes a head mushroom');
   assert.equal(bloomFx.headKill[0], 0);
   assert.ok(
     Math.hypot(bloomFx.headFromX[0], bloomFx.headFromY[0]) < 1.5,
@@ -939,7 +939,7 @@ fireballSplashBlastLobsUnits();
 fireballBlastDistanceIsRandom();
 castCommandSpawnsFireball();
 fireballAimScatterGrowsWithRange();
-sporeStreamHitsOnlyTarget();
+sporeStreamPiercesLine();
 sporeStreamSidestepMisses();
 sporeHeadKillSeedsATree();
 shadowBoltAppliesDot();

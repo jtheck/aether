@@ -3,8 +3,8 @@
 // owner's bank, repeat. Farms are the exception: food is banked in place while
 // the villager wanders the plot (no haul, no carry visual). Wood/rock harvest
 // plays chop; carry (VAT + overhead prop) starts only on the walk back.
-// An attached silo is a satellite drop-off and an extra gather circle one
-// tile tighter than the source building's work radius.
+// An attached silo is a satellite drop-off and an extra gather circle the
+// same size as the source building's work radius.
 //
 // Modeled on repair.js: a per-tick system drives locomotion via queuePath and
 // holds the unit in range while it works. All state lives on the world (SoA +
@@ -18,7 +18,7 @@ import { damageTree } from './trees.js';
 import { tileCenterX, tileCenterY, snapToPassable, worldToTile, worldToTileZ, TILE_SIZE_F, isPassable } from './field.js';
 import { RESOURCE_KINDS, RESOURCE_INDEX } from './resources.js';
 import { addGatherIncome, siloIsAttached, silosAttachedTo } from './storage.js';
-import { UNIT } from './unitTypes.js';
+import { isFlyer, UNIT } from './unitTypes.js';
 import { revertBrigand } from './brigand.js';
 import { SCENERY, rockFootprintRadiusForStock, rockResourceKind, damageRock } from './scenery.js';
 import { isHostile } from './teams.js';
@@ -167,8 +167,6 @@ export const CAMP_WORK_RADIUS_F = 8 * TILE_SIZE_F + WORK_RADIUS_PAD_F;
 export const FARM_WORK_RADIUS_F = 5 * TILE_SIZE_F + WORK_RADIUS_PAD_F;
 /** Advertised HUD ring sits this far inside the live gather circle. */
 export const WORK_RADIUS_RING_INSET_F = 1.6;
-/** Attached silo satellite circle is one tile tighter than the source. */
-export const SILO_WORK_RADIUS_PENALTY_F = TILE_SIZE_F;
 /** Reach added per engineer loitering near the drop-off (world units). */
 export const ENGINEER_RADIUS_BONUS_F = 8;
 /** How close an engineer must be to a drop-off to extend it (world units). */
@@ -205,7 +203,6 @@ const DEFEND_PHASE = 6;
 
 const CAMP_WORK_RADIUS = fx.fromFloat(CAMP_WORK_RADIUS_F);
 const FARM_WORK_RADIUS = fx.fromFloat(FARM_WORK_RADIUS_F);
-const SILO_WORK_RADIUS_PENALTY = fx.fromFloat(SILO_WORK_RADIUS_PENALTY_F);
 const ENGINEER_RADIUS_BONUS = fx.fromFloat(ENGINEER_RADIUS_BONUS_F);
 const CREW_RADIUS_BONUS = fx.fromFloat(CREW_RADIUS_BONUS_F);
 const ENGINEER_ASSIST_RANGE = fx.fromFloat(ENGINEER_ASSIST_RANGE_F);
@@ -975,10 +972,9 @@ export function campWorkRadiusWorld(w, b, buildings, field) {
   return reach + tiers * CREW_RADIUS_BONUS_F;
 }
 
-/** Satellite gather reach for an attached silo (world units). */
+/** Satellite gather reach for an attached silo — the parent drop-off's radius. */
 export function siloWorkRadiusWorld(sourceRadius) {
-  const r = sourceRadius - SILO_WORK_RADIUS_PENALTY_F;
-  return r > 0 ? r : 0;
+  return sourceRadius > 0 ? sourceRadius : 0;
 }
 
 /** HUD / ghost ring radius - slightly inside the live gather circle. */
@@ -988,8 +984,7 @@ export function workRadiusRingWorld(actual) {
 }
 
 function siloWorkRadiusFx(sourceRadius) {
-  const r = sourceRadius - SILO_WORK_RADIUS_PENALTY;
-  return r > 0 ? r : 0;
+  return sourceRadius > 0 ? sourceRadius : 0;
 }
 
 /**
@@ -1316,6 +1311,7 @@ function nearestHostile(w, i, rangeSq) {
     if (j === i || !w.alive[j]) continue;
     if (w.carriedBy && w.carriedBy[j] >= 0) continue;
     if (!isHostile(owner, w.owner[j])) continue;
+    if (isFlyer(w.type[j])) continue;
     const d2 = fx.dist2(w.px[i], w.py[i], w.px[j], w.py[j]);
     if (d2 <= bestD) {
       if (d2 < bestD || (best < 0 || j < best)) {

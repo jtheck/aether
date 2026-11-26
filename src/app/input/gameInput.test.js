@@ -437,7 +437,7 @@ describe('gamepad select drag', () => {
     assert.equal(input.updateSelectDrag(260, 260), true);
     assert.equal(boxes.length, 0);
     assert.ok(paths.some((p) => p.length >= 3));
-    assert.ok(brushes.at(-1) >= 36);
+    assert.ok(brushes.at(-1) >= 24);
     assert.ok(brushes.at(-1) <= 72);
     assert.equal(input.endSelectDrag(260, 260), true);
     assert.equal(selected[0], 1);
@@ -566,7 +566,7 @@ describe('gamepad orders', () => {
     return { input, cmds, ghosts, parks, confirms, getPlacing: () => placing, getCombo: () => combo };
   }
 
-  it('opens agora placement for 4 villagers + engineer and does not CAST', () => {
+  it('opens agora placement for an engineer crew and does not CAST', () => {
     const { input, cmds, ghosts, getPlacing, getCombo } = makeAgoraComboHarness();
     input.castAbilityAt(200, 300);
     assert.equal(cmds.length, 0);

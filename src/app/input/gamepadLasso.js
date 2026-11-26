@@ -1,10 +1,10 @@
 // Drawn-lasso hatch follows the outer hull, not the raw stroke.
-// Gamepad paints that hull with a circular brush. Trigger pressure sets the
-// radius: a light pull stays at the floor, a full squeeze reaches 2× the
+// Gamepad and XR paint that hull with a circular brush. Trigger pressure sets
+// the radius: a light pull stays at the floor, a full squeeze reaches 2× the
 // old single-bumper ceiling.
 
 /** Light-trigger floor - still a real stamp, not a hairline. */
-export const BRUSH_RADIUS_MIN = 36;
+export const BRUSH_RADIUS_MIN = 24;
 /** Former single-bumper ceiling. A full squeeze reaches 2× this. */
 export const BRUSH_RADIUS_MAX = 72;
 export const BRUSH_RADIUS_BOTH = BRUSH_RADIUS_MAX * 2;
@@ -13,6 +13,16 @@ export const BRUSH_STAMP_MIN = 8;
 export const BRUSH_STAMP_FRAC = 0.45;
 export const BRUSH_MAX_STAMPS = 80;
 const BRUSH_SMOOTH = 0.4;
+/** Same gate as LT/RT paint-select in gamepad.js. */
+export const TRIGGER_SELECT_ENTER = 0.15;
+
+/** 0 just as paint-select engages, 1 at a full squeeze. */
+export function triggerBrushPressure(amount) {
+  const a = Number.isFinite(amount) ? amount : 0;
+  if (!(a > TRIGGER_SELECT_ENTER)) return 0;
+  const t = (a - TRIGGER_SELECT_ENTER) / (1 - TRIGGER_SELECT_ENTER);
+  return t > 1 ? 1 : t;
+}
 
 /**
  * @param {{ x: number, y: number }} a
@@ -76,6 +86,27 @@ export function brushRadiusTarget(pressure) {
   const t = p > 1 ? 1 : p < 0 ? 0 : p;
   const e = t * t * (3 - 2 * t);
   return BRUSH_RADIUS_MIN + (BRUSH_RADIUS_BOTH - BRUSH_RADIUS_MIN) * e;
+}
+
+/** Field lasso brush radius from the same pressure curve as the gamepad (world units). */
+export function brushRadiusWorld(head, pressure) {
+  const h = Math.max(1, Number.isFinite(head) ? head : 1);
+  const px = brushRadiusTarget(pressure);
+  return px * (h * BRUSH_WORLD_MIN_FRAC) / BRUSH_RADIUS_MIN;
+}
+
+/** Head-height fraction matching {@link BRUSH_RADIUS_MIN} at a light pull. */
+export const BRUSH_WORLD_MIN_FRAC = 0.012;
+
+/**
+ * Brush hatch on the field. Stamps use `x` and `y` as world X and Z.
+ * @param {{ x: number, y: number, r: number }[]} stamps
+ */
+export function brushLoopXZ(stamps, scratch) {
+  const hull = brushOuterLoop(stamps, scratch);
+  const out = new Array(hull.length);
+  for (let i = 0; i < hull.length; i++) out[i] = { x: hull[i].x, z: hull[i].y };
+  return out;
 }
 
 /**

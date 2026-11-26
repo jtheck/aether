@@ -2,6 +2,7 @@
 
 import { clearPath, queuePath, attackStandPoint } from './path.js';
 import { claimEngagement } from './engagement.js';
+import { meleeMissesAir } from './attackMode.js';
 import { getUnitDef, isTransport, UNIT } from './unitTypes.js';
 import { isHostile } from './teams.js';
 import { storyProtectsOwner } from './storyProtect.js';
@@ -63,6 +64,7 @@ function tryRetaliate(w, victim, attacker) {
   if ((w.leashDrop?.[victim] ?? -1) === attacker) return;
   const def = getUnitDef(w.type[victim]);
   if (def.category !== 'military' && !def.firesOnMove) return;
+  if (meleeMissesAir(w.type[victim], w.type[attacker])) return;
 
   w.targetEntity[victim] = attacker;
   w.order[victim] = w.ORDER.ATTACK;

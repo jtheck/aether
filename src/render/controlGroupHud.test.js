@@ -44,7 +44,7 @@ describe('control group HUD layout', () => {
     assert.ok(six.find((r) => r.name === 'white')?.x > vw * 0.5);
   });
 
-  it('nests opposite triangles in/out/in on the left and the other way on the right', () => {
+  it('alternates in/out/in on the left and the other way on the right, with a gap', () => {
     assert.equal(controlGroupFacing('left', 0), 1);
     assert.equal(controlGroupFacing('left', 1), -1);
     assert.equal(controlGroupFacing('left', 2), 1);
@@ -59,7 +59,7 @@ describe('control group HUD layout', () => {
     assert.deepEqual(right.map((r) => r.dir), [-1, 1, -1]);
     assert.equal(left[1].y - left[0].y, CONTROL_GROUP_PITCH_PX);
     assert.equal(left[2].y - left[1].y, CONTROL_GROUP_PITCH_PX);
-    assert.ok(left[1].y < left[0].y + left[0].h);
+    assert.ok(left[1].y >= left[0].y + left[0].h);
   });
 
   it('carries every sixteen into an X and caps at XX', () => {

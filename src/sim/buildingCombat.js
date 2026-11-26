@@ -3,6 +3,7 @@
 
 import * as fx from './fixed.js';
 import { TILE_SIZE_F, snapToPassable } from './field.js';
+import { hybridBuildingMelee, unitMeleeRange } from './attackMode.js';
 import { getUnitDef } from './unitTypes.js';
 import {
   buildingIsFinished,
@@ -35,6 +36,9 @@ export function buildingFootprintHalf(typeId) {
 
 export function buildingAttackRange(w, attacker, b) {
   const def = getUnitDef(w.type[attacker]);
+  if (hybridBuildingMelee(def)) {
+    return unitMeleeRange(def) + buildingFootprintHalf(b.type);
+  }
   return def.attackRange + buildingFootprintHalf(b.type);
 }
 
@@ -44,7 +48,7 @@ export function attackBuildingInRange(w, i, b) {
   const reach = buildingAttackRange(w, i, b);
   const d2 = fx.dist2(w.px[i], w.py[i], b.x, b.z);
   if (d2 > fx.mul(reach, reach)) return false;
-  if (def.minRange > 0) {
+  if (def.minRange > 0 && !hybridBuildingMelee(def)) {
     const min2 = fx.mul(def.minRange, def.minRange);
     if (d2 < min2) return false;
   }
@@ -54,7 +58,8 @@ export function attackBuildingInRange(w, i, b) {
 export function attackBuildingStandPoint(w, i, b) {
   const def = getUnitDef(w.type[i]);
   const half = buildingFootprintHalf(b.type);
-  const stand = half + fx.mul(def.attackRange, fx.fromFloat(0.62));
+  const band = hybridBuildingMelee(def) ? unitMeleeRange(def) : def.attackRange;
+  const stand = half + fx.mul(band, fx.fromFloat(0.62));
   const dx = w.px[i] - b.x;
   const dy = w.py[i] - b.z;
   const dist = fx.len(dx, dy);

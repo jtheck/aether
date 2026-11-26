@@ -136,6 +136,42 @@ export function xrFadePlane(wm, frustum, depth = XR_FADE_DEPTH) {
   };
 }
 
+/**
+ * Visor-locked plate offset sideways / vertically on the HUD depth plane.
+ * @param {Float32Array | number[]} wm
+ * @param {{ h?: number, v?: number }} frustum
+ * @param {number} depth
+ * @param {number} [hOffset] horizontal tangent offset (viewer's left is negative)
+ * @param {number} [vOffset] vertical tangent offset
+ * @param {number} [viewW] fractional width of the full frustum span
+ * @param {number} [viewH] fractional height of the full frustum span
+ */
+export function xrHudPlatePose(
+  wm,
+  frustum,
+  depth,
+  hOffset = 0,
+  vOffset = 0,
+  viewW = 1,
+  viewH = 1,
+) {
+  const pose = xrFadePlane(wm, frustum, depth);
+  const rx = wm?.[0] || 0;
+  const ry = wm?.[1] || 0;
+  const rz = wm?.[2] || 0;
+  const ux = wm?.[4] || 0;
+  const uy = wm?.[5] || 1;
+  const uz = wm?.[6] || 0;
+  pose.x += (rx * hOffset + ux * vOffset) * depth;
+  pose.y += (ry * hOffset + uy * vOffset) * depth;
+  pose.z += (rz * hOffset + uz * vOffset) * depth;
+  const fh = Math.max(0.2, frustum?.h || 1);
+  const fv = Math.max(0.2, frustum?.v || 1);
+  pose.width = 2 * depth * fh * viewW;
+  pose.height = 2 * depth * fv * viewH;
+  return pose;
+}
+
 function wrapText(ctx, text, maxWidth) {
   const words = String(text || '').split(/\s+/).filter(Boolean);
   const lines = [];

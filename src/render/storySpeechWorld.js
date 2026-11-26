@@ -1,8 +1,16 @@
-// Story lines in the headset. Unit speech stands on the speaker. Speakerless
-// narrator copy lives on the visor fade plate, not on the ground.
+// Story lines in the headset. A unit that is in front of the eye carries its
+// own text. A unit that isn't sticks to a HUD column. Speakerless narrator
+// copy lives on the visor fade plate.
 
-import { xrEye } from './xrEye.js';
+import { xrEye, xrHudEye } from './xrEye.js';
 import { LINE_STYLE_LOOK } from '../story/speech.js';
+import {
+  assignSpeechColumns,
+  speechColumnPose,
+  speechInFront,
+  speechSide,
+  speechUnitPose,
+} from './storySpeechPose.js';
 import {
   addToScene,
   createMeshFromData,
@@ -13,8 +21,19 @@ import {
 } from '../vendor/lite/liteVendor.js';
 
 const BUBBLES = 5;
-const BUBBLE_W = 512;
-const BUBBLE_H = 192;
+const BUBBLE_W = 1024;
+const BUBBLE_H = 352;
+const SPEECH_FONT = 'Roboto, sans-serif';
+
+/** Body size relative to `normal`, matching LINE_STYLE_LOOK. */
+const STYLE_SCALE = Object.freeze({
+  normal: 1,
+  shout: 20 / 15,
+  whisper: 12 / 15,
+  think: 14 / 15,
+  command: 18 / 15,
+  scared: 1,
+});
 
 function quatFromBasis(xx, xy, xz, yx, yy, yz, zx, zy, zz) {
   const trace = xx + yy + zz;
@@ -75,19 +94,43 @@ function makeQuad() {
   return { positions, normals, uvs, indices };
 }
 
-function wrapText(ctx, text, maxWidth) {
+function wrapSpeech(ctx, text, maxWidth) {
   const words = String(text || '').split(/\s+/).filter(Boolean);
   const lines = [];
   let cur = '';
-  for (const word of words) {
-    const next = cur ? `${cur} ${word}` : word;
-    if (cur && ctx.measureText(next).width > maxWidth) {
+  function pushWord(word) {
+    if (ctx.measureText(word).width <= maxWidth) {
+      const next = cur ? `${cur} ${word}` : word;
+      if (cur && ctx.measureText(next).width > maxWidth) {
+        lines.push(cur);
+        cur = word;
+      } else cur = next;
+      return;
+    }
+    if (cur) {
       lines.push(cur);
-      cur = word;
-    } else cur = next;
+      cur = '';
+    }
+    let chunk = '';
+    for (const ch of word) {
+      const next = chunk + ch;
+      if (chunk && ctx.measureText(next).width > maxWidth) {
+        lines.push(chunk);
+        chunk = ch;
+      } else chunk = next;
+    }
+    cur = chunk;
   }
+  for (const word of words) pushWord(word);
   if (cur) lines.push(cur);
   return lines.length ? lines : [''];
+}
+
+function styleFace(style) {
+  return {
+    scale: STYLE_SCALE[style] || 1,
+    italic: style === 'think',
+  };
 }
 
 /**
@@ -232,31 +275,69 @@ function createPanel(engine, scene, name, width, height) {
   return { hide, paint, place };
 }
 
-function veil(ctx, w, h) {
-  const g = ctx.createRadialGradient(w * 0.5, h * 0.5, w * 0.08, w * 0.5, h * 0.5, w * 0.48);
-  g.addColorStop(0, 'rgba(0,0,0,0.5)');
-  g.addColorStop(0.62, 'rgba(0,0,0,0.16)');
-  g.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, w, h);
+function ink(ctx, text, x, y, font, color, px) {
+  ctx.font = font;
+  ctx.lineJoin = 'round';
+  ctx.miterLimit = 2;
+  ctx.lineWidth = Math.max(2, px * 0.11);
+  ctx.strokeStyle = 'rgba(0,0,0,0.92)';
+  ctx.strokeText(text, x, y);
+  ctx.fillStyle = color;
+  ctx.shadowColor = 'rgba(0,0,0,0.85)';
+  ctx.shadowBlur = px * 0.2;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = Math.max(1, px * 0.04);
+  ctx.fillText(text, x, y);
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
 }
 
-function paintBubble(ctx, w, h, line) {
-  veil(ctx, w, h);
-  const look = LINE_STYLE_LOOK[line.style] || LINE_STYLE_LOOK.normal;
-  const maxW = w * 0.84;
+/**
+ * Headset unit-speech line. Glyphs only: a dark stroke holds them on the
+ * world, with no plate behind the words.
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {number} w
+ * @param {number} h
+ * @param {{ speaker?: string, text?: string, style?: string }} line
+ */
+export function paintSpeechBubble(ctx, w, h, line) {
+  const look = LINE_STYLE_LOOK[line?.style] || LINE_STYLE_LOOK.normal;
+  const face = styleFace(line?.style);
+  const speaker = String(line?.speaker || '').trim();
+  const maxW = w * 0.86;
+  let bodyPx = Math.max(12, Math.round(h * 0.42 * face.scale));
+  let namePx = Math.max(11, Math.round(h * 0.24));
+  let rows = [''];
+  let nameStep = 0;
+  let bodyStep = bodyPx;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    ctx.font = `${bodyPx}px ${SPEECH_FONT}`;
+    rows = wrapSpeech(ctx, line?.text, maxW).slice(0, 2);
+    bodyStep = Math.round(bodyPx * 1.18);
+    nameStep = speaker ? Math.round((namePx + bodyPx) * 0.58) : 0;
+    const span = nameStep + Math.max(0, rows.length - 1) * bodyStep;
+    const top = (speaker ? namePx : bodyPx) * 0.62;
+    const bot = bodyPx * 0.62;
+    if (span + top + bot <= h * 0.92 || bodyPx <= Math.round(h * 0.11)) break;
+    bodyPx = Math.max(12, Math.round(bodyPx * 0.86));
+    namePx = Math.max(11, Math.round(namePx * 0.9));
+  }
+  const span = nameStep + Math.max(0, rows.length - 1) * bodyStep;
+  let y = (h - span) * 0.5;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = 'bold 26px sans-serif';
-  ctx.fillStyle = '#ffcc44';
-  ctx.fillText(String(line.speaker || ''), w * 0.5, h * 0.32);
-  ctx.font = '32px sans-serif';
-  ctx.fillStyle = look.color || '#fff6d9';
-  const rows = wrapText(ctx, line.text, maxW).slice(0, 3);
-  let y = h * 0.55;
+  const x = w * 0.5;
+  if (speaker) {
+    ink(ctx, speaker, x, y, `bold ${namePx}px ${SPEECH_FONT}`, '#ffcc44', namePx);
+    y += nameStep;
+  }
+  const bodyFont = `${face.italic ? 'italic ' : ''}${bodyPx}px ${SPEECH_FONT}`;
+  const color = look.color || '#fff6d9';
   for (const row of rows) {
-    ctx.fillText(row, w * 0.5, y);
-    y += 36;
+    if (!row) continue;
+    ink(ctx, row, x, y, bodyFont, color, bodyPx);
+    y += bodyStep;
   }
 }
 
@@ -273,6 +354,14 @@ export function createStorySpeechWorld(engine, scene, groundHeight) {
   for (let i = 0; i < BUBBLES; i++) {
     bubbles.push(createPanel(engine, scene, `story-say-${i}`, BUBBLE_W, BUBBLE_H));
   }
+  /** @type {Map<string, { side: number, index: number }>} */
+  let held = new Map();
+  let fontEpoch = 0;
+  const fonts = typeof document !== 'undefined' ? document.fonts : null;
+  if (fonts?.ready) {
+    fonts.load?.(`64px ${SPEECH_FONT}`).catch(() => {});
+    fonts.ready.then(() => { fontEpoch += 1; }).catch(() => {});
+  }
   /** @type {{ spoken?: object[], narrator?: object[] } | null} */
   let payload = null;
   let warned = false;
@@ -283,7 +372,13 @@ export function createStorySpeechWorld(engine, scene, groundHeight) {
 
   function clear() {
     payload = null;
+    held = new Map();
     hideAll();
+  }
+
+  function lineKey(line, nth) {
+    const base = `${line.speaker}|${line.style}|${line.text}`;
+    return nth ? `${base}#${nth}` : base;
   }
 
   function hasAnchor(line) {
@@ -292,7 +387,7 @@ export function createStorySpeechWorld(engine, scene, groundHeight) {
   }
 
   function draw() {
-    const eye = xrEye();
+    const eye = xrHudEye() || xrEye();
     const spoken = payload?.spoken || [];
     if (!eye) {
       hideAll();
@@ -304,38 +399,49 @@ export function createStorySpeechWorld(engine, scene, groundHeight) {
       if (hasAnchor(line)) anchored.push(line);
     }
     if (!anchored.length) {
+      held = new Map();
       hideAll();
       return;
     }
     const wm = eye.worldMatrix;
+    const seen = new Map();
+    const rows = [];
+    const wishes = [];
+    for (let i = 0; i < anchored.length; i++) {
+      const line = anchored[i];
+      const base = `${line.speaker}|${line.style}|${line.text}`;
+      const nth = seen.get(base) || 0;
+      seen.set(base, nth + 1);
+      const key = lineKey(line, nth);
+      const onUnit = speechInFront(wm, line.pos);
+      rows.push({ line, key, onUnit });
+      if (!onUnit) wishes.push({ key, side: speechSide(wm, line.pos) });
+    }
+    held = assignSpeechColumns(wishes, held);
+    rows.sort((a, b) => Number(b.onUnit) - Number(a.onUnit));
 
     for (let i = 0; i < bubbles.length; i++) {
-      const line = anchored[i];
-      if (!line) {
+      const row = rows[i];
+      const slot = row && !row.onUnit ? held.get(row.key) : null;
+      if (!row || (!row.onUnit && !slot)) {
         bubbles[i].hide();
         continue;
       }
-      const pos = line.pos;
-      const paintKey = `${line.speaker}|${line.style}|${line.text}`;
-      bubbles[i].paint(paintKey, (ctx, w, h) => paintBubble(ctx, w, h, line));
-      let nx = wm[12] - pos.x;
-      let nz = wm[14] - pos.z;
-      const nl = Math.hypot(nx, nz) || 1;
-      nx /= nl;
-      nz /= nl;
-      const width = Math.max(4.5, Math.min(nl * 0.22, 14));
-      const height = width * (BUBBLE_H / BUBBLE_W);
+      const paintKey = `${fontEpoch}|${row.key}`;
+      bubbles[i].paint(paintKey, (ctx, w, h) => paintSpeechBubble(ctx, w, h, row.line));
+      const pose = row.onUnit
+        ? speechUnitPose(wm, row.line.pos)
+        : speechColumnPose(wm, slot.side, slot.index);
       bubbles[i].place(
-        pos.x + nx * 1.1,
-        (Number.isFinite(pos.y) ? pos.y : 0) + 1.4,
-        pos.z + nz * 1.1,
-        width,
-        height,
-        [0, 1, 0],
-        [nx, 0, nz],
+        pose.x,
+        pose.y,
+        pose.z,
+        pose.width,
+        pose.height,
+        pose.yAxis,
+        pose.zAxis,
       );
     }
-
   }
 
   function update() {

@@ -1,8 +1,15 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import {
+  XR_HELD_CAST_REPEAT_MS,
+  XR_HELD_ORDER_REPEAT_MS,
+  XR_SWAP_FACE_BUTTONS,
+  XR_SWAP_TRIGGER_GRIP,
+} from './controlMods.js';
 import { createXrControls } from './xrControls.js';
 import { QUEUE_HOLD_DELAY_MS, QUEUE_HOLD_INTERVAL_MS } from './input/queueHold.js';
-import { handleButtonPoint } from '../render/xrLasso.js';
+import { handleButtonPoint, pickHandleButton } from '../render/xrLasso.js';
+import { sourceRay } from './xrSelect.js';
 
 const EYE_Y = 100;
 
@@ -30,13 +37,17 @@ function makeHand(handedness) {
     gamepad: pad,
   };
   const set = (i) => (on) => { buttons[i].pressed = on; };
+  const selectIdx = XR_SWAP_TRIGGER_GRIP ? 0 : 1;
+  const actionIdx = XR_SWAP_TRIGGER_GRIP ? 1 : 0;
   return {
     src,
     trigger: set(0),
     grip: set(1),
+    select: set(selectIdx),
+    action: set(actionIdx),
     stickClick: set(2),
-    primary: set(4),
-    secondary: set(3),
+    primary: set(XR_SWAP_FACE_BUTTONS ? 3 : 4),
+    secondary: set(XR_SWAP_FACE_BUTTONS ? 4 : 3),
     touch(on) { buttons[0].touched = on; },
     stick(x, y) {
       pad.axes[2] = x;
@@ -54,6 +65,7 @@ function harness() {
   const calls = [];
   const followed = [];
   const altitudes = [];
+  const pauses = [];
   const note = (kind) => (...args) => {
     calls.push({ kind, args });
     return true;
@@ -92,6 +104,10 @@ function harness() {
     hoverRadialPick: note('hover'),
     confirmRadialPick: note('confirmRadial'),
     cancelRadial: note('cancelRadial'),
+    pressControlGroup: note('group'),
+    handleControlGroupDown: note('groupDown'),
+    handleControlGroupUp: note('groupUp'),
+    handleControlGroupCancel: note('groupCancel'),
   };
   let nowMs = 0;
   const controls = createXrControls({
@@ -99,13 +115,14 @@ function harness() {
     getInput: () => input,
     onFollowToggle: () => followed.push(1),
     onAltitude: () => altitudes.push(1),
+    onPauseToggle: () => pauses.push(1),
     now: () => nowMs,
   });
   const left = makeHand('left');
   const right = makeHand('right');
   const ctx = { input: { inputSources: [left.src, right.src] } };
   return {
-    controls, state, left, right, shown, calls, ctx, followed, altitudes,
+    controls, state, left, right, shown, calls, ctx, followed, altitudes, pauses,
     step: () => controls.step(ctx),
     advance: (ms) => { nowMs += ms; },
     kinds: () => calls.map((c) => c.kind),
@@ -123,27 +140,40 @@ function tap(h, press) {
 }
 
 describe('xr controls: play', () => {
-  it('left trigger force-moves and right trigger attack-moves at their own beams', () => {
+  it('left action force-moves and right action attack-moves at their own beams', () => {
     const h = harness();
     h.left.aim(-20, 0);
     h.right.aim(30, 0);
-    tap(h, h.left.trigger);
-    tap(h, h.right.trigger);
+    tap(h, h.left.action);
+    tap(h, h.right.action);
     assert.deepEqual(h.kinds(), ['forceMove', 'attackMove']);
     assert.ok(h.of('forceMove')[0].args[0].dx < 0);
     assert.ok(h.of('attackMove')[0].args[0].dx > 0);
   });
 
-  it('a held trigger fires once', () => {
+  it('a held action button repeats attack-/force-move on a timer', () => {
     const h = harness();
-    h.right.trigger(true);
-    h.step();
-    h.step();
+    h.right.action(true);
     h.step();
     assert.equal(h.of('attackMove').length, 1);
+    h.advance(XR_HELD_ORDER_REPEAT_MS);
+    h.step();
+    assert.equal(h.of('attackMove').length, 2);
+    h.step();
+    assert.equal(h.of('attackMove').length, 2);
   });
 
-  it('Y and B use the unit ability at that hand', () => {
+  it('held face primary repeats cast', () => {
+    const h = harness();
+    h.right.primary(true);
+    h.step();
+    assert.equal(h.of('cast').length, 1);
+    h.advance(XR_HELD_CAST_REPEAT_MS);
+    h.step();
+    assert.equal(h.of('cast').length, 2);
+  });
+
+  it('face primary casts the unit ability at that hand', () => {
     const h = harness();
     h.left.aim(-20, 0);
     h.right.aim(30, 0);
@@ -155,24 +185,40 @@ describe('xr controls: play', () => {
     assert.ok(casts[1].args[0].dx > 0);
   });
 
-  it('the other trigger presses the handle pad at that laser', () => {
+  it('the other action button on a group pad selects that control group', () => {
     const h = harness();
-    const aim = { ox: 0, oy: 1.5, oz: 0, dx: 0, dy: 0, dz: 1, ux: 0, uy: 1, uz: 0 };
-    h.left.src.targetRayMatrix = rayMatrix(aim.ox, aim.oy, aim.oz, aim.dx, aim.dy, aim.dz);
-    const pad = handleButtonPoint(aim, 0);
-    h.right.src.targetRayMatrix = rayMatrix(pad.x, pad.y, pad.z, 0, -1, 0);
+    const beam = {
+      ox: 0, oy: 1.5, oz: 0, dx: 0, dy: 0, dz: 1, ux: 0, uy: 1, uz: 0, hand: 'left',
+    };
+    h.left.src.targetRayMatrix = rayMatrix(0, 1.5, 0, 0, 0, 1);
+    const grp = handleButtonPoint(beam, 2);
+    h.right.src.targetRayMatrix = rayMatrix(grp.x, grp.y, grp.z, 0, -1, 0);
+    assert.equal(pickHandleButton(beam, sourceRay(h.right.src)), 2);
     h.left.touch(true);
     h.step();
     h.calls.length = 0;
-    tap(h, h.right.trigger);
-    assert.equal(h.of('forceMove').length, 1);
-    assert.equal(h.of('attackMove').length, 0);
-    assert.equal(h.of('select').length, 0);
-    const ray = h.of('forceMove')[0].args[0];
-    assert.ok(Math.abs(ray.dz - 1) < 1e-5);
+    tap(h, h.right.action);
+    assert.equal(h.of('group').length, 1);
+    assert.equal(h.of('group')[0].args[0], 0);
+    assert.equal(h.of('groupUp').length, 1);
   });
 
-  it('X and A clear the selection', () => {
+  it('the other action button on pause toggles pause, and the face pads are gone', () => {
+    const h = harness();
+    const aim = { ox: 0, oy: 1.5, oz: 0, dx: 0, dy: 0, dz: 1, ux: 0, uy: 1, uz: 0, hand: 'left' };
+    h.left.src.targetRayMatrix = rayMatrix(aim.ox, aim.oy, aim.oz, aim.dx, aim.dy, aim.dz);
+    assert.equal(handleButtonPoint(aim, 0), null);
+    const pad = handleButtonPoint(aim, 5);
+    h.right.src.targetRayMatrix = rayMatrix(pad.x, pad.y, pad.z, 0, -1, 0);
+    h.step();
+    h.calls.length = 0;
+    tap(h, h.right.action);
+    assert.equal(h.pauses.length, 1);
+    assert.equal(h.of('cast').length, 0);
+    assert.equal(h.of('forceMove').length, 0);
+  });
+
+  it('face secondary clears the selection', () => {
     const h = harness();
     tap(h, h.left.secondary);
     tap(h, h.right.secondary);
@@ -189,16 +235,21 @@ describe('xr controls: holds', () => {
     assert.equal(h.altitudes.length, 1);
   });
 
-  it('a held click fires once', () => {
+  it('follow click fires once per press; held altitude click repeats', () => {
     const h = harness();
     h.right.stickClick(true);
     h.step();
     h.step();
+    assert.equal(h.followed.length, 1);
     h.left.stickClick(true);
     h.step();
-    h.step();
-    assert.equal(h.followed.length, 1);
     assert.equal(h.altitudes.length, 1);
+    h.advance(450);
+    h.step();
+    assert.equal(h.altitudes.length, 2);
+    h.advance(450);
+    h.step();
+    assert.equal(h.altitudes.length, 3);
   });
 
   it('stick clicks still latch while placing or in a pie menu', () => {
@@ -212,16 +263,16 @@ describe('xr controls: holds', () => {
     assert.equal(h.altitudes.length, 1);
   });
 
-  it('grip selects; triggers never select', () => {
+  it('select selects; action buttons never select', () => {
     const h = harness();
-    tap(h, h.right.trigger);
-    tap(h, h.right.grip);
+    tap(h, h.right.action);
+    tap(h, h.right.select);
     assert.deepEqual(h.kinds(), ['attackMove', 'select']);
   });
 });
 
 describe('xr controls: pie menu', () => {
-  it('a trigger picks the slice under the beam, and the stick does not', () => {
+  it('an action press picks the slice under the beam, and the stick does not', () => {
     const h = harness();
     h.state.radial = true;
     h.state.beamPick = { kind: 'building', id: 'wall' };
@@ -231,32 +282,32 @@ describe('xr controls: pie menu', () => {
     h.state.beamPick = null;
     h.step();
     assert.equal(h.of('hover').at(-1).args[0], null);
-    tap(h, h.left.trigger);
+    tap(h, h.left.action);
     assert.equal(h.of('confirmRadial').length, 0);
     assert.equal(h.of('attackMove').length, 0);
     assert.equal(h.of('forceMove').length, 1);
     h.state.beamPick = { kind: 'building', id: 'wall' };
-    tap(h, h.left.trigger);
+    tap(h, h.left.action);
     assert.deepEqual(h.of('confirmRadial').map((c) => c.args[0].id), ['wall']);
     assert.equal(h.of('forceMove').length, 1);
   });
 
-  it('a beam on a slice hovers and a grip on it picks without selecting', () => {
+  it('a beam on a slice hovers and select on it picks without selecting', () => {
     const h = harness();
     h.state.radial = true;
     h.state.beamPick = { kind: 'category', id: 'basic' };
     h.right.stick(0, -1);
     h.step();
     assert.equal(h.of('hover').at(-1).args[0].id, 'basic');
-    tap(h, h.right.grip);
+    tap(h, h.right.select);
     assert.deepEqual(h.of('confirmRadial').map((c) => c.args[0].id), ['basic']);
     assert.equal(h.of('select').length, 0);
   });
 
-  it('a grip off the menu still selects', () => {
+  it('select off the menu still selects', () => {
     const h = harness();
     h.state.radial = true;
-    tap(h, h.right.grip);
+    tap(h, h.right.select);
     assert.equal(h.of('select').length, 1);
   });
 
@@ -270,7 +321,7 @@ describe('xr controls: pie menu', () => {
     assert.equal(h.of('hover').length, 1);
   });
 
-  it('X / A backs out, and Y / B do not cast', () => {
+  it('face secondary backs out of the pie, and primary does not cast', () => {
     const h = harness();
     h.state.radial = true;
     tap(h, h.right.primary);
@@ -279,11 +330,11 @@ describe('xr controls: pie menu', () => {
     assert.equal(h.of('cast').length, 0);
   });
 
-  it('holding the trigger on a unit keeps queuing', () => {
+  it('holding the action button on a unit keeps queuing', () => {
     const h = harness();
     h.state.radial = true;
     h.state.beamPick = { kind: 'unit', id: 'archer' };
-    h.right.trigger(true);
+    h.right.action(true);
     h.step();
     assert.equal(h.of('confirmRadial').length, 1);
     assert.equal(h.of('attackMove').length, 0);
@@ -296,18 +347,18 @@ describe('xr controls: pie menu', () => {
     h.advance(QUEUE_HOLD_INTERVAL_MS);
     h.step();
     assert.equal(h.of('confirmRadial').length, 3);
-    h.right.trigger(false);
+    h.right.action(false);
     h.step();
     h.advance(2000);
     h.step();
     assert.equal(h.of('confirmRadial').length, 3);
   });
 
-  it('holding the trigger on a building picks once', () => {
+  it('holding the action button on a building picks once', () => {
     const h = harness();
     h.state.radial = true;
     h.state.beamPick = { kind: 'building', id: 'wall' };
-    h.right.trigger(true);
+    h.right.action(true);
     h.step();
     h.advance(2000);
     h.step();
@@ -315,13 +366,13 @@ describe('xr controls: pie menu', () => {
     assert.equal(h.of('confirmRadial').length, 1);
   });
 
-  it('a trigger that misses the pie still force-moves and attack-moves', () => {
+  it('an action press that misses the pie still force-moves and attack-moves', () => {
     const h = harness();
     h.state.radial = true;
     h.left.aim(-20, 0);
     h.right.aim(30, 0);
-    tap(h, h.left.trigger);
-    tap(h, h.right.trigger);
+    tap(h, h.left.action);
+    tap(h, h.right.action);
     assert.deepEqual(h.kinds(), ['forceMove', 'attackMove']);
     assert.ok(h.of('forceMove')[0].args[0].dx < 0);
     assert.ok(h.of('attackMove')[0].args[0].dx > 0);
@@ -329,20 +380,20 @@ describe('xr controls: pie menu', () => {
 });
 
 describe('xr controls: ghost-place', () => {
-  it('the beam walks the ghost and a trigger stamps it', () => {
+  it('the beam walks the ghost and an action press stamps it', () => {
     const h = harness();
     h.state.placing = true;
     h.step();
     assert.equal(h.of('preview').length, 1);
-    tap(h, h.left.trigger);
+    tap(h, h.left.action);
     assert.equal(h.of('confirmPlace').length, 1);
     assert.equal(h.of('attackMove').length, 0);
   });
 
-  it('grip does not select, and the beam keeps walking the ghost', () => {
+  it('select held does not select, and the beam keeps walking the ghost', () => {
     const h = harness();
     h.state.placing = true;
-    h.right.grip(true);
+    h.right.select(true);
     h.right.aim(40, 0);
     h.step();
     assert.equal(h.of('preview').length, 1);
@@ -354,30 +405,30 @@ describe('xr controls: ghost-place', () => {
     assert.equal(h.of('select').length, 0);
   });
 
-  it('a grip tap does not select while the ghost is out', () => {
+  it('a select tap does not select while the ghost is out', () => {
     const h = harness();
     h.state.placing = true;
-    tap(h, h.right.grip);
+    tap(h, h.right.select);
     assert.equal(h.of('select').length, 0);
     assert.equal(h.of('loop').length, 0);
   });
 
-  it('a grip sweep while placing lassoes the field', () => {
+  it('a select sweep while placing lassoes the field', () => {
     const h = harness();
     h.state.placing = true;
-    h.right.grip(true);
+    h.right.select(true);
     for (const [x, z] of [[0, 0], [20, 0], [20, 20], [0, 20]]) {
       h.right.aim(x, z);
       h.step();
     }
-    h.right.grip(false);
+    h.right.select(false);
     h.step();
     assert.equal(h.of('select').length, 0);
     assert.equal(h.of('loop').length, 1);
     assert.ok(h.of('preview').length > 0);
   });
 
-  it('X / A cancels the ghost', () => {
+  it('face secondary cancels the ghost', () => {
     const h = harness();
     h.state.placing = true;
     tap(h, h.left.secondary);
@@ -386,16 +437,19 @@ describe('xr controls: ghost-place', () => {
 });
 
 describe('xr controls: beams', () => {
-  it('a finger on the trigger shows the aim beam; lifting it hides it', () => {
+  it('bracer and stub beam stay up while the controller tracks', () => {
     const h = harness();
     h.step();
-    assert.equal(h.shown.length, 0);
+    assert.ok(h.lastShown('left')?.ray);
+    assert.ok(h.lastShown('right')?.ray);
     h.right.touch(true);
     h.step();
-    assert.ok(h.lastShown('right')?.ray);
+    const long = h.lastShown('right');
+    assert.ok(long?.ray);
+    assert.ok((long?.length ?? 0) > 1);
     h.right.touch(false);
     h.step();
-    assert.equal(h.lastShown('right'), null);
+    assert.ok(h.lastShown('right')?.ray);
   });
 
   it('a pie menu shows both beams', () => {

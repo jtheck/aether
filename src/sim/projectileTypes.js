@@ -142,7 +142,11 @@ export const PROJECTILE_DEFS = [
     hitRadius: fx.fromFloat(2.4),
     homing: 0,
     blockedByTerrain: 0,
-    pierce: 1,
+    /** 0 = travel the full line; no early cut-off after N hits. */
+    pierce: 0,
+    pathHit: 1,
+    /** Aim is along the target bearing out to Myco attack range. */
+    lineRange: fx.fromFloat(40),
     splashRadius: 0,
     growsHeadMushroom: 1,
     mesh: PROJECTILE_MESH.ORB,
@@ -202,7 +206,8 @@ export const PROJECTILE_DEFS = [
     splashRadius: 0,
     appliesFrost: 1,
     mesh: PROJECTILE_MESH.ARROW,
-    scale: [0.2, 0.2, 1.55],
+    // Longer than the old shaft so the tapered tip still reads as a full bolt.
+    scale: [0.2, 0.2, 2.6],
     color: [0.55, 0.88, 1],
     launchHeight: 3.4,
     arcHeight: 0.5,
@@ -243,6 +248,8 @@ export const PROJECTILE_DEFS = [
     pierce: 1,
     splashRadius: fx.fromFloat(2.6),
     friendlyFireMultiplier: 0.25,
+    /** One in four landings leaves a ground-fire patch. The tank's shot always does. */
+    groundFireChance: fx.fromFloat(0.25),
     aimScatter: 0,
     mesh: PROJECTILE_MESH.ORB,
     scale: [0.9, 0.9, 0.9],

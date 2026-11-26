@@ -123,10 +123,11 @@ export function xrHudDriftDirection(
  * @param {ArrayLike<{ projectionMatrix: Float32Array }>} [views] the pose's eye views
  * @param {number} [dt] frame delta in seconds
  */
-export function setXrEyeFromPose(rh, views, dt = 0) {
-  const previousHud = hudSeeded ? [hudWorld[12], hudWorld[13], hudWorld[14]] : null;
-  const previousUp = hudSeeded ? [hudWorld[4], hudWorld[5], hudWorld[6]] : null;
-  const previousBack = hudSeeded ? [hudWorld[8], hudWorld[9], hudWorld[10]] : null;
+export function setXrEyeFromPose(rh, views, dt = 0, opts = null) {
+  const snapHud = !!(opts && opts.snapHud);
+  const previousHud = hudSeeded && !snapHud ? [hudWorld[12], hudWorld[13], hudWorld[14]] : null;
+  const previousUp = hudSeeded && !snapHud ? [hudWorld[4], hudWorld[5], hudWorld[6]] : null;
+  const previousBack = hudSeeded && !snapHud ? [hudWorld[8], hudWorld[9], hudWorld[10]] : null;
   world[0] = rh[0];
   world[1] = rh[1];
   world[2] = -rh[2];
@@ -144,7 +145,9 @@ export function setXrEyeFromPose(rh, views, dt = 0) {
   world[14] = -rh[14];
   world[15] = 1;
   hudWorld.set(world);
-  if (hudSeeded) {
+  if (snapHud) {
+    hudTargetPosition = [world[12], world[13], world[14]];
+  } else if (hudSeeded) {
     const back = xrHudDriftDirection(previousBack, [world[8], world[9], world[10]], dt);
     const upHint = xrHudDriftDirection(previousUp, [world[4], world[5], world[6]], dt);
     let rx = upHint[1] * back[2] - upHint[2] * back[1];

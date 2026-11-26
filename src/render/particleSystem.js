@@ -157,6 +157,7 @@ function makeParticle() {
     endSizeW: 1,
     endSizeH: 1,
     hangTime: 0,
+    fadeIn: 0,
     fadeOut: true,
     killY: -Infinity,
     startAlpha: 1,
@@ -372,6 +373,7 @@ export async function createParticleSystem(engine, scene, options = {}) {
     particle.endSizeW = endSize[0];
     particle.endSizeH = endSize[1];
     particle.hangTime = Math.max(0, Math.min(particle.lifetime * 0.95, init.hangTime ?? 0));
+    particle.fadeIn = Math.max(0, init.fadeIn ?? 0);
     particle.fadeOut = init.fadeOut !== false;
     particle.killY = Number.isFinite(init.killY) ? init.killY : -Infinity;
     particle.startAlpha = color[3] ?? 1;
@@ -513,9 +515,19 @@ export async function createParticleSystem(engine, scene, options = {}) {
         }
       }
 
-      particle.drawColor[3] = particle.fadeOut
-        ? particle.startAlpha * (1 - particle.age / particle.lifetime)
-        : particle.startAlpha;
+      {
+        let alpha = particle.startAlpha;
+        const fadeIn = particle.fadeIn ?? 0;
+        if (fadeIn > 0 && particle.age < fadeIn) {
+          alpha *= particle.age / fadeIn;
+        } else if (particle.fadeOut) {
+          const fadeStart = fadeIn > 0 ? fadeIn : 0;
+          const fadeSpan = Math.max(0.001, particle.lifetime - fadeStart);
+          const tail = Math.min(1, (particle.age - fadeStart) / fadeSpan);
+          alpha *= Math.max(0, 1 - tail);
+        }
+        particle.drawColor[3] = alpha;
+      }
       if (particle.spin) {
         particle.rotation += particle.spin * dt;
         particle.patch.rotation = particle.rotation;

@@ -25,8 +25,12 @@ import {
   windvanePlacementForTile,
 } from '../sim/doodads.js';
 import { MODEL_BASE_SCALE } from './modelScale.js';
-import { OWNER_TINTS } from './ownerTints.js';
-import { isTeamColorMaterial, prepareTeamColorMaterial, sceneTeamRgb } from './teamColor.js';
+import { ownerTint, teamBannerTint } from './ownerTints.js';
+import {
+  flagBannerRoleFromMaterial,
+  sceneTeamRgb,
+  setupFlagBannerMeshes,
+} from './teamColor.js';
 import { loadBakedUnitMeshParts, prefetchBakedMesh } from './unitModels.js';
 import { softDetachMesh } from './meshLifecycle.js';
 
@@ -261,18 +265,11 @@ function placementsForSlot(field, slot) {
   return mushroomPlacementsForHost(field, slot.tile);
 }
 
-function bannerRgb(colorIndex) {
-  const n = OWNER_TINTS.length;
-  const i = ((colorIndex | 0) % n + n) % n;
-  return sceneTeamRgb(OWNER_TINTS[i]);
-}
-
-function tagTeamColorBatches(engine, batches) {
+function tagFlagBannerBatches(batches) {
   for (let i = 0; i < batches.length; i++) {
-    const mesh = batches[i].mesh;
-    if (!isTeamColorMaterial(mesh?.material)) continue;
-    prepareTeamColorMaterial(engine, mesh);
-    batches[i].teamColor = true;
+    const role = flagBannerRoleFromMaterial(batches[i].mesh?.material);
+    batches[i].allyColor = role === 'ally';
+    batches[i].playerColor = role === 'player';
   }
 }
 
@@ -367,7 +364,10 @@ export async function createDoodadsFromField(engine, scene, field, groundYAt, op
   derrickBatches = derricks;
   windvaneBatches = windvanes;
   standardBatches = standards;
-  tagTeamColorBatches(engine, standardBatches);
+  if (standardBatches.length) {
+    tagFlagBannerBatches(standardBatches);
+    setupFlagBannerMeshes(engine, standardBatches.map((b) => b.mesh));
+  }
   if (
     mushroomBatches.length === 0
     && wagonBatches.length === 0
@@ -506,7 +506,9 @@ export async function createDoodadsFromField(engine, scene, field, groundYAt, op
             inst.roll ?? 0,
             scale,
           );
-          const tint = batches[b].teamColor ? (inst.banner || MODEL_TINT) : (batches[b].tint || inst.tint);
+          let tint = batches[b].tint || inst.tint;
+          if (batches[b].allyColor) tint = inst.teamBanner || MODEL_TINT;
+          else if (batches[b].playerColor) tint = inst.playerBanner || MODEL_TINT;
           writeFogColor(batches[b].colors, drawCount, tint, inst.x, inst.z, size);
         }
         drawCount++;
@@ -547,7 +549,10 @@ export async function createDoodadsFromField(engine, scene, field, groundYAt, op
           : slot.kind === DOODAD.DERRICK || slot.kind === DOODAD.WINDVANE || slot.kind === DOODAD.STANDARD
             ? MODEL_TINT
             : tintForMushroom(slot.tile, i),
-      banner: slot.kind === DOODAD.STANDARD ? bannerRgb(slot.color) : null,
+      teamBanner:
+        slot.kind === DOODAD.STANDARD ? sceneTeamRgb(teamBannerTint(slot.color)) : null,
+      playerBanner:
+        slot.kind === DOODAD.STANDARD ? sceneTeamRgb(ownerTint(slot.color)) : null,
     }));
   }
 

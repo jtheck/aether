@@ -7,16 +7,16 @@
 // one and a control-group button adds the selection to that group. HUD menus
 // keep the two-stick gestures:
 // pan only when both sticks are in; a lone stick still tabs. An open agora /
-// action radial aims with a lone stick (A / LB / RB confirm, and holding one
-// on a unit keeps queuing; B / D-pad Left back); both
-// sticks still pan. Ghost-place: aim walks the ghost, A / LB / RB stamp, B /
+// action panel aims with a lone stick across its square buttons (A / LB / RB
+// confirm, and holding one on a unit keeps queuing; B / D-pad Left back); both
+// sticks still pan. Pie slices, when a menu still publishes them, aim by ring. Ghost-place: aim walks the ghost, A / LB / RB stamp, B /
 // D-pad Left cancels, LT / RT + stick drag yaws (not a trigger tap). Play reports onAim
 // so a field cursor can roam the view
 // (stick moves, release parks), then camera at the edges. Mouse / pointer
 // use yields that mark until a new button or a fresh stick throw - a held
 // stick or worn rest must not steal the camera back. LB / RB issue orders
-// at that aim (A-move / force-move) unless a menu, radial, or place overlay
-// owns them. LT / RT paint-select (brush lasso; trigger pressure sets the
+// at that aim (A-move / force-move); held repeats (see controlMods). Same for
+// B / D-pad Left cast unless a menu, radial, or place overlay owns them. LT / RT paint-select (brush lasso; trigger pressure sets the
 // radius, from a light pull to a full squeeze).
 // D-pad Up is the red group, where the home agora starts. D-pad Right / Down and Y/X/A are the other
 // control groups (press selects, hold assigns, second press jumps; hold L3 / R3
@@ -27,9 +27,16 @@
 // D-pad up/down/right and both sticks walk the key grid; D-pad Left closes
 // it; LT / RT backspace.
 
-import { leashLimit, settleCursorLeash, stepCursorLeash } from './gamepadCursor.js';
+import {
+  HELD_CAST_INITIAL_MS,
+  HELD_CAST_REPEAT_MS,
+  HELD_ORDER_INITIAL_MS,
+  HELD_ORDER_REPEAT_MS,
+} from '../controlMods.js';
 import { radialStickPick } from './radialStick.js';
+import { menuTargetsAreSquares, squareStickPick } from './squareStick.js';
 import { nextQueueHold, unitQueueKey } from './queueHold.js';
+import { leashLimit, settleCursorLeash, stepCursorLeash } from './gamepadCursor.js';
 import { OS_KBD_ID, closeOsKbd, listOsKbdKeys, osKbdRoot, pressOsKbdAction, stepOsKbdFocus } from '../osKbd.js';
 
 export const PAD = {
@@ -199,6 +206,19 @@ export function playOrderIntent(edges) {
   };
 }
 
+/** Held LB / RB in play (not edges). */
+export function playOrderHeld(buttons) {
+  return {
+    attackMove: !!buttons?.[PAD.LB],
+    forceMove: !!buttons?.[PAD.RB],
+  };
+}
+
+/** Held B / D-pad Left — repeat cast in play mode. */
+export function playCastHeld(buttons) {
+  return !!(buttons?.[PAD.B] || buttons?.[PAD.LEFT]);
+}
+
 /** Tabbed / minimized. Do not use hasFocus - a pad cannot steal the document back. */
 export function padShouldYield(doc) {
   return !!doc?.hidden;
@@ -313,8 +333,8 @@ export function placePadIntent(edges) {
   };
 }
 
-/** Pull past this to start a paint-select. Below the digital click (0.5). */
-export const TRIGGER_SELECT_ENTER = 0.15;
+import { TRIGGER_SELECT_ENTER, triggerBrushPressure } from './gamepadLasso.js';
+export { TRIGGER_SELECT_ENTER, triggerBrushPressure };
 /** Stay in the stroke down to here so a soft trigger does not flicker. */
 export const TRIGGER_SELECT_LEAVE = 0.08;
 
@@ -328,17 +348,6 @@ export function triggerSelectAmount(read) {
   const raw = lt > rt ? lt : rt;
   if (!(raw > 0)) return 0;
   return raw > 1 ? 1 : raw;
-}
-
-/**
- * 0 just as paint-select engages, 1 at a full squeeze.
- * @param {number} amount
- */
-export function triggerBrushPressure(amount) {
-  const a = Number.isFinite(amount) ? amount : 0;
-  if (!(a > TRIGGER_SELECT_ENTER)) return 0;
-  const t = (a - TRIGGER_SELECT_ENTER) / (1 - TRIGGER_SELECT_ENTER);
-  return t > 1 ? 1 : t;
 }
 
 /**
@@ -808,15 +817,87 @@ export function createGamepadAdapter(opts = {}) {
   let stickClickGesture = false;
   let stickClickAdded = false;
   let radialHeldRing = null;
+  /** Button the square panel was aiming, so a gap does not flicker the highlight. */
+  let squareHeld = null;
   let pointerYielded = false;
   let stickReclaimArmed = false;
   /** Radial confirm while the stick is still out. Hold that throw off the cursor. */
   let menuStickCarry = false;
   /** Unit option held with A / LB / RB. Null id means the hold is idle. */
   let trainHold = { id: null, heldAt: 0, lastAt: 0 };
+  let castRepeat = 0;
+  let castHeldAt = 0;
+  let castLastAt = 0;
+  let attackRepeat = 0;
+  let attackHeldAt = 0;
+  let attackLastAt = 0;
+  let forceRepeat = 0;
+  let forceHeldAt = 0;
+  let forceLastAt = 0;
 
   function clearTrainHold() {
     trainHold = { id: null, heldAt: 0, lastAt: 0 };
+  }
+
+  function resetPlayActionRepeat() {
+    castRepeat = 0;
+    castHeldAt = 0;
+    castLastAt = 0;
+    attackRepeat = 0;
+    attackHeldAt = 0;
+    attackLastAt = 0;
+    forceRepeat = 0;
+    forceHeldAt = 0;
+    forceLastAt = 0;
+  }
+
+  /** Play mode: held B / D-pad Left, LB, RB repeat cast and orders. */
+  function stepPlayActionRepeat(buttons, t) {
+    const castOn = playCastHeld(buttons) ? 1 : 0;
+    const castRep = heldRepeat(
+      castOn,
+      castRepeat,
+      t,
+      castHeldAt,
+      castLastAt,
+      HELD_CAST_INITIAL_MS,
+      HELD_CAST_REPEAT_MS,
+    );
+    castRepeat = castOn;
+    castHeldAt = castRep.heldAt;
+    castLastAt = castRep.lastAt;
+    if (castRep.fire) opts.onCast?.();
+
+    const orders = playOrderHeld(buttons);
+    const atkOn = orders.attackMove ? 1 : 0;
+    const atkRep = heldRepeat(
+      atkOn,
+      attackRepeat,
+      t,
+      attackHeldAt,
+      attackLastAt,
+      HELD_ORDER_INITIAL_MS,
+      HELD_ORDER_REPEAT_MS,
+    );
+    attackRepeat = atkOn;
+    attackHeldAt = atkRep.heldAt;
+    attackLastAt = atkRep.lastAt;
+    if (atkRep.fire) opts.onAttackMove?.();
+
+    const fOn = orders.forceMove ? 1 : 0;
+    const fRep = heldRepeat(
+      fOn,
+      forceRepeat,
+      t,
+      forceHeldAt,
+      forceLastAt,
+      HELD_ORDER_INITIAL_MS,
+      HELD_ORDER_REPEAT_MS,
+    );
+    forceRepeat = fOn;
+    forceHeldAt = fRep.heldAt;
+    forceLastAt = fRep.lastAt;
+    if (fRep.fire) opts.onForceMove?.();
   }
   /** Paint-select / place-yaw hysteresis for a soft trigger. */
   let triggerLatched = false;
@@ -832,6 +913,7 @@ export function createGamepadAdapter(opts = {}) {
     triggerLatched = false;
     stickClickGesture = false;
     stickClickAdded = false;
+    resetPlayActionRepeat();
   }
 
   function sampleTriggerSelect(read) {
@@ -1246,8 +1328,9 @@ export function createGamepadAdapter(opts = {}) {
       // Driving that pie pins the preview on the agora until the pie closes.
       // Control groups still select; A keeps stamping the ghost.
       radialHeldRing = null;
+      squareHeld = null;
       cancelPadSelect();
-      // The stick is still the pie throw. Keep the field mark off until it recenters.
+      // The stick is still the menu throw. Keep the field mark off until it recenters.
       if (menuStickCarry) aim(false, 'radial');
       else aim(true);
       applyPlay(cameraRead);
@@ -1266,8 +1349,18 @@ export function createGamepadAdapter(opts = {}) {
       cancelPadSelect();
       aim(false, 'radial');
       applyMenuCamera(cameraRead);
-      const pick = radialStickPick(radialMenuRead(cameraRead), opts.getRadialTargets?.() ?? null, radialHeldRing);
-      radialHeldRing = pick?.ring ?? null;
+      const targets = opts.getRadialTargets?.() ?? null;
+      const aimRead = radialMenuRead(cameraRead);
+      const pick = menuTargetsAreSquares(targets)
+        ? squareStickPick(aimRead, targets, squareHeld)
+        : radialStickPick(aimRead, targets, radialHeldRing);
+      if (menuTargetsAreSquares(targets)) {
+        squareHeld = pick;
+        radialHeldRing = null;
+      } else {
+        squareHeld = null;
+        radialHeldRing = pick?.ring ?? null;
+      }
       opts.onRadialHover?.(pick);
       const confirming = playConfirmIntent(edges) && !!pick;
       applyControlGroups(edges, released, confirming ? PAD.A : -1, read.buttons);
@@ -1292,6 +1385,7 @@ export function createGamepadAdapter(opts = {}) {
       return;
     }
     radialHeldRing = null;
+    squareHeld = null;
 
     aim(true);
     const selectHeld = sampleTriggerSelect(read);
@@ -1306,11 +1400,8 @@ export function createGamepadAdapter(opts = {}) {
       padSelecting = false;
       opts.onSelectEnd?.(chord);
     }
-    const orders = playOrderIntent(edges);
-    if (orders.attackMove) opts.onAttackMove?.();
-    if (orders.forceMove) opts.onForceMove?.();
     applyControlGroups(edges, released, -1, read.buttons);
-    if (playCastIntent(edges)) opts.onCast?.();
+    stepPlayActionRepeat(read.buttons, t);
     finishStickClick(stickNow, true);
     } finally {
       if (!keepTrainHold) clearTrainHold();

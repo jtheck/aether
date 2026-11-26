@@ -50,38 +50,15 @@
       "emissiveImage": null
     },
     {
-      "name": "Rock.001",
+      "name": "Rock",
       "baseColorFactor": [
-        0.24421121180057526,
-        0.25826212763786316,
-        0.30319520831108093,
+        1,
+        1,
+        1,
         1
       ],
-      "metallicFactor": 0,
-      "roughnessFactor": 0.5,
-      "emissiveFactor": [
-        0,
-        0,
-        0
-      ],
-      "doubleSided": true,
-      "alphaMode": "OPAQUE",
-      "alphaCutoff": 0.5,
-      "baseColorImage": null,
-      "normalImage": null,
-      "ormImage": null,
-      "emissiveImage": null
-    },
-    {
-      "name": "Green.001",
-      "baseColorFactor": [
-        0.08744194358587265,
-        0.15232062339782715,
-        0.05986013635993004,
-        1
-      ],
-      "metallicFactor": 0,
-      "roughnessFactor": 0.5,
+      "metallicFactor": 1,
+      "roughnessFactor": 1,
       "emissiveFactor": [
         0,
         0,
@@ -109,7 +86,7 @@
       ],
       "boundMax": [
         7.00192403793335,
-        1.1550930738449097,
+        1.3093003034591675,
         7.892484664916992
       ],
       "positions": {
@@ -139,37 +116,37 @@
       "reverseWinding": true,
       "boundMin": [
         -5.033120155334473,
-        0.41668710112571716,
+        0.585407018661499,
         -3.003401041030884
       ],
       "boundMax": [
         5.024945259094238,
-        0.6656476259231567,
+        0.585407018661499,
         5.8988142013549805
       ],
       "positions": {
         "offset": 24552,
-        "length": 198,
+        "length": 69,
         "type": "f32"
       },
       "normals": {
-        "offset": 25344,
-        "length": 198,
+        "offset": 24828,
+        "length": 69,
         "type": "f32"
       },
       "indices": {
-        "offset": 26136,
+        "offset": 25104,
         "length": 66,
         "type": "u32"
       },
       "uvs": {
-        "offset": 26400,
-        "length": 132,
+        "offset": 25368,
+        "length": 46,
         "type": "f32"
       }
     },
     {
-      "materialName": "Rock.001",
+      "materialName": "Rock",
       "materialIndex": 2,
       "reverseWinding": true,
       "boundMin": [
@@ -183,58 +160,23 @@
         1.4867101907730103
       ],
       "positions": {
-        "offset": 26928,
-        "length": 1095,
+        "offset": 25552,
+        "length": 1416,
         "type": "f32"
       },
       "normals": {
-        "offset": 31308,
-        "length": 1095,
+        "offset": 31216,
+        "length": 1416,
         "type": "f32"
       },
       "indices": {
-        "offset": 35688,
-        "length": 555,
+        "offset": 36880,
+        "length": 708,
         "type": "u32"
       },
       "uvs": {
-        "offset": 37908,
-        "length": 730,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Green.001",
-      "materialIndex": 3,
-      "reverseWinding": true,
-      "boundMin": [
-        -9.368756294250488,
-        0.6906154155731201,
-        -7.23427152633667
-      ],
-      "boundMax": [
-        9.615727424621582,
-        8.683343887329102,
-        0.6450853943824768
-      ],
-      "positions": {
-        "offset": 40828,
-        "length": 321,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 42112,
-        "length": 321,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 43396,
-        "length": 153,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 44008,
-        "length": 214,
+        "offset": 39712,
+        "length": 944,
         "type": "f32"
       }
     }

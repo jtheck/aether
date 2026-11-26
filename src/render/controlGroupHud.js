@@ -1,5 +1,5 @@
-// Control-group pads - camera-locked hollow rounded triangles on the
-// left/right edges, nested in/out/in so they interlock. Six colours
+// Control-group pads - camera-locked hollow triangles on the left/right
+// edges, alternating in/out/in with a gap. Six colours
 // (red / green / black left, blue / yellow / white right).
 
 import {
@@ -20,13 +20,13 @@ export const CONTROL_GROUP_DEFS = Object.freeze([
 ]);
 
 export const CONTROL_GROUP_SIZE_PX = 54;
-/** Horizontal span - slimmer than the old square so they don't eat the playfield. */
-export const CONTROL_GROUP_WIDTH_PX = 36;
+/** Square slot so the triangle is not stretched. Pitch stays on the height. */
+export const CONTROL_GROUP_WIDTH_PX = CONTROL_GROUP_SIZE_PX;
 /** One X carries sixteen. Two overlapping X's is the display cap. */
 export const TALLY_X_VALUE = 16;
 export const CONTROL_GROUP_TALLY_MAX = 32;
-/** Half-height nest plus a gap so interlocking pads don't sit on top of each other. */
-export const CONTROL_GROUP_NEST_GAP_PX = 16;
+/** Air between the alternating triangles, past the old half-height nest. */
+export const CONTROL_GROUP_NEST_GAP_PX = 32;
 export const CONTROL_GROUP_PITCH_PX = CONTROL_GROUP_SIZE_PX * 0.5 + CONTROL_GROUP_NEST_GAP_PX;
 export const CONTROL_GROUP_EDGE_PX = 26;
 /** Extra pick slop around the triangle (CSS px). */
@@ -50,7 +50,7 @@ export function visibleControlGroupDefs() {
 
 /**
  * Screen-space pad rects (CSS px). Vertically centered, three per side,
- * nested so in/out triangles interlock with a gap between them.
+ * alternating in/out with a gap between them.
  * `dir` is +1 (point right) or -1 (point left).
  * @param {number} vw
  * @param {number} vh
@@ -429,11 +429,12 @@ ${PRISON_TALLY_WGSL}
 @fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
   let p = input.uv * 2.0 - 1.0;
   let face = shaderUniforms.facing;
+  // Base is vertical. Altitude is the base times sqrt(3)/2, so all three sides match.
   let d = sdTriangle(
     p,
-    vec2<f32>(-0.70 * face, -0.78),
-    vec2<f32>(-0.70 * face, 0.78),
-    vec2<f32>(0.80 * face, 0.0),
+    vec2<f32>(-0.6235 * face, -0.72),
+    vec2<f32>(-0.6235 * face, 0.72),
+    vec2<f32>(0.6235 * face, 0.0),
   ) - 0.18;
   let stroke = 0.07 + shaderUniforms.fill * 0.02 + shaderUniforms.glow * 0.025;
   let edge = 1.0 - smoothstep(0.0, 0.035, abs(d) - stroke * 0.5);
@@ -565,6 +566,7 @@ export function createControlGroupHud(engine, scene, screen = {}) {
       const cy = r.y + r.h * 0.5;
       const ray = screen.rayFromCanvas(cx, cy);
       const rayR = screen.rayFromCanvas(cx + 1, cy);
+      const rayD = screen.rayFromCanvas(cx, cy + 1);
       if (!ray || !rayR) {
         hidePad(pad);
         continue;
@@ -615,6 +617,18 @@ export function createControlGroupHud(engine, scene, screen = {}) {
       rgtY = upZ * fx - upX * fz;
       rgtZ = upX * fy - upY * fx;
 
+      let pixelX = Math.abs((rx - wx) * rgtX + (ry - wy) * rgtY + (rz - wz) * rgtZ);
+      let pixelY = pixelX;
+      if (rayD) {
+        const dx = rayD.ox + rayD.dx * ICON_DEPTH - wx;
+        const dy = rayD.oy + rayD.dy * ICON_DEPTH - wy;
+        const dz = rayD.oz + rayD.dz * ICON_DEPTH - wz;
+        const along = Math.abs(dx * upX + dy * upY + dz * upZ);
+        if (along > 1e-8) pixelY = along;
+      }
+      if (!(pixelX > 1e-8)) pixelX = pixel;
+      if (!(pixelY > 1e-8)) pixelY = pixelX;
+
       const hover = 1 + pad.hoverT * HOVER_SCALE;
       const mesh = pad.mesh;
       if (mesh.position) {
@@ -622,10 +636,13 @@ export function createControlGroupHud(engine, scene, screen = {}) {
         mesh.position.y = wy;
         mesh.position.z = wz;
       }
+      // Square on the screen. One horizontal pixel is shorter than a vertical
+      // one at the edge of a perspective view, which was squashing the triangle.
       if (mesh.scaling) {
-        mesh.scaling.x = r.w * pixel * hover;
-        mesh.scaling.y = r.h * pixel * hover;
-        mesh.scaling.z = r.h * pixel * hover;
+        const side = Math.max(r.w, r.h);
+        mesh.scaling.x = side * pixelX * hover;
+        mesh.scaling.y = side * pixelY * hover;
+        mesh.scaling.z = side * pixelY * hover;
       }
       setQuat(mesh, quatFromBasis(rgtX, rgtY, rgtZ, upX, upY, upZ, fx, fy, fz));
       setSubtreeVisible(mesh, true);

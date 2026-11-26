@@ -9,12 +9,21 @@ import {
   createStandardMaterial,
   flushThinInstances,
   markMaterialUboDirty,
+  setShaderUniform,
   setThinInstances,
   setThinInstanceColors,
 } from '../vendor/lite/liteVendor.js';
 import { loadBakedUnitMeshParts, prefetchBakedMesh } from './unitModels.js';
 import { meshRoofY, roofChipLift, DEFAULT_BUILDING_ROOF } from './healthBars.js';
-import { BUILDING_FOOTPRINTS, BUILDING_MODEL_URLS, PLACEABLE_BUILDINGS, buildingMeshGroundCenter, buildingMeshOrigin } from '../sim/buildings.js';
+import {
+  BUILDING_FOOTPRINTS,
+  BUILDING_MODEL_URLS,
+  PLACEABLE_BUILDINGS,
+  buildingFootprintCenterWorld,
+  buildingMeshGroundCenter,
+  buildingMeshOrigin,
+} from '../sim/buildings.js';
+import * as fx from '../sim/fixed.js';
 import { bodyScaleMul } from '../sim/namedUnit.js';
 import { TILE_SIZE_F } from '../sim/field.js';
 import { SCALE_RISE_MS, stageRiseScale } from './scaleBounce.js';
@@ -29,12 +38,12 @@ import { nearestMeshInstanceHit, pickPartsFromMeshes } from './meshPick.js';
 
 /** Start small; grow by powers of two when place() needs more. */
 const INITIAL_CAPACITY = 32;
-const GHOST_ALPHA = 0.62;
-const GHOST_VALID_EMISSIVE = [0.15, 0.55, 0.22];
-const GHOST_INVALID_EMISSIVE = [1.0, 0.05, 0.02];
-const GHOST_VALID_DIFFUSE = [0.35, 0.85, 0.45];
-const GHOST_INVALID_DIFFUSE = [1.0, 0.08, 0.04];
-const GHOST_INVALID_ALPHA = 0.72;
+const GHOST_ALPHA = 0.82;
+const GHOST_VALID_EMISSIVE = [0.22, 0.78, 0.34];
+const GHOST_INVALID_EMISSIVE = [1.0, 0.12, 0.06];
+const GHOST_VALID_DIFFUSE = [0.42, 0.92, 0.52];
+const GHOST_INVALID_DIFFUSE = [1.0, 0.1, 0.05];
+const GHOST_INVALID_ALPHA = 0.86;
 const SELECTION_COLLAR_URL = '/assets/models/collar.glb';
 const FOOT_CLEARANCE = 0.06;
 /** Thicker than the old paper-thin squash. */
@@ -48,6 +57,8 @@ const COLLAR_ALPHA = 0.82;
  */
 const COLLAR_RENDER_ORDER = 110;
 const BUILDING_RENDER_ORDER = 120;
+/** Draws above the placement G-grid ink. */
+const GHOST_RENDER_ORDER = BUILDING_RENDER_ORDER;
 /** Unfinished sites sit smaller until villagers raise them. */
 const SITE_SCALE = 0.58;
 /** First work - a small pop off the foundation. */
@@ -268,11 +279,59 @@ function makeCollarMaterial() {
 }
 
 function makeGhostMaterial() {
-  const mat = createStandardMaterial();
+  const mat = createShaderMaterial({
+    name: 'building-placement-ghost',
+    attributes: ['position', 'normal'],
+    uniforms: [
+      'world',
+      'viewProjection',
+      { name: 'ghostDiffuse', type: 'vec3<f32>', defaultValue: [...GHOST_VALID_DIFFUSE] },
+      { name: 'ghostEmissive', type: 'vec3<f32>', defaultValue: [...GHOST_VALID_EMISSIVE] },
+      { name: 'ghostAlpha', type: 'f32', defaultValue: GHOST_ALPHA },
+    ],
+    needAlphaBlending: true,
+    backFaceCulling: false,
+    depthWrite: true,
+    vertexSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) worldN: vec3<f32>,
+  @location(1) worldPos: vec3<f32>,
+};
+@vertex fn mainVertex(input: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  let instanceWorld = mat4x4<f32>(input.world0, input.world1, input.world2, input.world3);
+  let world = shaderSystem.world * instanceWorld;
+  let wp = world * vec4<f32>(input.position, 1.0);
+  out.position = shaderSystem.viewProjection * wp;
+  out.worldPos = wp.xyz;
+  out.worldN = (world * vec4<f32>(input.normal, 0.0)).xyz;
+  return out;
+}`,
+    fragmentSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) worldN: vec3<f32>,
+  @location(1) worldPos: vec3<f32>,
+};
+@fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
+  var n = normalize(input.worldN);
+  let toEye = scene.vEyePosition.xyz - input.worldPos;
+  if (dot(n, toEye) < 0.0) { n = -n; }
+  let v = normalize(toEye);
+  let ndv = clamp(dot(n, v), 0.0, 1.0);
+  let rim = pow(1.0 - ndv, 2.4);
+  let core = shaderUniforms.ghostDiffuse * 0.38 + shaderUniforms.ghostEmissive * 0.55;
+  let edge = shaderUniforms.ghostEmissive + shaderUniforms.ghostDiffuse * 0.35;
+  var rgb = core + edge * (0.35 + rim * 1.15);
+  rgb = min(rgb, vec3<f32>(1.0));
+  let alpha = shaderUniforms.ghostAlpha * (0.58 + rim * 0.42);
+  if (alpha <= 0.004) { discard; }
+  return vec4<f32>(rgb, alpha);
+}`,
+  });
+  mat._buildingGhost = true;
   mat.alpha = GHOST_ALPHA;
   mat.diffuseColor = [...GHOST_VALID_DIFFUSE];
   mat.emissiveColor = [...GHOST_VALID_EMISSIVE];
-  applyUnlit(mat);
   markMaterialUboDirty(mat);
   return mat;
 }
@@ -284,15 +343,17 @@ function makeGhostMaterial() {
  */
 export function applyGhostValidityTint(mat, valid) {
   if (!mat) return;
-  if (valid) {
-    mat.alpha = GHOST_ALPHA;
-    mat.diffuseColor = [...GHOST_VALID_DIFFUSE];
-    mat.emissiveColor = [...GHOST_VALID_EMISSIVE];
-  } else {
-    mat.alpha = GHOST_INVALID_ALPHA;
-    mat.diffuseColor = [...GHOST_INVALID_DIFFUSE];
-    mat.emissiveColor = [...GHOST_INVALID_EMISSIVE];
+  const diffuse = valid ? GHOST_VALID_DIFFUSE : GHOST_INVALID_DIFFUSE;
+  const emissive = valid ? GHOST_VALID_EMISSIVE : GHOST_INVALID_EMISSIVE;
+  const alpha = valid ? GHOST_ALPHA : GHOST_INVALID_ALPHA;
+  if (mat._buildingGhost) {
+    setShaderUniform(mat, 'ghostDiffuse', [...diffuse]);
+    setShaderUniform(mat, 'ghostEmissive', [...emissive]);
+    setShaderUniform(mat, 'ghostAlpha', alpha);
   }
+  mat.alpha = alpha;
+  mat.diffuseColor = [...diffuse];
+  mat.emissiveColor = [...emissive];
   markMaterialUboDirty(mat);
 }
 
@@ -448,6 +509,7 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
       const mesh = cloneTransformNode(src);
       mesh.pickable = false;
       mesh.material = makeGhostMaterial();
+      mesh.renderOrder = GHOST_RENDER_ORDER;
       const matrices = new Float32Array(16);
       setThinInstances(mesh, matrices, 1);
       setThinInstanceCount(mesh, 0);
@@ -765,17 +827,18 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
   }
 
   function poseVisual(s) {
-    const gy = groundYAt(s.x, s.z);
+    const pivot = buildingFootprintCenterWorld(s.type, fx.fromFloat(s.x), fx.fromFloat(s.z));
+    const gy = groundYAt(pivot.x, pivot.z);
     const fit = meshFit(s.type, s.modelUrl);
     const yaw = s.yaw || 0;
     if (!s.falling) {
-      const origin = buildingMeshOrigin(s.x, s.z, yaw, s.visScale, fit.cx, fit.cz);
+      const origin = buildingMeshOrigin(pivot.x, pivot.z, yaw, s.visScale, fit.cx, fit.cz);
       return { x: origin.x, y: gy, z: origin.z, yaw, sx: s.visScale, sy: s.visScale, sz: s.visScale };
     }
     const t = Math.min(1, s.fallT);
     const ease = t * t;
     const sc = s.visScale * (1 + 0.55 * ease);
-    const origin = buildingMeshOrigin(s.x, s.z, yaw + 0.32 * ease, sc, fit.cx, fit.cz);
+    const origin = buildingMeshOrigin(pivot.x, pivot.z, yaw + 0.32 * ease, sc, fit.cx, fit.cz);
     return {
       x: origin.x,
       y: gy - 0.7 * ease,
@@ -1010,10 +1073,11 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
     }
     ghostType = pos.type;
     ghostUrl = url;
-    const y = groundYAt(pos.x, pos.z);
+    const pivot = buildingFootprintCenterWorld(pos.type, fx.fromFloat(pos.x), fx.fromFloat(pos.z));
+    const y = groundYAt(pivot.x, pivot.z);
     const yaw = pos.yaw ?? 0;
     const fit = meshFit(pos.type, url);
-    const origin = buildingMeshOrigin(pos.x, pos.z, yaw, fit.scale, fit.cx, fit.cz);
+    const origin = buildingMeshOrigin(pivot.x, pivot.z, yaw, fit.scale, fit.cx, fit.cz);
     const valid = pos.valid !== false;
     for (const layer of batch.layers) {
       writeMatrix(layer.matrices, 0, origin.x, y, origin.z, yaw, fit.scale);

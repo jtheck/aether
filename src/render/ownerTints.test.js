@@ -6,6 +6,8 @@ import {
   ownerColorsFromRoster,
   ownerColorsFromSeats,
   ownerTint,
+  teamBannerTint,
+  TEAM_BANNER_TINTS,
   sanitizeOwnerColor,
   setLocalOwnerTint,
   setOwnerTints,
@@ -40,6 +42,12 @@ describe('ownerTints', () => {
     assert.deepEqual(ownerTint(2), OWNER_TINTS[2]);
     setOwnerTints(null);
     setLocalOwnerTint(0, '');
+  });
+
+  it('uses white then black on the team banner cloth', () => {
+    assert.deepEqual(teamBannerTint(0), TEAM_BANNER_TINTS[0]);
+    assert.deepEqual(teamBannerTint(1), TEAM_BANNER_TINTS[1]);
+    assert.deepEqual(teamBannerTint(2), TEAM_BANNER_TINTS[2]);
   });
 
   it('keeps owner 5 off the player-blue wrap', () => {

@@ -19,6 +19,10 @@ import {
   xrHudOvalTopArcPoint,
   xrHudProjection,
   xrShadowCover,
+  clearXrEye,
+  setXrEyeFromPose,
+  xrEye,
+  xrHudEye,
 } from './xrEye.js';
 
 /** GL-style projection for tangents l, r, b, t at the unit plane. */
@@ -223,5 +227,27 @@ describe('xrShadowCover', () => {
 
   it('caps at the board range', () => {
     assert.equal(xrShadowCover(1000, 300), 300);
+  });
+});
+
+describe('setXrEyeFromPose snapHud', () => {
+  it('lands the HUD on the eye when a jump snaps the rig', () => {
+    clearXrEye();
+    const a = new Float32Array(16);
+    a[0] = a[5] = a[10] = a[15] = 1;
+    a[12] = 1;
+    a[14] = 2;
+    setXrEyeFromPose(a, [{ projectionMatrix: proj(-1, 1, -1, 1) }], 0.016);
+    const b = new Float32Array(16);
+    b[0] = b[5] = b[10] = b[15] = 1;
+    b[12] = 50;
+    b[14] = -30;
+    setXrEyeFromPose(b, [{ projectionMatrix: proj(-1, 1, -1, 1) }], 0.016);
+    const lag = xrHudEye().x - xrEye().x;
+    assert.ok(Math.abs(lag) > 0.01);
+    setXrEyeFromPose(b, [{ projectionMatrix: proj(-1, 1, -1, 1) }], 0.016, { snapHud: true });
+    assert.ok(Math.abs(xrHudEye().x - xrEye().x) < 1e-6);
+    assert.ok(Math.abs(xrHudEye().z - xrEye().z) < 1e-6);
+    clearXrEye();
   });
 });

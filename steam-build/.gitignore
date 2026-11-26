@@ -8,8 +8,11 @@ dist-win/
 dist-win*/
 dist-linux/
 dist-linux*/
+dist-osx/
 Aether-win64.zip
 Aether-linux64.zip
+Aether-linux-arm64.zip
+Aether-osx-x64.zip
 
 # SteamCMD upload
 workshop-seed/item.vdf

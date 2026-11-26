@@ -1,3 +1,4 @@
+// STASHED ring. Not wired. The live building menu is sceneCommandMenu.js.
 // Building action menu - tilted ring framing a selected placeable
 // (empty hub stays on the building). Thin outer chrome for units, upgrades,
 // building upgrades, and a fixed bottom Pause | Cancel pair; options pick
@@ -108,7 +109,8 @@ const CANCEL_SPAN = UTILITY_SPAN * 0.5;
  * Parallel-edge treatment - not an angular wedge cut.
  */
 const ARC_GAP = 2.3;
-const MENU_TILT = 0.56;
+/** Lean from horizontal toward the camera. Same steeper angle as the build ring. */
+const MENU_TILT = 0.9;
 const HUD_REF_DIST = 110;
 const HUD_BASE_SCALE = 0.8;
 const HUD_SCALE_MIN = 0.28;

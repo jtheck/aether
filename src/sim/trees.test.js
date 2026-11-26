@@ -30,6 +30,10 @@ import {
   treeBurnSystem,
   treeSpreadWeight,
   treeSpreadCount,
+  treeSpreadAttemptsForLook,
+  TREE_LOOK_CHAR,
+  TREE_LOOK_PLAIN,
+  TREE_LOOK_SNOW,
 } from './trees.js';
 import { TERRAIN } from './field.js';
 
@@ -110,9 +114,39 @@ function smallTreeDoesNotSpread() {
   assert.equal(treeSpreadWeight(treeStageFromStock(TREE_WOOD_PER_STAGE * 2)), 0);
 }
 
+function canopyLookScalesSpreadAttempts() {
+  assert.equal(treeSpreadAttemptsForLook(TREE_LOOK_SNOW), 1);
+  assert.equal(treeSpreadAttemptsForLook(TREE_LOOK_PLAIN), 2);
+  assert.equal(treeSpreadAttemptsForLook(TREE_LOOK_CHAR), 5);
+  const stock = TREE_WOOD_PER_STAGE * 10;
+  const { field, tx, tz, i } = fieldWithTree(33, 33, stock);
+  field.treeLook[i] = TREE_LOOK_SNOW;
+  const ring = [];
+  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+  for (let d = 0; d < dirs.length; d++) {
+    ring.push(plantTree(field, tx + dirs[d][0], tz + dirs[d][1], stock));
+    field.treeLook[ring[d]] = TREE_LOOK_SNOW;
+  }
+  igniteTree(field, i);
+  for (let t = 0; t < TREE_BURN_DAMAGE_INTERVAL; t++) treeBurnSystem(field);
+  let snowLit = 0;
+  for (let k = 0; k < ring.length; k++) if (field.treeBurn[ring[k]] > 0) snowLit++;
+
+  for (let k = 0; k < ring.length; k++) field.treeBurn[ring[k]] = 0;
+  field.treeBurn[i] = TREE_BURN_TICKS;
+  field.treeStock[i] = stock;
+  field.treeLook[i] = TREE_LOOK_CHAR;
+  for (let t = 0; t < TREE_BURN_DAMAGE_INTERVAL; t++) treeBurnSystem(field);
+  let charLit = 0;
+  for (let k = 0; k < ring.length; k++) if (field.treeBurn[ring[k]] > 0) charLit++;
+  assert.ok(charLit >= snowLit, `char canopy spreads at least as far as snow (${charLit} vs ${snowLit})`);
+  if (snowLit > 0) assert.ok(charLit > snowLit, `char runs hotter than snow when snow already catches (${charLit} vs ${snowLit})`);
+}
+
 function bigTreeCatchesNeighbor() {
   const stock = TREE_WOOD_PER_STAGE * 10;
   const { field, tx, tz, i } = fieldWithTree(32, 32, stock);
+  field.treeLook[i] = TREE_LOOK_SNOW;
   const neighbor = plantTree(field, tx + 1, tz, stock);
   igniteTree(field, i);
   for (let t = 0; t < TREE_BURN_DAMAGE_INTERVAL; t++) treeBurnSystem(field);
@@ -311,6 +345,7 @@ addStockGrowsExistingOnly();
 damageShrinksThenFells();
 destinedTreesBurnDown();
 smallTreeDoesNotSpread();
+canopyLookScalesSpreadAttempts();
 bigTreeCatchesNeighbor();
 waterDoesNotCatchFire();
 burnConsumesStages();

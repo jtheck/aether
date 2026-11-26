@@ -4,6 +4,7 @@
 import * as fx from './fixed.js';
 import { TILE_SIZE_F, snapToPassable } from './field.js';
 import { applyWallOccupancy, openingWorldPoint } from './walls.js';
+import { hybridBuildingMelee, unitMeleeRange } from './attackMode.js';
 import { getUnitDef } from './unitTypes.js';
 
 /** A short squad of infantry breaks one. */
@@ -54,7 +55,8 @@ export function damageDoorsInRadius(world, field, x, z, radius, amount) {
 }
 
 export function doorAttackRange(def) {
-  return (def?.attackRange ?? 0) + fx.fromFloat(DOOR_REACH_F);
+  const band = hybridBuildingMelee(def) ? unitMeleeRange(def) : (def?.attackRange ?? 0);
+  return band + fx.fromFloat(DOOR_REACH_F);
 }
 
 export function attackDoorInRange(w, i, door) {
@@ -63,7 +65,7 @@ export function attackDoorInRange(w, i, door) {
   const reach = doorAttackRange(def);
   const d2 = fx.dist2(w.px[i], w.py[i], door.x, door.z);
   if (d2 > fx.mul(reach, reach)) return false;
-  if (def.minRange > 0) {
+  if (def.minRange > 0 && !hybridBuildingMelee(def)) {
     const min2 = fx.mul(def.minRange, def.minRange);
     if (d2 < min2) return false;
   }

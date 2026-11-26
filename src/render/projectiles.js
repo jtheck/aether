@@ -53,10 +53,11 @@ function projectileArcVy(def, progress, life, loftPeak) {
   return (dClear + dLoft) / Math.max(1, life);
 }
 
-function createArrowMesh(engine, name) {
+/** Two crossed quads. +Z is the nose; tailHalf flares the rear (local -Z). */
+function createCrossMesh(engine, name, noseHalf, tailHalf) {
   const positions = new Float32Array([
-    -0.5, 0, -0.5, 0.5, 0, -0.5, 0.5, 0, 0.5, -0.5, 0, 0.5,
-    0, -0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5,
+    -tailHalf, 0, -0.5, tailHalf, 0, -0.5, noseHalf, 0, 0.5, -noseHalf, 0, 0.5,
+    0, -tailHalf, -0.5, 0, tailHalf, -0.5, 0, noseHalf, 0.5, 0, -noseHalf, 0.5,
   ]);
   const normals = new Float32Array([
     0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0,
@@ -69,7 +70,19 @@ function createArrowMesh(engine, name) {
   return createMeshFromData(engine, name, positions, normals, indices);
 }
 
+function createArrowMesh(engine, name) {
+  return createCrossMesh(engine, name, 0.5, 0.5);
+}
+
+/** Icicle: pinched nose, flared tail, same cross so it reads from above and the side. */
+function createIcicleMesh(engine, name) {
+  return createCrossMesh(engine, name, 0.06, 1.6);
+}
+
 function createArchetypeMesh(engine, def) {
+  if (def.id === PROJECTILE.ICE_BOLT) {
+    return createIcicleMesh(engine, `projectile-${def.name.toLowerCase()}`);
+  }
   if (def.mesh === PROJECTILE_MESH.ARROW) {
     return createArrowMesh(engine, `projectile-${def.name.toLowerCase()}`);
   }

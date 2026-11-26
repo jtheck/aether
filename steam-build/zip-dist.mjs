@@ -2,15 +2,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { resolveTarget } from './targets.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const platform = process.argv[2] === 'linux' ? 'linux' : 'win';
-const dist = path.join(root, platform === 'linux' ? 'dist-linux' : 'dist-win');
-const outZip = path.join(root, platform === 'linux' ? 'Aether-linux64.zip' : 'Aether-win64.zip');
-const launchBin = platform === 'linux' ? 'Aether' : 'Aether.exe';
+const target = resolveTarget(process.argv[2] || 'win');
+if (!target) {
+  console.error('[steam-build] Unknown target. Use win, linux, linux-arm64, or osx.');
+  process.exit(1);
+}
 
-if (!fs.existsSync(path.join(dist, launchBin))) {
-  console.error(`[steam-build] ${dist}/${launchBin} missing - run npm run dist:${platform === 'linux' ? 'linux' : 'win'} first`);
+const dist = path.join(root, target.outDir);
+const outZip = path.join(root, target.zipName);
+const launchBin = path.join(dist, target.launchRel);
+
+if (!fs.existsSync(launchBin)) {
+  console.error(`[steam-build] ${launchBin} missing - run npm run dist:${target.id} first`);
   process.exit(1);
 }
 

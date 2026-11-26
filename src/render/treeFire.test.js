@@ -23,8 +23,8 @@ describe('tree fire anchors', () => {
     const trunk = treeFireTongueScale('trunk', 1.47);
     assert.ok(Math.abs(mature - TREE_MODEL_SCALE * 1.47) < 1e-9);
     assert.ok(treeFireHeight(1.47) < TREE_MESH_HEIGHT * 2);
-    assert.ok(leaf > CAMP_SOCKET_SCALE * 0.65, 'tongues are large enough to join');
-    assert.ok(leaf < CAMP_SOCKET_SCALE, 'a tongue is not a full hearth');
+    assert.ok(leaf > CAMP_SOCKET_SCALE * 0.95, 'tongues are campfire-sized at the canopy');
+    assert.ok(leaf < CAMP_SOCKET_SCALE * 1.25, 'a tongue is not an oversized bonfire');
     assert.ok(trunk < leaf);
     assert.ok(trunk > leaf * 0.6);
   });
@@ -38,7 +38,7 @@ describe('tree fire anchors', () => {
     assert.ok(Math.abs(leaned.y) < 1e-9);
   });
 
-  it('pins tongues inside the canopy, not on the leaf tips', () => {
+  it('pins tongues in the outer canopy shell, not buried in the trunk', () => {
     const leaf = TREE_FIRE_ANCHORS.filter((a) => a.kind === 'leaf');
     const trunk = TREE_FIRE_ANCHORS.filter((a) => a.kind === 'trunk');
     assert.ok(leaf.length >= 6);
@@ -48,12 +48,15 @@ describe('tree fire anchors', () => {
     assert.ok(ys[ys.length - 1] < TREE_MESH_HEIGHT, 'no anchors above the mesh');
     assert.ok(ys[ys.length - 1] - ys[0] > 2, 'anchors span the canopy');
     const mid = ys[ys.length >> 1];
-    assert.ok(mid < 3.4, 'most of the fire sits in the leafy mass, not the tip');
-    // Outer foliage reaches ~3.5. Tips that far out read as lights on the branches.
+    assert.ok(mid < 3.6, 'most of the fire sits in the leafy mass, not the tip');
+    // Shell push keeps sites near the bark so particles clear the mesh.
+    let maxR = 0;
     for (const a of TREE_FIRE_ANCHORS) {
-      const r = Math.hypot(a.x + 0.35, a.z + 0.15);
-      assert.ok(r < 2.2, 'fire stays in the trunk and inner canopy');
+      const r = Math.hypot(a.x * 1.52 + 0.35, a.z * 1.52 + 0.15);
+      if (r > maxR) maxR = r;
+      assert.ok(r < 2.25, 'fire stays on the tree, not in empty air past the crown');
     }
+    assert.ok(maxR > 1.45, 'shell push reaches the outer foliage');
   });
 
   it('keeps world sites on the tree', () => {
@@ -69,8 +72,8 @@ describe('tree fire anchors', () => {
       if (s.y > maxY) maxY = s.y;
       if (s.x < minX) minX = s.x;
       if (s.x > maxX) maxX = s.x;
-      assert.ok(s.scale > CAMP_SOCKET_SCALE * 0.5);
-      assert.ok(s.scale < CAMP_SOCKET_SCALE);
+      assert.ok(s.scale > CAMP_SOCKET_SCALE * 0.85);
+      assert.ok(s.scale < CAMP_SOCKET_SCALE * 1.25);
     }
     assert.ok(minY < 2.2, 'trunk / low canopy is lit');
     assert.ok(maxY < treeFireHeight(1.47) + 0.2, 'tongues stay on the tree');

@@ -1,7 +1,18 @@
 {
   "sourceUrl": "/assets/models/agora.glb",
   "version": 3,
-  "sockets": [],
+  "sockets": [
+    {
+      "name": "standard_anchor",
+      "x": 5.104867935180664,
+      "y": 0.42214199900627136,
+      "z": -5.592783451080322,
+      "scale": 1.6713490278381353,
+      "yaw": -0.11916044800419247,
+      "pitch": 0.000059280506729236264,
+      "roll": -0.01588961564186323
+    }
+  ],
   "materials": [
     {
       "name": "Material",
@@ -27,11 +38,11 @@
       "emissiveImage": null
     },
     {
-      "name": "Material.001",
+      "name": "b1",
       "baseColorFactor": [
-        0.1600571572780609,
-        0.1600571572780609,
-        0.1600571572780609,
+        1,
+        1,
+        1,
         1
       ],
       "metallicFactor": 0,
@@ -44,17 +55,17 @@
       "doubleSided": true,
       "alphaMode": "OPAQUE",
       "alphaCutoff": 0.5,
-      "baseColorImage": null,
+      "baseColorImage": 0,
       "normalImage": null,
       "ormImage": null,
       "emissiveImage": null
     },
     {
-      "name": "Material.002",
+      "name": "b2",
       "baseColorFactor": [
-        0.12331452965736389,
-        0.12331452965736389,
-        0.12331452965736389,
+        1,
+        1,
+        1,
         1
       ],
       "metallicFactor": 0,
@@ -67,116 +78,125 @@
       "doubleSided": true,
       "alphaMode": "OPAQUE",
       "alphaCutoff": 0.5,
-      "baseColorImage": null,
+      "baseColorImage": 1,
       "normalImage": null,
       "ormImage": null,
       "emissiveImage": null
     }
   ],
-  "images": [],
+  "images": [
+    {
+      "file": "img-0.png",
+      "mimeType": "image/png"
+    },
+    {
+      "file": "img-1.png",
+      "mimeType": "image/png"
+    }
+  ],
   "parts": [
     {
       "materialName": "Material",
       "materialIndex": 0,
       "reverseWinding": true,
       "boundMin": [
-        -22.65119171142578,
-        -15.028664588928223,
-        -22.141511917114258
+        -7.782260417938232,
+        0.4918674826622009,
+        -7.684662818908691
       ],
       "boundMax": [
-        22.70406723022461,
-        0.7873742580413818,
-        22.842729568481445
+        7.835133075714111,
+        1.3051475286483765,
+        7.804981231689453
       ],
       "positions": {
         "offset": 0,
-        "length": 600,
+        "length": 240,
         "type": "f32"
       },
       "normals": {
-        "offset": 2400,
-        "length": 600,
+        "offset": 960,
+        "length": 240,
         "type": "f32"
       },
       "indices": {
-        "offset": 4800,
-        "length": 306,
+        "offset": 1920,
+        "length": 120,
         "type": "u32"
       },
       "uvs": {
-        "offset": 6024,
-        "length": 400,
+        "offset": 2400,
+        "length": 160,
         "type": "f32"
       }
     },
     {
-      "materialName": "Material.001",
+      "materialName": "b1",
       "materialIndex": 1,
       "reverseWinding": true,
       "boundMin": [
-        -3.4234180450439453,
-        0.4918674826622009,
-        -6.266019344329834
+        -21.898700714111328,
+        -13.31171989440918,
+        -21.409873962402344
       ],
       "boundMax": [
-        3.4762918949127197,
-        1.3051475286483765,
-        -1.916710615158081
+        21.951576232910156,
+        0.7873742580413818,
+        22.081695556640625
       ],
       "positions": {
-        "offset": 7624,
-        "length": 204,
+        "offset": 3040,
+        "length": 324,
         "type": "f32"
       },
       "normals": {
-        "offset": 8440,
-        "length": 204,
+        "offset": 4336,
+        "length": 324,
         "type": "f32"
       },
       "indices": {
-        "offset": 9256,
-        "length": 102,
+        "offset": 5632,
+        "length": 168,
         "type": "u32"
       },
       "uvs": {
-        "offset": 9664,
-        "length": 136,
+        "offset": 6304,
+        "length": 216,
         "type": "f32"
       }
     },
     {
-      "materialName": "Material.002",
+      "materialName": "b2",
       "materialIndex": 2,
       "reverseWinding": true,
       "boundMin": [
-        -7.605112552642822,
-        0.7813676595687866,
-        -7.512424945831299
+        -18.815109252929688,
+        -8.401789665222168,
+        -18.411745071411133
       ],
       "boundMax": [
-        7.657985210418701,
+        18.867982864379883,
         1.2196904420852661,
-        7.625820636749268
+        18.96309471130371
       ],
       "positions": {
-        "offset": 10208,
-        "length": 48,
+        "offset": 7168,
+        "length": 276,
         "type": "f32"
       },
       "normals": {
-        "offset": 10400,
-        "length": 48,
+        "offset": 8272,
+        "length": 276,
         "type": "f32"
       },
       "indices": {
-        "offset": 10592,
-        "length": 24,
+        "offset": 9376,
+        "length": 144,
         "type": "u32"
       },
       "uvs": {
-        "offset": 10688,
-        "length": 32,
+        "offset": 9952,
+        "length": 184,
         "type": "f32"
       }
     }

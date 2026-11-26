@@ -25,8 +25,14 @@ import {
   buildingMeshOrigin,
   snapBuildingWorld,
   buildingAimYaw,
+  buildingPlacementTravelYaw,
+  buildingPlacementFootprintHopYaw,
   buildingTileYaw,
   buildingAimSpan,
+  buildingFootprintCenterWorld,
+  placementAimBand,
+  snapBuildingYaw,
+  BUILDING_YAW_SNAP,
   holdBuildingSnap,
   BUILDING_FOOTPRINTS,
   getBuildingDisplayName,
@@ -1322,19 +1328,40 @@ describe('village and workshop menus', () => {
   });
 });
 
+describe('placement ghost aim', () => {
+  it('faces travel direction at the nearest snap; holds yaw when aim is still', () => {
+    const prior = snapBuildingYaw(Math.PI / 8);
+    assert.equal(buildingPlacementTravelYaw(0, 0, prior), prior);
+    assert.equal(buildingPlacementTravelYaw(4, 0, prior), Math.PI / 2);
+    assert.equal(buildingPlacementTravelYaw(0, -8, prior), Math.PI);
+    assert.equal(buildingPlacementTravelYaw(-3, 0, prior), -Math.PI / 2);
+  });
+
+  it('turns one snap step per footprint hop, not the full bearing at once', () => {
+    const step = BUILDING_YAW_SNAP;
+    assert.equal(buildingPlacementFootprintHopYaw(0, 0, 0), 0);
+    assert.equal(snapBuildingYaw(buildingPlacementFootprintHopYaw(8, 0, 0)), snapBuildingYaw(step));
+    assert.equal(
+      snapBuildingYaw(buildingPlacementFootprintHopYaw(8, 0, step)),
+      snapBuildingYaw(step * 2),
+    );
+    assert.equal(snapBuildingYaw(buildingPlacementFootprintHopYaw(0, -8, 0)), snapBuildingYaw(step));
+  });
+});
+
 describe('placement facing from the aim', () => {
   it('holds the plot facing in the middle and follows the pointer outward', () => {
     const rest = buildingTileYaw(8, 12, 4);
     assert.equal(buildingAimYaw(8, 12, 8, 12, 4), rest);
     assert.equal(buildingAimYaw(8.4, 12.2, 8, 12, 4), rest);
-    assert.equal(buildingAimYaw(10, 12, 8, 12, 4), Math.PI / 2);
-    assert.equal(buildingAimYaw(8, 14, 8, 12, 4), 0);
-    assert.equal(buildingAimYaw(8, 10, 8, 12, 4), Math.PI);
-    assert.equal(buildingAimYaw(6, 12, 8, 12, 4), -Math.PI / 2);
+    assert.equal(buildingAimYaw(11, 12, 8, 12, 4), Math.PI / 2);
+    assert.equal(buildingAimYaw(8, 15, 8, 12, 4), 0);
+    assert.equal(buildingAimYaw(8, 9, 8, 12, 4), Math.PI);
+    assert.equal(buildingAimYaw(5, 12, 8, 12, 4), -Math.PI / 2);
     const steps = [0, 1, 2, 3, 4, 5, 6, 7].map((i) => (i * Math.PI) / 4);
     assert.ok(steps.includes(rest));
 
-    const y = buildingAimYaw(9.2, 12, 8, 12, 4);
+    const y = buildingAimYaw(9.7, 12, 8, 12, 4);
     const toward = Math.atan2(Math.sin(Math.PI / 2 - rest), Math.cos(Math.PI / 2 - rest));
     const moved = Math.atan2(Math.sin(y - rest), Math.cos(y - rest));
     if (Math.abs(toward) > 0.05) {
@@ -1344,8 +1371,8 @@ describe('placement facing from the aim', () => {
     const dx = 0.85;
     const dz = 0.85;
     const dist = Math.hypot(dx, dz);
-    const dead = 4 * 0.18;
-    const span = 4 * 0.42 - dead;
+    const dead = 4 * 0.3;
+    const span = 4 * 0.56 - dead;
     const s = ((dist - dead) / span);
     const ease = s * s * (3 - 2 * s);
     const aim = Math.atan2(dx, dz);
@@ -1355,10 +1382,37 @@ describe('placement facing from the aim', () => {
     assert.ok(Math.abs(Math.atan2(Math.sin(got - expected), Math.cos(got - expected))) < 1e-9);
   });
 
-  it('gives a 2×2 the whole footprint to turn in, and leaves a 3×3 on its tile', () => {
+  it('scales the turn band with footprint size', () => {
     assert.equal(buildingAimSpan('camp'), 8);
-    assert.equal(buildingAimSpan('village'), 4);
-    assert.equal(buildingAimSpan('agora'), 4);
+    assert.equal(buildingAimSpan('village'), 12);
+    assert.equal(buildingAimSpan('agora'), 16);
+    const band = placementAimBand('village');
+    assert.equal(band.yawSnapSteps, 12);
+    assert.ok(Math.abs(band.fullRadius - 12 * 0.56) < 1e-6);
+  });
+
+  it('yaws from the footprint center and reaches every yaw step at full radius', () => {
+    buildField(3, { width: 64, height: 64 });
+    for (const type of ['camp', 'village', 'agora']) {
+      const snap = snapBuildingWorld(type, fx.fromFloat(24), fx.fromFloat(28));
+      const pivot = buildingFootprintCenterWorld(type, snap.x, snap.z);
+      const sx = fx.toFloat(snap.x);
+      const sz = fx.toFloat(snap.z);
+      assert.ok(Math.hypot(pivot.x - sx, pivot.z - sz) < 1e-3, `${type} pivot on snap`);
+      const span = buildingAimSpan(type);
+      const orbit = span * 0.5 + 1;
+      const snaps = new Set();
+      for (let deg = 0; deg < 360; deg++) {
+        const rad = (deg * Math.PI) / 180;
+        const ax = pivot.x + Math.sin(rad) * orbit;
+        const az = pivot.z + Math.cos(rad) * orbit;
+        snaps.add(snapBuildingYaw(buildingAimYaw(ax, az, pivot.x, pivot.z, span)).toFixed(5));
+      }
+      assert.equal(snaps.size, placementAimBand(type).yawSnapSteps + 1, type);
+    }
+  });
+
+  it('gives a 2×2 the whole footprint to turn in, and leaves a 3×3 on its tile', () => {
     assert.deepEqual(holdBuildingSnap('camp', 3, 1, 4, 0, 0, 0), { x: 0, z: 0 });
     assert.deepEqual(holdBuildingSnap('camp', 5, 0, 4, 0, 0, 0), { x: 4, z: 0 });
     assert.deepEqual(holdBuildingSnap('village', 3, 0, 4, 0, 0, 0), { x: 4, z: 0 });

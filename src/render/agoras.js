@@ -22,9 +22,14 @@ import {
 } from './healthBars.js';
 import { AGORA_PHASE_TUG, AGORA_RITE_FINALE } from '../sim/agora.js';
 import { USE_GPU_PICK } from './pickMode.js';
-import { ownerTint } from './ownerTints.js';
-import { isTeamColorMaterial, prepareTeamColorMaterial, sceneTeamRgb } from './teamColor.js';
-import { attachBannerFlutter } from './windSway.js';
+import { ownerTint, teamBannerTint } from './ownerTints.js';
+import {
+  flagBannerRoleFromMaterial,
+  isTeamColorMaterial,
+  prepareTeamColorMaterial,
+  sceneTeamRgb,
+  setupFlagBannerMeshes,
+} from './teamColor.js';
 import { forEachRallyDash, rallyArrivalYaw } from './rallyDash.js';
 import { MODEL_BASE_SCALE } from './modelScale.js';
 import { nearestMeshInstanceHit, pickPartsFromMeshes } from './meshPick.js';
@@ -142,6 +147,70 @@ function writeMatrix(matrices, slot, x, y, z, yaw, sx, sy = sx, sz = sx) {
   matrices[o + 8] = s * sz;
   matrices[o + 9] = 0;
   matrices[o + 10] = c * sz;
+  matrices[o + 11] = 0;
+  matrices[o + 12] = x;
+  matrices[o + 13] = y;
+  matrices[o + 14] = z;
+  matrices[o + 15] = 1;
+}
+
+/** Baked empty origin in instance-local space → world (same recipe as socket FX). */
+export function bakedSocketWorld(x, y, z, yaw, scale, socket) {
+  if (!socket) return { x, y, z };
+  const lx = socket.x;
+  const ly = socket.y;
+  const lz = socket.z;
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  return {
+    x: x + c * scale * lx + s * scale * lz,
+    y: y + scale * ly,
+    z: z + (-s * scale * lx + c * scale * lz),
+  };
+}
+
+/**
+ * Position + orientation for planting on an authored anchor (spawn seats use the
+ * same yaw add; pitch/roll stay in model space until instanced).
+ */
+export function bakedSocketPose(x, y, z, yaw, scale, socket) {
+  const pos = bakedSocketWorld(x, y, z, yaw, scale, socket);
+  if (!socket) return { ...pos, yaw, pitch: 0, roll: 0 };
+  return {
+    ...pos,
+    yaw: yaw + (+socket.yaw || 0),
+    pitch: +socket.pitch || 0,
+    roll: +socket.roll || 0,
+  };
+}
+
+function writeMatrixYpr(matrices, slot, x, y, z, yaw, pitch, roll, sx, sy = sx, sz = sx) {
+  const o = slot * 16;
+  const cy = Math.cos(yaw);
+  const syw = Math.sin(yaw);
+  const cp = Math.cos(pitch);
+  const sp = Math.sin(pitch);
+  const cr = Math.cos(roll);
+  const sr = Math.sin(roll);
+  const x0x = cy;
+  const x0z = -syw;
+  const y0x = syw * sp;
+  const y0y = cp;
+  const y0z = cy * sp;
+  const z0x = syw * cp;
+  const z0y = -sp;
+  const z0z = cy * cp;
+  matrices[o] = (x0x * cr + y0x * sr) * sx;
+  matrices[o + 1] = (y0y * sr) * sx;
+  matrices[o + 2] = (x0z * cr + y0z * sr) * sx;
+  matrices[o + 3] = 0;
+  matrices[o + 4] = (-x0x * sr + y0x * cr) * sy;
+  matrices[o + 5] = (y0y * cr) * sy;
+  matrices[o + 6] = (-x0z * sr + y0z * cr) * sy;
+  matrices[o + 7] = 0;
+  matrices[o + 8] = z0x * sz;
+  matrices[o + 9] = z0y * sz;
+  matrices[o + 10] = z0z * sz;
   matrices[o + 11] = 0;
   matrices[o + 12] = x;
   matrices[o + 13] = y;
@@ -491,12 +560,30 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
   };
 
   let agoraRoofY = 0;
+  /** @type {{ x: number, y: number, z: number, yaw?: number, pitch?: number, roll?: number } | null} */
+  let ownershipAnchor = null;
   let pickParts = [];
   let flagPickParts = [];
   try {
     const parts = await loadBakedUnitMeshParts(engine, AGORA_MODEL_URL);
     pickParts = pickPartsFromMeshes(parts);
     agoraRoofY = meshRoofY(parts);
+    const sockets = parts[0]?.fxSockets;
+    if (sockets?.length) {
+      for (let i = 0; i < sockets.length; i++) {
+        if (sockets[i].name === 'standard_anchor') {
+          ownershipAnchor = {
+            x: sockets[i].x,
+            y: sockets[i].y,
+            z: sockets[i].z,
+            yaw: sockets[i].yaw,
+            pitch: sockets[i].pitch,
+            roll: sockets[i].roll,
+          };
+          break;
+        }
+      }
+    }
     for (let p = 0; p < parts.length; p++) {
       const mesh = parts[p];
       // GPU pick path kept; CPU ray-vs-sphere is live (see pickMode.js).
@@ -522,16 +609,16 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
     try {
       const parts = await loadBakedUnitMeshParts(engine, FLAG_MODEL_URL);
       if (forPick) flagPickParts = pickPartsFromMeshes(parts);
-      // Team-color prep swaps the material object, so it goes first; the flutter
-      // plugin must be on the final materials before any part reaches the scene.
       for (const mesh of parts) {
-        if (isTeamColorMaterial(mesh.material)) prepareTeamColorMaterial(engine, mesh);
+        mesh._flagBannerRole = flagBannerRoleFromMaterial(mesh.material);
       }
-      attachBannerFlutter(parts);
+      setupFlagBannerMeshes(engine, parts);
       for (let p = 0; p < parts.length; p++) {
         const mesh = parts[p];
         mesh.pickable = pickable;
-        const isTeamColor = isTeamColorMaterial(mesh.material);
+        const role = mesh._flagBannerRole;
+        const isPlayerColor = role === 'player';
+        const isAllyColor = role === 'ally';
         const matrices = new Float32Array(cap * 16);
         const colors = new Float32Array(cap * 4);
         colors.fill(1);
@@ -539,7 +626,7 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
         setThinInstanceColors(mesh, colors);
         setThinInstanceCount(mesh, 0);
         addToScene(scene, mesh);
-        into.push({ mesh, matrices, colors, isTeamColor });
+        into.push({ mesh, matrices, colors, isPlayerColor, isAllyColor });
         if (pickable) pickMeshes.add(mesh);
       }
     } catch (err) {
@@ -582,16 +669,29 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
   rallyLine = makeLineBatch(MAX_RALLY_LINE_SEGS);
   ghostLine = makeLineBatch(MAX_GHOST_LINE_SEGS);
 
-  function writeFlagBatch(batchLayers, list, eye, scaleFor, poseFor) {
+  function agoraYaw(a) {
+    return a.yaw != null ? a.yaw : Math.atan2(-a.x, -a.z);
+  }
+
+  function agoraOwnershipFlagBase(a) {
+    const gy = groundYAt(a.x, a.z);
+    return bakedSocketPose(a.x, gy, a.z, agoraYaw(a), AGORA_SCALE, ownershipAnchor);
+  }
+
+  function writeFlagBatch(batchLayers, list, eye, scaleFor, poseFor, baseFor) {
     const now = typeof performance !== 'undefined' ? performance.now() : 0;
     const n = list.length;
     for (let i = 0; i < n; i++) {
       const a = list[i];
       const owner = a.owner | 0;
-      const yaw = a.yaw != null ? a.yaw : Math.atan2(-a.x, -a.z);
-      const x = a.x;
-      const z = a.z;
-      const y = groundYAt(a.x, a.z) + (Number.isFinite(a.lift) ? a.lift : 0);
+      const padYaw = a.yaw != null ? a.yaw : Math.atan2(-a.x, -a.z);
+      const base = baseFor ? baseFor(a, i) : null;
+      const yaw = base?.yaw != null ? base.yaw : padYaw;
+      const pitch = base?.pitch ?? 0;
+      const roll = base?.roll ?? 0;
+      const x = base?.x ?? a.x;
+      const z = base?.z ?? a.z;
+      const y = (base?.y ?? groundYAt(a.x, a.z)) + (Number.isFinite(a.lift) ? a.lift : 0);
       const dist = Math.hypot(eye.x - x, eye.y - y, eye.z - z) || FLAG_DIST_REF;
       const scale = scaleFor ? scaleFor(dist) : flagScaleForDist(dist);
       const pose = poseFor ? poseFor(a, i, now) : null;
@@ -605,11 +705,27 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
       const yaw2 = yaw + (pose?.yaw ?? 0);
       const tintOwner = pose?.owner >= 0 ? pose.owner : owner;
       for (const layer of batchLayers) {
-        writeMatrix(layer.matrices, i, px, py, pz, yaw2, sx, sy, sz);
-        if (layer.isTeamColor) {
+        if (baseFor && (pitch || roll)) {
+          writeMatrixYpr(layer.matrices, i, px, py, pz, yaw2, pitch, roll, sx, sy, sz);
+        } else {
+          writeMatrix(layer.matrices, i, px, py, pz, yaw2, sx, sy, sz);
+        }
+        if (layer.isPlayerColor) {
           if (a.attackMove) writeTint(layer.colors, i, sceneTeamRgb(ATTACK_MOVE_TINT), 1);
-          else if (pose && pose.owner >= 0) writeTint(layer.colors, i, sceneTeamRgb(ownerTint(tintOwner)), 1);
-          else writeTint(layer.colors, i, sceneTeamRgb(agoraPropTint(a)), 1);
+          else if (pose && pose.owner >= 0) {
+            writeTint(layer.colors, i, sceneTeamRgb(ownerTint(tintOwner)), 1);
+          } else if (baseFor) {
+            writeTint(layer.colors, i, sceneTeamRgb(agoraPropTint(a)), 1);
+          } else {
+            writeTint(layer.colors, i, sceneTeamRgb(ownerTint(owner)), 1);
+          }
+        } else if (layer.isAllyColor) {
+          if (a.attackMove) writeTint(layer.colors, i, sceneTeamRgb(ATTACK_MOVE_TINT), 1);
+          else if (pose && pose.owner >= 0) {
+            writeTint(layer.colors, i, sceneTeamRgb(teamBannerTint(tintOwner)), 1);
+          } else {
+            writeTint(layer.colors, i, sceneTeamRgb(teamBannerTint(owner)), 1);
+          }
         } else {
           const o = i * 4;
           if (a.attackMove) {
@@ -869,9 +985,17 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
     lastFlagEyeY = eye.y;
     lastFlagEyeZ = eye.z;
     if (cam && Number.isFinite(cam.radius)) lastFlagRadius = cam.radius;
-    writeFlagBatch(agoraFlagLayers, agoraCache, eye, flagScaleForDist, (a) => {
-      return agoraFlagDrawPose(flagActs.get(agoraFlagKey(a.x, a.z)), typeof performance !== 'undefined' ? performance.now() : 0);
-    });
+    writeFlagBatch(
+      agoraFlagLayers,
+      agoraCache,
+      eye,
+      flagScaleForDist,
+      (a) => agoraFlagDrawPose(
+        flagActs.get(agoraFlagKey(a.x, a.z)),
+        typeof performance !== 'undefined' ? performance.now() : 0,
+      ),
+      agoraOwnershipFlagBase,
+    );
     writeFlagBatch(rallyFlagLayers, rallyFlagsToDraw(), eye);
     if (rallyGhost) {
       writeFlagBatch(ghostFlagLayers, [rallyGhost], eye);
@@ -1036,19 +1160,23 @@ export async function createAgoraProps(engine, scene, groundYAt, opts = {}) {
         dirty = true;
       }
       if (next.fx === 'disintegrate') {
-        const gy = groundYAt(a.x, a.z);
-        const dist = eye ? Math.hypot(eye.x - a.x, eye.y - gy, eye.z - a.z) : 0;
-        emitAgoraFlagDisintegrate(emitFx, a.x, gy, a.z, ownerTint(next.owner), 2.2, next.wind, dist);
+        const base = agoraOwnershipFlagBase(a);
+        const dist = eye
+          ? Math.hypot(eye.x - base.x, eye.y - base.y, eye.z - base.z)
+          : 0;
+        emitAgoraFlagDisintegrate(emitFx, base.x, base.y, base.z, ownerTint(next.owner), 2.2, next.wind, dist);
         dirty = true;
       }
       if (next.mode === AGORA_FLAG_SLAM && !next.impact) {
         const pose = agoraFlagSlamPose((now - next.t0) / AGORA_FLAG_SLAM_TOTAL_MS);
         if (pose.hit) {
           next.impact = true;
-          const gy = groundYAt(a.x, a.z);
-          const dist = eye ? Math.hypot(eye.x - a.x, eye.y - gy, eye.z - a.z) : 0;
-          emitAgoraFlagSlam(emitFx, emitBurstFx, a.x, gy, a.z, dist);
-          emitAgoraSlamFlowerBurst(emitFx, a.x, gy, a.z, dist, {
+          const base = agoraOwnershipFlagBase(a);
+          const dist = eye
+            ? Math.hypot(eye.x - base.x, eye.y - base.y, eye.z - base.z)
+            : 0;
+          emitAgoraFlagSlam(emitFx, emitBurstFx, base.x, base.y, base.z, dist);
+          emitAgoraSlamFlowerBurst(emitFx, base.x, base.y, base.z, dist, {
             finale: (a.rite | 0) === AGORA_RITE_FINALE,
           });
           dirty = true;

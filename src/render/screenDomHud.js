@@ -537,8 +537,8 @@ export function createScreenDomHud(engine, scene, screen) {
 const DOM_PLATE_PAD = 2;
 
 /**
- * Menu-plane copy of one HTML price row. The monitor keeps the DOM.
- * The headset never sees that overlay, so the same pixels sit on the pad.
+ * Menu-plane copy of one price row. The DOM node is only a raster source
+ * parked off screen. The words sit on this plate in the scene.
  * @param {object} engine
  * @param {object} scene
  * @param {string} name
@@ -649,14 +649,30 @@ export function createMenuDomPlate(engine, scene, name) {
       return null;
     }
     const box = el.getBoundingClientRect();
-    if (!(box.width > 0) || !(box.height > 0)) {
+    let left = box.left;
+    let top = box.top;
+    let right = box.right;
+    let bottom = box.bottom;
+    const parts = el.querySelectorAll('*');
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      if (part.hidden) continue;
+      const r = part.getBoundingClientRect();
+      if (!(r.width > 0) || !(r.height > 0)) continue;
+      if (r.left < left) left = r.left;
+      if (r.top < top) top = r.top;
+      if (r.right > right) right = r.right;
+      if (r.bottom > bottom) bottom = r.bottom;
+    }
+    if (!(right > left) || !(bottom > top)) {
       hide();
       return null;
     }
     const union = padClientRect(
-      { left: box.left, top: box.top, width: box.width, height: box.height },
+      { left, top, width: right - left, height: bottom - top },
       DOM_PLATE_PAD,
     );
+    const anchorX = box.width > 0 ? (box.left + box.width * 0.5 - union.left) / union.width : 0.5;
     const key = `${contentKey(el, union)}|${el.style.opacity || ''}`;
     if (performance.now() >= retryAt && key !== paintedKey) {
       try {
@@ -684,7 +700,7 @@ export function createMenuDomPlate(engine, scene, name) {
       return null;
     }
     visible = true;
-    return { cssW: union.width, cssH: union.height, pad: DOM_PLATE_PAD };
+    return { cssW: union.width, cssH: union.height, pad: DOM_PLATE_PAD, anchorX };
   }
 
   return { mesh, hide, sync };

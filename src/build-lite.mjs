@@ -358,6 +358,27 @@ const LITE_PATCHES = [
     to: 'ctx.scene._update(); for (const t of ctx.scene._frameGraph._tasks) if (t.name === "shadow") t.execute?.();',
   },
   {
+    // Chromium defaults projection layers to scale 1.0. Frame can report a
+    // higher native scale, so use it instead of leaving headset resolution at
+    // the lower recommended default. Log the actual result for field checks.
+    file: /xr-session\.js$/,
+    from: `		const layer = binding.createProjectionLayer({
+			colorFormat,
+			depthStencilFormat: depthFormat ?? void 0
+		});`,
+    to: `		const nativeScale = Number.isFinite(session.nativeProjectionScaleFactor) ? session.nativeProjectionScaleFactor : 1;
+		const layer = binding.createProjectionLayer({
+			colorFormat,
+			depthStencilFormat: depthFormat ?? void 0,
+			scaleFactor: nativeScale
+		});
+		console.info("[xr] projection", {
+			nativeScale,
+			textureWidth: layer.textureWidth,
+			textureHeight: layer.textureHeight
+		});`,
+  },
+  {
     // Shader-material meshes keep one system UBO shared by both eye tasks,
     // written with queue.writeBuffer. In one submit the last eye's matrices
     // win for both eyes. Submit per eye so each sees its own write.

@@ -2,6 +2,15 @@
 // the board. Seat / roster hexes (and the local profile swatch) override that
 // so every client paints the same army the same color.
 
+/** Fixed team identity on the second standard / agora banner (not profile hex). */
+export const TEAM_BANNER_TINTS = [
+  [1, 1, 1],
+  [0.1, 0.1, 0.12],
+  [0.92, 0.18, 0.15],
+  [0.22, 0.48, 0.95],
+  [0.95, 0.82, 0.12],
+];
+
 export const OWNER_TINTS = [
   [0.38, 0.64, 1.0],
   [1.0, 0.4, 0.3],
@@ -103,6 +112,13 @@ export function setOwnerTints(colorsByOwner) {
 export function setLocalOwnerTint(ownerId, hex) {
   localOwnerId = Number.isFinite(+ownerId) ? (+ownerId | 0) : -1;
   localTint = hexToRgb01(hex) ?? OWNER_TINTS[0];
+}
+
+/** White / black / red / blue / yellow, then wrap. */
+export function teamBannerTint(owner) {
+  const id = owner | 0;
+  const n = TEAM_BANNER_TINTS.length;
+  return TEAM_BANNER_TINTS[((id % n) + n) % n];
 }
 
 /** TeamColor RGB for an army slot. */

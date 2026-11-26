@@ -348,6 +348,58 @@ describe('war balloon attack-move', () => {
   });
 });
 
+describe('melee contact', () => {
+  it('a warrior in arm\'s reach damages the foe without standing on the same point', () => {
+    const w = createWorld(41);
+    const field = openField();
+    const warrior = spawn(w, { x: 0, y: 0, type: UNIT.WARRIOR, owner: 0, hp: 500 });
+    const foe = spawn(w, {
+      x: fx.fromFloat(4),
+      y: 0,
+      type: UNIT.WARRIOR,
+      owner: 1,
+      hp: 500,
+    });
+    applyCommands(w, field, [{ type: CMD.ATTACK, entities: [warrior], target: foe }]);
+    const hp = w.hp[foe];
+    for (let t = 0; t < 8; t++) step(w, field);
+    assert.ok(w.hp[foe] < hp, 'contact swing lands');
+    assert.ok(fx.dist2(w.px[warrior], w.py[warrior], w.px[foe], w.py[foe]) > 0);
+  });
+
+  it('a sword misses a balloon and a priest slash does not', () => {
+    const w = createWorld(42);
+    const field = openField();
+    const warrior = spawn(w, { x: 0, y: 0, type: UNIT.WARRIOR, owner: 0, hp: 500 });
+    const balloon = spawn(w, {
+      x: fx.fromFloat(2),
+      y: 0,
+      type: UNIT.WAR_BALLOON,
+      owner: 1,
+      hp: 65,
+    });
+    const hp = w.hp[balloon];
+    applyCommands(w, field, [{ type: CMD.ATTACK, entities: [warrior], target: balloon }]);
+    assert.notEqual(w.order[warrior], ORDER.ATTACK);
+    applyDamage(w, warrior, 5, balloon);
+    assert.notEqual(w.order[warrior], ORDER.ATTACK, 'a cinder does not pull a sword under the basket');
+    for (let t = 0; t < 20; t++) step(w, field);
+    assert.equal(w.hp[balloon], hp);
+
+    const priest = spawn(w, {
+      x: fx.fromFloat(24),
+      y: 0,
+      type: UNIT.PRIEST,
+      owner: 0,
+      hp: 80,
+    });
+    applyCommands(w, field, [{ type: CMD.ATTACK, entities: [priest], target: balloon }]);
+    assert.equal(w.order[priest], ORDER.ATTACK);
+    for (let t = 0; t < 40; t++) step(w, field);
+    assert.ok(w.hp[balloon] < hp, 'holy slash still reaches the balloon');
+  });
+});
+
 describe('frost attack slow', () => {
   it('recovers attack cooldown at the same 0.28 rate as movement', () => {
     const w = createWorld(36);

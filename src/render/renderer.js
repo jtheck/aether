@@ -43,6 +43,7 @@ import {
   xrEyeVersion,
   xrFitFov,
   xrHudEye,
+  xrHudChromeScale,
   xrHudEdgeScale,
   xrHudLayoutPoint,
   xrHudOvalLayoutPoint,
@@ -94,6 +95,7 @@ import {
 } from './vatUnits.js';
 import { createCelestialRig } from './celestial.js';
 import { createTerrainFromField, createTileGridOverlay, createPlacementGridOverlay, primeFieldAssets, surfaceHeightAt, terrainChunkLodSpec } from './terrain.js';
+import { createPlacementPivotOverlay } from './placementPivot.js';
 import { createProjectileRenderer } from './projectiles.js';
 import { createPickHitboxRenderer } from './pickHitboxes.js';
 import { createHolyShieldMaterial, createHolyShieldMesh } from './holyShields.js';
@@ -118,7 +120,7 @@ import { createSporeBloomFx } from './sporeBloomFx.js';
 import { createLocustFx } from './locustFx.js';
 import { createBuildingFire } from './buildingFire.js';
 import { forEachTreeFireAnchor, treeCrownCenterY, treeFireAnchorIndices } from './treeFire.js';
-import { groundFireDetail, treeFireDetail } from './fireBudget.js';
+import { groundFireDetail, treeFireDetail, treeCanopySmokeBuild } from './fireBudget.js';
 import { FIREBALL_TRAIL_CULL, createFireballFx } from './fireballFx.js';
 import { createMushroomPreviews } from './mushrooms.js';
 import { createCarryLoads } from './carryLoads.js';
@@ -135,8 +137,7 @@ import {
 } from '../app/decalCatalog.js';
 import { AGORA_DECK_Y, agoraWalkPadsFromList, agoraWalkYAt } from './agoraWalk.js';
 import { createBuildingProps } from './buildings.js';
-import { createBuildingRadialMenu } from './buildingRadial.js';
-import { createBuildingActionRadial } from './buildingActionRadial.js';
+import { createSceneActionMenu, createSceneBuildMenu } from './sceneCommandMenu.js';
 import { createSelectionHud } from './selectionHud.js';
 import { nextSelectionRingDrawCount } from './selectionRingDraw.js';
 import { createControlGroupHud } from './controlGroupHud.js';
@@ -925,8 +926,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   };
   // Screen HUD is placed by unprojecting canvas pixels. In the headset that
   // projection has to be the head, or the panels stay where the desktop
-  // camera was. Control pads use hudPoint. The other chrome uses chromePoint,
-  // a little closer to center.
+  // camera was. Control pads use hudPoint. Corner chrome uses chromePoint
+  // and sits on the view oval. Command menus use menuPoint: the same
+  // rectangle as the monitor, scaled into the comfortable field of view.
   const xrHudWorld = new Float32Array(16);
   let xrHudVer = 1;
   let xrHudEyeVer = -1;
@@ -1137,6 +1139,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let lastBuildingHighlight = null;
   /** @type {{ setFocus: Function, dispose: () => void } | null} */
   let placementGrid = null;
+  /** @type {{ setFocus: Function, dispose: () => void } | null} */
+  let placementPivot = null;
   /** @type {{ type: string, x: number, z: number, valid?: boolean } | null} */
   let placementFocus = null;
   /** @type {{ x: number, z: number, y?: number, valid?: boolean } | null} */
@@ -1333,15 +1337,27 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   function rebuildTileGrid(snap) {
     tileGrid?.dispose?.();
     placementGrid?.dispose?.();
+    placementPivot?.dispose?.();
     tileGrid = null;
     placementGrid = null;
+    placementPivot = null;
     tileGridOccupancyDirty = false;
     if (!snap) return;
     tileGrid = createTileGridOverlay(engine, scene, snap);
     // Apply current toggle after rebuild (mesh starts hidden / off-scene).
     tileGrid.setVisible(tileGridVisible);
     placementGrid = createPlacementGridOverlay(engine, scene);
+    placementPivot = createPlacementPivotOverlay(engine, scene, groundYAt);
     syncPlacementGrid();
+  }
+
+  function syncPlacementPivot() {
+    if (!placementPivot) return;
+    if (screenshotHudHidden || tileGridVisible || !placementFocus || !fieldSnap) {
+      placementPivot.setFocus(null);
+      return;
+    }
+    placementPivot.setFocus(placementFocus);
   }
 
   /** Refresh blocked/slow fills from the live field (trees, buildings, etc.). */
@@ -1359,6 +1375,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       return;
     }
     placementGrid.setFocus(fieldSnap, placementFocus);
+    syncPlacementPivot();
   }
 
   function applyWorkRadiusSpec(spec, links) {
@@ -1382,6 +1399,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     agoraCaptureRings.clear();
     tileGrid?.setVisible(false);
     placementGrid?.setFocus(null);
+    placementPivot?.setFocus(null);
     sceneConfirm.clear?.();
     gamepadCursor.clear?.();
     for (const mesh of selRingParts) mesh.visible = false;
@@ -1758,8 +1776,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let lastObjectiveRingSpec = null;
   /** @type {Map<string, ReturnType<typeof createXrLassoOverlay>>} one per hand */
   const xrLassos = new Map([
-    ['left', createXrLassoOverlay(engine, scene, groundYAt)],
-    ['right', createXrLassoOverlay(engine, scene, groundYAt)],
+    ['left', createXrLassoOverlay(engine, scene, groundYAt, 'left')],
+    ['right', createXrLassoOverlay(engine, scene, groundYAt, 'right')],
   ]);
   const carryLoads = createCarryLoads(engine, scene);
 
@@ -2535,6 +2553,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       if (xrEye()) return xrHudOvalLayoutPoint(x, y, width, height);
       return { x, y };
     },
+    menuScale() {
+      return xrEye() ? xrHudChromeScale() : 1;
+    },
+    menuPoint(x, y) {
+      const { width, height } = canvasCoords(0, 0);
+      return xrHudLayoutPoint(x, y, width, height, xrEye() ? xrHudChromeScale() : 1);
+    },
   };
   const floatingHudScreen = {
     ...radialScreen,
@@ -2570,6 +2595,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }, { passive: true });
 
   /** @type {any} Side control-group pads (camera-locked). */
+  const controlGroupCounts = [0, 0, 0, 0, 0, 0];
   let controlGroupHud = {
     update() {},
     pick() { return null; },
@@ -3280,6 +3306,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   /** First-sight bursts so new tree / ground fires don't trickle in. */
   const groundFirePrimed = new Set();
   const treeFirePrimed = new Set();
+  /** First time this burning tree was drawn — smoke warm-up does not need sim burn. */
+  const treeSmokeWarmMs = new Map();
   /** Reused so a burning grove does not allocate a list every frame. */
   const treeFireVisible = [];
   const groundFireVisible = [];
@@ -3294,7 +3322,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   function emitBurningTreeFires(dtMs) {
     if (!socketFireEnabled) return;
     const period = SOCKET_FX_CADENCE.fire * Math.max(0.5, (unitFxIntervalMs || 80) / 80);
-    const smokePeriod = SOCKET_FX_CADENCE.smoke * Math.max(0.5, (unitFxIntervalMs || 80) / 80);
     const eye = cameraEyePos();
     const visible = treeFireVisible;
     visible.length = 0;
@@ -3311,6 +3338,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     const burning = visible.length;
     if (!burning) {
       treeFirePrimed.clear();
+      treeSmokeWarmMs.clear();
       return;
     }
     const seen = new Set();
@@ -3320,6 +3348,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       seen.add(key);
       const prime = !treeFirePrimed.has(key);
       treeFirePrimed.add(key);
+      if (!treeSmokeWarmMs.has(key)) treeSmokeWarmMs.set(key, particleClockMs);
+      const smokeAgeMs = particleClockMs - treeSmokeWarmMs.get(key);
+      const smokeBuild = treeCanopySmokeBuild(smokeAgeMs, tree.burn);
       const detail = treeFireDetail(tree.dist, burning);
       const slot = ((tree.x * 2) | 0) * 17 + ((tree.z * 2) | 0);
       const salt = tree.x * 0.013 + tree.z * 0.021;
@@ -3328,25 +3359,53 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         wisps: detail.wisps,
         size: detail.size,
         embers: detail.embers,
+        plumeMul: detail.plumeMul,
       };
       // A grove igniting on one frame used to dump 4–6 full campfires per tongue.
       const burst = burning > 8 ? 1 : 2;
+      let flameTicks = 0;
       forEachTreeFireAnchor(tree, (site) => {
         const hits = prime
           ? burst
           : socketPhaseHits(slot, site.index, period, dtMs, salt);
+        flameTicks += hits;
+        const flameScale = site.scale * 1.15;
+        const flameY = site.y + site.scale * 0.14;
         for (let h = 0; h < hits; h++) {
-          emitSocketFlame(site.x, site.y, site.z, site.scale, 'torch', tongue);
-        }
-        if (!detail.smoke || !site.smoke || prime) return;
-        const puffs = socketPhaseHits(slot, site.index + 40, smokePeriod, dtMs, salt + 0.4);
-        for (let h = 0; h < puffs; h++) {
-          emitSocketFlame(site.x, site.y, site.z, site.scale, 'smoke', tongue);
+          emitSocketFlame(site.x, flameY, site.z, flameScale, 'torch', tongue);
         }
       }, treeFireAnchorIndices(detail.anchorCount));
+      if (detail.smoke) {
+        const build = flameTicks > 0
+          ? Math.max(smokeBuild, 0.48)
+          : smokeBuild;
+        const smokeCadence = period * 2.4;
+        const smokeTick = flameTicks > 0
+          && (prime || socketPhaseHits(slot, 4, smokeCadence, dtMs, salt + 0.17) > 0);
+        if (smokeTick && build > 0) {
+          forEachTreeFireAnchor(tree, (site) => {
+            if (!site.smoke) return;
+            const flameScale = site.scale * 1.15;
+            const smokeY = site.y + site.scale * 0.05;
+            const smokeScale = flameScale * (0.88 + 0.32 * build);
+            const wind = (slot % 97) * 0.041;
+            emitSocketFlame(site.x, smokeY, site.z, smokeScale, 'smoke', {
+              canopySmoke: true,
+              smokeBuild: build,
+              smokeWind: wind,
+              smokeSlot: slot,
+              density: Math.min(1, detail.density * (0.5 + 0.5 * build)),
+              plumeMul: 1 + (detail.plumeMul - 1) * build * 0.85,
+            });
+          }, [4]);
+        }
+      }
     }
     for (const key of treeFirePrimed) {
       if (!seen.has(key)) treeFirePrimed.delete(key);
+    }
+    for (const key of treeSmokeWarmMs) {
+      if (!seen.has(key)) treeSmokeWarmMs.delete(key);
     }
   }
 
@@ -3630,12 +3689,17 @@ export async function createRenderer(canvas, capacity, opts = {}) {
    * Density scales with fxEmitChance so low FX settings stay cheap.
    */
   /**
-   * @param {{ density?: number, wisps?: number, size?: number, embers?: boolean }} [opts]
+   * @param {{ density?: number, wisps?: number, size?: number, embers?: boolean, plumeMul?: number }} [opts]
    *   density multiplies the quality-tier keep chance. Camp sockets omit it.
+   *   plumeMul stretches rise height (burning trees).
    */
   function emitSocketFlame(x, y, z, scale, style, opts) {
     const s = Math.max(0.12, scale);
     if (style === 'smoke') {
+      if (opts?.canopySmoke) {
+        emitCanopySmoke(x, y, z, s, opts);
+        return;
+      }
       emitSocketSmoke(x, y, z, s, opts);
       return;
     }
@@ -3678,7 +3742,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   /**
    * @param {boolean} hex Arcane white-blue with ink beads, vs orange hearth.
-   * @param {{ density?: number, wisps?: number, size?: number, embers?: boolean }} [opts]
+   * @param {{ density?: number, wisps?: number, size?: number, embers?: boolean, plumeMul?: number }} [opts]
    */
   function emitSocketFire(x, y, z, s, hex, opts) {
     const densityMul = opts && opts.density != null ? opts.density : 1;
@@ -3686,6 +3750,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (!(dens > 0)) return;
     const wispCount = opts?.wisps ?? FIRE_WISPS_PER_TICK;
     const sizeMul = opts?.size ?? 1;
+    const plume = Math.max(1, opts?.plumeMul ?? 1);
+    const lifeStretch = 1 + (plume - 1) * 0.55;
     if (Math.random() < FIRE_BASE_CHANCE * dens) {
       const bSize = (0.32 + Math.random() * 0.22) * s;
       particles.emit({
@@ -3701,12 +3767,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         ],
         velocity: [
           (Math.random() - 0.5) * 0.08 * s,
-          (0.5 + Math.random() * 0.6) * s,
+          (0.5 + Math.random() * 0.6) * s * plume,
           (Math.random() - 0.5) * 0.08 * s,
         ],
         gravity: [0, 0.1, 0],
         color: hex ? [0.72, 0.9, 1, 0.33] : [1, 0.72, 0.24, 0.34],
-        lifetime: 1.8 + Math.random() * 1.2,
+        lifetime: (1.8 + Math.random() * 1.2) * lifeStretch,
         startSize: bSize,
         // Collapses to a tenth of its width, so the pool narrows to a point as
         // it climbs instead of carrying a slab of fire upward.
@@ -3750,15 +3816,15 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         // swirl off early, leaving a curved kick rather than an orbit.
         velocity: [
           cs * outward - sn * swirl,
-          (0.63 + Math.random() * 0.81) * s,
+          (0.63 + Math.random() * 0.81) * s * plume,
           sn * outward + cs * swirl,
         ],
         // Weak buoyancy against heavy drag: wisps coast up, then hang and fade
         // near the top instead of streaming off it.
-        gravity: [0, hex ? 0.12 : 0.18, 0],
+        gravity: [0, (hex ? 0.12 : 0.18) / Math.sqrt(plume), 0],
         color,
         // Lifetime × wisps-per-tick sets the live count (~100 per socket).
-        lifetime: 1.2 + Math.random() * 0.9,
+        lifetime: (1.2 + Math.random() * 0.9) * lifeStretch,
         startSize: size,
         endSize: size * (0.35 + Math.random() * 0.25),
         drag: 1.5,
@@ -3778,14 +3844,14 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         position: [x, y + 0.04 * s, z],
         velocity: [
           Math.cos(eAng) * kick,
-          (0.4 + Math.random() * 0.6) * s,
+          (0.4 + Math.random() * 0.6) * s * Math.sqrt(plume),
           Math.sin(eAng) * kick,
         ],
         gravity: [0, 0.1, 0],
         color: hex
           ? [0.75, 0.92, 1, 0.55]
           : [1, 0.7, 0.2, 0.55],
-        lifetime: 0.7 + Math.random() * 0.5,
+        lifetime: (0.7 + Math.random() * 0.5) * lifeStretch,
         startSize: (0.035 + Math.random() * 0.04) * s,
         endSize: 0.01 * s,
         drag: 0.5,
@@ -3832,8 +3898,83 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   /** Puff rolls per chimney tick; later rolls are coin flips, see the loop. */
   const SMOKE_PUFFS_PER_TICK = 3;
 
+  /** Crown billows — few loose puffs that shear and climb, not a tight chimney stack. */
+  function emitCanopySmoke(x, y, z, s, opts) {
+    const build = Math.max(0, Math.min(1, opts?.smokeBuild ?? 1));
+    const dens = Math.min(1, fxEmitChance * (opts?.density ?? 1));
+    if (!(dens > 0) || build <= 0 || Math.random() > dens) return;
+    const plume = Math.max(1, opts?.plumeMul ?? 1);
+    const capS = s * (0.95 + 0.52 * build);
+    const windA = (opts?.smokeWind ?? 0) + Math.random() * 0.6;
+    const slotBias = ((opts?.smokeSlot ?? 0) % 11) * 0.57;
+    const spawnA = windA + Math.PI * 0.55 + slotBias + (Math.random() - 0.5) * 0.85;
+    const spawnR = capS * (0.38 + Math.random() * 0.48);
+    const end = (1.12 + Math.random() * 0.52) * capS * Math.min(plume, 1.55);
+    const start = end * (0.06 + Math.random() * 0.05);
+    const a = 0.44 + 0.16 * build;
+    const shear = (0.22 + Math.random() * 0.38) * capS;
+    const rise = (0.22 + Math.random() * 0.34) * capS * plume;
+    const gx = Math.cos(windA) * shear;
+    const gz = Math.sin(windA) * shear;
+    const life = 3.0 + Math.random() * 2.4 * (0.55 + 0.45 * build);
+    const fadeIn = 0.85 + Math.random() * 0.65;
+    const spawnY = y - capS * (0.2 + Math.random() * 0.16);
+    particles.emit({
+      ...puffSprite(0.32),
+      cullMin: SOCKET_FX_CULL_MIN,
+      blend: 'alpha',
+      fadeIn,
+      fadeOut: true,
+      position: [
+        x + Math.cos(spawnA) * spawnR,
+        spawnY,
+        z + Math.sin(spawnA) * spawnR,
+      ],
+      velocity: [
+        gx * 0.75 + Math.cos(spawnA) * (0.1 + Math.random() * 0.12) * capS,
+        rise,
+        gz * 0.75 + Math.sin(spawnA) * (0.1 + Math.random() * 0.12) * capS,
+      ],
+      gravity: [Math.cos(windA) * 0.04, 0.08, Math.sin(windA) * 0.04],
+      color: [0.24, 0.24, 0.26, a],
+      lifetime: life,
+      startSize: start,
+      endSize: end,
+      drag: 0.14,
+    });
+    if (Math.random() < 0.22 * build * dens) {
+      const ang = spawnA + (Math.random() - 0.5) * 1.6;
+      const r2 = spawnR * (0.72 + Math.random() * 0.45);
+      particles.emit({
+        ...puffSprite(0.28),
+        cullMin: SOCKET_FX_CULL_MIN,
+        blend: 'alpha',
+        fadeIn: fadeIn * 0.9,
+        fadeOut: true,
+        position: [
+          x + Math.cos(ang) * r2,
+          spawnY - capS * 0.06,
+          z + Math.sin(ang) * r2,
+        ],
+        velocity: [
+          gx * 0.6 + Math.cos(ang) * (0.08 + Math.random() * 0.14) * capS,
+          rise * (0.8 + Math.random() * 0.3),
+          gz * 0.6 + Math.sin(ang) * (0.08 + Math.random() * 0.14) * capS,
+        ],
+        gravity: [gx * 0.1, 0.06, gz * 0.1],
+        color: [0.2, 0.2, 0.22, a * 0.85],
+        lifetime: life * 0.92,
+        startSize: start * 0.95,
+        endSize: end * 1.05,
+        drag: 0.12,
+      });
+    }
+  }
+
   function emitSocketSmoke(x, y, z, s, opts) {
     const dens = Math.min(1, fxEmitChance * (opts?.density ?? 1));
+    const plume = Math.max(1, opts?.plumeMul ?? 1);
+    const lifeStretch = 1 + (plume - 1) * 0.65;
     // Slow chimney rhythm: a puff every ~240ms tick, often doubled or
     // tripled. Thickness comes from puffs overlapping each other, not from
     // raising their alpha, which would only darken the column rather than
@@ -3844,7 +3985,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const rad = Math.random() * 0.1 * s;
       const drift = 0.08 + Math.random() * 0.2;
       const start = (0.28 + Math.random() * 0.22) * s;
-      const end = (1.0 + Math.random() * 0.8) * s;
+      const end = (1.0 + Math.random() * 0.8) * s * plume;
       particles.emit({
         ...puffSprite(0.9),
         cullMin: SOCKET_FX_CULL_MIN,
@@ -3857,15 +3998,15 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         ],
         velocity: [
           Math.cos(ang) * drift,
-          (0.4 + Math.random() * 0.55) * s,
+          (0.4 + Math.random() * 0.55) * s * plume,
           Math.sin(ang) * drift,
         ],
-        gravity: [0, 0.18, 0],
+        gravity: [0, 0.18 / Math.sqrt(plume), 0],
         color:
           Math.random() > 0.5
             ? [0.42, 0.42, 0.45, 0.34]
             : [0.28, 0.28, 0.3, 0.28],
-        lifetime: 2.2 + Math.random() * 1.4,
+        lifetime: (2.2 + Math.random() * 1.4) * lifeStretch,
         startSize: start,
         endSize: end,
         drag: 0.35,
@@ -3880,14 +4021,14 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         position: [x, y + 0.04 * s, z],
         velocity: [
           (Math.random() - 0.5) * 0.15,
-          (0.25 + Math.random() * 0.3) * s,
+          (0.25 + Math.random() * 0.3) * s * plume,
           (Math.random() - 0.5) * 0.15,
         ],
-        gravity: [0, 0.12, 0],
+        gravity: [0, 0.12 / Math.sqrt(plume), 0],
         color: [0.18, 0.18, 0.2, 0.4],
-        lifetime: 1.2 + Math.random() * 0.6,
+        lifetime: (1.2 + Math.random() * 0.6) * lifeStretch,
         startSize: 0.2 * s,
-        endSize: 0.6 * s,
+        endSize: 0.6 * s * plume,
         drag: 0.5,
       });
     }
@@ -4221,7 +4362,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const hudCamera = hudViewCamera();
       const fadeCovering = (xrFade.opacity?.() ?? 0) > 0.2;
       selectionHud.update?.(hudCamera);
-      controlGroupHud.update?.(hudCamera);
+      if (xrEye()) controlGroupHud.clear();
+      else controlGroupHud.update?.(hudCamera);
       if (fadeCovering) {
         resourcePileHud.clear?.();
         screenDomHud.clear?.();
@@ -4780,8 +4922,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
           radialScreen.font = font;
           floatingHudScreen.font = font;
           const [buildMenu, actionMenu, selHud] = await Promise.all([
-            createBuildingRadialMenu(engine, scene, groundYAt, radialScreen),
-            createBuildingActionRadial(engine, scene, groundYAt, radialScreen),
+            createSceneBuildMenu(engine, scene, groundYAt, radialScreen),
+            createSceneActionMenu(engine, scene, groundYAt, radialScreen),
             createSelectionHud(engine, scene, floatingHudScreen),
           ]);
           buildingRadial = buildMenu;
@@ -4792,7 +4934,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
           selectionHud.registerLabels?.();
           sceneConfirm.ensureText?.();
           sceneConfirm.registerLabels?.();
-          bootLog('radials');
+          bootLog('command menus');
         } catch (err) {
           console.error('[boot] radials failed', err);
         }
@@ -4842,10 +4984,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         return;
       }
       if (!overlay) {
-        overlay = createXrLassoOverlay(engine, scene, groundYAt);
+        overlay = createXrLassoOverlay(engine, scene, groundYAt, hand);
         xrLassos.set(hand, overlay);
       }
-      overlay.show(state);
+      overlay.show({ ...state, counts: controlGroupCounts });
     },
 
     releaseHeadsetCamera() {
@@ -6373,7 +6515,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     setControlGroupCount(id, n) {
-      controlGroupHud.setCount?.(id, n);
+      const v = Math.max(0, n | 0);
+      if (id >= 0 && id < controlGroupCounts.length) controlGroupCounts[id] = v;
+      controlGroupHud.setCount?.(id, v);
     },
 
     setControlGroupHold(id) {

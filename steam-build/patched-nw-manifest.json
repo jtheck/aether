@@ -1,0 +1,14 @@
+{
+  "versions": [
+    {
+      "version": "v0.121.0",
+      "date": "2026/11/25",
+      "files": ["linux-arm64"],
+      "flavors": ["normal"],
+      "components": {
+        "node": "26.12.1",
+        "chromium": "158.0.8127.37"
+      }
+    }
+  ]
+}

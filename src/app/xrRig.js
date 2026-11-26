@@ -1,11 +1,20 @@
-import { STICK_SPLIT_YAW } from './input/gamepad.js';
+import { STICK_SPLIT_HALF, STICK_SPLIT_YAW, stickSplitOppose } from './input/gamepad.js';
+import {
+  XR_ALTITUDE_EASE,
+  XR_ALTITUDE_REPEAT_MS,
+  XR_ALTITUDE_PLAY_SLACK,
+  XR_ALTITUDE_SLACK_DECAY,
+  XR_ALTITUDE_SNAP,
+  XR_FREE_UNDER,
+  XR_SWAP_FACE_BUTTONS,
+} from './controlMods.js';
 import { chaseToward } from '../render/cameraController.js';
 import { setXrEyeFromPose } from '../render/xrEye.js';
 
 // Quest Touch. Trigger and grip are always the first two buttons.
 // An `xr-standard` pad (current Quest browser) is:
 //   buttons[2] touchpad   buttons[3] stick click
-//   buttons[4] X / A      buttons[5] Y / B  (Y/B ability, X/A cancel)
+//   buttons[4] X / A      buttons[5] Y / B  (see XR_SWAP_FACE_BUTTONS for ability/cancel)
 // Older Quest 1 reports put the stick click at 2 and the faces at 3 and 4.
 //   axes[0], axes[1] are the unused touchpad slot
 //   axes[2], axes[3] are the stick (push forward is negative y)
@@ -26,12 +35,16 @@ const XR_YAW_RATE = (XR_DIRECT_YAW + STICK_SPLIT_YAW * 60) / 2;
 export const XR_LOOK_SNAP = 12;
 const XR_LOOK_SNAP_ARC = Math.PI / 6;
 /**
- * Heights above the local ground. The first locks onto the terrain each frame.
- * The others ease toward a normal orbit and a far pullback.
+ * Tier 0 is ground-run (terrain-hug at clearance). Tiers 1–3 lock a world height when
+ * entered so hills do not yank the view. Below ground-run and above the high band,
+ * pinch is free vertical roam; between, a held pinch steps presets on a repeat timer.
+ * Left-stick click cycles on the same repeat while held.
  */
-export const XR_ALTITUDE_BANDS = [11, 34, 90];
-/** Softer than selection follow so a height change does not yank the horizon. */
-const XR_ALTITUDE_EASE = 8;
+export const XR_GROUND_CLEARANCE = 6;
+export const XR_ALTITUDE_BANDS = [XR_GROUND_CLEARANCE, 32, 88, 188];
+/** Pull required on X before a pinch counts for altitude (in/out, not feather). */
+export const XR_ALTITUDE_PINCH = 0.34;
+export { XR_ALTITUDE_REPEAT_MS } from './controlMods.js';
 /** Same-direction throw, or a pinch, that lets go of a hold. Rest noise stays under this. */
 const XR_HOLD_BREAK = 0.22;
 
@@ -47,10 +60,17 @@ export function stickAxes(axes) {
   return [axes[0] || 0, axes[1] || 0];
 }
 
-/** Face-button slots. Y / B is primary (ability), X / A is secondary (cancel). */
+/** Face-button slots. Default mapping: Y / B ability, X / A cancel. */
 function faceButtons(gamepad) {
-  if (gamepad?.mapping === 'xr-standard') return { stick: 3, primary: 5, secondary: 4 };
-  return { stick: 2, primary: 4, secondary: 3 };
+  const face = gamepad?.mapping === 'xr-standard'
+    ? { stick: 3, primary: 5, secondary: 4 }
+    : { stick: 2, primary: 4, secondary: 3 };
+  if (XR_SWAP_FACE_BUTTONS) {
+    const p = face.primary;
+    face.primary = face.secondary;
+    face.secondary = p;
+  }
+  return face;
 }
 
 /** Named Quest controls off an XR input source's gamepad. Missing buttons stay released. */
@@ -246,7 +266,8 @@ function hand(sources, handedness) {
  * the synthetic adjustment rigidly to small head motion.
  * While `rightStickBusy()` is true the sticks do not move the head.
  * `follow` eases the view onto `followAt` until a pan or a second click.
- * `altitudeIndex` holds a band until a pinch. The lowest band locks to the ground.
+ * Tier 0 is ground-run on the terrain; higher tiers float. Free crawl under that,
+ * free roam above the top preset. Pinch steps presets with a deliberate pull.
  * @param {[number, number, number]} eye desktop camera world position
  * @param {object | null} [bounds]
  * @param {{ rightStickBusy?: () => boolean, facing?: [number, number] | null }} [opts]
@@ -257,6 +278,7 @@ export function createXrRig(eye, bounds = null, opts = {}) {
   const fl = raw ? Math.hypot(raw[0], raw[1]) : 0;
   return {
     eye,
+    lastHead: eye,
     bounds,
     facing: fl > 1e-5 ? [raw[0] / fl, raw[1] / fl] : null,
     rightStickBusy: opts.rightStickBusy ?? null,
@@ -270,10 +292,20 @@ export function createXrRig(eye, bounds = null, opts = {}) {
     follow: false,
     /** @type {{ x: number, z: number } | null} */
     followAt: null,
-    /** Armed altitude band, or null once a pinch lets go. */
+    /** Armed snap tier, or null in free close / far. */
     altitudeIndex: null,
     /** Last band a click chose, so the next click advances after a pinch. */
     altitudePick: null,
+    /** Pinch gesture active; repeat steps use {@link XR_ALTITUDE_REPEAT_MS}. */
+    altitudePinchLatch: false,
+    /** `performance.now()` of the last altitude step from pinch. */
+    altitudePinchLastAt: 0,
+    /** Fast ease until the tier catch-up finishes. */
+    altitudeSnapFast: false,
+    /** World Y locked for floating tiers (1+); ground-run (0) re-samples terrain. */
+    altitudeLockY: null,
+    /** Temporary offset on a locked float tier; decays when pinch is neutral. */
+    altitudeDrift: 0,
     /** Stick that started the current throw. The other one turns. */
     panHand: null,
     /** Unpitched fly/yaw space. Look-down is applied on top each frame. */
@@ -293,16 +325,19 @@ function stickAxis(v) {
 }
 
 /**
- * Opposite throws on one axis, −1..1. A resting stick is not an opponent,
- * so one hand stays a pure pan. Linear from the first opposition.
- * `dir` is sign(b − a).
+ * Pinch / spread lift on X. Uses the pad half-gate so a slight strafe on the
+ * second stick does not read as zoom. When pan or turn is already committed on
+ * Y, X lift only wins at matching strength (deliberate pinch, not drift).
  */
-function oppose(a, b) {
-  if (!(a * b < 0)) return 0;
-  const dir = Math.sign(b - a);
-  if (!dir) return 0;
-  const mag = (Math.abs(a) + Math.abs(b)) * 0.5;
-  return dir * (mag > 1 ? 1 : mag);
+function xrStickLift(lx, ly, rx, ry, lOn, rOn) {
+  if (!(lOn && rOn)) return 0;
+  let lift = -stickSplitOppose(lx, rx, true);
+  if (!lift) return 0;
+  const turn = ly * ry < 0 ? (Math.abs(ly) + Math.abs(ry)) * 0.5 : 0;
+  const coopPan = ly * ry > 0 ? (Math.abs(ly) + Math.abs(ry)) * 0.5 : 0;
+  const intent = Math.max(turn, coopPan);
+  if (intent >= STICK_SPLIT_HALF && Math.abs(lift) < intent) lift = 0;
+  return lift;
 }
 
 /** Pan still left when a pinch is fully opposed. Turning does not use this. */
@@ -321,17 +356,120 @@ export function xrBreaksFollow(left, right, panHand = null) {
   return Math.hypot(m.strafe, m.forward) >= XR_HOLD_BREAK;
 }
 
-/** A pinch large enough to drop the altitude band. One stick panning does not. */
-export function xrBreaksAltitude(left, right) {
-  const lift = -oppose(stickAxis(left?.stickX), stickAxis(right?.stickX));
-  return Math.abs(lift) >= XR_HOLD_BREAK;
+/** Eye height above sampled floor at x/z, or null when unknown. */
+export function xrHeightAboveFloor(head, bounds) {
+  const floorY = bounds?.floor?.(head[0], head[2]);
+  if (!Number.isFinite(floorY)) return null;
+  return head[1] - floorY;
 }
 
-/** Next altitude band. The first click from a free camera is just above the trees. */
-export function cycleXrAltitude(rig) {
+/** `free-close`, `snap` (ground-run through high preset), or `free-far`. */
+export function xrAltitudeZone(relY) {
+  if (!Number.isFinite(relY)) return 'snap';
+  const hi = XR_ALTITUDE_BANDS[XR_ALTITUDE_BANDS.length - 1];
+  if (relY < XR_GROUND_CLEARANCE - XR_FREE_UNDER) return 'free-close';
+  if (relY > hi) return 'free-far';
+  return 'snap';
+}
+
+/** Pinch / spread magnitude on X for altitude gestures. */
+export function xrPinchLiftMagnitude(left, right) {
+  const lx = stickAxis(left?.stickX);
+  const ly = stickAxis(left?.stickY);
+  const rx = stickAxis(right?.stickX);
+  const ry = stickAxis(right?.stickY);
+  const lOn = lx !== 0 || ly !== 0;
+  const rOn = rx !== 0 || ry !== 0;
+  if (!(lOn && rOn)) return 0;
+  return Math.abs(xrStickLift(lx, ly, rx, ry, lOn, rOn));
+}
+
+export function xrCommitAltitudeTier(rig, idx, head, bounds) {
+  if (!(idx >= 0 && idx < XR_ALTITUDE_BANDS.length)) return;
+  rig.altitudeIndex = idx;
+  rig.altitudePick = idx;
+  rig.altitudeSnapFast = true;
+  rig.altitudeDrift = 0;
+  if (idx === 0) {
+    rig.altitudeLockY = null;
+    return;
+  }
+  const floorY = bounds?.floor?.(head[0], head[2]);
+  const base = Number.isFinite(floorY) ? floorY : 0;
+  rig.altitudeLockY = base + XR_ALTITUDE_BANDS[idx];
+}
+
+export function xrNearestAltitudeTier(relY) {
+  const b = XR_ALTITUDE_BANDS;
+  if (!Number.isFinite(relY)) return 0;
+  for (let i = 0; i < b.length - 1; i++) {
+    if (relY <= (b[i] + b[i + 1]) * 0.5) return i;
+  }
+  return b.length - 1;
+}
+
+/** One pinch edge steps a tier, or drops into free close / far at the ends. */
+export function xrStepAltitudeFromPinch(rig, lift, relY, head, bounds) {
+  if (Math.abs(lift) < XR_ALTITUDE_PINCH) return;
+  const zone = xrAltitudeZone(relY);
+  const up = lift > 0;
+  const h = head ?? [0, 0, 0];
+  if (rig.altitudeIndex === 0) {
+    if (up) {
+      xrCommitAltitudeTier(rig, 1, h, bounds);
+    } else {
+      rig.altitudeIndex = null;
+      rig.altitudePick = 0;
+      rig.altitudeLockY = null;
+    }
+    return;
+  }
+  if (zone === 'free-close') {
+    if (up) xrCommitAltitudeTier(rig, 0, h, bounds);
+    return;
+  }
+  if (zone === 'free-far') {
+    if (!up) {
+      xrCommitAltitudeTier(rig, XR_ALTITUDE_BANDS.length - 1, h, bounds);
+    }
+    return;
+  }
+  let idx = rig.altitudeIndex;
+  if (idx == null || idx < 0 || idx >= XR_ALTITUDE_BANDS.length) {
+    idx = xrNearestAltitudeTier(relY);
+  }
+  const top = XR_ALTITUDE_BANDS.length - 1;
+  if (up) {
+    if (idx >= top) {
+      rig.altitudeIndex = null;
+      rig.altitudePick = top;
+      rig.altitudeLockY = null;
+    } else {
+      xrCommitAltitudeTier(rig, idx + 1, h, bounds);
+    }
+  } else if (idx <= 0) {
+    xrCommitAltitudeTier(rig, 0, h, bounds);
+  } else {
+    xrCommitAltitudeTier(rig, idx - 1, h, bounds);
+  }
+}
+
+export function xrAllowsFreeZoom(relY, altitudeIndex = null) {
+  if (altitudeIndex === 0) return false;
+  const z = xrAltitudeZone(relY);
+  return z === 'free-close' || z === 'free-far';
+}
+
+/** A deliberate pinch on X for altitude (see XR_ALTITUDE_PINCH). */
+export function xrBreaksAltitude(left, right) {
+  return xrPinchLiftMagnitude(left, right) >= XR_ALTITUDE_PINCH;
+}
+
+/** Next altitude band; first click is ground-run. */
+export function cycleXrAltitude(rig, head, bounds) {
   const next = rig.altitudePick == null ? 0 : (rig.altitudePick + 1) % XR_ALTITUDE_BANDS.length;
-  rig.altitudePick = next;
-  rig.altitudeIndex = next;
+  const h = head ?? [0, 0, 0];
+  xrCommitAltitudeTier(rig, next, h, bounds);
   return next;
 }
 
@@ -357,17 +495,21 @@ export function xrHoldHead(head, forward, opts) {
     x = chased.x;
     z = chased.z;
   }
-  const band = opts.altitudeIndex == null ? null : XR_ALTITUDE_BANDS[opts.altitudeIndex];
-  if (band != null && !opts.breakAltitude) {
+  if (opts.altitudeIndex != null && !opts.breakAltitude) {
     const floorY = opts.bounds?.floor?.(x, z);
     const base = Number.isFinite(floorY) ? floorY : 0;
-    const target = base + band;
-    // The low band is a ground hugger: eye height is the terrain plus the clearance.
-    if (opts.altitudeIndex === 0) y = target;
-    else {
-      const u = 1 - Math.exp(-XR_ALTITUDE_EASE * dt);
-      y += (target - y) * u;
+    const ease = opts.altitudeSnapFast ? XR_ALTITUDE_SNAP : XR_ALTITUDE_EASE;
+    const u = 1 - Math.exp(-ease * dt);
+    let target = opts.altitudeIndex === 0
+      ? base + XR_ALTITUDE_BANDS[0]
+      : opts.altitudeLockY;
+    if (opts.altitudeIndex !== 0 && !Number.isFinite(target)) {
+      target = base + XR_ALTITUDE_BANDS[opts.altitudeIndex];
     }
+    if (opts.altitudeIndex !== 0 && Number.isFinite(opts.altitudeDrift)) {
+      target += opts.altitudeDrift;
+    }
+    y += (target - y) * u;
   }
   return clampXrHead([x, y, z], opts.bounds);
 }
@@ -376,7 +518,8 @@ export function xrHoldHead(head, forward, opts) {
  * Either stick pans. Two sticks thrown the same way add, up to double.
  * The stick already out keeps its pan; the other one's up/down turns
  * (left up or right down turns right) and does not quiet that pan.
- * Pinch lifts and spread lowers, in place, and a hard pinch quiets the slide.
+ * Pinch/spread below or above the snap corridor is free zoom; between the three
+ * presets it steps a tier. A hard pinch still quiets the slide in the corridor.
  * No deadzone. `yaw` is positive for a right turn, per 60 Hz frame,
  * which is the sign `yawSpace` already uses. `zoom` is a -1..1 lift, positive up.
  * `panHand` is the stick that started this throw, or null.
@@ -409,7 +552,7 @@ export function xrStickMotion(left, right, panHand = null) {
     forward = -py;
     yaw = ((primary === 'left' ? sy : -sy) * XR_YAW_RATE) / 60 || 0;
   }
-  const lift = -oppose(lx, rx);
+  const lift = xrStickLift(lx, ly, rx, ry, lOn, rOn);
   const scale = gesturePanScale(Math.abs(lift));
   return {
     strafe: ((lx + rx) * scale) || 0,
@@ -487,8 +630,10 @@ export function stepXrRig(rig, ctx, frame, time) {
   const pose = frame.getViewerPose(loco);
   if (!pose) return;
   const head = poseHead(pose);
+  rig.lastHead = head;
   const basis = flatBasis(pose.transform.matrix);
   let next = loco;
+  let snapHud = false;
 
   if (!rig.seeded) {
     const dest = rig.eye;
@@ -502,9 +647,11 @@ export function stepXrRig(rig, ctx, frame, time) {
     }
     rig.seeded = true;
     rig.lastTime = time;
+    snapHud = true;
   } else if (rig.jump) {
     const j = rig.jump;
     rig.jump = null;
+    snapHud = true;
     const dest = Number.isFinite(j.y)
       ? clampXrHead([j.x, j.y, j.z], rig.bounds)
       : xrJumpHead(head, basis.forward, j, rig.bounds);
@@ -542,9 +689,45 @@ export function stepXrRig(rig, ctx, frame, time) {
         : xrStickMotion(left, right, rig.panHand);
       if (!busy) rig.panHand = raw.panHand ?? null;
       const breakFollow = !busy && Math.hypot(raw.strafe, raw.forward) >= XR_HOLD_BREAK;
-      const breakAlt = !busy && xrBreaksAltitude(left, right);
+      const relY = xrHeightAboveFloor(head, rig.bounds);
+      const pinchLive = !busy && xrBreaksAltitude(left, right);
+      if (pinchLive) {
+        const lx = stickAxis(left.stickX);
+        const ly = stickAxis(left.stickY);
+        const rx = stickAxis(right.stickX);
+        const ry = stickAxis(right.stickY);
+        const lOn = lx !== 0 || ly !== 0;
+        const rOn = rx !== 0 || ry !== 0;
+        const lift = xrStickLift(lx, ly, rx, ry, lOn, rOn);
+        const firstPinch = !rig.altitudePinchLatch;
+        const repeatDue = time - (rig.altitudePinchLastAt || 0) >= XR_ALTITUDE_REPEAT_MS;
+        if (firstPinch || repeatDue) {
+          xrStepAltitudeFromPinch(rig, lift, relY ?? 0, head, rig.bounds);
+          rig.altitudePinchLatch = true;
+          rig.altitudePinchLastAt = time;
+        }
+      } else {
+        rig.altitudePinchLatch = false;
+        rig.altitudePinchLastAt = 0;
+      }
       if (breakFollow) rig.follow = false;
-      if (breakAlt) rig.altitudeIndex = null;
+      const freeZoom = relY != null && xrAllowsFreeZoom(relY, rig.altitudeIndex);
+      const snapTier = rig.altitudeIndex != null && rig.altitudeIndex > 0
+        && relY != null && !freeZoom;
+      let drift = rig.altitudeDrift || 0;
+      if (snapTier) {
+        const slide = rig.speed * dt;
+        if (Math.abs(raw.zoom) > 0.05) {
+          drift += raw.zoom * slide * 0.55;
+          drift = Math.max(-XR_ALTITUDE_PLAY_SLACK, Math.min(XR_ALTITUDE_PLAY_SLACK, drift));
+        } else if (drift !== 0) {
+          drift *= Math.exp(-XR_ALTITUDE_SLACK_DECAY * dt);
+          if (Math.abs(drift) < 0.08) drift = 0;
+        }
+        rig.altitudeDrift = drift;
+      } else if (drift !== 0) {
+        rig.altitudeDrift = 0;
+      }
       const s = rig.smooth;
       let dest = [head[0], head[1], head[2]];
       let yawDt = 0;
@@ -556,12 +739,14 @@ export function stepXrRig(rig, ctx, frame, time) {
         s.strafe = damp(s.strafe, raw.strafe, dt);
         s.forward = damp(s.forward, raw.forward, dt);
         s.yaw = damp(s.yaw, raw.yaw * 60, dt);
-        s.zoom = damp(s.zoom, raw.zoom, dt);
+        const zoomTarget = freeZoom ? raw.zoom : 0;
+        s.zoom = damp(s.zoom, zoomTarget, dt);
         const slide = rig.speed * dt;
+        const dy = freeZoom ? s.zoom * slide : 0;
         dest = [
           head[0] + basis.right[0] * s.strafe * slide
             + basis.forward[0] * s.forward * slide,
-          head[1] + s.zoom * slide,
+          head[1] + dy,
           head[2] + basis.right[1] * s.strafe * slide
             + basis.forward[1] * s.forward * slide,
         ];
@@ -575,8 +760,19 @@ export function stepXrRig(rig, ctx, frame, time) {
         followAt: rig.followAt,
         altitudeIndex: rig.altitudeIndex,
         breakFollow,
-        breakAltitude: breakAlt,
+        breakAltitude: false,
+        altitudeSnapFast: !!rig.altitudeSnapFast,
+        altitudeLockY: rig.altitudeLockY,
+        altitudeDrift: rig.altitudeDrift || 0,
       });
+      if (rig.altitudeSnapFast && rig.altitudeIndex != null && relY != null) {
+        const target = rig.altitudeIndex === 0
+          ? (rig.bounds?.floor?.(dest[0], dest[2]) || 0) + XR_ALTITUDE_BANDS[0]
+          : rig.altitudeLockY;
+        if (Number.isFinite(target) && Math.abs(dest[1] - target) < 0.75) {
+          rig.altitudeSnapFast = false;
+        }
+      }
       if (held[0] !== dest[0] || held[1] !== dest[1] || held[2] !== dest[2]) {
         dest = held;
         moved = true;
@@ -611,5 +807,5 @@ export function stepXrRig(rig, ctx, frame, time) {
     ? Math.min(0.05, Math.max(0, (time - rig.eyeLastTime) / 1000))
     : 0;
   rig.eyeLastTime = time;
-  setXrEyeFromPose(view.transform.matrix, view.views, eyeDt);
+  setXrEyeFromPose(view.transform.matrix, view.views, eyeDt, snapHud ? { snapHud: true } : null);
 }

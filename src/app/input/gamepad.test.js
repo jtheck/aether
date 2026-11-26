@@ -31,6 +31,8 @@ import {
   playCastIntent,
   playConfirmIntent,
   playControlGroupIntent,
+  playCastHeld,
+  playOrderHeld,
   playOrderIntent,
   playSelectHeld,
   triggerBrushPressure,
@@ -410,6 +412,15 @@ describe('menu focus helpers', () => {
 });
 
 describe('playOrderIntent', () => {
+  it('playOrderHeld and playCastHeld mirror held bumpers and B', () => {
+    const lb = [];
+    lb[PAD.LB] = true;
+    assert.deepEqual(playOrderHeld(lb), { attackMove: true, forceMove: false });
+    const cast = [];
+    cast[PAD.B] = true;
+    assert.equal(playCastHeld(cast), true);
+  });
+
   it('maps LB to attack-move and RB to force-move', () => {
     const lb = [];
     lb[PAD.LB] = true;
@@ -1312,18 +1323,20 @@ describe('createGamepadAdapter', () => {
     pad.dispose();
   });
 
-  it('LB attack-moves and RB force-moves on press, not hold or in the menu', () => {
+  it('LB attack-moves and RB force-moves on press and repeat while held', () => {
     const attacks = [];
     const moves = [];
     const { doc, side } = menuDoc();
     const lb = [];
     lb[PAD.LB] = btn(true);
     let pads = [stdPad({ buttons: lb })];
+    let nowMs = 1000;
     const pad = createGamepadAdapter({
       camera: { nudgeLookPan() {} },
       active: () => true,
       root: doc,
       getGamepads: () => pads,
+      now: () => nowMs,
       onAttackMove: () => attacks.push(1),
       onForceMove: () => moves.push(1),
       autoStart: false,
@@ -1332,8 +1345,9 @@ describe('createGamepadAdapter', () => {
     assert.equal(attacks.length, 1);
     assert.equal(moves.length, 0);
 
+    nowMs += 200;
     pad.tick();
-    assert.equal(attacks.length, 1);
+    assert.equal(attacks.length, 2);
 
     const rb = [];
     rb[PAD.RB] = btn(true);
@@ -1347,7 +1361,7 @@ describe('createGamepadAdapter', () => {
     both[PAD.RB] = btn(true);
     pads = [stdPad({ buttons: both })];
     pad.tick();
-    assert.equal(attacks.length, 1);
+    assert.equal(attacks.length, 2);
     assert.equal(moves.length, 1);
     pad.dispose();
   });
@@ -1752,6 +1766,50 @@ describe('createGamepadAdapter', () => {
     pad.dispose();
   });
 
+  it('a square menu aims by button, so a full throw left stays on that column', () => {
+    const hovers = [];
+    const confirms = [];
+    const { doc } = menuDoc();
+    const targets = {
+      inner: [
+        { kind: 'category', id: 'basic', x: 100, y: 100, w: 132, h: 74, ring: 'inner' },
+        { kind: 'close', x: 100, y: 346, w: 132, h: 74, ring: 'inner' },
+      ],
+      outer: [
+        { kind: 'building', id: 'house', x: 240, y: 100, w: 214, h: 74, ring: 'outer' },
+        { kind: 'building', id: 'tower', x: 240, y: 264, w: 214, h: 74, ring: 'outer' },
+      ],
+    };
+    const a = [];
+    a[PAD.A] = btn(true);
+    let pads = [stdPad({ axes: [-1, -1, 0, 0], buttons: a })];
+    const pad = createGamepadAdapter({
+      camera: { nudgeLookPan() {} },
+      active: () => true,
+      root: doc,
+      getGamepads: () => pads,
+      radialOpen: () => true,
+      getRadialTargets: () => targets,
+      onRadialHover: (pick) => hovers.push(pick),
+      onRadialConfirm: (pick) => confirms.push(pick?.id ?? pick?.kind),
+      autoStart: false,
+    });
+    pad.tick();
+    assert.equal(hovers.at(-1)?.id, 'basic');
+    assert.equal(confirms.at(-1), 'basic');
+
+    pads = [stdPad({ axes: [1, 0.45, 0, 0], buttons: [] })];
+    pad.tick();
+    assert.equal(hovers.at(-1)?.id, 'tower');
+
+    const again = [];
+    again[PAD.A] = btn(true);
+    pads = [stdPad({ axes: [1, 0.45, 0, 0], buttons: again })];
+    pad.tick();
+    assert.equal(confirms.at(-1), 'tower');
+    pad.dispose();
+  });
+
   it('both sticks pan while a radial is open; a lone stick still aims', () => {
     const pans = [];
     const zooms = [];
@@ -2126,24 +2184,30 @@ describe('createGamepadAdapter', () => {
     pad.dispose();
   });
 
-  it('B and D-pad Left cast on press, not hold or in the menu', () => {
+  it('B and D-pad Left cast on press and repeat while held', () => {
     const casts = [];
     const { doc, side } = menuDoc();
     const b = [];
     b[PAD.B] = btn(true);
     let pads = [stdPad({ buttons: b })];
+    let nowMs = 1000;
     const pad = createGamepadAdapter({
       camera: { nudgeLookPan() {} },
       active: () => true,
       root: doc,
       getGamepads: () => pads,
+      now: () => nowMs,
       onCast: () => casts.push(1),
       autoStart: false,
     });
     pad.tick();
     assert.equal(casts.length, 1);
+    nowMs += 50;
     pad.tick();
     assert.equal(casts.length, 1);
+    nowMs += 150;
+    pad.tick();
+    assert.equal(casts.length, 2);
 
     const left = [];
     left[PAD.LEFT] = btn(true);

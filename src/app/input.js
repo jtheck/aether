@@ -216,6 +216,10 @@ export function setupInput(opts) {
       if (pick) opts.onRadialPick?.(pick);
     },
     cancelRadial: () => opts.onRadialCancel?.(),
+    pressControlGroup: (id) => game.pressControlGroup?.(id) ?? false,
+    handleControlGroupDown: (id, opts) => game.handleControlGroupDown?.(id, opts) ?? false,
+    handleControlGroupUp: (id) => game.handleControlGroupUp?.(id) ?? false,
+    handleControlGroupCancel: () => game.handleControlGroupCancel?.() ?? false,
     getSelectedBuilding: () => game.getSelectedBuilding?.(),
     setSelectedBuilding: (sel) => game.setSelectedBuilding?.(sel),
     getFollowSelection: () => game.getFollowSelection?.() ?? { units: [], buildings: [] },

@@ -39,7 +39,7 @@ export const ATTACK_DELIVERY = {
   PROJECTILE: 1,
 };
 
-/** @type {ReadonlyArray<{ id: number, name: string, category: string, hp: number, speed: number, size: number, footprint?: number, steer?: number, accel?: number, decel?: number, slowMul?: number, avoidSlow?: boolean, pickRadius: number, pickHeight: number, color: [number, number, number], attackDamage: number, attackRange: number, attackCooldown: number, aggroRange: number, attackDelivery: number, projectileType: number, minRange: number, preferredRange: number, primaryAbility: string | null, transportCapacity?: number, mechanical?: boolean, fly?: boolean, canHaul?: boolean, attacksBuildings?: boolean, idleHunt?: boolean }>} */
+/** @type {ReadonlyArray<{ id: number, name: string, category: string, hp: number, speed: number, size: number, footprint?: number, steer?: number, accel?: number, decel?: number, slowMul?: number, avoidSlow?: boolean, pickRadius: number, pickHeight: number, color: [number, number, number], attackDamage: number, attackRange: number, attackCooldown: number, aggroRange: number, attackDelivery: number, projectileType: number, minRange: number, preferredRange: number, primaryAbility: string | null, meleeRange?: number, meleeDamage?: number, transportCapacity?: number, mechanical?: boolean, fly?: boolean, canHaul?: boolean, attacksBuildings?: boolean, idleHunt?: boolean }>} */
 export const UNIT_DEFS = [
   {
     id: UNIT.VILLAGER,
@@ -146,8 +146,10 @@ export const UNIT_DEFS = [
     projectileType: PROJECTILE.HOLY_SLASH,
     minRange: fx.fromFloat(4),
     preferredRange: fx.fromFloat(35),
+    meleeRange: fx.fromFloat(2.2),
+    meleeDamage: 5,
     primaryAbility: 'holy_armor',
-    attacksBuildings: false,
+    attacksBuildings: true,
   },
   {
     id: UNIT.MYCO,

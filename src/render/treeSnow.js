@@ -15,6 +15,7 @@ import { markMaterialUboDirty } from '../vendor/lite/liteVendor.js';
 const SNOW_VERT = `
 out.snowP = position;
 out.treeLook = instanceColor.a;
+out.windBase = finalWorld[3].xz;
 `;
 
 const SNOW_FNS = `
@@ -54,13 +55,15 @@ if (look > 2.5) {
   let scorch = smoothstep(0.56, 0.72, hot);
   let ember = smoothstep(0.76, 0.9, hot);
   let emberPhase = tHash(floor(input.snowP.xz * 2.2)) * 6.28318;
-  let flare = pow(saturate(sin(material.emberT * 0.28 + emberPhase)), 8.0);
+  let gust = 0.5 + 0.5 * sin(dot(input.windBase, vec2<f32>(0.014, 0.011)) - material.emberT * 0.5);
+  let windPulse = gust * gust;
+  let flare = pow(saturate(sin(material.emberT * 0.28 + emberPhase)), 8.0) * (1.0 + windPulse * 0.45);
   let gray = dot(baseColor, vec3<f32>(0.3, 0.59, 0.11));
   let ashy = mix(baseColor, vec3<f32>(gray * 1.15, gray, gray * 0.92) * 1.4, 0.82);
   baseColor = mix(baseColor, ashy, soot);
   baseColor = mix(baseColor, vec3<f32>(0.012, 0.009, 0.008), scorch);
   baseColor = mix(baseColor, mix(vec3<f32>(0.008, 0.007, 0.006), vec3<f32>(0.12, 0.025, 0.006), flare), ember);
-  emissive = vec3<f32>(1.35, 0.055, 0.008) * ember * (0.012 + flare) * shade;
+  emissive = vec3<f32>(1.35, 0.055, 0.008) * ember * (0.012 + flare) * shade * (1.0 + windPulse * 0.9);
 } else if (look > 1.5) {
   let pile = snowH * 0.65 + snowR * 0.35;
   let drift = smoothstep(0.52, 0.64, coarse + (pile - 0.4) * 1.4);
@@ -91,6 +94,7 @@ const plugin = {
   getVaryings: () => [
     { name: 'snowP', type: 'vec3<f32>' },
     { name: 'treeLook', type: 'f32' },
+    { name: 'windBase', type: 'vec2<f32>' },
   ],
   getCustomCode(shaderType) {
     if (shaderType === 'vertex') return { CUSTOM_VERTEX_MAIN_END: SNOW_VERT };

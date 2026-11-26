@@ -1347,6 +1347,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
           lean: p.lean ?? 0,
           yaw: p.yaw ?? 0,
           char: p.char ?? 0,
+          burn: p.burn | 0,
         });
       }
     }

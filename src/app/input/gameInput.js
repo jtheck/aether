@@ -2,8 +2,9 @@
 // Touch later synthesizes into the hub; gamepad LB/RB orders, LT/RT paint-select,
 // B / D-pad Left cast and cancel, D-pad Up is the red group (home agora), Right / Down + Y/X/A
 // are the other control groups. Placement is the
-// same loop on every device: aim walks the ghost, and the facing is where
-// that aim sits inside the plot. Mouse tap, pad A, and LB / RB stamp.
+// same loop on every device: aim walks the ghost; facing updates on footprint
+// hops only (BUILDING_YAW_SNAP steps, smoothed mesh). Mouse tap,
+// pad A, and LB / RB stamp.
 // Touch sits the ghost on a drag or the first tap, then a later tap places
 // it. B / back / agora hub leaves. After a stamp the type stays so you can
 // plant more.
@@ -13,9 +14,10 @@ import { CMD } from '../../sim/commands.js';
 import { classifyCastSelection, COMBO, canAffordAgoraFound } from '../../sim/combos.js';
 import {
   BUILDING_YAW_SNAP,
-  buildingAimYaw,
-  buildingAimSpan,
+  buildingPlacementFootprintHopYaw,
   snapBuildingYaw,
+  snapBuildingWorld,
+  holdBuildingSnap,
   BUILDING_FOOTPRINTS,
   buildingCanRally,
   isBuildingAlive,
@@ -325,6 +327,8 @@ export function createGameInput(opts) {
   let placeDownKind = null;
   /** Touch confirms only when the ghost was already sitting before this tap. */
   let placeTouchConfirm = false;
+  /** Last snapped footprint origin — facing updates only when this moves. @type {{ x: number, z: number } | null} */
+  let placeSnapPrev = null;
   let boxLastL = NaN;
   let boxLastT = NaN;
   let boxLastW = NaN;
@@ -397,6 +401,7 @@ export function createGameInput(opts) {
     placeAnchor = null;
     placeDownKind = null;
     placeTouchConfirm = false;
+    placeSnapPrev = null;
     onPlacementParked?.(false);
   }
 
@@ -406,17 +411,45 @@ export function createGameInput(opts) {
     placeTouchConfirm = false;
   }
 
+  function peekPlacementSnap(x, z) {
+    const type = getPlacingType?.();
+    if (!type) return null;
+    const raw = snapBuildingWorld(type, fx.fromFloat(x), fx.fromFloat(z));
+    const nextX = fx.toFloat(raw.x);
+    const nextZ = fx.toFloat(raw.z);
+    const curX = placeSnapPrev?.x;
+    const curZ = placeSnapPrev?.z;
+    const held = holdBuildingSnap(type, x, z, nextX, nextZ, curX ?? NaN, curZ ?? NaN);
+    return { x: held.x, z: held.z };
+  }
+
   /**
-   * Snap the ghost to the aim, then take the facing from where that aim
-   * sits inside the snapped cell.
+   * Walk the ghost to the snap. Facing is fixed on a footprint; it only
+   * updates when the snap hops, from the hop direction (30° steps).
    */
   function posePlacement(x, z) {
-    const snapped = emitPlacementGhost(x, z, currentYaw());
-    const yaw = buildingAimYaw(x, z, snapped.x, snapped.z, buildingAimSpan(getPlacingType?.()));
-    if (yaw !== currentYaw()) {
-      setPlacementYaw?.(yaw);
-      return emitPlacementGhost(snapped.x, snapped.z, yaw);
+    const peek = peekPlacementSnap(x, z) ?? { x, z };
+    const yaw = currentYaw();
+
+    if (!placeSnapPrev) {
+      const snapped = emitPlacementGhost(x, z, yaw);
+      placeSnapPrev = { x: snapped.x, z: snapped.z };
+      return snapped;
     }
+
+    const snapChanged =
+      Math.abs(peek.x - placeSnapPrev.x) > 1e-4 ||
+      Math.abs(peek.z - placeSnapPrev.z) > 1e-4;
+    const target = snapChanged
+      ? buildingPlacementFootprintHopYaw(
+          peek.x - placeSnapPrev.x,
+          peek.z - placeSnapPrev.z,
+          yaw,
+        )
+      : yaw;
+
+    const snapped = emitPlacementGhost(x, z, target);
+    placeSnapPrev = { x: snapped.x, z: snapped.z };
     return snapped;
   }
 

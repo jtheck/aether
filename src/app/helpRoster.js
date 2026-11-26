@@ -44,7 +44,7 @@ const UNIT_NOTE = {
   [UNIT.CHAMPION]: 'Melee. A warrior who has seen tremendous battle.',
   [UNIT.ARCHER]: 'Ranged. Trained at the Barracks.',
   [UNIT.WARLOCK]: 'Ranged. Fireball. Trained at the Tavern.',
-  [UNIT.PRIEST]: 'Ranged. Heal costs a mana charge. Holy armor. Does not attack buildings. Trained at the Church.',
+  [UNIT.PRIEST]: 'Ranged holy slash; staff at melee range. Heal costs a mana charge. Holy armor. Trained at the Church.',
   [UNIT.MYCO]: 'Ranged. Spore bloom. Trained at the Camp.',
   [UNIT.SHAMAN]: 'Ranged. Plague of frogs, locusts. Trained at the Grove.',
   [UNIT.WIZARD]: 'Ranged. Lightning. Trained at the Tower.',

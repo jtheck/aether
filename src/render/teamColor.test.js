@@ -2,6 +2,9 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { CONTRAST, EXPOSURE } from './celestial.js';
 import {
+  flagBannerRoleFromMaterial,
+  isAllyColorMaterial,
+  isAllyColorName,
   isTeamColorMaterial,
   isTeamColorName,
   sceneTeamRgb,
@@ -30,6 +33,14 @@ describe('teamColor names', () => {
     assert.equal(isTeamColorName('spawn_anchor'), false);
     assert.equal(isTeamColorMaterial({ name: 'Wood' }), false);
     assert.equal(isTeamColorMaterial(null), false);
+  });
+
+  it('maps flag cloth: TeamColor profile, AllyColor identity', () => {
+    assert.equal(isAllyColorName('AllyColor'), true);
+    assert.equal(isAllyColorMaterial({ name: 'AllyColor.001' }), true);
+    assert.equal(flagBannerRoleFromMaterial({ name: 'TeamColor' }), 'player');
+    assert.equal(flagBannerRoleFromMaterial({ name: 'AllyColor' }), 'ally');
+    assert.equal(flagBannerRoleFromMaterial({ name: 'Wood' }), null);
   });
 
   it('undoes the outdoor exposure lift so the picker hex is the on-screen swatch', () => {

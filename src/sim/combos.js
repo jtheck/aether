@@ -1,5 +1,5 @@
-// Combo recipes on a cast selection. First match wins: mixed-type recipes
-// (agora found) beat same-type caster compounds.
+// Combo recipes on a cast selection. First match wins: an engineer crew
+// (agora found) beats same-type caster compounds.
 
 import { getUnitDef, UNIT } from './unitTypes.js';
 import { isManaAbility } from './mana.js';
@@ -62,7 +62,7 @@ export function tallyComboSelection(w, ids, owner = -1) {
 
 export function selectionHasAgoraFound(w, ids, owner = -1) {
   const t = tallyComboSelection(w, ids, owner);
-  return t.villagers >= 4 && t.engineers >= 1 && t.casters === 0;
+  return t.engineers >= 1 && t.casters === 0;
 }
 
 export function classifyCastSelection(w, ids, owner = -1) {
@@ -83,35 +83,30 @@ export function ownerBank(w, owner) {
   };
 }
 
+/** Odd units stay in the bank. Half of 45 stone is 22. */
+function halfResource(n) {
+  const v = n | 0;
+  return v > 0 ? v >> 1 : 0;
+}
+
 /**
+ * 30 mineral, plus half the current wood, stone, and food.
  * @param {{ wood?: number, stone?: number, mineral?: number, food?: number } | null | undefined} bank
  */
-/** Wood and stone in one KOTH agora purse. Mineral stays AGORA_FOUND_MINERAL. */
-export const AGORA_PURSE_WOOD = BASE_PYRAMID_BANK.wood;
-export const AGORA_PURSE_STONE = BASE_PYRAMID_BANK.stone;
-
-export function agoraFoundCost(bank, purse = false) {
-  if (purse) {
-    return {
-      mineral: AGORA_FOUND_MINERAL,
-      wood: AGORA_PURSE_WOOD,
-      stone: AGORA_PURSE_STONE,
-    };
-  }
+export function agoraFoundCost(bank) {
   return {
     mineral: AGORA_FOUND_MINERAL,
-    wood: bank?.wood | 0,
-    stone: bank?.stone | 0,
+    wood: halfResource(bank?.wood),
+    stone: halfResource(bank?.stone),
+    food: halfResource(bank?.food),
   };
 }
 
 /**
  * @param {{ wood?: number, stone?: number, mineral?: number, food?: number } | null | undefined} bank
  */
-export function canAffordAgoraFound(bank, purse = false) {
-  if ((bank?.mineral | 0) < AGORA_FOUND_MINERAL) return false;
-  if (!purse) return true;
-  return (bank?.wood | 0) >= AGORA_PURSE_WOOD && (bank?.stone | 0) >= AGORA_PURSE_STONE;
+export function canAffordAgoraFound(bank) {
+  return (bank?.mineral | 0) >= AGORA_FOUND_MINERAL;
 }
 
 export function cloneRefundCost(cost) {

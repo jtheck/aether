@@ -13,6 +13,8 @@ import {
   agoraFlagDisintegratePose,
   agoraFlagDrawPose,
   agoraFlagSlamPose,
+  bakedSocketPose,
+  bakedSocketWorld,
   flagScaleForDist,
   emitAgoraFlagDisintegrate,
   emitAgoraFlagSlam,
@@ -23,6 +25,24 @@ import { AGORA_PHASE_LOCK, AGORA_PHASE_TUG, AGORA_RITE_FINALE, AGORA_RITE_UNLOCK
 import { AGORA_FINALE_WISH_AT_MS, emitAgoraSlamFlowerBurst } from './healthBars.js';
 
 describe('agora ownership flags', () => {
+  it('maps standard_anchor through the agora instance matrix', () => {
+    const anchor = { x: 1.32, y: 1.44, z: -4.37 };
+    const scale = 2;
+    const yaw = 0;
+    const world = bakedSocketWorld(10, 0, 20, yaw, scale, anchor);
+    assert.ok(Math.abs(world.x - (10 + scale * anchor.x)) < 1e-6);
+    assert.ok(Math.abs(world.y - scale * anchor.y) < 1e-6);
+    assert.ok(Math.abs(world.z - (20 + scale * anchor.z)) < 1e-6);
+  });
+
+  it('adds anchor yaw to the pad facing', () => {
+    const anchor = { x: 0, y: 0, z: 0, yaw: 0.5, pitch: 0, roll: 0 };
+    const pose = bakedSocketPose(0, 0, 0, 0.25, 1, anchor);
+    assert.ok(Math.abs(pose.yaw - 0.75) < 1e-6);
+    assert.equal(pose.pitch, 0);
+    assert.equal(pose.roll, 0);
+  });
+
   it('plants quietly on first sight of a locked pad', () => {
     const act = stepAgoraFlagAct(null, { phase: AGORA_PHASE_LOCK, owner: 0 }, 0);
     assert.equal(act.mode, AGORA_FLAG_PLANTED);

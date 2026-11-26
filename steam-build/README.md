@@ -4,8 +4,9 @@ Desktop shell that loads [https://aether.garden](https://aether.garden).
 
 ## Prerequisites
 
-1. App ID is **5043860** (`app/steam_appid.txt`). Windows depot **5043861**. Linux depot **5043862** (`Aether.Garden Depot Linux`).
-   - Installation → Launch Options: Linux executable **`Aether`**. Arguments (WebGPU on Linux): `--enable-unsafe-webgpu --enable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE,WebXRLayers,WebXRWebGPUBinding --use-angle=vulkan --ignore-gpu-blocklist --ozone-platform=x11`
+1. App ID is **5043860** (`app/steam_appid.txt`). Depots that ship: Windows **5043861**, Linux x64 **5043862**, Frame/Linux ARM64 **5043863**, macOS **5043864**.
+   - Linux launch executable **`Aether`**, arguments empty. Both Linux depots use that root path; each depot contains only its native architecture.
+   - Mac launch executable **`Aether.app`**. The build is not notarized.
 2. Optional Steam redistributables: set `STEAMWORKS_SDK` to your SDK root before `dist` / upload.
 
 ## Run locally
@@ -35,11 +36,20 @@ npm start
 
 **Hotkeys (window focused):** F5 / Ctrl+R reload · Ctrl+Shift+R hard reload · F11 fullscreen · F12 / Ctrl+Shift+I DevTools.
 
-## Build Windows / Linux
+## Build Windows / Linux / Frame / Mac
 
-NW.js is intentionally pinned to **0.118.0 (Chromium 155)** in `build.mjs`.
-Do not upgrade it without testing headset entry: NW.js 0.119.x / Chromium 156
-crashes in `xr_gpu_swap_chain.cc` while creating the WebGPU WebXR shared image.
+Windows, Linux x64, and Mac stay on NW.js **0.118.0 (Chromium 155)**. Do not move
+those targets to 0.119.x: Chromium 156 crashes in `xr_gpu_swap_chain.cc` while
+creating the WebGPU WebXR shared image.
+
+Frame uses a locally built, patched NW.js **0.121.0 (Chromium 158)** runtime.
+Stock Linux Chromium does not support Æther's required WebGPU OpenXR session.
+The complete working configuration, source patches, build procedure, known
+launch behavior, and cleanup guardrails are in [FRAME.md](FRAME.md).
+
+Keep Linux x86-64 and Linux ARM64 as separate depots. Do not stage both
+architectures into the x86-64 depot. Steamworks needs only one Linux launch
+option pointing to root **`Aether`**; Steam selects the applicable depot.
 
 ```powershell
 $env:STEAMWORKS_SDK="C:\Users\blind\steamworks_sdk"   # optional but needed for Steam API DLL
@@ -48,7 +58,15 @@ npm run zip:win
 
 npm run zip:linux
 # → dist-linux/Aether  +  dist-linux/Aether.sh  and  Aether-linux64.zip
+
+npm run zip:linux-arm64
+# → dist-linux-arm64/Aether  +  Aether.sh  and  Aether-linux-arm64.zip
+
+npm run zip:osx
+# → dist-osx/Aether.app  and  Aether-osx-x64.zip
 ```
+
+The Mac package is assembled on Windows. Creating it needs symlink permission (Windows Developer Mode), or the NW.js extract fails with `EPERM`. Signing and notarization are not part of this build. `npm run upload:steam` uploads every depot whose ID is set, in one Steam build.
 
 Steam Linux / Deck “Play does nothing” is usually the Windows depot + Proton, or a Linux launch option pointing at `Aether.exe` / `Aether.sh`. After the Linux depot is live, the Linux launch executable must be **`Aether`**. To force the wrapper: executable `/bin/sh`, arguments `Aether.sh`.
 
@@ -62,7 +80,7 @@ Launch-Aether.bat
 
 Distribution is this upload, then the user sets the build live. Do not build a local-only package and treat it as shipped. Do not edit the Steam library install (`steamapps/common/Aether.Garden`, including `aether.url`, `package.nw`, or anything beside the exe). A local build or an install edit happens only after the user confirms that, more than once, in the same request.
 
-1. Create app + Windows/Linux depots on the partner site.
+1. Create the depots on the partner site. Windows and Linux x64 already exist. Frame is a Linux ARM64 depot. Mac is a macOS depot. Put the new IDs in `steampipe/config.json`.
 2. Copy `steampipe/config.example.json` → `steampipe/config.json` and fill `appId` / depot IDs.
 3. Put the same App ID in `app/steam_appid.txt`.
 4. Upload:

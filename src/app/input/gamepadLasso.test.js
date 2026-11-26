@@ -7,6 +7,7 @@ import {
   appendBrushStamps,
   brushOuterLoop,
   brushRadiusTarget,
+  brushRadiusWorld,
   brushViewStamps,
   convexHull2,
   lassoOuterLoop,
@@ -47,6 +48,15 @@ describe('lassoOuterLoop', () => {
 function screenHas(pts, x, y) {
   return pts.some((p) => p.x === x && p.y === y);
 }
+
+describe('brushRadiusWorld', () => {
+  it('scales the screen brush down from head height', () => {
+    const light = brushRadiusWorld(100, 0);
+    const full = brushRadiusWorld(100, 1);
+    assert.ok(light > 0);
+    assert.ok(full > light * 5);
+  });
+});
 
 describe('brushRadiusTarget', () => {
   it('stays at the floor on a light pull and fills the large brush on a full squeeze', () => {

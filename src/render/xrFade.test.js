@@ -7,6 +7,7 @@ import {
   paintFadeNarrator,
   xrFadeMix,
   xrFadePlane,
+  xrHudPlatePose,
 } from './xrFade.js';
 
 function identityLookingZ() {
@@ -30,6 +31,17 @@ describe('xrFadePlane', () => {
     assert.ok(Math.abs(pose.zAxis[0]) < 1e-8);
     assert.ok(Math.abs(pose.zAxis[1]) < 1e-8);
     assert.ok(Math.abs(pose.zAxis[2] + 1) < 1e-8);
+  });
+});
+
+describe('xrHudPlatePose', () => {
+  it('offsets a HUD plate along view tangents', () => {
+    const wm = identityLookingZ();
+    wm[12] = 1;
+    const center = xrHudPlatePose(wm, { h: 1, v: 0.8 }, 0.9, 0, 0, 0.3, 0.1);
+    const side = xrHudPlatePose(wm, { h: 1, v: 0.8 }, 0.9, -0.5, 0, 0.3, 0.1);
+    assert.notEqual(side.x, center.x);
+    assert.ok(Math.abs(center.width - side.width) < 1e-6);
   });
 });
 

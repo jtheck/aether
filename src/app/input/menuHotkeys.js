@@ -50,9 +50,9 @@ export function clockwiseFromPause(ang) {
  */
 export function orderedMenuOptions(targets) {
   if (!targets) return [];
-  const inner = targets.inner ?? [];
+  const inner = (targets.inner ?? []).filter((s) => s && s.kind !== 'close');
   const outer = (targets.outer ?? []).filter(
-    (s) => s && s.kind !== 'pause' && s.kind !== 'cancel',
+    (s) => s && s.kind !== 'pause' && s.kind !== 'cancel' && s.kind !== 'rally',
   );
   const list = inner.length ? inner : outer;
   const rank = inner.length ? clockwiseFromNine : clockwiseFromPause;

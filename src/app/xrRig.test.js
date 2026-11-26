@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { XR_SWAP_FACE_BUTTONS } from './controlMods.js';
 import {
   clampXrHead,
   readQuestTouch,
@@ -11,6 +12,10 @@ import {
   xrFitHead,
   xrBreaksFollow,
   xrBreaksAltitude,
+  xrAltitudeZone,
+  xrAllowsFreeZoom,
+  xrStepAltitudeFromPinch,
+  xrNearestAltitudeTier,
   xrHoldHead,
   cycleXrAltitude,
   toggleXrFollow,
@@ -25,16 +30,18 @@ import {
 
 describe('readQuestTouch', () => {
   it('names the Quest 1 trigger, grip, stick, and face buttons', () => {
+    const primaryIdx = XR_SWAP_FACE_BUTTONS ? 3 : 4;
     const pad = {
       buttons: [
         { value: 0.4, pressed: true },
         { value: 1, pressed: true },
         { value: 1, pressed: true },
         { value: 0, pressed: false },
-        { value: 1, pressed: true },
+        { value: 0, pressed: false },
       ],
       axes: [0.5, -0.8],
     };
+    pad.buttons[primaryIdx] = { value: 1, pressed: true };
     const touch = readQuestTouch(pad);
     assert.equal(touch.trigger.value, 0.4);
     assert.equal(touch.grip.pressed, true);
@@ -46,14 +53,16 @@ describe('readQuestTouch', () => {
   });
 
   it('reads Y/B and X/A from an xr-standard pad', () => {
+    const primaryIdx = XR_SWAP_FACE_BUTTONS ? 4 : 5;
+    const secondaryIdx = XR_SWAP_FACE_BUTTONS ? 5 : 4;
     const buttons = [0, 1, 2, 3, 4, 5].map(() => ({ pressed: false, value: 0 }));
     buttons[3].pressed = true;
-    buttons[5].pressed = true;
+    buttons[primaryIdx].pressed = true;
     const touch = readQuestTouch({ mapping: 'xr-standard', buttons, axes: [0, 0, 0, 0] });
     assert.equal(touch.stickClick.pressed, true);
     assert.equal(touch.primary.pressed, true);
     assert.equal(touch.secondary.pressed, false);
-    buttons[4].pressed = true;
+    buttons[secondaryIdx].pressed = true;
     const cancel = readQuestTouch({ mapping: 'xr-standard', buttons, axes: [0, 0, 0, 0] });
     assert.equal(cancel.secondary.pressed, true);
   });
@@ -127,15 +136,34 @@ describe('xrStickMotion', () => {
       { stickX: 0.8, stickY: 0 },
       { stickX: -0.8, stickY: 0 },
     );
-    assert.equal(pinch.zoom, 0.8);
+    assert.ok(pinch.zoom > 0.45);
     assert.equal(pinch.yaw, 0);
     assert.equal(pinch.strafe, 0);
     const spread = xrStickMotion(
       { stickX: -1, stickY: 0 },
       { stickX: 1, stickY: 0 },
     );
-    assert.equal(spread.zoom, -1);
+    assert.ok(spread.zoom < -0.45);
     assert.equal(spread.strafe, 0);
+  });
+
+  it('keeps pinch/spread secondary to cooperative pan or turn', () => {
+    const pan = xrStickMotion(
+      { stickX: 0.15, stickY: -0.85 },
+      { stickX: -0.12, stickY: -0.75 },
+    );
+    assert.equal(pan.zoom, 0);
+    assert.ok(pan.forward > 1.4);
+    assert.equal(pan.yaw, 0);
+
+    const turn = xrStickMotion(
+      { stickX: 0.2, stickY: -0.85 },
+      { stickX: -0.2, stickY: 0.85 },
+      'left',
+    );
+    assert.equal(turn.zoom, 0);
+    assert.ok(turn.yaw > 0);
+    assert.equal(turn.forward, 0.85);
   });
 
   it('does not quiet a turn, and still quiets a hard pinch', () => {
@@ -274,6 +302,54 @@ describe('smoothFlatDirection', () => {
   });
 });
 
+describe('xr altitude zones', () => {
+  const [ground, low, mid, high] = XR_ALTITUDE_BANDS;
+  const bounds = { floor: () => 0 };
+  const head = [0, ground, 0];
+
+  it('labels free close, snap corridor, and free far', () => {
+    assert.equal(xrAltitudeZone(ground - 3), 'free-close');
+    assert.equal(xrAltitudeZone(ground), 'snap');
+    assert.equal(xrAltitudeZone(mid), 'snap');
+    assert.equal(xrAltitudeZone(high), 'snap');
+    assert.equal(xrAltitudeZone(high + 8), 'free-far');
+    assert.equal(xrAllowsFreeZoom(ground - 3), true);
+    assert.equal(xrAllowsFreeZoom(ground - 2), false);
+    assert.equal(xrAllowsFreeZoom(mid), false);
+    assert.equal(xrAllowsFreeZoom(mid, 0), false);
+    assert.equal(xrAllowsFreeZoom(high + 1), true);
+  });
+
+  it('pinch steps tiers in the corridor and hands off to free zoom at the ends', () => {
+    const rig = { altitudeIndex: 1, altitudePick: 1, altitudeSnapFast: false, altitudeLockY: low };
+    xrStepAltitudeFromPinch(rig, 0.9, mid, head, bounds);
+    assert.equal(rig.altitudeIndex, 2);
+    assert.equal(rig.altitudeLockY, mid);
+    rig.altitudeIndex = 3;
+    rig.altitudePick = 3;
+    xrStepAltitudeFromPinch(rig, 0.9, high, head, bounds);
+    assert.equal(rig.altitudeIndex, null);
+    assert.equal(rig.altitudePick, 3);
+    xrStepAltitudeFromPinch(rig, -0.9, low + 1, head, bounds);
+    assert.equal(rig.altitudeIndex, 0);
+    assert.equal(rig.altitudeLockY, null);
+    rig.altitudeIndex = 0;
+    xrStepAltitudeFromPinch(rig, -0.9, ground, head, bounds);
+    assert.equal(rig.altitudeIndex, null);
+    xrStepAltitudeFromPinch(rig, 0.9, ground - 3, head, bounds);
+    assert.equal(rig.altitudeIndex, 0);
+    assert.equal(xrNearestAltitudeTier(low + 0.5), 1);
+    assert.equal(xrNearestAltitudeTier(mid), 2);
+    assert.equal(xrNearestAltitudeTier(high - 0.5), 3);
+  });
+
+  it('ignores a feather pinch for altitude', () => {
+    const rig = { altitudeIndex: 0, altitudePick: 0, altitudeSnapFast: false, altitudeLockY: null };
+    xrStepAltitudeFromPinch(rig, 0.2, ground, head, bounds);
+    assert.equal(rig.altitudeIndex, 0);
+  });
+});
+
 describe('xr holds', () => {
   const bounds = { floor: () => 0, maxY: 400, maxRange: 1000, clearance: 6 };
 
@@ -281,7 +357,7 @@ describe('xr holds', () => {
     assert.equal(xrBreaksFollow({ stickX: 0, stickY: -0.6 }, { stickX: 0, stickY: 0 }), true);
     assert.equal(xrBreaksFollow({ stickX: 0, stickY: -1 }, { stickX: 0, stickY: 1 }), true);
     assert.equal(xrBreaksFollow({ stickX: -1, stickY: 0 }, { stickX: 1, stickY: 0 }), false);
-    assert.equal(xrBreaksAltitude({ stickX: -0.6, stickY: 0 }, { stickX: 0.6, stickY: 0 }), true);
+    assert.equal(xrBreaksAltitude({ stickX: -0.85, stickY: 0 }, { stickX: 0.85, stickY: 0 }), true);
     assert.equal(xrBreaksAltitude({ stickX: 0, stickY: -1 }, { stickX: 0, stickY: 0 }), false);
     assert.equal(xrBreaksFollow({ stickX: 0.05, stickY: 0 }, { stickX: 0, stickY: 0 }), false);
   });
@@ -299,24 +375,35 @@ describe('xr holds', () => {
 
     const slope = { ...bounds, floor: (_x, z) => z };
     const hugged = xrHoldHead([0, 50, 10], [0, 1], {
-      dt: 0.016,
+      dt: 0.5,
       bounds: slope,
       follow: false,
       altitudeIndex: 0,
+      altitudeSnapFast: true,
     });
     assert.equal(hugged[0], 0);
     assert.equal(hugged[2], 10);
-    assert.equal(hugged[1], 10 + XR_ALTITUDE_BANDS[0]);
+    assert.ok(Math.abs(hugged[1] - (10 + XR_ALTITUDE_BANDS[0])) < 0.05);
 
     const lifted = xrHoldHead([0, 50, 0], [0, 1], {
       dt: 0.1,
       bounds,
       follow: false,
       altitudeIndex: 1,
+      altitudeLockY: XR_ALTITUDE_BANDS[1],
     });
     assert.equal(lifted[0], 0);
     assert.equal(lifted[2], 0);
     assert.ok(lifted[1] < 50 && lifted[1] > XR_ALTITUDE_BANDS[1]);
+
+    const stillFloat = xrHoldHead([0, XR_ALTITUDE_BANDS[1], 40], [0, 1], {
+      dt: 0.016,
+      bounds: { ...bounds, floor: (_x, z) => z * 0.5 },
+      follow: false,
+      altitudeIndex: 1,
+      altitudeLockY: XR_ALTITUDE_BANDS[1],
+    });
+    assert.equal(stillFloat[1], XR_ALTITUDE_BANDS[1]);
   });
 
   it('a break leaves that axis where the sticks put it', () => {
@@ -333,13 +420,18 @@ describe('xr holds', () => {
   });
 
   it('altitude clicks walk the three bands and follow is a toggle', () => {
-    const rig = { altitudePick: null, altitudeIndex: null, follow: false, followAt: { x: 1, z: 2 } };
-    assert.equal(cycleXrAltitude(rig), 0);
-    assert.equal(cycleXrAltitude(rig), 1);
-    assert.equal(cycleXrAltitude(rig), 2);
-    assert.equal(cycleXrAltitude(rig), 0);
+    const rig = { altitudePick: null, altitudeIndex: null, follow: false, followAt: { x: 1, z: 2 }, altitudeLockY: null };
+    const bounds = { floor: () => 0 };
+    const head = [0, 20, 0];
+    assert.equal(cycleXrAltitude(rig, head, bounds), 0);
+    assert.equal(rig.altitudeLockY, null);
+    assert.equal(cycleXrAltitude(rig, head, bounds), 1);
+    assert.equal(rig.altitudeLockY, XR_ALTITUDE_BANDS[1]);
+    assert.equal(cycleXrAltitude(rig, head, bounds), 2);
+    assert.equal(cycleXrAltitude(rig, head, bounds), 3);
+    assert.equal(cycleXrAltitude(rig, head, bounds), 0);
     rig.altitudeIndex = null;
-    assert.equal(cycleXrAltitude(rig), 1);
+    assert.equal(cycleXrAltitude(rig, head, bounds), 1);
     toggleXrFollow(rig);
     assert.equal(rig.follow, true);
     toggleXrFollow(rig);

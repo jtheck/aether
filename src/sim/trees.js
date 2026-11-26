@@ -116,9 +116,23 @@ export function treeSpreadCount(stage) {
   return (stage | 0) >= 6 ? 2 : 1;
 }
 
+/**
+ * Independent spread rolls per damage interval. Snow canopies are the baseline;
+ * green runs hotter; char is tinder-dry.
+ */
+export function treeSpreadAttemptsForLook(look) {
+  const l = look | 0;
+  if (l === TREE_LOOK_CHAR) return 5;
+  if (l === TREE_LOOK_PLAIN) return 2;
+  return 1;
+}
+
 /** Stable mix of tile and remaining burn. Same on every peer, no world rng. */
-export function treeSpreadHash(tileIndex, burn) {
-  let h = Math.imul((tileIndex + 1) ^ Math.imul(burn | 0, 0x9e3779b1), 0x85ebca6b);
+export function treeSpreadHash(tileIndex, burn, attempt = 0) {
+  let h = Math.imul(
+    (tileIndex + 1) ^ Math.imul(burn | 0, 0x9e3779b1) ^ Math.imul(attempt | 0, 0x27d4eb2d),
+    0x85ebca6b,
+  );
   h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
   return h >>> 0;
 }
@@ -359,11 +373,11 @@ export function treeBurnsToDeath(stock, burn) {
  * cannot refresh each other. Water tiles never catch.
  * @returns {number} trees newly lit
  */
-export function spreadTreeFire(field, tileIndex) {
+export function spreadTreeFire(field, tileIndex, attempt = 0) {
   const stage = treeStageFromStock(field.treeStock[tileIndex]);
   const weight = treeSpreadWeight(stage);
   if (weight <= 0) return 0;
-  const roll = treeSpreadHash(tileIndex, field.treeBurn[tileIndex]);
+  const roll = treeSpreadHash(tileIndex, field.treeBurn[tileIndex], attempt);
   if ((roll & 15) >= weight) return 0;
   const want = treeSpreadCount(stage);
   const reach = treeSpreadReach(stage);
@@ -404,7 +418,9 @@ export function treeBurnSystem(field) {
     field.treeBurn[ti] = burn;
     // Spread on the size it held this interval, then chip.
     if (burn % TREE_BURN_DAMAGE_INTERVAL === 0) {
-      spreadTreeFire(field, ti);
+      const look = field.treeLook?.[ti] ?? TREE_LOOK_PLAIN;
+      const attempts = treeSpreadAttemptsForLook(look);
+      for (let a = 0; a < attempts; a++) spreadTreeFire(field, ti, a);
       damageTree(field, ti, TREE_BURN_DAMAGE);
     }
     if (field.treeStock[ti] === 0 || burn === 0) {

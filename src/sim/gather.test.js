@@ -20,7 +20,6 @@ import {
   nearestDropOff,
   refreshEngineerAssists,
   CAMP_WORK_RADIUS_F,
-  SILO_WORK_RADIUS_PENALTY_F,
   WORK_RADIUS_RING_INSET_F,
   siloWorkRadiusWorld,
   workRadiusRingWorld,
@@ -953,7 +952,7 @@ attachedSiloDropOffWalksOntoOccupancy();
 unattachedSiloIsNotADropOff();
 unbuiltSiloIsNotADropOff();
 attachedSiloExtendsGatherRadius();
-siloGatherRadiusIsOneTileTighter();
+siloGatherRadiusMatchesParent();
 unattachedSiloDoesNotExtendRadius();
 attachedSiloExtendsFarmRadius();
 console.log('gather.test.js: ok (wood + stone + mineral + food + wander + specialize + defend + storage + silo reach)');
@@ -1085,8 +1084,8 @@ function attachedSiloExtendsGatherRadius() {
   const field = createField(1);
   field.pass.fill(1);
   const w = createWorld(57);
-  // Camp reach + silo at 16 (one tile tighter). Villager + tree at 34
-  // sit outside the camp circle and inside the silo's satellite circle.
+  // Camp reach + silo at 16 (same radius as the camp). Villager + tree at 34
+  // sit on the camp rim and inside the silo's satellite circle.
   const vill = spawn(w, { x: fx.fromFloat(34), y: 0, type: UNIT.VILLAGER, owner: 0 });
   plantTreeAt(field, fx.fromFloat(32), 0, 30);
   w.buildings = [
@@ -1099,26 +1098,38 @@ function attachedSiloExtendsGatherRadius() {
   assert.ok(getResource(w, 0, 'wood') > 0, 'silo-extended camp banks wood');
 }
 
-function siloGatherRadiusIsOneTileTighter() {
-  assert.equal(siloWorkRadiusWorld(CAMP_WORK_RADIUS_F), CAMP_WORK_RADIUS_F - SILO_WORK_RADIUS_PENALTY_F);
+function siloGatherRadiusMatchesParent() {
+  assert.equal(siloWorkRadiusWorld(CAMP_WORK_RADIUS_F), CAMP_WORK_RADIUS_F);
   assert.equal(workRadiusRingWorld(CAMP_WORK_RADIUS_F), CAMP_WORK_RADIUS_F - WORK_RADIUS_RING_INSET_F);
   const field = createField(1);
   field.pass.fill(1);
   const w = createWorld(62);
-  // Past the camp and the one-tile-tighter silo circle (silo at 16), but
-  // inside a full-size silo ring copied from the camp.
+  // Silo at 16. Tile center 46 is outside the camp and outside the old
+  // one-tile-tighter silo circle, and inside a full copy of the camp radius.
   const siloX = 16;
-  const pastSilo = siloX + siloWorkRadiusWorld(CAMP_WORK_RADIUS_F) + 1;
-  const vill = spawn(w, { x: fx.fromFloat(pastSilo), y: 0, type: UNIT.VILLAGER, owner: 0 });
-  plantTreeAt(field, fx.fromFloat(pastSilo - 1), 0, 30);
+  const vill = spawn(w, { x: fx.fromFloat(44), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  plantTreeAt(field, fx.fromFloat(46), 0, 30);
   w.buildings = [
     createBuilding({ owner: 0, type: 'camp', x: 0, z: 0 }),
-    createBuilding({ owner: 0, type: 'silo', x: 16, z: 0 }),
+    createBuilding({ owner: 0, type: 'silo', x: siloX, z: 0 }),
   ];
 
-  for (let t = 0; t < 80; t++) step(w, field, []);
-  assert.notEqual(w.order[vill], ORDER.GATHER, 'silo circle is one tile shorter than the camp');
-  assert.equal(getResource(w, 0, 'wood'), 0);
+  for (let t = 0; t < 220; t++) step(w, field, []);
+  assert.equal(w.order[vill], ORDER.GATHER, 'silo circle matches the parent gather radius');
+
+  const past = createWorld(63);
+  const pastField = createField(1);
+  pastField.pass.fill(1);
+  const pastSilo = siloX + CAMP_WORK_RADIUS_F + 1;
+  const outsider = spawn(past, { x: fx.fromFloat(pastSilo), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  plantTreeAt(pastField, fx.fromFloat(pastSilo), 0, 30);
+  past.buildings = [
+    createBuilding({ owner: 0, type: 'camp', x: 0, z: 0 }),
+    createBuilding({ owner: 0, type: 'silo', x: siloX, z: 0 }),
+  ];
+  for (let t = 0; t < 80; t++) step(past, pastField, []);
+  assert.notEqual(past.order[outsider], ORDER.GATHER, 'silo circle stops at the parent gather radius');
+  assert.equal(getResource(past, 0, 'wood'), 0);
 }
 
 function unattachedSiloDoesNotExtendRadius() {
@@ -1143,8 +1154,7 @@ function attachedSiloExtendsFarmRadius() {
   const w = createWorld(59);
   const farmTile = worldToTile(0) * field.width + worldToTile(0);
   field.foodNode[farmTile] = 1;
-  // Farm plot + silo at 12 (one tile tighter). Villager at 20 is outside
-  // the plot ring and inside the silo's extra circle.
+  // Farm plot + silo at 12. The silo copies the farm's gather radius.
   w.buildings = [
     createBuilding({ owner: 0, type: 'farm', x: 0, z: 0 }),
     createBuilding({ owner: 0, type: 'silo', x: 12, z: 0 }),

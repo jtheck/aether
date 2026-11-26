@@ -21,6 +21,20 @@ const copies = [
         path.join(process.env.STEAMWORKS_SDK, 'redistributable_bin', 'linux64', 'libsteam_api.so'),
     ].filter(Boolean),
   },
+  {
+    dll: path.join(appRoot, 'steamworks_sdk', 'redistributable_bin', 'linuxarm64', 'libsteam_api.so'),
+    sources: [
+      process.env.STEAMWORKS_SDK &&
+        path.join(process.env.STEAMWORKS_SDK, 'redistributable_bin', 'linuxarm64', 'libsteam_api.so'),
+    ].filter(Boolean),
+  },
+  {
+    dll: path.join(appRoot, 'steamworks_sdk', 'redistributable_bin', 'osx', 'libsteam_api.dylib'),
+    sources: [
+      process.env.STEAMWORKS_SDK &&
+        path.join(process.env.STEAMWORKS_SDK, 'redistributable_bin', 'osx', 'libsteam_api.dylib'),
+    ].filter(Boolean),
+  },
 ];
 
 for (const { dll, sources } of copies) {

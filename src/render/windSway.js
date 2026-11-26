@@ -11,10 +11,16 @@ import { markMaterialUboDirty } from '../vendor/lite/liteVendor.js';
 
 /** Peak tree tip offset as a fraction of tree height at intensity 1 (idle breeze). */
 const TREE_AMPLITUDE = 0.018;
+/** Instance alpha: 2 snow, 3 char (see treeSnow.js). */
+const TREE_SWAY_SNOW = 0.28;
+const TREE_SWAY_CHAR = 0.5;
 /** Peak wheat tip offset as a fraction of stalk height. */
 const WHEAT_AMPLITUDE = 0.035;
 /** Peak banner bottom-edge offset as a fraction of cloth height. */
 const BANNER_AMPLITUDE = 0.07;
+/** Standard wind chimes: clip swing + a touch of yaw (radians at the tip). */
+const CHIME_AMPLITUDE = 0.011;
+const CHIME_YAW = 0.035;
 
 /** @type {Set<object>} */
 const windMaterials = new Set();
@@ -80,9 +86,11 @@ const gust = (base) => GUST.replace('%B%', base);
  */
 const TREE_CODE = `
 let swH=clamp(position.y/material.swayH,0.0,1.0);
+let swLook=instanceColor.a;
+let swMul=select(select(1.0,${TREE_SWAY_SNOW},swLook>1.5),${TREE_SWAY_CHAR},swLook>2.5);
 let swB=finalWorld[3].xz;
 let swG=0.5+0.5*${gust('swB')};
-let swA=material.swayH*length(finalWorld[1].xyz)*${TREE_AMPLITUDE}*material.swayK*(0.6+1.2*swG*swG)*swH*swH;
+let swA=material.swayH*length(finalWorld[1].xyz)*${TREE_AMPLITUDE}*material.swayK*swMul*(0.6+1.2*swG*swG)*swH*swH;
 let swP=material.swayT*1.45+swB.x*0.04+swB.y*0.03+sin(swB.x*0.9+swB.y*1.3)*0.25;
 let swO=vec3<f32>(sin(swP),0.0,cos(swP*0.83+1.3))*swA;
 out.clipPos=out.clipPos+scene.viewProjection*vec4<f32>(swO,0.0);
@@ -118,6 +126,45 @@ let flP=material.swayT*2.6+flT*3.2+flB.x*0.05+flB.y*0.04;
 let flO=finalWorld[2].xyz*(sin(flP)*flA)+finalWorld[0].xyz*(sin(flP*0.6+0.7)*flA*0.25);
 out.clipPos=out.clipPos+scene.viewProjection*vec4<f32>(flO,0.0);
 `;
+
+/**
+ * Rigid chimes: one angle per tube, rotate around the top pivot (no vertex bend).
+ * `swayCluster` > 0 buckets xz when several chimes share one baked part.
+ */
+const CHIME_CODE = `
+let chB=finalWorld[3].xz;
+let chG=0.5+0.5*${gust('chB')};
+let breeze=(0.4+0.6*chG)*material.swayK;
+let cell=floor((position.xz-vec2<f32>(material.swayCx,material.swayCz))*max(material.swayCluster,0.001));
+let chSeed=select(
+  dot(vec2<f32>(material.swayCx,material.swayCz),vec2<f32>(0.41,0.29)),
+  dot(cell,vec2<f32>(1.73,2.11)),
+  material.swayCluster>0.0
+);
+let phase=material.swayT*1.55+chSeed*0.95+chB.x*0.018;
+let swayAng=sin(phase)*${CHIME_AMPLITUDE}*breeze*2.1;
+let yawAng=sin(phase*0.82+1.2)*${CHIME_YAW}*breeze;
+let px=position.x-material.swayCx;
+let py=position.y-material.swayBase;
+let pz=position.z-material.swayCz;
+let cx=cos(swayAng);
+let sx=sin(swayAng);
+let ry=py*cx-pz*sx;
+let rz=py*sx+pz*cx;
+let yc=cos(yawAng);
+let ys=sin(yawAng);
+let rx=px*yc+rz*ys;
+let rz2=-px*ys+rz*yc;
+let delta=vec3<f32>(rx-px,ry-py,rz2-pz);
+let dWorld=finalWorld[0].xyz*delta.x+finalWorld[1].xyz*delta.y+finalWorld[2].xyz*delta.z;
+out.clipPos=out.clipPos+scene.viewProjection*vec4<f32>(dWorld,0.0);
+`;
+
+export function isChimeMaterial(mat) {
+  const n = String(mat?.name ?? '').toLowerCase();
+  if (n.includes('chime')) return true;
+  return n === 'material.001';
+}
 
 /**
  * @param {string} name
@@ -198,6 +245,31 @@ export function attachBannerFlutter(meshes) {
   }
   if (!(top > bottom)) return;
   attach(cloth, createWindPlugin('banner-flutter', BANNER_CODE, { swayBase: top, swayH: top - bottom }));
+}
+
+/**
+ * flag.glb wind chimes (one mesh or several). Skips pole / cloth.
+ * @param {object[]} meshes
+ */
+export function attachChimeSway(meshes) {
+  for (const mesh of meshes) {
+    if (!isChimeMaterial(mesh.material)) continue;
+    const min = mesh.boundMin;
+    const max = mesh.boundMax;
+    if (!min || !max) continue;
+    const swayH = max[1] - min[1];
+    if (!(swayH > 0.02)) continue;
+    const spanX = max[0] - min[0];
+    const spanZ = max[2] - min[2];
+    const swayCluster = spanX > 0.55 || spanZ > 0.55 ? 1.35 : 0;
+    attach([mesh], createWindPlugin('chime-sway', CHIME_CODE, {
+      swayBase: max[1],
+      swayH,
+      swayCx: (min[0] + max[0]) * 0.5,
+      swayCz: (min[2] + max[2]) * 0.5,
+      swayCluster,
+    }));
+  }
 }
 
 /** Once per frame: sample gust envelope and re-upload uniforms. */

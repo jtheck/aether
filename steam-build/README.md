@@ -45,7 +45,9 @@ creating the WebGPU WebXR shared image.
 Frame uses a locally built, patched NW.js **0.121.0 (Chromium 158)** runtime.
 Stock Linux Chromium does not support Æther's required WebGPU OpenXR session.
 The complete working configuration, source patches, build procedure, known
-launch behavior, and cleanup guardrails are in [FRAME.md](FRAME.md).
+launch behavior, and cleanup guardrails are in [FRAME.md](FRAME.md). The
+reusable setup for another project is documented in
+[FRAME-WEBGPU-XR-PORTING.md](FRAME-WEBGPU-XR-PORTING.md).
 
 Keep Linux x86-64 and Linux ARM64 as separate depots. Steam reports both as
 Linux 64-bit and may install both, so architecture-specific ELFs must not share

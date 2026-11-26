@@ -1,0 +1,110 @@
+From 2b7a4ab2aac2f0d0424c3208f1689c9d63c0625b Mon Sep 17 00:00:00 2001
+From: Aether Build <build@aether.garden>
+Date: Wed, 25 Nov 2026 23:36:39 -0800
+Subject: [PATCH 2/4] nwjs: enable Aether WebGPU XR sessions on Frame
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+---
+ content/browser/xr/service/vr_service_impl.cc          |  7 +++++++
+ device/vr/openxr/openxr_device.cc                      | 10 +++++-----
+ extensions/browser/extension_protocols.cc              |  3 +++
+ .../renderer/modules/xr/xr_gpu_copy_swap_chain.cc      | 10 ++++++++++
+ .../blink/renderer/modules/xr/xr_gpu_copy_swap_chain.h |  1 +
+ 5 files changed, 26 insertions(+), 5 deletions(-)
+
+diff --git a/content/browser/xr/service/vr_service_impl.cc b/content/browser/xr/service/vr_service_impl.cc
+index 32ba0f88d95a..fcd6b6492ddb 100644
+--- a/content/browser/xr/service/vr_service_impl.cc
++++ b/content/browser/xr/service/vr_service_impl.cc
+@@ -694,6 +694,13 @@ void VRServiceImpl::OnPermissionResultsForMode(
+ 
+   bool is_consent_granted =
+       permission_results.HasPermissionsFor(request.options->mode);
++  // NW.js app windows do not have Chromium's permission prompt UI. This
++  // runtime is dedicated to Aether on Frame, so allow immersive VR after the
++  // user-activation check above rather than rejecting an unshowable prompt.
++  if (request.options->mode ==
++      device::mojom::XRSessionMode::kImmersiveVr) {
++    is_consent_granted = true;
++  }
+   DVLOG(2) << __func__ << ": is_consent_granted=" << is_consent_granted;
+ 
+   if (!is_consent_granted) {
+diff --git a/device/vr/openxr/openxr_device.cc b/device/vr/openxr/openxr_device.cc
+index ebc404f9d0cd..a8a7c2d0cea6 100644
+--- a/device/vr/openxr/openxr_device.cc
++++ b/device/vr/openxr/openxr_device.cc
+@@ -88,11 +88,11 @@ OpenXrDevice::OpenXrDevice(
+         mojom::XRSessionFeature::LAYERS);
+   }
+ 
+-  // Only support WebGPU sessions if the feature flag is enabled.
+-  if (base::FeatureList::IsEnabled(features::kWebXRWebGPUBinding)) {
+-    device_data.supported_features.emplace_back(
+-        mojom::XRSessionFeature::WEBGPU);
+-  }
++  // This dedicated Frame runtime always enables WebGPU XR. NW.js app-manifest
++  // feature switches are applied after the isolated XR service initializes, so
++  // the service cannot reliably observe kWebXRWebGPUBinding.
++  device_data.supported_features.emplace_back(
++      mojom::XRSessionFeature::WEBGPU);
+ 
+   // Only support Plane Detection if the feature flag is enabled.
+   if (base::FeatureList::IsEnabled(features::kWebXRPlaneDetection)) {
+diff --git a/extensions/browser/extension_protocols.cc b/extensions/browser/extension_protocols.cc
+index bf61a46254e8..352b33feff98 100644
+--- a/extensions/browser/extension_protocols.cc
++++ b/extensions/browser/extension_protocols.cc
+@@ -154,6 +154,9 @@ void GenerateBackgroundPageContents(const Extension* extension,
+     *data += script.relative_path().AsUTF8Unsafe();
+     *data += "\"></script>\n";
+   }
++  LOG(ERROR) << "[aether-nw] generated background page for " << extension->id()
++             << ":\n"
++             << *data;
+ }
+ 
+ ResourceInfo ReadResourceInfo(const extensions::ExtensionResource& resource,
+diff --git a/third_party/blink/renderer/modules/xr/xr_gpu_copy_swap_chain.cc b/third_party/blink/renderer/modules/xr/xr_gpu_copy_swap_chain.cc
+index 0200505255c8..9452496e7fec 100644
+--- a/third_party/blink/renderer/modules/xr/xr_gpu_copy_swap_chain.cc
++++ b/third_party/blink/renderer/modules/xr/xr_gpu_copy_swap_chain.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "third_party/blink/renderer/modules/xr/xr_gpu_copy_swap_chain.h"
+ 
++#include "base/logging.h"
+ #include "components/viz/common/resources/shared_image_format.h"
+ #include "gpu/command_buffer/client/raster_interface.h"
+ #include "gpu/command_buffer/client/shared_image_interface.h"
+@@ -74,6 +75,15 @@ void XRGPUCopySwapChain::OnFrameEnd() {
+     return;
+   }
+ 
++  if (!logged_copy_dimensions_) {
++    logged_copy_dimensions_ = true;
++    LOG(ERROR) << "[aether-xr-copy] source="
++               << shared_image_->size().ToString()
++               << " destination=" << dest.shared_image->size().ToString()
++               << " descriptor=" << descriptor_.size.width << "x"
++               << descriptor_.size.height;
++  }
++
+   gpu::raster::RasterInterface* raster_interface =
+       wrapper->ContextProvider().RasterInterface();
+   std::unique_ptr<gpu::RasterScopedAccess> src_access =
+diff --git a/third_party/blink/renderer/modules/xr/xr_gpu_copy_swap_chain.h b/third_party/blink/renderer/modules/xr/xr_gpu_copy_swap_chain.h
+index 849013fb6a29..7334caf53227 100644
+--- a/third_party/blink/renderer/modules/xr/xr_gpu_copy_swap_chain.h
++++ b/third_party/blink/renderer/modules/xr/xr_gpu_copy_swap_chain.h
+@@ -37,6 +37,7 @@ class XRGPUCopySwapChain final : public XRGPUSwapChain {
+   wgpu::DawnTextureInternalUsageDescriptor texture_internal_usage_;
+   scoped_refptr<gpu::ClientSharedImage> shared_image_;
+   gpu::SyncToken sync_token_;
++  bool logged_copy_dimensions_ = false;
+ };
+ 
+ }  // namespace blink
+-- 
+2.43.0
+

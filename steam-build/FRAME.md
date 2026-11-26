@@ -1,9 +1,11 @@
 # Steam Frame ARM64 / WebGPU WebXR
 
-This records the first confirmed working Frame build before the build pipeline is
-cleaned up.
+This records Æther-specific history and operational notes. For a clean,
+project-agnostic reproduction guide, use
+[FRAME-WEBGPU-XR-PORTING.md](FRAME-WEBGPU-XR-PORTING.md). The complete runtime
+patch series is checked in under `patches/nwjs-frame/`.
 
-## Confirmed working build
+## First confirmed working build
 
 - Steam app: **5043860**
 - Frame depot: **5043863** (Linux, ARM64)
@@ -38,6 +40,10 @@ The corrected collision-free layout was uploaded as Steam build **26957512**:
 - Linux ARM64 depot 5043863: manifest **7794468492004346221**
 
 The single Linux launch entry remains root `Aether`.
+
+The current perfected state is Steam build **26957512**. It includes the
+collision-free dual-architecture depot layout, the 2048²-per-eye Frame runtime,
+clean default launch behavior, and working manual XR exit/re-entry.
 
 ## Why stock NW.js did not work
 
@@ -231,12 +237,16 @@ That cap is `2516 / 1728`, preventing Chromium from selecting Frame's excessive
 8192² maximum. The deployed client requests `nativeProjectionScaleFactor` and
 logs `[xr] projection` with the resulting dimensions.
 
-Steam build **26942466** contains this scaling change. Expected verification:
+Steam build **26957512** contains the final scaling and depot layout. Verified:
 
 ```text
-[xr] projection {"nativeScale":1.456...,"textureWidth":2516,"textureHeight":2516}
-[aether-xr-copy] source=5032x2516 destination=5032x2516 descriptor=5032x2516
+[xr] projection {"nativeScale":1,"requestedScale":1.456,"textureWidth":2048,"textureHeight":2048}
+[aether-xr-copy] source=4096x2048 destination=4096x2048 descriptor=4096x2048
 ```
+
+The 4096 maximum WebGPU 2D texture width and side-by-side stereo packing cap
+Frame at 2048² per eye. This is intentionally lower than PC Link's 2516² to
+avoid another 51% pixel cost.
 
 The client intentionally leaves the NW.js 2D window alone when entering XR.
 An experiment that hid it with `chrome.app.window.current()` was reverted after

@@ -1,0 +1,29 @@
+From 5b5905dc0c606ad19c58b8bd997f38de1ba4ccbe Mon Sep 17 00:00:00 2001
+From: Aether Build <build@aether.garden>
+Date: Thu, 26 Nov 2026 00:13:47 -0800
+Subject: [PATCH 3/4] openxr: log Frame view size limits
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+---
+ device/vr/openxr/openxr_view_configuration.cc | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/device/vr/openxr/openxr_view_configuration.cc b/device/vr/openxr/openxr_view_configuration.cc
+index d88ba5627f24..4aa77a48847a 100644
+--- a/device/vr/openxr/openxr_view_configuration.cc
++++ b/device/vr/openxr/openxr_view_configuration.cc
+@@ -66,6 +66,11 @@ OpenXrViewProperties::OpenXrViewProperties(
+            << xr_properties_.recommendedImageRectWidth
+            << " recommendedImageRectHeight="
+            << xr_properties_.recommendedImageRectHeight;
++  LOG(ERROR) << "[aether-xr-view] views=" << view_count_
++             << " recommended=" << xr_properties_.recommendedImageRectWidth
++             << "x" << xr_properties_.recommendedImageRectHeight
++             << " max=" << xr_properties_.maxImageRectWidth << "x"
++             << xr_properties_.maxImageRectHeight;
+ 
+   CalculateViewportScaledProperties();
+ }
+-- 
+2.43.0
+

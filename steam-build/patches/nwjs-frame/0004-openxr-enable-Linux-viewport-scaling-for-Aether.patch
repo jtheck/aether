@@ -1,0 +1,31 @@
+From 42c1bbd498901065a913f5ff277fbf438ecb090d Mon Sep 17 00:00:00 2001
+From: Aether Build <build@aether.garden>
+Date: Thu, 26 Nov 2026 00:31:48 -0800
+Subject: [PATCH 4/4] openxr: enable Linux viewport scaling for Aether
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+---
+ device/vr/openxr/openxr_view_configuration.cc | 7 +++----
+ 1 file changed, 3 insertions(+), 4 deletions(-)
+
+diff --git a/device/vr/openxr/openxr_view_configuration.cc b/device/vr/openxr/openxr_view_configuration.cc
+index 4aa77a48847a..0757f5a2867f 100644
+--- a/device/vr/openxr/openxr_view_configuration.cc
++++ b/device/vr/openxr/openxr_view_configuration.cc
+@@ -33,10 +33,9 @@ constexpr XrView kDefaultView{
+     /*pose=*/{{0, 0, 0, 1}, {0, 0, 0}},
+     /*fov=*/{kDefaultFov, kDefaultFov, kDefaultFov, kDefaultFov}};
+ 
+-// TODO(crbug.com/529457611): Windows and Linux do not support framebuffer
+-// scaling.
+-constexpr bool kSupportsViewportScaling =
+-    !BUILDFLAG(IS_WIN) && !BUILDFLAG(IS_LINUX);
++// Aether's Linux WebGPU copy swapchain supports resizing both the renderer
++// texture and OpenXR destination. Windows still uses the stock fixed-size path.
++constexpr bool kSupportsViewportScaling = !BUILDFLAG(IS_WIN);
+ 
+ constexpr base::ByteSize kLowMemoryThreshold = base::GiB(8);
+ constexpr double kLowMemoryDefaultMaxScaleFactor = 1.5f;
+-- 
+2.43.0
+

@@ -358,22 +358,24 @@ const LITE_PATCHES = [
     to: 'ctx.scene._update(); for (const t of ctx.scene._frameGraph._tasks) if (t.name === "shadow") t.execute?.();',
   },
   {
-    // Chromium defaults projection layers to scale 1.0. Frame can report a
-    // higher native scale, so use it instead of leaving headset resolution at
-    // the lower recommended default. Log the actual result for field checks.
+    // Frame's OpenXR destination can be larger while Chromium still reports a
+    // native scale of 1. Request the PC Link ratio; stock runtimes clamp this
+    // to their own maximum, while the patched Frame runtime reaches 2048².
     file: /xr-session\.js$/,
     from: `		const layer = binding.createProjectionLayer({
 			colorFormat,
 			depthStencilFormat: depthFormat ?? void 0
 		});`,
     to: `		const nativeScale = Number.isFinite(session.nativeProjectionScaleFactor) ? session.nativeProjectionScaleFactor : 1;
+		const requestedScale = Math.max(nativeScale, 1.456);
 		const layer = binding.createProjectionLayer({
 			colorFormat,
 			depthStencilFormat: depthFormat ?? void 0,
-			scaleFactor: nativeScale
+			scaleFactor: requestedScale
 		});
 		console.info("[xr] projection", JSON.stringify({
 			nativeScale,
+			requestedScale,
 			textureWidth: layer.textureWidth,
 			textureHeight: layer.textureHeight
 		}));`,

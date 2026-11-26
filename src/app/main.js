@@ -733,11 +733,11 @@ function armXrAutoAfterEnter() {
 
 function runXrFlight(fn) {
   const prev = xrFlight || Promise.resolve();
-  const p = prev.then(fn, fn);
-  xrFlight = p.finally(() => {
-    if (xrFlight === p) xrFlight = null;
+  const tracked = prev.then(fn, fn).finally(() => {
+    if (xrFlight === tracked) xrFlight = null;
   });
-  return p;
+  xrFlight = tracked;
+  return tracked;
 }
 
 /** Start a session during the load splash while the click still counts as a gesture. */

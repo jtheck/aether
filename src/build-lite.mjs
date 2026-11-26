@@ -372,11 +372,11 @@ const LITE_PATCHES = [
 			depthStencilFormat: depthFormat ?? void 0,
 			scaleFactor: nativeScale
 		});
-		console.info("[xr] projection", {
+		console.info("[xr] projection", JSON.stringify({
 			nativeScale,
 			textureWidth: layer.textureWidth,
 			textureHeight: layer.textureHeight
-		});`,
+		}));`,
   },
   {
     // Shader-material meshes keep one system UBO shared by both eye tasks,

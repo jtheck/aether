@@ -218,11 +218,9 @@ native scale and resulting texture dimensions. `npm run build:lite` succeeds.
 It remains undeployed because packaging the current working tree would include
 many unrelated `src/` changes.
 
-The same pending client change hides the NW.js app window after XR entry and
-shows it again when the session ends. It uses `chrome.app.window.current()` and
-safely does nothing in a normal browser. Frame still needs to confirm that this
-API remains exposed after the local bootstrap redirects to `aether.garden`; if
-not, the shell will need a small explicit message bridge.
+The client intentionally leaves the NW.js 2D window alone when entering XR.
+An experiment that hid it with `chrome.app.window.current()` was reverted after
+testing; Frame's existing window behavior is preferred.
 
 ## Cleanup guardrails
 

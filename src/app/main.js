@@ -771,14 +771,6 @@ async function stopMatchXr(renderer, ctx) {
  * @param {() => object | null | undefined} getInput input api from setupInput (ray orders, radial, place)
  * @param {{ selection?: () => { x: number, z: number } | null }} [holds]
  */
-function setXrDesktopWindowVisible(visible) {
-  const appWindow = globalThis.chrome?.app?.window?.current?.();
-  if (!appWindow) return false;
-  if (visible) appWindow.show();
-  else appWindow.hide();
-  return true;
-}
-
 async function startMatchXr(renderer, getInput, holds) {
   if (matchXr) return;
   const xrApi = !!globalThis.navigator?.xr;
@@ -833,7 +825,6 @@ async function startMatchXr(renderer, getInput, holds) {
   function teardown() {
     if (closed) return;
     closed = true;
-    setXrDesktopWindowVisible(true);
     xrCamLive = false;
     renderer.cameraController?.setPoseListener?.(null);
     controls.dispose();
@@ -900,7 +891,6 @@ async function startMatchXr(renderer, getInput, holds) {
     teardown();
     return;
   }
-  setXrDesktopWindowVisible(false);
   session.xrControls = controls;
   session.rig = rig;
   session.teardown = teardown;
